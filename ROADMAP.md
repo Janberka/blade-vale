@@ -179,3 +179,37 @@ Modern three.js migration · Poki + touch controls · global leaderboards at sca
 **Deferred (future):** full client-map-as-pure-view (snapshot + dead-reckoning + WS) reconciliation; real multiplayer auth + shared worlds. The headline ("a living world that evolves while you're away") is delivered; these are correctness/scale refinements.
 
 **Roadmap interaction:** this changes the distribution math (a backend is no longer "post-traction"). The free web funnel can still ship the client with graceful offline degradation; the persistent world + cross-device saves become the Steam/CrazyGames delta. Revisit Phase 5's paid-delta split with this in mind.
+
+---
+
+## Addendum — Allied Co-op, Living Battles & Crusades (added 2026-06-29)
+
+> Owner-directed pillar on top of the living world: **allies fighting together is a central
+> mechanism.** Extends (and partly overrides toward) real multiplayer co-op.
+
+**What it is:**
+1. **Living, timed overworld battles.** Off-map clashes no longer resolve instantly — rival hosts
+   lock together and fight over a *calculated* duration (a 1v1 of swordsmen ≈ 3s, scaling ~`size^0.4`
+   to a ~70s siege), rendered "in battle mode" on the map (contested disc, strength bar, dwindling
+   counts). Reinforcements can swing a fight mid-clash. *(Client-side in solo worlds; the
+   server-driven shared-world macro war still resolves on the backend — bringing timed visibility to
+   that path is the remaining piece.)*
+2. **Alliances & pacts.** Forge pacts with AI nations (parley → Propose Pact, renown-gated); other
+   players in a shared world are allies. Allied bands turn friendly (✦) and answer your calls.
+3. **Call to Arms / Crusade (G).** Rally allied bands to your banner, or call a map-wide crusade on
+   an enemy castle — they converge and storm it together.
+4. **Reinforcement & coordination.** Nearby pacted bands / answered banners / a host you rode in to
+   aid join *your* side (borrowed troops — they fight beside you, then go home; never absorbed into
+   your roster). Each banner grants a coordination buff (up to +50%): **working together is a real,
+   large advantage.**
+5. **Real-time co-op (J), host-authoritative.** A dependency-free WebSocket relay (`server/ws.js`,
+   `/coop`) + client transport (`net-battle.js`, `window.coop`): discover an ally's live battle, join
+   it, hand over your warband, watch the shared arena and split the spoils.
+
+**Status:** 1–4 built & preview-verified (offline path; calibration confirmed: 1v1 = 3.17s). 5: relay
++ transport + beacon discovery + snapshot codec + guest render **verified headlessly**; the live
+two-browser arena and direct guest-avatar sword control still need real two-device testing.
+
+**Files:** all overworld/co-op logic in `game.js`; new `server/ws.js` (relay) and `net-battle.js`
+(client). Reuses the shared resolver (`sim/world-sim.js`). Offline single-player is fully gated off
+from every co-op path. Controls + dev map: `BATTLE_CONTROLS.md` (overworld/co-op section).

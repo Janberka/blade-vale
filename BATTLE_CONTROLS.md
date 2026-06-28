@@ -123,6 +123,49 @@ orders, same pace, same zones/positions — so you can just press **Begin Battle
 
 ---
 
+## The overworld & the allied war (map layer)
+
+The strategic map is where battles are *chosen* and alliances are forged. It now wars in real time
+and lets allies fight together.
+
+### Living battles you can see — and join
+Rival hosts that meet no longer resolve in a blink. They **lock together and fight over time** at a
+contested point: a glowing disc, a two-colour strength bar, and the banners' troop counts ticking
+down before your eyes. A clash's length is computed from the hosts (a **1-on-1 of swordsmen ≈ 3s**,
+scaling ~`size^0.4` up to a ~70s siege; a lopsided fight routs faster). Fresh hosts can march in and
+**reinforce either side mid-fight**, turning the tide. **Ride into a clash** to throw in beside the
+host you reach. *(This plays out client-side in offline/solo worlds; in a server-driven shared world
+the macro war is still resolved by the backend.)*
+
+### Pacts & alliances
+Ride into a neutral band → **Propose Pact** (acceptance rises with your renown). Allied bands fly a
+**✦** marker, can't be attacked by accident, and **answer your call to arms**. In a shared world,
+other players are allies too. Ride into an allied band to **Break Pact** or greet them.
+
+### Call to Arms / Crusade — press **G** on the map
+- **Near an enemy castle → CRUSADE:** every ally on the map is summoned to its walls. Let them
+  muster, then storm it together as one host.
+- **In open field → RALLY:** allied bands within reach march to your banner.
+- A beacon + pulsing ring marks the muster point; a HUD banner counts the answering banners and the
+  time left. Press **G** again to cancel.
+
+### Working together is a real edge
+When you start a fight, **nearby pacted bands (and any host you rode in to aid, and everyone a call
+summoned) join your side** as reinforcements — their named soldiers fight beside yours but return
+home afterward (they never join your permanent warband, and their losses don't dock your XP). Each
+answering **banner grants a coordination bonus** (up to +50% might to your whole side). A crusade
+that gathers many banners hits a castle like an avalanche.
+
+### Co-op: two players, one arena — press **J** on the map (shared world)
+In a shared world you can **ride into an ally's live battle**. Press **J** to list allied battles and
+**Join** one: your warband is handed to the host's arena and fights at their side, and you watch the
+clash unfold and share the victory. Co-op runs over the server's WebSocket relay (`/coop`),
+**host-authoritative** — the host runs the sim and broadcasts snapshots. *(v1: the host simulates and
+the guest's troops + spoils are shared and rendered live; direct guest-avatar sword control is the
+next step and needs two-device testing.)*
+
+---
+
 ## Full input reference
 
 ### Mouse (Plan or mid-battle command — deck open)
@@ -147,6 +190,16 @@ orders, same pace, same zones/positions — so you can just press **Begin Battle
 | **N** | new squad (Plan only) |
 | **Enter** | Begin Battle / Resume |
 | **Esc** | open command (mid-battle) / resume |
+
+### Keyboard (overworld map)
+| Key | Action |
+|---|---|
+| **WASD** | roam the map |
+| **G** | Call to Arms (near an enemy hold → Crusade); press again to cancel |
+| **J** | find & join an ally's live battle (shared world) |
+| **V** | warband charsheet |
+
+*(`G` is context-sensitive: on the map it sounds the call; in a battle/plan it selects all soldiers.)*
 
 ### Reading the field
 - **Green ring** — selected soldier.
@@ -206,7 +259,28 @@ where `order` ∈ `attack | hold | zone | regroup | free`, `recipe` is the remem
   zoneG(i,rect), paceG(i,pace), deploySelected(vec3), beginBattle, openCommandDeck, resumeBattle,
   groups(), selCount(), commandPanelOpen() }`.
 - `BV.advance(secs)` — step the battle deterministically (no rendering) for timing checks.
+- `BV.advanceMap(secs)` — step the overworld (living battles, marches, calls) deterministically.
+- `BV.startClash(a,b)` → duration · `BV.mapBattles()` — living-battle timing/inspection.
+- `BV.pacts()` · `BV.allyWith(i)` · `BV.alliedBandsNear(r)` — diplomacy.
+- `BV.raiseCall()` · `BV.activeCall()` · `BV.tp(x,z)` — call to arms / crusade.
+- `BV.coopState()` — reinforcement/coordination state in the current battle.
+- `BV.coop()` · `BV.coopBuildSnapshot()` · `BV.coopApplySnap(s)` — co-op transport + snapshot codec.
+
+### The overworld / co-op layer (where the code lives)
+- **Living battles:** `startMapBattle` / `joinMapBattle` / `updateMapBattles` / `finishMapBattle` in
+  `game.js`; calibrated by `clashDuration`. Bands carry `inBattle`; markers are disposed on finish.
+- **Diplomacy:** `playerPacts` (Set of NATION defs), `isAllyFaction`, the `enc-ally` button.
+- **Call to arms:** `raiseCall` / `updateActiveCall` / `clearCall`; allied bands steer to `activeCall`.
+- **Reinforcements:** `assembleAllies` → `buildAllyReinforcement` (borrowed allies, excluded from the
+  persistent roster in `applyBattleGrowth`); `coopMult` is the coordination buff applied in `spawnAlly`.
+- **Co-op netcode:** server `server/ws.js` (dependency-free WebSocket relay on `/coop`, rooms +
+  beacons), client `net-battle.js` (`window.coop`), and the `coop*` functions in `game.js`
+  (host beacon + `coopHostTick` snapshot broadcast; guest discovery `J` + `enterCoopGuest` /
+  `updateCoopGuest` puppet render). All co-op paths are gated on `coopOnline()` / shared world, so
+  offline play is untouched.
 
 > Previewing: the sandboxed dev server can't read the project dir — files are served from
-> `/tmp/blade-vale`, so `cp game.js index.html /tmp/blade-vale/` after every edit and bump
-> `game.js?v=N` in `index.html` to bust the cache.
+> `/tmp/blade-vale`, so `cp game.js index.html net-battle.js client-net.js /tmp/blade-vale/` (and
+> `sim/world-sim.js` → `/tmp/blade-vale/sim/`) after every edit, and bump `game.js?v=N` in
+> `index.html` to bust the cache. Co-op needs the backend (`npm run server`, :8787) for its `/coop`
+> WebSocket relay; offline play needs no server.

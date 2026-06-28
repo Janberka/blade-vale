@@ -2814,6 +2814,7 @@ function reinforceMap() {
 function enterMap() {
   mode = 'map'; gameRunning = false;
   encounter = null; siegeCapital = null;
+  if (typeof clearCall === 'function' && activeCall) clearCall(); // no stale call/beacon carries into a (new) region
   const encEl = document.getElementById('encounter'); if (encEl) encEl.classList.add('hidden');
   const pb = document.getElementById('cmd-deck'); if (pb) pb.classList.add('hidden'); commandPanelOpen = false; timeScale = 1;
   clearBattlefield();
@@ -2963,7 +2964,7 @@ function sidePower(side) {
 // (re)compute the eventual outcome from the CURRENT forces — at the start, and whenever
 // reinforcements arrive, so a relief host genuinely changes who wins and how fast.
 function recomputeBattle(bt) {
-  bt.t = 0;
+  const oldFrac = bt.duration > 0 ? clamp(bt.t / bt.duration, 0, 0.95) : 0; // a reinforcement must NOT rewind the clock
   const a = bt.sideA, b = bt.sideB;
   a.start = sideSize(a); b.start = sideSize(b);
   for (const x of a.bands) x._w = a.start > 0 ? x.size / a.start : 0;
@@ -2977,6 +2978,7 @@ function recomputeBattle(bt) {
   win.end = Math.max(1, Math.round(win.start * (1 - winnerLossFrac)));
   los.end = Math.max(0, Math.round(los.start * (1 - loserLossFrac)));
   bt.duration = clashDuration(a.start, b.start);
+  bt.t = oldFrac * bt.duration; // resume from the progress already made (0 at creation)
 }
 function makeBattleMarker(bt) {
   const g = new THREE.Group();
@@ -4494,6 +4496,10 @@ function wireCoop() {
   window.coop.on('beacons', renderBeaconPanel);
   window.coop.on('joined', onCoopJoined);
   window.coop.on('host-gone', () => { if (coopRole === 'guest') { showWaveBanner('Battle Over', 'Your ally\'s battle has ended.'); leaveCoopGuest(); } });
+  window.coop.on('disconnect', () => { // socket dropped: never strand a guest in the co-op view
+    if (coopRole === 'guest') { showWaveBanner('Disconnected', 'Lost contact with your ally\'s battle.'); leaveCoopGuest(); }
+    else if (coopRole === 'host') { coopRole = null; coopJoined.clear(); }
+  });
 }
 
 // ----- HOST: beacon the fight, broadcast the arena, field a guest's handed-over warband -----
@@ -4590,6 +4596,7 @@ function makePuppet(team) {
 function clearCoopPuppets() { for (const [, p] of coopPuppets) { scene.remove(p.obj); disposeGroup(p.obj); } coopPuppets.clear(); }
 function enterCoopGuest(beacon) {
   mode = 'coopguest'; gameRunning = false; commandPanelOpen = false; timeScale = 1;
+  if (typeof clearCall === 'function' && activeCall) clearCall(); // drop any standing call/beacon before the co-op view
   clearBattlefield(); clearCoopPuppets();
   setBattleDressing(true);
   applyBiome(biomeAt(beacon.x || 0, beacon.z || 0));
@@ -4601,8 +4608,9 @@ function enterCoopGuest(beacon) {
 }
 function coopApplySnap(s) {
   const seen = new Set();
-  const put = (arr, team) => { if (!arr) return; for (const b of arr) { const id = team + b[0] + ':' + (b[1] + b[2]); seen.add(id); let p = coopPuppets.get(id); if (!p) { p = makePuppet(team); coopPuppets.set(id, p); } p.tx = b[1] / 10; p.tz = b[2] / 10; p.tf = b[3] / 100; } };
-  // ally/enemy ids can repeat across frames only loosely (fodder shares id 0); key by id+coarse-pos to keep bodies stable-ish
+  // key by STABLE identity (team + char id), NOT position — else a moving body re-keys every frame
+  // and gets destroyed+rebuilt (defeating interpolation). id-0 fodder falls back to its array index.
+  const put = (arr, team) => { if (!arr) return; for (let i = 0; i < arr.length; i++) { const b = arr[i]; const id = team + ':' + (b[0] || ('i' + i)); seen.add(id); let p = coopPuppets.get(id); if (!p) { p = makePuppet(team); p.obj.position.set(b[1] / 10, 0, b[2] / 10); coopPuppets.set(id, p); } p.tx = b[1] / 10; p.tz = b[2] / 10; p.tf = b[3] / 100; } };
   put(s.al, 'a'); put(s.en, 'e');
   if (s.pl) { const id = 'host'; seen.add(id); let p = coopPuppets.get(id); if (!p) { p = makePuppet('host'); coopPuppets.set(id, p); } p.tx = s.pl[0] / 10; p.tz = s.pl[1] / 10; p.tf = s.pl[2] / 100; }
   for (const [id, p] of coopPuppets) if (!seen.has(id)) { scene.remove(p.obj); disposeGroup(p.obj); coopPuppets.delete(id); }

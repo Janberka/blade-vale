@@ -9,11 +9,14 @@ const net = require('net');
 const crypto = require('crypto');
 const { EventEmitter } = require('events');
 
+const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';   // RFC 6455 magic value (matches server/ws.js)
+
 function connect(url) {
   const u = new URL(url);
   const port = u.port ? +u.port : (u.protocol === 'wss:' ? 443 : 80);
   const ev = new EventEmitter();
   const key = crypto.randomBytes(16).toString('base64');
+  const accept = crypto.createHash('sha1').update(key + GUID).digest('base64');
 
   let open = false;
   let buf = Buffer.alloc(0);
@@ -45,10 +48,9 @@ function connect(url) {
       if (i < 0) return;                       // headers still arriving
       const head = buf.slice(0, i).toString('utf8');
       buf = buf.slice(i + 4);
-      // Accept any 101 that carries an Accept header. We deliberately do NOT pin the exact
-      // Sec-WebSocket-Accept hash: this server uses a non-standard magic GUID (server/ws.js), so a
-      // strict RFC check would reject its own server. The 101 + header presence is enough.
-      if (!/HTTP\/1\.1 101/i.test(head) || !/sec-websocket-accept:/i.test(head)) {
+      // Verify Sec-WebSocket-Accept = base64(sha1(key + GUID)). The server is RFC 6455-compliant
+      // (server/ws.js uses the standard magic GUID), so pinning the exact hash is correct here.
+      if (!/HTTP\/1\.1 101/i.test(head) || !head.includes(accept)) {
         ev.emit('error', new Error('handshake failed')); sock.destroy(); return;
       }
       open = true;

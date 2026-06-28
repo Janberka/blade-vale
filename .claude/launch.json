@@ -7,6 +7,13 @@
       "runtimeArgs": ["-I", "-c", "import http.server,socketserver,os\nD='/tmp/blade-vale'\nP=int(os.environ.get('PORT','8099'))\nclass H(http.server.SimpleHTTPRequestHandler):\n def __init__(s,*a,**k): super().__init__(*a,directory=D,**k)\n def end_headers(s):\n  s.send_header('Cache-Control','no-store, must-revalidate'); s.send_header('Pragma','no-cache'); s.send_header('Expires','0')\n  super().end_headers()\nsocketserver.TCPServer.allow_reuse_address=True\nsocketserver.TCPServer(('',P),H).serve_forever()"],
       "port": 8099,
       "autoPort": true
+    },
+    {
+      "name": "blade-vale-qa",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-I", "-c", "import http.server,socketserver,os\nD='/tmp/blade-vale-qa'\nP=int(os.environ.get('PORT','8100'))\nclass H(http.server.SimpleHTTPRequestHandler):\n def __init__(s,*a,**k): super().__init__(*a,directory=D,**k)\n def end_headers(s):\n  s.send_header('Cache-Control','no-store, must-revalidate'); s.send_header('Pragma','no-cache'); s.send_header('Expires','0')\n  super().end_headers()\nsocketserver.TCPServer.allow_reuse_address=True\nsocketserver.TCPServer(('',P),H).serve_forever()"],
+      "port": 8100,
+      "autoPort": true
     }
   ]
 }

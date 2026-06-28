@@ -213,3 +213,35 @@ two-browser arena and direct guest-avatar sword control still need real two-devi
 **Files:** all overworld/co-op logic in `game.js`; new `server/ws.js` (relay) and `net-battle.js`
 (client). Reuses the shared resolver (`sim/world-sim.js`). Offline single-player is fully gated off
 from every co-op path. Controls + dev map: `BATTLE_CONTROLS.md` (overworld/co-op section).
+
+---
+
+## Addendum — Global Destiny Engine (added 2026-06-29)
+
+> Owner-directed server-pillar step on top of the living world: every life should feel like it's
+> *going somewhere*. Built as the exact sibling of the diplomacy engine.
+
+**What it is:** each world tick the server reads **every character in the world** — NPC warlords *and*
+the player + warband — and scores each toward a **fated arc** (Conqueror, Champion of the Vale,
+Kingslayer, The Bulwark, Founder of a Line, The Faithless, The Doomed, The Unremembered), advancing a
+`fate` 0→1. It rolls the whole population up into a world-level **"age"** (Age of Ambition / Age of
+Blood / The Uniting / The Long Dusk / The Long Peace) with a generated prophecy, and records milestones
+in the chronicle ("*A fate settles on …*", "*The prophecy holds …*", "*The age turns: The Uniting*").
+
+**Chronicle-only by design:** nothing in combat / marching / conquest / diplomacy reads
+`destiny`/`fate`/`age` — it is purely descriptive (keeps outcomes legible; aligns with *no hidden
+rubber-banding*).
+
+**Status: built & verified.** Engine over 300 ticks (varied destinies + correct age + chronicle);
+determinism (byte-identical per seed); live `/api/v1/world` `destiny` block; real-browser digest +
+charsheet render.
+
+**Files:** pure kernel `computeDestiny()` in `sim/world-sim.js` (deterministic, shared client+server;
+plus `destinyTitle()`/`ageTitle()`); server authority `server/destiny.js` (`tickDestiny()` runs inside
+the tick transaction, after diplomacy, self-gated to every 3rd tick); schema `server/migrations/005_destiny.sql`
+(`destiny/fate/destiny_tick` on `warlords`+`characters`, `world_destiny` table); wiring in `server/tick.js`
++ `server/index.js`; client thin read in `game.js` (digest age/prophecy/fated pills + `✦ Destiny` on the
+V charsheet). `spawnWarlord` now seeds the Phase-B `personality_json`/`loyalty` so fates diverge.
+
+**Deferred:** "fate sealed" lines when a doomed/conqueror actually falls; optionally letting destiny
+*nudge* the sim — both kept out so this build stays purely descriptive.

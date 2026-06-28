@@ -6,7 +6,7 @@
 const { db } = require('./db');
 const WS = require('../sim/world-sim.js');
 
-const NATIONS = ['Valgard', 'Eorland', 'Sunmarch', 'Mournhold', 'Frostmere'];
+const NATIONS = ['Aurelia', 'Khorvane', 'Sahir', 'Wendmark', 'Maridor'];
 const PLAYER = 'Your Banner';
 const ALL_FACTIONS = NATIONS.concat([PLAYER]);
 const CAP_POWER = 25;          // a held capital is worth this much strategic weight
@@ -14,17 +14,15 @@ const CONQUEST_SHOCK = 28;     // opinion a faction loses toward whoever seizes 
 
 // ----- seeding -----
 function seedDiplomacy(worldId) {
-  // relations: one row per unordered pair, opening opinion by pentagon adjacency (neighbours feud)
+  // relations: one row per unordered pair, opening opinion from the themed matrix in the kernel
+  // (a fading empire, its eastern rival, a rising southern power, northern tribes, a sea-league)
   if (!db.prepare('SELECT count(*) n FROM faction_relations WHERE world_id=?').get(worldId).n) {
     const ins = db.prepare('INSERT INTO faction_relations(world_id, faction_a, faction_b, opinion, stance) VALUES (?,?,?,?,?)');
     for (let i = 0; i < ALL_FACTIONS.length; i++) for (let j = i + 1; j < ALL_FACTIONS.length; j++) {
       const a = ALL_FACTIONS[i], b = ALL_FACTIONS[j];
-      let opinion = 0;
       const ni = NATIONS.indexOf(a), nj = NATIONS.indexOf(b);
-      if (ni >= 0 && nj >= 0) {                                   // two nations: neighbours on the pentagon start sore
-        const d = Math.abs(ni - nj); const adjacent = d === 1 || d === NATIONS.length - 1;
-        opinion = adjacent ? -25 : 5;
-      }
+      // nation↔nation opening standing is themed; the player opens neutral with everyone
+      const opinion = (ni >= 0 && nj >= 0) ? WS.initialOpinion(a, b) : 0;
       const c = WS.canonPair(a, b);
       ins.run(worldId, c.a, c.b, opinion, WS.stanceFromOpinion(opinion, null));
     }

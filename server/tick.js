@@ -19,14 +19,17 @@ const ARMY_SPEED = 6;           // map units per tick
 const CLASH_RANGE = 9;
 const CAP_RANGE = 8;
 
-const NATIONS = ['Valgard', 'Eorland', 'Sunmarch', 'Mournhold', 'Frostmere'];
+const NATIONS = ['Aurelia', 'Khorvane', 'Sahir', 'Wendmark', 'Maridor'];
+// each power's heartland bearing (radians), matching the client's NATIONS[].home: the rising
+// power in the hot south, the war-tribes in the cold north, the empire and its rival east/west
+const CAP_ANGLE = [2.62, 0.15, 1.57, 4.71, 3.67];
 const GNAMES = ['Aldric','Bram','Cedwyn','Doran','Eadric','Falk','Garrec','Hale','Ivo','Joren','Kell','Lorne','Maddoc','Nael','Osric','Perrin','Roderic','Sefton','Tomas','Ulf','Varin','Wend','Yorin','Edra','Freya','Gerda','Halla','Ingrid','Kara','Linnet','Mira','Nessa','Orla','Petra','Romilda','Sigrun','Thora'];
 const BYN = ['the Bold','the Grim','Ironhand','Oakheart','the Swift','Stonefist','Redmane','Hawkeye','the Tall','Wolfsbane','the Sly','Brightblade','Frostbeard','Stormcrow','the Fierce','the Quiet','Greycloak'];
 function pick(a) { return a[(Math.random() * a.length) | 0]; }
 function genName() { return pick(GNAMES) + (Math.random() < 0.6 ? ' ' + pick(BYN) : ''); }
 function rand(a, b) { return a + Math.random() * (b - a); }
 function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
-function capPos(idx) { const a = idx / NATIONS.length * Math.PI * 2; return { x: Math.cos(a) * CAP_RADIUS, z: Math.sin(a) * CAP_RADIUS }; }
+function capPos(idx) { const a = CAP_ANGLE[idx] != null ? CAP_ANGLE[idx] : idx / NATIONS.length * Math.PI * 2; return { x: Math.cos(a) * CAP_RADIUS, z: Math.sin(a) * CAP_RADIUS }; }
 function factionCapPos(f) { const i = NATIONS.indexOf(f); return capPos(i < 0 ? 0 : i); }
 
 function ev(worldId, tick, type, summary) { db.prepare('INSERT INTO world_events(world_id, tick, type, summary) VALUES (?,?,?,?)').run(worldId, tick, type, summary); }

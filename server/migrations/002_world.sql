@@ -12,7 +12,7 @@ CREATE TABLE capitals (
   id INTEGER PRIMARY KEY,
   world_id INTEGER NOT NULL REFERENCES worlds(id),
   idx INTEGER NOT NULL,                  -- 0..4, matches the client's pentagon vertices
-  def_name TEXT NOT NULL,                -- founding nation (Valgard, Eorland, ...)
+  def_name TEXT NOT NULL,                -- founding nation (Aurelia, Khorvane, ...)
   owner_name TEXT NOT NULL,              -- current owner nation, or 'Your Banner'
   garrison INTEGER NOT NULL DEFAULT 20,
   UNIQUE (world_id, idx)

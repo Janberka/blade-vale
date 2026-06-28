@@ -2366,16 +2366,22 @@ const worldSeed = () => ((mapLevel * 1000 + 7) ^ (universeSeed * 2654435761)) >>
 const TERR_SCALE = 1 / 42;
 function elevationAt(x, z) {
   const base = _fbm((x + 1000) * TERR_SCALE, (z - 1000) * TERR_SCALE, worldSeed() + 1);
-  // land sits in the temperate mid-range; only noise peaks reach mountains
-  const nx = x / MAP_HALF, nz = z / MAP_HALF, d = Math.sqrt(nx * nx + nz * nz);
-  const coast = clamp((d - 0.72) / 0.42, 0, 1); // 0 inland → 1 at the open-sea rim
-  return clamp(0.30 + base * 0.55 - coast * 0.62, 0, 1);
+  // Broad seas, gulfs, and inland lakes are carved by a slow "continent" field instead of a
+  // radial rim, so dry land continues forever in every direction (the old heartland was an
+  // island walled off by ocean at the map edge). Peaks still rise from the base noise.
+  const cont = _fbm((x - 4000) * TERR_SCALE * 0.20, (z + 4000) * TERR_SCALE * 0.20, worldSeed() + 5);
+  return clamp(0.30 + base * 0.55 + (cont - 0.55) * 0.80, 0, 1);
 }
 function moistureAt(x, z) { return _fbm((x - 2200) * TERR_SCALE * 1.15, (z + 1700) * TERR_SCALE * 1.15, worldSeed() + 19); }
 function tempAt(x, z) {
-  // climate is latitude-led: 0 = frozen north, 1 = hot south. small noise softens
-  // the band edges; altitude cools the highlands so peaks stay snowbound.
-  const lat = (z + MAP_HALF) / (2 * MAP_HALF);
+  // Heartland climate stays latitude-led (0 = frozen north, 1 = hot south) so the five powers
+  // keep their themed homelands — desert south, tribal north. Out past the heartland it dissolves
+  // into broad noise "provinces" so the frontier holds fresh climates instead of one endless band.
+  // Altitude cools the highlands so peaks stay snowbound everywhere.
+  const latBand = clamp((z + MAP_HALF) / (2 * MAP_HALF), 0, 1);
+  const prov = _fbm((x + 9000) * 0.0016, (z - 9000) * 0.0016, worldSeed() + 71);
+  const frontier = clamp((Math.hypot(x, z) - MAP_HALF) / (MAP_HALF * 3), 0, 1); // 0 heartland → 1 deep frontier
+  const lat = latBand * (1 - frontier) + prov * frontier;
   return clamp(lat * 0.95 + 0.03 + _fbm(x * 0.025, z * 0.025, worldSeed() + 41) * 0.1 - elevationAt(x, z) * 0.18, 0, 1);
 }
 const isWater = (x, z) => elevationAt(x, z) < SEA_LEVEL;
@@ -2407,13 +2413,17 @@ function biomeAt(x, z) {
   return m < 0.40 ? B.DESERT : B.SAVANNA;                 // hot south: desert / dry savanna
 }
 
-// ---------- Nations: five countries, each a homeland that wars for territory ----------
+// ---------- Nations: five powers around an inner sea, on the eve of a great upheaval ----------
+// A fading old empire, its ancient eastern rival, a young power surging out of the southern
+// deserts, the war-tribes of the cold north, and a sea-merchant league. `home` is the compass
+// angle its heartland sits at (radians; +z is the hot south, -z the frozen north — see tempAt),
+// so the desert power always rises in the south and the tribes hold the northern woods.
 const NATIONS = [
-  { name: 'Valgard',  color: 0xb0202a },
-  { name: 'Eorland',  color: 0x1d7d82 },
-  { name: 'Sunmarch', color: 0xc69020 },
-  { name: 'Mournhold', color: 0x7a3cae },
-  { name: 'Frostmere', color: 0x3a6ea5 },
+  { name: 'Aurelia',  color: 0x7d3fb0, home: 2.62 }, // the old empire — imperial purple, warm western heartland
+  { name: 'Khorvane', color: 0xb0202a, home: 0.15 }, // the ancient eastern rival — deep crimson, far east
+  { name: 'Sahir',    color: 0x1f9d57, home: 1.57 }, // the rising power — green banners, the southern wastes
+  { name: 'Wendmark', color: 0x6b7280, home: 4.71 }, // the northern war-tribes — iron grey, the cold forests
+  { name: 'Maridor',  color: 0x1d8f8f, home: 3.67 }, // the sea-merchant league — teal, a temperate coast
 ];
 const PLAYER_REALM = { name: 'Your Banner', color: 0x2f6fd0 }; // captured holds fly your colors
 // ---------- Diplomacy: standing pacts with AI nations (other players in a shared world are allies too) ----------
@@ -2459,9 +2469,10 @@ function seedLocalRelations() {
   const all = NATIONS.map(n => n.name).concat([PLAYER_REALM.name]);
   const out = [];
   for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) {
-    const a = all[i], b = all[j]; let opinion = 0;
+    const a = all[i], b = all[j];
     const ni = NATIONS.findIndex(n => n.name === a), nj = NATIONS.findIndex(n => n.name === b);
-    if (ni >= 0 && nj >= 0) { const dd = Math.abs(ni - nj); opinion = (dd === 1 || dd === NATIONS.length - 1) ? -25 : 5; }
+    // nation↔nation opening standing comes from the themed matrix; the player opens neutral with all
+    const opinion = (ni >= 0 && nj >= 0) ? WorldSim.initialOpinion(a, b) : 0;
     const c = WorldSim.canonPair(a, b);
     out.push({ a: c.a, b: c.b, opinion, stance: WorldSim.stanceFromOpinion(opinion, null) });
   }
@@ -2495,19 +2506,23 @@ let nations = [];           // this region's capitals: [{ def, owner, x, z, garr
 const _tcA = new THREE.Color(), _tcB = new THREE.Color();
 // a capital is a real prize — its garrison outnumbers a field host
 function garrisonSize() { return Math.round(rand(18, 28) + mapLevel * 8); }
-function nearestLand(x, z) { // spiral out from a point until we find dry ground
+function nearestLand(x, z) { // spiral out from a point until we find dry ground (unbounded — the world is infinite)
   if (!isWater(x, z)) return [x, z];
-  for (let r = 4; r < MAP_HALF; r += 4) for (let a = 0; a < 12; a++) {
-    const ax = clamp(x + Math.cos(a / 12 * Math.PI * 2) * r, -MAP_HALF + 3, MAP_HALF - 3);
-    const az = clamp(z + Math.sin(a / 12 * Math.PI * 2) * r, -MAP_HALF + 3, MAP_HALF - 3);
+  for (let r = 4; r < MAP_HALF * 2; r += 4) for (let a = 0; a < 12; a++) {
+    const ax = x + Math.cos(a / 12 * Math.PI * 2) * r;
+    const az = z + Math.sin(a / 12 * Math.PI * 2) * r;
     if (!isWater(ax, az)) return [ax, az];
   }
-  return [0, 0];
+  return [x, z];
 }
 function placeCapitals() {
   nations = [];
+  // each power sits at its themed compass bearing; a small seeded wobble keeps runs distinct
+  // (and the terrain noise itself shifts per universe) without scrambling the cardinal layout
+  const jitter = ((worldSeed() % 1000) / 1000 - 0.5) * 0.18; // ±~5°
   for (let i = 0; i < NATIONS.length; i++) {
-    const ang = (i / NATIONS.length) * Math.PI * 2 + worldSeed() * 0.0013;
+    const home = (typeof NATIONS[i].home === 'number') ? NATIONS[i].home : (i / NATIONS.length) * Math.PI * 2;
+    const ang = home + jitter;
     const [cx, cz] = nearestLand(Math.cos(ang) * MAP_HALF * 0.5, Math.sin(ang) * MAP_HALF * 0.5);
     nations.push({ def: NATIONS[i], owner: NATIONS[i], x: cx, z: cz, garrison: garrisonSize(), parleyCd: 0, conquerCd: 0, group: null });
   }
@@ -2554,79 +2569,193 @@ function mapElevY(x, z) {
   if (e > 0.70) h += (e - 0.70) * MAP_RELIEF * 2.2;                   // peaks tower above the foothills
   return h;
 }
-function buildMapTerrain() {
-  if (mapTerrain && mapTerrainLevel === mapLevel) { mapTerrain.visible = true; return; }
-  if (mapTerrain) { scene.remove(mapTerrain); disposeGroup(mapTerrain); mapTerrain = null; }
-  mapTerrain = new THREE.Group();
-  const col = new THREE.Color();
-  // 1) smooth vertex-colored terrain sheet — soft biome transitions + coastlines
-  const SEG = 84;
-  const tgeo = new THREE.PlaneGeometry(MAP_HALF * 2, MAP_HALF * 2, SEG, SEG);
-  tgeo.rotateX(-Math.PI / 2);
-  const pos = tgeo.attributes.position, cArr = new Float32Array(pos.count * 3);
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i), z = pos.getZ(i);
-    pos.setY(i, mapElevY(x, z));   // real relief: mountains rise, valleys sink, coasts shelve
-    terrainColorAt(x, z, col);
-    cArr[i * 3] = col.r; cArr[i * 3 + 1] = col.g; cArr[i * 3 + 2] = col.b;
+// ---------- Infinite world: streaming terrain chunks + a settlement hierarchy ----------
+// The strategic map is no longer one bounded sheet. Terrain, scatter, and settlements stream in as
+// square chunks around the player and dispose once left behind, so the world extends forever and is
+// generated the moment you discover it. Everything a chunk builds is a pure function of
+// (chunkX, chunkZ, worldSeed), so a place looks identical each time you return within a region.
+const CHUNK = 60;          // world units per chunk side
+const CHUNK_SEG = 16;      // relief subdivisions per chunk (matches the old sheet's vertex density)
+const VIEW = 2;            // chunks loaded out from the player's chunk (5×5 = 25 ⇒ ~300×300 window)
+const mapChunks = new Map();   // "cx,cz" -> { group, holds:[settlement holds] }
+const settlements = [];        // every currently-loaded village/town/city (duck-typed like a capital)
+const heldOwners = new Map();  // siteKey -> owner faction name: remembers conquests near you this region
+let _lastPlayerChunk = '';
+
+function _mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function _chunkHash(cx, cz) { return (Math.imul(cx | 0, 73856093) ^ Math.imul(cz | 0, 19349663) ^ Math.imul(worldSeed(), 83492791)) >>> 0; }
+
+// the campaign gets deadlier the farther you roam: home stays gentle, the frontier is brutal
+const FRONTIER_STEP = 240;
+function frontierLevel(x, z) { return mapLevel + Math.floor(Math.hypot(x, z) / FRONTIER_STEP); }
+
+// ---------- Frontier politics: free cities + petty realms beyond the five powers' heartland ----------
+const FREE = { name: 'Free City', color: 0x9aa0a6, free: true };  // unaligned, neutral grey
+const PETTY = [
+  { name: 'Greymark',   color: 0x8a6d3b }, { name: 'Ravenfell', color: 0x466079 },
+  { name: 'Thornhold',  color: 0x6f8f3a }, { name: 'Duskvar',   color: 0x7c4a72 },
+  { name: 'Stormwatch', color: 0x3b7d96 }, { name: 'Ashreach',  color: 0xa6543a },
+  { name: 'Hollowmere', color: 0x4c7d62 }, { name: 'Karran',    color: 0xb08a2a },
+];
+const HEARTLAND_R = MAP_HALF * 1.6;  // within this of origin the five named powers rule; beyond it, the frontier
+function factionByName(nm) {
+  if (nm === PLAYER_REALM.name) return PLAYER_REALM;
+  if (nm === FREE.name) return FREE;
+  return NATIONS.find(n => n.name === nm) || PETTY.find(p => p.name === nm) || null;
+}
+function nearCapital(x, z, d) { for (const n of nations) if (Math.hypot(n.x - x, n.z - z) < d) return true; return false; }
+
+// deterministic settlement sites within a chunk (most chunks hold 0–1; a few hold 2)
+function settlementSites(cx, cz) {
+  const rng = _mulberry32(_chunkHash(cx, cz) ^ 0x51A7);
+  const n = rng() < 0.42 ? 0 : (rng() < 0.80 ? 1 : 2);
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const x = (cx + 0.20 + rng() * 0.60) * CHUNK;   // kept off the chunk edges so neighbours don't collide
+    const z = (cz + 0.20 + rng() * 0.60) * CHUNK;
+    const tr = rng();
+    const tier = tr < 0.70 ? 'village' : tr < 0.92 ? 'town' : 'city';
+    out.push({ x, z, tier, idx: i, cx, cz });
   }
-  tgeo.setAttribute('color', new THREE.BufferAttribute(cArr, 3));
-  tgeo.computeVertexNormals();
-  const sheet = new THREE.Mesh(tgeo, new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 3 }));
-  sheet.receiveShadow = true;
-  mapTerrain.add(sheet);
-  // 2) national borders — a dark line wherever two territories meet on land (draped over the relief)
-  const seg = [], bstep = 3;
-  const byAt = (bx, bz) => mapElevY(bx, bz) + 0.25;
-  for (let x = -MAP_HALF; x < MAP_HALF; x += bstep) for (let z = -MAP_HALF; z < MAP_HALF; z += bstep) {
-    if (isWater(x, z)) continue;
-    const n = nationAt(x, z);
-    if (!isWater(x + bstep, z) && nationAt(x + bstep, z) !== n) seg.push(x + bstep, byAt(x + bstep, z - bstep / 2), z - bstep / 2, x + bstep, byAt(x + bstep, z + bstep / 2), z + bstep / 2);
-    if (!isWater(x, z + bstep) && nationAt(x, z + bstep) !== n) seg.push(x - bstep / 2, byAt(x - bstep / 2, z + bstep), z + bstep, x + bstep / 2, byAt(x + bstep / 2, z + bstep), z + bstep);
-  }
-  if (seg.length) {
-    const lgeo = new THREE.BufferGeometry();
-    lgeo.setAttribute('position', new THREE.Float32BufferAttribute(seg, 3));
-    mapTerrain.add(new THREE.LineSegments(lgeo, new THREE.LineBasicMaterial({ color: 0x241f2e })));
-  }
-  // 3) trees + rocks scattered on land by biome density (never on water)
-  const trees = [], rocks = [];
-  for (let x = -MAP_HALF + 4; x < MAP_HALF - 4; x += 6.5) for (let z = -MAP_HALF + 4; z < MAP_HALF - 4; z += 6.5) {
-    const jx = x + rand(-2, 2), jz = z + rand(-2, 2);
+  return out;
+}
+function siteKey(s) { return s.cx + ',' + s.cz + ',' + s.idx; }
+const _NAME_A = ['Ash', 'Brook', 'Crag', 'Dun', 'Elder', 'Fen', 'Grim', 'Holt', 'Kel', 'Mar', 'Oak', 'Pell', 'Raven', 'Stone', 'Thorn', 'Vale', 'Wic', 'Yarl', 'Bram', 'Glen'];
+const _NAME_B = ['bury', 'combe', 'dale', 'ford', 'garth', 'hollow', 'mere', 'reach', 'stead', 'ton', 'wick', 'wold', 'holm', 'crest', 'gate', 'moor', 'fell', 'bridge'];
+function settlementName(s) {
+  const r = _mulberry32(_chunkHash(s.cx, s.cz) ^ (Math.imul(s.idx + 1, 2654435761) >>> 0));
+  return _NAME_A[(r() * _NAME_A.length) | 0] + _NAME_B[(r() * _NAME_B.length) | 0];
+}
+function settlementOwner(s) {
+  if (Math.hypot(s.x, s.z) < HEARTLAND_R) { const n = nationAt(s.x, s.z); return n ? n.owner : FREE; } // heartland → its nation
+  const r = _mulberry32(_chunkHash(s.cx, s.cz) ^ (Math.imul(s.idx + 7, 40503) >>> 0));
+  return r() < 0.55 ? FREE : PETTY[(r() * PETTY.length) | 0];   // frontier → free cities + petty realms
+}
+const TIER_GARRISON = { village: [4, 9], town: [10, 18], city: [20, 34] };
+function settlementGarrison(s) {
+  const g = TIER_GARRISON[s.tier], scale = s.tier === 'city' ? 6 : s.tier === 'town' ? 3 : 1.4;
+  return Math.round(rand(g[0], g[1]) + frontierLevel(s.x, s.z) * scale);   // distant holds bristle with men
+}
+function makeSettlementHold(s) {
+  const key = siteKey(s);
+  const restored = heldOwners.get(key);
+  const owner = (restored && factionByName(restored)) || settlementOwner(s);
+  const hold = { def: { name: settlementName(s) }, owner, x: s.x, z: s.z, tier: s.tier,
+    garrison: settlementGarrison(s), parleyCd: 0, conquerCd: 0, group: null, site: s, key };
+  hold.group = makeSettlement(hold);
+  return hold;
+}
+
+// ---------- Per-chunk decoration: trees + rocks, deterministic from the chunk seed ----------
+function buildScatter(group, cx, cz) {
+  const rng = _mulberry32(_chunkHash(cx, cz) ^ 0x5EED);
+  const x0 = cx * CHUNK, z0 = cz * CHUNK, trees = [], rocks = [];
+  for (let gx = 3; gx < CHUNK; gx += 6.5) for (let gz = 3; gz < CHUNK; gz += 6.5) {
+    const jx = x0 + gx + (rng() * 4 - 2), jz = z0 + gz + (rng() * 4 - 2);
     if (isWater(jx, jz)) continue;
-    const b = biomeAt(jx, jz);
-    if (Math.random() < b.treeChance) trees.push([jx, jz, b.tree]);
-    else if (Math.random() < b.rockChance) rocks.push([jx, jz]);
+    const b = biomeAt(jx, jz), roll = rng();
+    if (roll < b.treeChance) trees.push([jx, jz, b.tree]);
+    else if (roll < b.treeChance + b.rockChance) rocks.push([jx, jz]);
   }
-  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), v = new THREE.Vector3(), s = new THREE.Vector3();
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), v = new THREE.Vector3(), s = new THREE.Vector3(), col = new THREE.Color();
   if (trees.length) {
-    const trunks = new THREE.InstancedMesh(new THREE.BoxGeometry(0.5, 1, 0.5), mat(0x6b4a2e), trees.length);
-    const cones = new THREE.InstancedMesh(new THREE.ConeGeometry(1.5, 3.2, 6), mat(0xffffff), trees.length);
+    const trunks = new THREE.InstancedMesh(cachedGeo('mapTrunk', () => new THREE.BoxGeometry(0.5, 1, 0.5)), mat(0x6b4a2e), trees.length);
+    const cones = new THREE.InstancedMesh(cachedGeo('mapCone', () => new THREE.ConeGeometry(1.5, 3.2, 6)), mat(0xffffff), trees.length);
     trees.forEach(([x, z, c], i) => {
-      const sc = rand(0.8, 1.5), th = rand(2, 3) * sc, gy = mapElevY(x, z);
-      q.setFromEuler(e.set(0, rand(0, Math.PI), 0));
+      const sc = 0.8 + rng() * 0.7, th = (2 + rng()) * sc, gy = mapElevY(x, z);
+      q.setFromEuler(e.set(0, rng() * Math.PI, 0));
       m4.compose(v.set(x, gy + th / 2, z), q, s.set(sc, th, sc)); trunks.setMatrixAt(i, m4);
       m4.compose(v.set(x, gy + th + 1.2 * sc, z), q, s.set(sc, sc, sc)); cones.setMatrixAt(i, m4);
       col.setHex(c); cones.setColorAt(i, col);
     });
     trunks.castShadow = cones.castShadow = true;
     if (cones.instanceColor) cones.instanceColor.needsUpdate = true;
-    mapTerrain.add(trunks); mapTerrain.add(cones);
+    group.add(trunks); group.add(cones);
   }
   if (rocks.length) {
-    const rm = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 0), mat(0x8d8f95), rocks.length);
+    const rm = new THREE.InstancedMesh(cachedGeo('mapRock', () => new THREE.IcosahedronGeometry(1, 0)), mat(0x8d8f95), rocks.length);
     rocks.forEach(([x, z], i) => {
-      const r = rand(0.6, 1.6);
-      q.setFromEuler(e.set(Math.random(), Math.random(), Math.random()));
-      m4.compose(v.set(x, mapElevY(x, z) + r * 0.5, z), q, s.set(r, r * rand(0.6, 1), r)); rm.setMatrixAt(i, m4);
+      const r = 0.6 + rng() * 1.0;
+      q.setFromEuler(e.set(rng(), rng(), rng()));
+      m4.compose(v.set(x, mapElevY(x, z) + r * 0.5, z), q, s.set(r, r * (0.6 + rng() * 0.4), r)); rm.setMatrixAt(i, m4);
     });
     rm.castShadow = rm.receiveShadow = true;
-    mapTerrain.add(rm);
+    group.add(rm);
   }
-  // 4) capital strongholds + nation name labels
-  for (const n of nations) { n.group = makeCapital(n); recolorCapital(n); mapTerrain.add(n.group); }
-  scene.add(mapTerrain);
-  mapTerrainLevel = mapLevel;
+}
+
+// ---------- Chunk streaming ----------
+function buildChunk(cx, cz) {
+  const key = cx + ',' + cz;
+  if (mapChunks.has(key)) return;
+  const group = new THREE.Group();
+  const col = new THREE.Color();
+  // relief sheet — world coords baked into the vertices so the chunk group itself stays at the origin
+  const tgeo = new THREE.PlaneGeometry(CHUNK, CHUNK, CHUNK_SEG, CHUNK_SEG);
+  tgeo.rotateX(-Math.PI / 2);
+  const ox = (cx + 0.5) * CHUNK, oz = (cz + 0.5) * CHUNK;
+  const pos = tgeo.attributes.position, cArr = new Float32Array(pos.count * 3);
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i) + ox, z = pos.getZ(i) + oz;
+    pos.setX(i, x); pos.setZ(i, z); pos.setY(i, mapElevY(x, z));
+    terrainColorAt(x, z, col);
+    cArr[i * 3] = col.r; cArr[i * 3 + 1] = col.g; cArr[i * 3 + 2] = col.b;
+  }
+  tgeo.computeVertexNormals();
+  tgeo.setAttribute('color', new THREE.BufferAttribute(cArr, 3));
+  const sheet = new THREE.Mesh(tgeo, new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 3 }));
+  sheet.receiveShadow = true; group.add(sheet);
+  buildScatter(group, cx, cz);
+  // settlements discovered in this chunk
+  const holds = [];
+  for (const s of settlementSites(cx, cz)) {
+    if (isWater(s.x, s.z) || nearCapital(s.x, s.z, 18)) continue;
+    const hold = makeSettlementHold(s);
+    group.add(hold.group);
+    holds.push(hold); settlements.push(hold);
+  }
+  mapTerrain.add(group);
+  mapChunks.set(key, { group, holds });
+}
+function disposeChunk(key) {
+  const c = mapChunks.get(key); if (!c) return;
+  mapTerrain.remove(c.group); disposeGroup(c.group);
+  for (const h of c.holds) { const i = settlements.indexOf(h); if (i >= 0) settlements.splice(i, 1); }
+  mapChunks.delete(key);
+}
+function clearChunks() { for (const key of Array.from(mapChunks.keys())) disposeChunk(key); }
+function updateChunks(force) {
+  if (!mapTerrain) return;
+  const pcx = Math.floor(player.pos.x / CHUNK), pcz = Math.floor(player.pos.z / CHUNK), pk = pcx + ',' + pcz;
+  if (!force && pk === _lastPlayerChunk) return;   // only re-stream when the player crosses a chunk line
+  _lastPlayerChunk = pk;
+  for (let dx = -VIEW; dx <= VIEW; dx++) for (let dz = -VIEW; dz <= VIEW; dz++) buildChunk(pcx + dx, pcz + dz);
+  for (const key of Array.from(mapChunks.keys())) {
+    const c = key.indexOf(','), kx = +key.slice(0, c), kz = +key.slice(c + 1);
+    if (Math.abs(kx - pcx) > VIEW + 1 || Math.abs(kz - pcz) > VIEW + 1) disposeChunk(key);
+  }
+}
+
+// ---------- Strategic map: persistent capitals + streamed chunks ----------
+function buildMapTerrain() {
+  if (mapTerrain && mapTerrainLevel !== mapLevel) {  // a fresh region — tear the whole world down
+    scene.remove(mapTerrain); disposeGroup(mapTerrain); mapTerrain = null;
+    mapChunks.clear(); settlements.length = 0; heldOwners.clear(); _lastPlayerChunk = '';
+  }
+  if (!mapTerrain) {
+    mapTerrain = new THREE.Group(); scene.add(mapTerrain);
+    for (const n of nations) { n.group = makeCapital(n); recolorCapital(n); mapTerrain.add(n.group); } // capitals always loaded
+    mapTerrainLevel = mapLevel;
+  }
+  mapTerrain.visible = true;
+  updateChunks(true);
 }
 // A walled keep: outer curtain wall with crenellated towers, a gatehouse, a central
 // keep, and the owner's banners. Banner/roof materials are per-capital and mutable,

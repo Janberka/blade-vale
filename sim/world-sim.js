@@ -97,6 +97,31 @@
   function canonPair(a, b) { return a <= b ? { a: a, b: b, swapped: false } : { a: b, b: a, swapped: true }; }
   function pairKey(a, b) { var c = canonPair(a, b); return c.a + '' + c.b; }
 
+  // ---------- Themed opening world ----------
+  // Five powers ring an inner sea on the eve of a great upheaval: a vast empire long past its
+  // peak, its ancient rival across the eastern water, a surging young power risen from the
+  // southern wastes, the war-tribes of the cold north, and a merchant league that profits from
+  // every quarrel. The opening alliances/feuds below set that stage; the kernel then drifts them.
+  // (Keys are canonical: the two names alphabetically, joined by '|' — see canonPair.)
+  var INITIAL_OPINION = {
+    'Aurelia|Khorvane':  -35, // two old empires, generations of war, now an exhausted, wary lull
+    'Aurelia|Maridor':    62, // the empire and the sea-league, bound by trade — a standing alliance
+    'Aurelia|Sahir':     -75, // the surge tears the empire's southern provinces away — open war
+    'Aurelia|Wendmark':  -55, // the northern tribes gnaw at the frayed frontier
+    'Khorvane|Maridor':   28, // trade across the eastern water — a non-aggression understanding
+    'Khorvane|Sahir':    -80, // the eastern empire all but shattered by the rising power
+    'Khorvane|Wendmark':   0, // distant, no shared border, no quarrel
+    'Maridor|Sahir':     -12, // the surge unsettles the trade lanes; the league stays watchful, neutral
+    'Maridor|Wendmark':   24, // the league buys northern furs and hires northern blades
+    'Sahir|Wendmark':    -15, // far apart, wary opposites, but not yet at blows
+  };
+  // opening opinion (-100..100) for a fresh world. Unknown pairs (e.g. an extra nation) open neutral.
+  function initialOpinion(a, b) {
+    var c = canonPair(a, b);
+    var v = INITIAL_OPINION[c.a + '|' + c.b];
+    return (typeof v === 'number') ? v : 0;
+  }
+
   function balanceOfPower(factions) {
     var live = factions.filter(function (f) { return f.alive !== 0; });
     var ranked = live.slice().sort(function (x, y) { return y.power - x.power; });
@@ -330,6 +355,7 @@
     stanceFromOpinion: stanceFromOpinion, rawStance: rawStance,
     areEnemies: areEnemies, areAllies: areAllies, areNonAggression: areNonAggression,
     canonPair: canonPair, pairKey: pairKey, balanceOfPower: balanceOfPower,
+    initialOpinion: initialOpinion,
     updateDiplomacy: updateDiplomacy, STANCE_TH: STANCE_TH,
     // destiny kernel
     computeDestiny: computeDestiny, destinyTitle: destinyTitle, ageTitle: ageTitle,

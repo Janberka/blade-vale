@@ -4932,7 +4932,13 @@ BV.otherPlayers = () => otherPlayerTokens.length;
 //  you're dropped into — is DERIVED from it. A Prince fields ≥100 men; an Outlaw
 //  a desperate dozen. Refresh, or hit "New Universe", to be dealt another.
 // ============================================================================
+// The DRIFTER is the humble default — a nobody with 3–4 swords and no holdings, dealt on a plain
+// load. It carries weight:0 so the random reroll pool never lands here; you only begin a drifter
+// by default, then grow from there. encounter:'none' → land in MAP mode, no forced opening fight.
+const DRIFTER = { key: 'drifter', title: 'Drifter', weight: 0, menLo: 3, menHi: 4, holdings: 0, pacts: 0, renownLo: 0, renownHi: 10, regionLo: 0, regionHi: 0, enemyFactor: 0, encounter: 'none',
+  mix: { sword: 0.50, long: 0.0, archer: 0.25, thrower: 0.25 }, blurb: 'Three or four swords and the open road — raise a warband from nothing.' };
 const STATIONS = [
+  DRIFTER,
   { key: 'outlaw',   title: 'Outlaw',            weight: 3, menLo: 6,   menHi: 13,  holdings: 0, pacts: 0, renownLo: 0,   renownHi: 25,  regionLo: 0, regionHi: 1, enemyFactor: 1.5,  encounter: 'ambush',
     mix: { sword: 0.70, long: 0.05, archer: 0.15, thrower: 0.10 }, blurb: 'Landless and hunted — a fistful of blades and nothing left to lose.' },
   { key: 'sellsword', title: 'Sellsword Captain', weight: 3, menLo: 18,  menHi: 30,  holdings: 0, pacts: 1, renownLo: 30,  renownHi: 90,  regionLo: 1, regionHi: 2, enemyFactor: 1.15, encounter: 'field',
@@ -4947,6 +4953,7 @@ const STATIONS = [
     mix: { sword: 0.42, long: 0.24, archer: 0.20, thrower: 0.14 }, blurb: 'Crowned and warlike — two holds, sworn vassals, and a grand campaign.' },
 ];
 const ENCOUNTER_VERB = {
+  none:   () => `The open road — raise your band`,
   ambush: n => `Ambushed — ${n} raiders close in`,
   field:  n => `A host of ${n} bars your path`,
   defend: n => `${n} march on your hold — break the siege`,
@@ -4965,11 +4972,14 @@ function _compFromMix(total, mix) {
 }
 
 // Deal a station + all its derived state from a universe seed. Pure: same seed → same deal.
-function rollStation(seed) {
+// forceKey pins the station (e.g. the humble 'drifter' default); otherwise it's drawn from the
+// weighted pool (drifter is weight:0 → never drawn randomly, only forced).
+function rollStation(seed, forceKey) {
   const rng = WorldSim.mulberry32((seed * 2654435761) >>> 0);
   const totalW = STATIONS.reduce((s, d) => s + d.weight, 0);
-  let r = rng() * totalW, def = STATIONS[0];
-  for (const d of STATIONS) { if ((r -= d.weight) < 0) { def = d; break; } }
+  let r = rng() * totalW, def = STATIONS.find(d => d.weight > 0) || STATIONS[0];
+  for (const d of STATIONS) { if (d.weight > 0 && (r -= d.weight) < 0) { def = d; break; } }
+  if (forceKey) { const f = STATIONS.find(d => d.key === forceKey); if (f) def = f; }
   const men = _rngInt(rng, def.menLo, def.menHi);
   const region = _rngInt(rng, def.regionLo, def.regionHi);
   const renown = _rngInt(rng, def.renownLo, def.renownHi);
@@ -5059,6 +5069,14 @@ function startStationGame(s) {
   placeCapitals();                                          // this universe's land + capitals
   claimHoldings(s);
 
+  if (s.encounter === 'none') {
+    // The humble default: begin on the overworld with your 3–4, no forced opening fight.
+    // Roam, pick winnable battles, recruit — raise the band from here.
+    enterMap();
+    updateStationReadout(s);
+    return;
+  }
+
   const rivalNation = NATIONS[s.rivalIdx];
   const rivalCap = nations[s.rivalIdx] || nations[0];
   const pos = { x: rivalCap.x, z: rivalCap.z };             // the fight takes the biome of the rival's land
@@ -5069,10 +5087,12 @@ function startStationGame(s) {
 
 // Deal a universe. With no seed → a fresh random one. Refresh defaults to a NEW universe;
 // only an explicitly PINNED seed (#u=<seed>, set via the seed box) reproduces on refresh.
-function bootUniverse(seed) {
+// forceKey pins the station — the default plain load deals the humble 'drifter' (map mode, no
+// opening fight); the "New Universe" reroll & seed box deal random dramatic stations.
+function bootUniverse(seed, forceKey) {
   if (seed == null) seed = (Math.random() * 0xffffffff) >>> 0;
   universeSeed = seed >>> 0;
-  startStationGame(rollStation(universeSeed));
+  startStationGame(rollStation(universeSeed, forceKey));
 }
 
 // ---------- Station readout + "New Universe" (reroll) panel ----------
@@ -5131,9 +5151,12 @@ BV.station = () => currentStation && { seed: currentStation.seed, title: station
   rival: NATIONS[currentStation.rivalIdx].name, enemy: currentStation.enemy, encounter: currentStation.encounter };
 BV.universeSeed = () => universeSeed;
 
-// Auto-deal a universe on load — refresh = a new starting point, dropped into its fight.
-// Honour #u=<seed> in the URL so a shared/bookmarked universe loads reproducibly.
+// Auto-deal a universe on load. The DEFAULT is the humble 'drifter' — begin on the overworld
+// (MAP mode) with a 3–4 warband and no forced opening fight; raise the band from there.
+// A PINNED #u=<seed> instead reproduces a full dramatic station (outlaw/prince/…), and the
+// "New Universe" reroll deals a fresh random station — both via the station panel.
 const _bootMatch = (typeof location !== 'undefined' && location.hash || '').match(/u=(\d+)/);
-bootUniverse(_bootMatch ? (parseInt(_bootMatch[1], 10) >>> 0) : undefined);
+if (_bootMatch) bootUniverse(parseInt(_bootMatch[1], 10) >>> 0);
+else bootUniverse(undefined, 'drifter');
 
 })();

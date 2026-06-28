@@ -207,7 +207,8 @@
   <div id="wave-banner"></div>
   <div id="wave-sub"></div>
   <div id="combo"></div>
-  <div id="controls-hint">MAP: WASD roam · ride into a band to parley · ride into a stronghold to lay siege · take every capital to win the land &nbsp;|&nbsp; BATTLE: MOUSE aim · CLICK attack/shoot · F sword/bow · SHIFT block · C crouch · SPACE dodge · V warband</div>
+  <div id="rally-banner" style="position:fixed; top:74px; left:50%; transform:translateX(-50%); display:none; padding:8px 18px; background:rgba(20,10,30,.80); border:1px solid #ffd34d; border-radius:10px; color:#ffe089; font-weight:700; letter-spacing:.4px; text-align:center; z-index:30; box-shadow:0 4px 18px rgba(0,0,0,.5); pointer-events:none; max-width:70vw"></div>
+  <div id="controls-hint">MAP: WASD roam · ride into a band to parley/pact · ride into a clash to join · ride into a stronghold to siege · <b>G</b> call to arms / crusade · take every capital to win &nbsp;|&nbsp; BATTLE: MOUSE aim · CLICK attack · F sword/bow · SHIFT block · C crouch · SPACE dodge · V warband</div>
 </div>
 
 <div id="damage-flash"></div>
@@ -241,6 +242,7 @@
   <p id="enc-info">A band bars your path.</p>
   <div style="display:flex; gap:18px; flex-wrap:wrap; justify-content:center;">
     <button class="btn" id="enc-attack">Attack</button>
+    <button class="btn" id="enc-ally" style="display:none">Propose Pact</button>
     <button class="btn" id="enc-hail">Say Hi</button>
   </div>
 </div>
@@ -292,6 +294,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="sim/world-sim.js?v=1"></script>
 <script src="client-net.js?v=1"></script>
-<script src="game.js?v=8"></script>
+<script src="net-battle.js?v=1"></script>
+<script src="game.js?v=9"></script>
 </body>
 </html>

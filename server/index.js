@@ -5,7 +5,9 @@ const http = require('http');
 const { db, migrate } = require('./db');
 const { ensureAccount, ensureSharedWorld } = require('./seed');
 const tick = require('./tick');
+const diplomacy = require('./diplomacy');
 const validate = require('./validate');
+const coop = require('./ws'); // real-time co-op battle relay (WebSocket, no external deps)
 
 migrate();
 // seed every world's macro state and start the always-on heartbeat (advances inactive worlds)
@@ -128,7 +130,8 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, {
         worldId: wid, shared: wid !== world.id, account: acct.id, simTick,
         capitals: tick.getCapitals(wid), armies, warlords,
-        players: tick.getPresence(wid, acct.id), events
+        players: tick.getPresence(wid, acct.id), events,
+        relations: diplomacy.relationsForApi(wid), factionState: diplomacy.factionStateForApi(wid)
       });
     }
 
@@ -163,4 +166,5 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => console.log('Blade Vale server on http://localhost:' + PORT + '  (db: better-sqlite3)'));
+coop.attach(server); // upgrade /coop WebSocket connections into the co-op battle relay
+server.listen(PORT, () => console.log('Blade Vale server on http://localhost:' + PORT + '  (db: better-sqlite3, co-op relay on /coop)'));

@@ -77,6 +77,9 @@
   net.reportArmyDefeat = function (armyId) { // you broke this server army in person
     return jfetch('/world/army/defeat', { method: 'POST', headers: worldHeaders(), body: JSON.stringify({ armyId: armyId }) }).catch(function () { return null; });
   };
+  net.diplomacy = function () { // the authoritative faction relations + posture from the last world poll
+    return net.world ? { relations: net.world.relations || [], factionState: net.world.factionState || [] } : null;
+  };
   // pre-fetch the world alongside the profile so the digest is ready when the player starts
   net.worldReady = net.loadWorld();
 

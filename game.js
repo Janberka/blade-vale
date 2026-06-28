@@ -158,6 +158,7 @@ function sphereMesh(r, m, wseg = 12, hseg = 9) {
 // ---------- World ----------
 let arenaPad = null;
 let ground = null; // hoisted: biomes recolor it per region when entering battle
+let backdropRange = null, backdropSnow = null; // distant mountain/hill silhouette ringing the field, recolored per biome
 function buildWorld() {
   // Low-poly ground: built ONCE at the MAXIMUM size — only the playable
   // bound (pad, treeline, torches, confine walls) moves as the arena grows.
@@ -168,8 +169,11 @@ function buildWorld() {
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i), z = pos.getZ(i);
     const edge = Math.max(Math.abs(x), Math.abs(z));
-    let h = Math.sin(x * 0.12) * Math.cos(z * 0.12) * 0.7 + (Math.random() - 0.5) * 0.35;
-    if (edge > ARENA_MAX) h += (edge - ARENA_MAX) * 0.9; // raise the far borders into hills
+    // gentle rolling relief across the playable field — fighters stand at y≈0, so this stays
+    // shallow enough that feet never visibly float, but the ground no longer reads as a pancake.
+    let h = (Math.sin(x * 0.06) * Math.cos(z * 0.05) + Math.sin(x * 0.13 + 2.1) * Math.cos(z * 0.11 + 0.7) * 0.5) * 0.55
+          + (Math.random() - 0.5) * 0.3;
+    if (edge > ARENA_MAX) h += (edge - ARENA_MAX) * 1.4 + Math.sin(x * 0.05) * Math.cos(z * 0.05) * (edge - ARENA_MAX) * 0.3; // foothills climb to the mountain ring
     pos.setY(i, h);
   }
   geo.computeVertexNormals();
@@ -196,7 +200,23 @@ function buildWorld() {
   for (let i = 0; i < 6; i++) {
     rocks.push({ a: 0, off: 0, inner: true, fx: rand(-1, 1), fz: rand(-1, 1), rad: rand(0.6, 1.8), ys: rand(0.6, 1), rx: Math.random(), ry: Math.random(), rz: Math.random() });
   }
+  // Rock piles — clusters of boulders that read as cairns / scree heaps. Some ring the field,
+  // some sit inside it as cover; each pile shares an anchor so it travels with the arena as it grows.
+  for (let p = 0; p < 16; p++) {
+    const inner = Math.random() < 0.5;
+    const a = Math.random() * Math.PI * 2, off = rand(-4, 18);
+    const fx = rand(-1, 1), fz = rand(-1, 1);
+    const members = 3 + (Math.random() * 4 | 0);
+    for (let k = 0; k < members; k++) {
+      const big = k === 0;
+      rocks.push({ a, off, inner, fx, fz,
+        lx: rand(-2.4, 2.4), lz: rand(-2.4, 2.4),
+        rad: big ? rand(1.6, 2.6) : rand(0.6, 1.6), ys: rand(0.55, 1.05),
+        rx: Math.random(), ry: Math.random(), rz: Math.random() });
+    }
+  }
   buildInstancedDeco(trees, rocks);
+  buildBackdropRange();
 
   // Ring of torches for atmosphere — repositioned outward as the field grows.
   for (let i = 0; i < 10; i++) {
@@ -242,8 +262,8 @@ function refreshDecoMatrices() {
     }
   });
   rocks.forEach((r, i) => {
-    const x = r.inner ? r.fx * (ARENA - 8) : Math.cos(r.a) * (ARENA + r.off);
-    const z = r.inner ? r.fz * (ARENA - 8) : Math.sin(r.a) * (ARENA + r.off);
+    const x = (r.inner ? r.fx * (ARENA - 8) : Math.cos(r.a) * (ARENA + r.off)) + (r.lx || 0);
+    const z = (r.inner ? r.fz * (ARENA - 8) : Math.sin(r.a) * (ARENA + r.off)) + (r.lz || 0);
     q.setFromEuler(e.set(r.rx, r.ry, r.rz));
     m4.compose(v.set(x, r.rad * 0.5, z), q, sc.set(r.rad, r.rad * r.ys, r.rad));
     rockMesh.setMatrixAt(i, m4);
@@ -251,6 +271,51 @@ function refreshDecoMatrices() {
   trunks.instanceMatrix.needsUpdate = true;
   cones.instanceMatrix.needsUpdate = true;
   rockMesh.instanceMatrix.needsUpdate = true;
+}
+// ---------- Backdrop range: a low-poly mountain/hill silhouette ringing the battlefield ----------
+// Two concentric rings of jittered, overlapping pyramidal peaks well beyond the largest play field,
+// plus snow caps that toggle on for cold/high biomes. Recolored by applyBiome() to suit each land.
+function buildBackdropRange() {
+  if (backdropRange) return;
+  const peaks = [];
+  const R0 = ARENA_MAX + 24;
+  const rings = [{ r: R0, n: 48, hl: 30, hh: 72, wl: 22, wh: 46 }, { r: R0 + 64, n: 36, hl: 48, hh: 116, wl: 30, wh: 64 }];
+  for (const ring of rings) for (let i = 0; i < ring.n; i++) {
+    const a = (i / ring.n) * Math.PI * 2 + rand(-0.05, 0.05);
+    const rr = ring.r + rand(-20, 20);
+    peaks.push({ x: Math.cos(a) * rr, z: Math.sin(a) * rr, h: rand(ring.hl, ring.hh), w: rand(ring.wl, ring.wh), rot: rand(0, Math.PI), tilt: rand(-0.08, 0.08) });
+  }
+  const peakMat = mat(0x83868c, { shared: false });   // recolored per biome
+  const snowMat = mat(0xeef3f7, { shared: false });
+  const geo = () => new THREE.ConeGeometry(1, 1, 5);   // 5-sided = chunky low-poly peak
+  backdropRange = new THREE.InstancedMesh(cachedGeo('bdpeak', geo), peakMat, peaks.length);
+  backdropSnow = new THREE.InstancedMesh(cachedGeo('bdpeak', geo), snowMat, peaks.length);
+  backdropRange.userData.mat = peakMat; backdropSnow.userData.mat = snowMat;
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), v = new THREE.Vector3(), s = new THREE.Vector3();
+  peaks.forEach((p, i) => {
+    q.setFromEuler(e.set(p.tilt, p.rot, 0));
+    m4.compose(v.set(p.x, p.h / 2 - 2, p.z), q, s.set(p.w, p.h, p.w)); backdropRange.setMatrixAt(i, m4);
+    const sh = p.h * 0.34, sw = p.w * 0.34;            // snow cap rides the top third
+    m4.compose(v.set(p.x, p.h - sh / 2 - 2, p.z), q, s.set(sw, sh, sw)); backdropSnow.setMatrixAt(i, m4);
+  });
+  backdropRange.castShadow = backdropRange.receiveShadow = false; // far outside the shadow cascade
+  backdropSnow.castShadow = backdropSnow.receiveShadow = false;
+  backdropRange.visible = backdropSnow.visible = false;           // off until a battle turns the dressing on
+  scene.add(backdropRange); scene.add(backdropSnow);
+}
+// the silhouette's stone tone + whether its peaks are snowbound, chosen to suit the biome
+function backdropTone(b) {
+  switch (b) {
+    case B.MOUNTAIN: return { rock: 0x83868c, snow: true };
+    case B.TUNDRA:   return { rock: 0x9aa6b0, snow: true };
+    case B.TAIGA:    return { rock: 0x46604f, snow: true };
+    case B.FOREST:   return { rock: 0x355f33, snow: false };
+    case B.GRASS:    return { rock: 0x4f7a3c, snow: false };
+    case B.SAVANNA:  return { rock: 0x8a8147, snow: false };
+    case B.DESERT:   return { rock: 0xbf9a5c, snow: false };
+    case B.BEACH:    return { rock: 0xa9a276, snow: false };
+    default:         return { rock: 0x83868c, snow: true };
+  }
 }
 function makeTorch(angle) {
   const g = new THREE.Group();
@@ -1093,8 +1158,8 @@ function foldChar(c, won) {
 // fold the battle's deeds into every survivor, drop the fallen, re-derive the warband counts
 function applyBattleGrowth(won) {
   const survivors = [], seen = new Set();
-  for (const a of allies) if (a.alive && a.char && a.char !== playerChar) { foldChar(a.char, won); survivors.push(a.char); seen.add(a.char); }
-  for (const item of playerReserve) if (item && item.char && !seen.has(item.char)) { survivors.push(item.char); seen.add(item.char); } // never fielded → no growth, but they live
+  for (const a of allies) if (a.alive && a.char && a.char !== playerChar && !a.char.borrowed) { foldChar(a.char, won); survivors.push(a.char); seen.add(a.char); }
+  for (const item of playerReserve) if (item && item.char && !item.char.borrowed && !seen.has(item.char)) { survivors.push(item.char); seen.add(item.char); } // never fielded → no growth, but they live (borrowed allies go home)
   if (playerChar) foldChar(playerChar, won);
   warbandRoster = survivors;
   warbandNameSet.clear(); for (const c of warbandRoster) warbandNameSet.add(c.name);
@@ -1156,6 +1221,7 @@ function loadCareers() {
 function spawnAlly(x, z, palette, def = ALLY_DEF, char = null) {
   if (!char) char = makeChar(defKey(def), { team: 'ally' }); // legacy callers still get a name
   def = materializeDef(def, char);                            // a grown soldier fields harder stats
+  if (coopMult > 1.001) { def = Object.assign({}, def); def.dmg = Math.round(def.dmg * coopMult); def.hp = Math.round(def.hp * coopMult); } // fighting shoulder-to-shoulder with allies: harder hits, more grit
   const h = buildHumanoid(palette, def.scale, def.weapon || 'sword');
   scene.add(h.group);
   const bar = makeHealthBar(0x6bff8a); // green bar marks a friendly
@@ -1419,7 +1485,7 @@ function killAlly(a, killer) {
   a.bar.visible = false;
   selected.delete(a); a.group = null; // drop the fallen from any selection/squad
   spawnSparks(a.obj.position.clone().setY(2), 0x9adcff, 14);
-  waveLosses++; // a fallen comrade docks your XP earnings
+  if (!(a.char && a.char.borrowed)) waveLosses++; // a fallen comrade docks your XP (a borrowed ally's blood is on their own ledger)
   if (commandPanelOpen) renderDeck(); // keep the live squad counts honest while you command
 }
 
@@ -2243,11 +2309,12 @@ function updateCamera(dt) {
 // strategic overview: a high, steeply-tilted camera looking down on the warband token
 function updateMapCamera(dt) {
   const k = clamp(dt * 4, 0, 1);
+  const gy = mapElevY(player.pos.x, player.pos.z); // ride the relief so the cam clears hills and peaks
   camBase.x = lerp(camBase.x, player.pos.x, k);
-  camBase.y = lerp(camBase.y, 46, k);
+  camBase.y = lerp(camBase.y, gy + 46, k);
   camBase.z = lerp(camBase.z, player.pos.z + 20, k); // slight south offset = tilt, not pure top-down
   camera.position.copy(camBase);
-  camera.lookAt(player.pos.x, 0, player.pos.z);
+  camera.lookAt(player.pos.x, gy, player.pos.z);
 }
 
 // ---------- Game state ----------
@@ -2270,6 +2337,10 @@ let lastBattle = null;    // { size, raider } of the band you just beat — for 
 let encounter = null;     // { kind:'band'|'capital', band?, cap? } awaiting the player's choice
 let siegeCapital = null;  // the hold being stormed in the current battle (for conquest on win)
 let advanceRegion = false; // set when you take every hold — the next map is a fresh land
+let coopMult = 1;          // coordination buff applied to your whole side this battle (allies answered)
+let battleAllyBanners = 0, battleReinforced = 0; // how many allied banners / soldiers fight beside you this battle
+let activeCall = null;     // an active Call to Arms / Crusade (Phase 4): { target, x, z, crusade, radius, ... }
+const CALL_MUSTER_RADIUS = 130; // a standing Call pulls allied bands from this far (a crusade is map-wide)
 
 // ---------- Coherent value noise: the world is generated, not scattered ----------
 // Two smooth fields (elevation + moisture) plus latitude (temperature) drive a
@@ -2341,6 +2412,81 @@ const NATIONS = [
   { name: 'Frostmere', color: 0x3a6ea5 },
 ];
 const PLAYER_REALM = { name: 'Your Banner', color: 0x2f6fd0 }; // captured holds fly your colors
+// ---------- Diplomacy: standing pacts with AI nations (other players in a shared world are allies too) ----------
+const playerPacts = new Set(); // NATION defs the player is sworn-allied with — persists across regions (NATIONS is constant)
+function isAllyFaction(f) { return f === PLAYER_REALM || (f && playerPacts.has(f)); }
+function pactAcceptChance() { const r = playerChar ? playerChar.renown : 0; return clamp(0.30 + r / 240, 0.30, 0.92); }
+
+// ---------- Diplomacy engine (client) ----------
+// Relations come from the server (authoritative) when online; in SOLO play the SAME shared kernel
+// (window.WorldSim) evolves them locally, so the offline world is alive too. Factions are objects here
+// ({name,color}); the matrix is keyed by faction NAME via WorldSim.pairKey. Degrades to the original
+// all-vs-all war if world-sim.js ever fails to load.
+let worldRelations = new Map();   // pairKey -> { a, b, opinion, stance, truceUntil }
+let soloWeary = new Map();        // faction name -> war-weariness (solo bookkeeping)
+let localDipTick = 0, localDipAccum = 0, soloRelSeeded = false;
+const DIP_STEP_SECONDS = 3;       // a diplomacy step / server refresh every few seconds of map time
+const _wsOK = () => (typeof WorldSim !== 'undefined' && WorldSim.pairKey);
+function factionName(f) { return typeof f === 'string' ? f : (f && f.name) || ''; }
+function relGet(a, b) { return _wsOK() ? worldRelations.get(WorldSim.pairKey(factionName(a), factionName(b))) : null; }
+function stanceLocal(a, b) {
+  const an = factionName(a), bn = factionName(b);
+  if (!an || !bn || an === bn) return 'alliance';            // same banner never fights itself
+  const pr = PLAYER_REALM.name;
+  if (an === pr || bn === pr) {                              // the player's standing
+    if (isAllyFaction(an === pr ? b : a)) return 'alliance';
+    const r = relGet(an, bn); return r ? r.stance : 'neutral'; // no quarrel by default
+  }
+  const r = relGet(an, bn);
+  return r ? r.stance : 'hostile';                            // unknown AI pair = rivals (preserves solo war)
+}
+function areFactionEnemies(a, b) {
+  const s = stanceLocal(a, b);
+  return (typeof WorldSim !== 'undefined' && WorldSim.areEnemies) ? WorldSim.areEnemies(s) : (s === 'war' || s === 'hostile');
+}
+function setRelations(list) {
+  if (!_wsOK()) return;
+  worldRelations = new Map();
+  for (const r of (list || [])) worldRelations.set(WorldSim.pairKey(r.a, r.b), { a: r.a, b: r.b, opinion: r.opinion, stance: r.stance, truceUntil: r.truceUntil || 0 });
+}
+// solo seeding mirrors the server: neighbours on the pentagon open sore, the rest neutral, player neutral
+function seedLocalRelations() {
+  if (!_wsOK()) return;
+  const all = NATIONS.map(n => n.name).concat([PLAYER_REALM.name]);
+  const out = [];
+  for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) {
+    const a = all[i], b = all[j]; let opinion = 0;
+    const ni = NATIONS.findIndex(n => n.name === a), nj = NATIONS.findIndex(n => n.name === b);
+    if (ni >= 0 && nj >= 0) { const dd = Math.abs(ni - nj); opinion = (dd === 1 || dd === NATIONS.length - 1) ? -25 : 5; }
+    const c = WorldSim.canonPair(a, b);
+    out.push({ a: c.a, b: c.b, opinion, stance: WorldSim.stanceFromOpinion(opinion, null) });
+  }
+  setRelations(out); soloRelSeeded = true;
+}
+// one solo diplomacy step: power from local holds + hosts, then the shared kernel drifts every pair
+function updateSoloDiplomacy() {
+  if (!_wsOK() || !WorldSim.updateDiplomacy) return;
+  if (!soloRelSeeded) seedLocalRelations();
+  localDipTick++;
+  const all = NATIONS.map(n => n.name).concat([PLAYER_REALM.name]);
+  const power = {}; for (const nm of all) power[nm] = 0;
+  for (const cap of nations) { const nm = factionName(cap.owner); if (power[nm] != null) power[nm] += 25; }
+  for (const band of parties) { if (!band.alive) continue; const nm = factionName(band.faction); if (power[nm] != null) power[nm] += WorldSim.bandPower({ size: band.size, quality: band.quality || 1.05, leader: band.leader }); }
+  const factions = all.map(nm => ({ name: nm, power: power[nm], alive: 1, warWeariness: soloWeary.get(nm) || 0 }));
+  const rows = Array.from(worldRelations.values());
+  const rnd = WorldSim.mulberry32((worldSeed() ^ localDipTick ^ 0x5151) >>> 0);
+  const out = WorldSim.updateDiplomacy(factions, rows, { tick: localDipTick }, rnd);
+  for (const u of out.relationUpdates) worldRelations.set(WorldSim.pairKey(u.a, u.b), { a: u.a, b: u.b, opinion: u.opinion, stance: u.stance, truceUntil: u.truceUntil || 0 });
+  for (const ps of out.postureUpdates) soloWeary.set(ps.faction, ps.warWeariness);
+  if (out.events.length) showWaveBanner('The Vale Shifts', out.events[0].summary);
+}
+// drive relations forward on the map: pull fresh server truth online, run the kernel in solo
+function tickMapDiplomacy(dt, serverDriven) {
+  localDipAccum += dt; if (localDipAccum < DIP_STEP_SECONDS) return; localDipAccum = 0;
+  if (serverDriven) { const w = (typeof window !== 'undefined' && window.net && window.net.world); if (w && w.relations) setRelations(w.relations); }
+  else updateSoloDiplomacy();
+}
+function refreshAlliedLabels(fac) { for (const b of parties) if (b.alive && b.faction === fac) { b._shownSize = -1; setBandLabel(b); } }
 let nations = [];           // this region's capitals: [{ def, owner, x, z, garrison, group, ... }]
 const _tcA = new THREE.Color(), _tcB = new THREE.Color();
 // a capital is a real prize — its garrison outnumbers a field host
@@ -2387,9 +2533,22 @@ function terrainColorAt(x, z, out) {
   if (e < SEA_LEVEL) { out.setHex(0x123a5e).lerp(_tcB.setHex(0x2f86b4), clamp(e / SEA_LEVEL, 0, 1)); return out; }
   out.setHex(biomeAt(x, z).ground);
   out.multiplyScalar(clamp(0.80 + (e - SEA_LEVEL) * 0.4, 0.7, 1.0));   // gentle relief shading (never over-bright)
+  if (e > 0.78) out.lerp(_tcB.setHex(0xeef3f7), clamp((e - 0.78) / 0.16, 0, 0.85)); // snowline whitens the peaks
   const n = nationAt(x, z);
   if (n) out.lerp(_tcB.setHex(n.def.color), 0.13);                     // political wash
   return out;
+}
+// Display elevation for the strategic map: turn the (gameplay-only) elevation field into
+// real vertical relief so mountains tower and valleys sink. Water dips into a seabed basin
+// beneath its tint; land eases upward, with peaks getting an extra exponential lift.
+const MAP_RELIEF = 26;
+function mapElevY(x, z) {
+  const e = elevationAt(x, z);
+  if (e < SEA_LEVEL) return -0.6 - (SEA_LEVEL - e) * 2.0;              // seabed basin under the water tint
+  const land = (e - SEA_LEVEL) / (1 - SEA_LEVEL);                     // 0..~0.76 across the dry range
+  let h = Math.pow(land, 1.5) * MAP_RELIEF;                           // rolling hills lift gently, not pancake-flat
+  if (e > 0.70) h += (e - 0.70) * MAP_RELIEF * 2.2;                   // peaks tower above the foothills
+  return h;
 }
 function buildMapTerrain() {
   if (mapTerrain && mapTerrainLevel === mapLevel) { mapTerrain.visible = true; return; }
@@ -2403,7 +2562,7 @@ function buildMapTerrain() {
   const pos = tgeo.attributes.position, cArr = new Float32Array(pos.count * 3);
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i), z = pos.getZ(i);
-    pos.setY(i, 0.06);
+    pos.setY(i, mapElevY(x, z));   // real relief: mountains rise, valleys sink, coasts shelve
     terrainColorAt(x, z, col);
     cArr[i * 3] = col.r; cArr[i * 3 + 1] = col.g; cArr[i * 3 + 2] = col.b;
   }
@@ -2412,13 +2571,14 @@ function buildMapTerrain() {
   const sheet = new THREE.Mesh(tgeo, new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 3 }));
   sheet.receiveShadow = true;
   mapTerrain.add(sheet);
-  // 2) national borders — a dark line wherever two territories meet on land
-  const seg = [], bstep = 3, by = 0.22;
+  // 2) national borders — a dark line wherever two territories meet on land (draped over the relief)
+  const seg = [], bstep = 3;
+  const byAt = (bx, bz) => mapElevY(bx, bz) + 0.25;
   for (let x = -MAP_HALF; x < MAP_HALF; x += bstep) for (let z = -MAP_HALF; z < MAP_HALF; z += bstep) {
     if (isWater(x, z)) continue;
     const n = nationAt(x, z);
-    if (!isWater(x + bstep, z) && nationAt(x + bstep, z) !== n) seg.push(x + bstep, by, z - bstep / 2, x + bstep, by, z + bstep / 2);
-    if (!isWater(x, z + bstep) && nationAt(x, z + bstep) !== n) seg.push(x - bstep / 2, by, z + bstep, x + bstep / 2, by, z + bstep);
+    if (!isWater(x + bstep, z) && nationAt(x + bstep, z) !== n) seg.push(x + bstep, byAt(x + bstep, z - bstep / 2), z - bstep / 2, x + bstep, byAt(x + bstep, z + bstep / 2), z + bstep / 2);
+    if (!isWater(x, z + bstep) && nationAt(x, z + bstep) !== n) seg.push(x - bstep / 2, byAt(x - bstep / 2, z + bstep), z + bstep, x + bstep / 2, byAt(x + bstep / 2, z + bstep), z + bstep);
   }
   if (seg.length) {
     const lgeo = new THREE.BufferGeometry();
@@ -2439,10 +2599,10 @@ function buildMapTerrain() {
     const trunks = new THREE.InstancedMesh(new THREE.BoxGeometry(0.5, 1, 0.5), mat(0x6b4a2e), trees.length);
     const cones = new THREE.InstancedMesh(new THREE.ConeGeometry(1.5, 3.2, 6), mat(0xffffff), trees.length);
     trees.forEach(([x, z, c], i) => {
-      const sc = rand(0.8, 1.5), th = rand(2, 3) * sc;
+      const sc = rand(0.8, 1.5), th = rand(2, 3) * sc, gy = mapElevY(x, z);
       q.setFromEuler(e.set(0, rand(0, Math.PI), 0));
-      m4.compose(v.set(x, th / 2, z), q, s.set(sc, th, sc)); trunks.setMatrixAt(i, m4);
-      m4.compose(v.set(x, th + 1.2 * sc, z), q, s.set(sc, sc, sc)); cones.setMatrixAt(i, m4);
+      m4.compose(v.set(x, gy + th / 2, z), q, s.set(sc, th, sc)); trunks.setMatrixAt(i, m4);
+      m4.compose(v.set(x, gy + th + 1.2 * sc, z), q, s.set(sc, sc, sc)); cones.setMatrixAt(i, m4);
       col.setHex(c); cones.setColorAt(i, col);
     });
     trunks.castShadow = cones.castShadow = true;
@@ -2454,7 +2614,7 @@ function buildMapTerrain() {
     rocks.forEach(([x, z], i) => {
       const r = rand(0.6, 1.6);
       q.setFromEuler(e.set(Math.random(), Math.random(), Math.random()));
-      m4.compose(v.set(x, r * 0.5, z), q, s.set(r, r * rand(0.6, 1), r)); rm.setMatrixAt(i, m4);
+      m4.compose(v.set(x, mapElevY(x, z) + r * 0.5, z), q, s.set(r, r * rand(0.6, 1), r)); rm.setMatrixAt(i, m4);
     });
     rm.castShadow = rm.receiveShadow = true;
     mapTerrain.add(rm);
@@ -2508,7 +2668,7 @@ function makeCapital(cap) {
   label.scale.set(6.6, 0.82, 1); label.position.y = base + keepH + 3.4; g.add(label);
   g.userData.ownerMats = ownerMats;
   g.userData.label = label;
-  g.position.set(cap.x, 0, cap.z);
+  g.position.set(cap.x, mapElevY(cap.x, cap.z), cap.z);   // the keep sits on its hill
   return g;
 }
 // repaint a hold's banners/roofs to its current owner (after a conquest)
@@ -2526,8 +2686,11 @@ function setBattleDressing(on) {
   if (d.trunks) d.trunks.visible = on;
   if (d.cones) d.cones.visible = on;
   if (d.rockMesh) d.rockMesh.visible = on;
+  if (backdropRange) backdropRange.visible = on;             // distant range belongs to the battlefield, not the strategic map
+  if (backdropSnow) backdropSnow.visible = on && !!backdropSnow.userData.snow;
   if (mapTerrain) mapTerrain.visible = !on;
   for (const p of parties) if (p.group) p.group.visible = !on; // roaming map banners don't belong on the battlefield
+  for (const bt of mapBattles) if (bt.marker) bt.marker.visible = !on; // nor do the living-clash markers
 }
 // repaint the battlefield to look like the biome the clash happens in
 function applyBiome(b) {
@@ -2540,6 +2703,12 @@ function applyBiome(b) {
     const c = new THREE.Color(b.tree);
     for (let i = 0; i < cones.count; i++) cones.setColorAt(i, c);
     cones.instanceColor.needsUpdate = true;
+  }
+  if (backdropRange) {
+    const t = backdropTone(b);
+    backdropRange.userData.mat.color.setHex(t.rock);
+    backdropSnow.userData.snow = t.snow;        // remembered so setBattleDressing can respect it
+    backdropSnow.visible = t.snow;
   }
 }
 
@@ -2571,6 +2740,7 @@ function clearBattlefield() {
   for (const g of planGroups) { if (g.zoneMesh) g.zoneMesh.visible = false; if (g.holdMarker) g.holdMarker.visible = false; } // re-shown when the plan rebinds
 }
 function clearParties() {
+  clearMapBattles(); // dispose any living-clash markers before their bands go
   for (const p of parties) { scene.remove(p.group); disposeGroup(p.group); }
   parties.length = 0;
 }
@@ -2598,7 +2768,8 @@ function setBandLabel(band) {
   }
   const small = band.size <= 5;
   const lead = band.leader ? band.leader.name + '  ' : '';
-  const label = makeNameSprite(lead + (small ? '☠ ' : '⚔ ') + band.size);
+  const mark = isAllyFaction(band.faction) ? '✦ ' : (small ? '☠ ' : '⚔ ');
+  const label = makeNameSprite(lead + mark + band.size);
   label.scale.set(small ? 3.2 : 4.6, small ? 0.5 : 0.6, 1);
   label.position.y = (small ? 2.6 : 3.6) + 0.6;
   g.add(label); g.userData.label = label;
@@ -2612,7 +2783,7 @@ function spawnBand(size, speed, awayFromPlayer, nation) {
   const def = nation.def;
   const [x, z] = spawnPointFor(nation, awayFromPlayer);
   const g = makePartyToken(size, def);
-  g.position.set(x, 0, z);
+  g.position.set(x, mapElevY(x, z), z);
   scene.add(g);
   const band = { group: g, pos: g.position.clone(), size, alive: true, speed, faction: def,
     raider: size <= 5, clashCd: 0, parleyCd: 0,
@@ -2665,6 +2836,7 @@ function enterMap() {
   if (player.mapToken) { scene.remove(player.mapToken); disposeGroup(player.mapToken); }
   player.mapToken = makePlayerToken(warbandTotal());
   player.mapToken.position.copy(player.pos);
+  player.mapToken.position.y = mapElevY(player.pos.x, player.pos.z);
   scene.add(player.mapToken);
   player.obj.visible = false;
   musterOverlay.classList.add('hidden');
@@ -2679,7 +2851,7 @@ function enterMap() {
 function nearestRival(band, radius) {
   let best = null, bestD = radius * radius;
   for (const o of parties) {
-    if (!o.alive || o === band || o.faction === band.faction) continue;
+    if (!o.alive || o === band || !areFactionEnemies(o.faction, band.faction)) continue; // only at-war hosts are rivals
     const dx = o.pos.x - band.pos.x, dz = o.pos.z - band.pos.z, d2 = dx * dx + dz * dz;
     if (d2 < bestD) { bestD = d2; best = o; }
   }
@@ -2688,6 +2860,11 @@ function nearestRival(band, radius) {
 // two rival bands meet off-map: the bigger host wins, bloodied; the smaller is wiped out
 function killBand(band) {
   band.alive = false;
+  if (band.inBattle) { // detach from any living clash before disposal (finish/teardown null this first)
+    const bt = band.inBattle; band.inBattle = null;
+    bt.sideA.bands = bt.sideA.bands.filter(b => b !== band);
+    bt.sideB.bands = bt.sideB.bands.filter(b => b !== band);
+  }
   scene.remove(band.group); disposeGroup(band.group);
 }
 // rival hosts trade blows: each round both sides take casualties, the smaller
@@ -2727,7 +2904,7 @@ function resolveBandClash(a, b) {
 function nearestEnemyCapital(faction, x, z, radius) {
   let best = null, bd = radius * radius;
   for (const cap of nations) {
-    if (cap.owner === faction) continue;
+    if (!areFactionEnemies(faction, cap.owner)) continue; // march only on a hold you're at war/hostile with
     const dx = cap.x - x, dz = cap.z - z, d = dx * dx + dz * dz;
     if (d < bd) { bd = d; best = cap; }
   }
@@ -2753,9 +2930,231 @@ function landStep(x, z, dx, dz) {
   return [nx, nz];
 }
 
+// ---------- Living battles: rival hosts lock into a VISIBLE clash that plays out over time ----------
+// Two rival bands that meet no longer resolve in a single instant — they lock together at a
+// contested point and FIGHT for a calculated stretch (a 1v1 of swordsmen ~3s, scaling ~size^0.4
+// up to a ~70s siege), their numbers bleeding down before your eyes. Fresh hosts can march in to
+// reinforce either side mid-fight and turn the tide, and you can ride in to join. This is what
+// "show them on the map as in battle mode" means.
+const mapBattles = [];
+let _mapBattleId = 0;
+const BATTLE_DUR_COEF = 2.4, BATTLE_DUR_EXP = 0.40, BATTLE_DUR_MIN = 2.5, BATTLE_DUR_MAX = 70;
+// total battle length grows sub-linearly with the host sizes (frontage limits how many fight at
+// once), and a lopsided fight breaks sooner (a rout, not a grind).
+function clashDuration(sizeA, sizeB) {
+  const total = Math.max(2, sizeA + sizeB);
+  const pa = Math.max(1, sizeA), pb = Math.max(1, sizeB);
+  const mismatch = clamp(0.5 + 0.5 * Math.min(pa, pb) / Math.max(pa, pb), 0.5, 1);
+  return clamp(BATTLE_DUR_COEF * Math.pow(total, BATTLE_DUR_EXP) * mismatch, BATTLE_DUR_MIN, BATTLE_DUR_MAX);
+}
+function sideSize(side) { let s = 0; for (const b of side.bands) if (b.alive) s += b.size; return s; }
+// combined fighting power of a side (shared resolver), led by its most renowned warlord
+function sidePower(side) {
+  let size = 0, qw = 0, best = null;
+  for (const b of side.bands) if (b.alive) {
+    size += b.size; qw += (b.quality || 1) * b.size;
+    if (b.leader && (!best || !best.leader || (b.leader.renown || 0) > (best.leader.renown || 0))) best = b;
+  }
+  if (size <= 0) return 0;
+  return (typeof WorldSim !== 'undefined' && WorldSim.bandPower)
+    ? WorldSim.bandPower({ size, quality: qw / size, leader: best && best.leader })
+    : size;
+}
+// (re)compute the eventual outcome from the CURRENT forces — at the start, and whenever
+// reinforcements arrive, so a relief host genuinely changes who wins and how fast.
+function recomputeBattle(bt) {
+  bt.t = 0;
+  const a = bt.sideA, b = bt.sideB;
+  a.start = sideSize(a); b.start = sideSize(b);
+  for (const x of a.bands) x._w = a.start > 0 ? x.size / a.start : 0;
+  for (const x of b.bands) x._w = b.start > 0 ? x.size / b.start : 0;
+  const Pa = sidePower(a), Pb = sidePower(b);
+  if (bt.aWins == null) { const winA = Math.pow(Pa, 1.8) / ((Math.pow(Pa, 1.8) + Math.pow(Pb, 1.8)) || 1); bt.aWins = Math.random() < winA; }
+  else bt.aWins = Pa >= Pb; // a reinforcement that tips the power balance flips the result
+  const Pw = bt.aWins ? Pa : Pb, Pl = bt.aWins ? Pb : Pa, ratio = Pw / Math.max(0.001, Pl);
+  const loserLossFrac = clamp(0.55 + 0.30 / ratio, 0.55, 0.95), winnerLossFrac = clamp(0.28 / ratio, 0.05, 0.30);
+  const win = bt.aWins ? a : b, los = bt.aWins ? b : a;
+  win.end = Math.max(1, Math.round(win.start * (1 - winnerLossFrac)));
+  los.end = Math.max(0, Math.round(los.start * (1 - loserLossFrac)));
+  bt.duration = clashDuration(a.start, b.start);
+}
+function makeBattleMarker(bt) {
+  const g = new THREE.Group();
+  const disc = new THREE.Mesh(cachedGeo('cbDisc', () => { const c = new THREE.CircleGeometry(5.0, 26); c.rotateX(-Math.PI / 2); return c; }),
+    mat(0xff5a2a, { shared: false, emissive: 0xff5a2a, emissiveI: 0.5 }));
+  disc.material.transparent = true; disc.material.opacity = 0.3; disc.position.y = 0.2; g.add(disc); g.userData.disc = disc;
+  const barY = 5.4;
+  const barA = boxMesh(1, 0.5, 0.5, mat(bt.sideA.faction.color, { shared: false })); barA.position.set(0, barY, 0); g.add(barA);
+  const barB = boxMesh(1, 0.5, 0.5, mat(bt.sideB.faction.color, { shared: false })); barB.position.set(0, barY, 0); g.add(barB);
+  g.userData.barA = barA; g.userData.barB = barB;
+  const glyph = makeNameSprite('⚔'); glyph.scale.set(2.6, 2.6, 1); glyph.position.y = barY + 1.2; g.add(glyph);
+  scene.add(g);
+  return g;
+}
+function startMapBattle(a, b) {
+  const cx = (a.pos.x + b.pos.x) / 2, cz = (a.pos.z + b.pos.z) / 2;
+  let axx = b.pos.x - a.pos.x, axz = b.pos.z - a.pos.z; const al = Math.hypot(axx, axz) || 1; axx /= al; axz /= al;
+  const bt = {
+    id: ++_mapBattleId, cx, cz, axX: axx, axZ: axz, t: 0, duration: 1, done: false, aWins: null,
+    sideA: { faction: a.faction, bands: [a], start: a.size, end: a.size, live: a.size },
+    sideB: { faction: b.faction, bands: [b], start: b.size, end: b.size, live: b.size },
+  };
+  a.inBattle = bt; b.inBattle = bt; a.clashCd = b.clashCd = 1e9; // locked: the movement loop leaves them be
+  bt.marker = makeBattleMarker(bt);
+  recomputeBattle(bt);
+  mapBattles.push(bt);
+  if (a.leader && b.leader) spawnPopup(tmpV2.set(cx, 3.0, cz), '⚔ ' + a.faction.name + ' ✦ ' + b.faction.name, '#ffe089');
+  return bt;
+}
+function joinMapBattle(bt, band, sideKey) {
+  const side = bt[sideKey];
+  side.bands.push(band); band.inBattle = bt; band.clashCd = 1e9;
+  if (band.leader) spawnPopup(band.pos.clone().setY(3.4), band.leader.name + ' joins the fray!', '#ffe089');
+  recomputeBattle(bt);
+}
+function joinSide(bt, band) { // a free band collides with an ongoing battle: it joins its own faction's side
+  if (band.faction === bt.sideA.faction) joinMapBattle(bt, band, 'sideA');
+  else if (band.faction === bt.sideB.faction) joinMapBattle(bt, band, 'sideB');
+  // a third faction passes by — it'll find its own fight
+}
+function applySideLive(side, frac) {
+  const live = lerp(side.start, side.end, frac);
+  side.live = live;
+  for (const b of side.bands) {
+    if (!b.alive) continue;
+    const ns = Math.max(1, Math.round(live * (b._w || 0)));
+    if (ns !== b.size) { b.size = ns; if (ns !== b._shownSize) { b._shownSize = ns; setBandLabel(b); } }
+  }
+}
+function layoutBattle(bt) { // cluster each side either flank of the contested point; jitter = the shake of melee
+  const place = (side, sign) => side.bands.forEach((b, k) => {
+    if (!b.alive) return;
+    const lane = (k - (side.bands.length - 1) / 2) * 2.2;
+    const ox = bt.axX * sign * 2.2 + (-bt.axZ) * lane + rand(-0.35, 0.35);
+    const oz = bt.axZ * sign * 2.2 + (bt.axX) * lane + rand(-0.35, 0.35);
+    b.pos.set(bt.cx + ox, 0, bt.cz + oz);
+    b.group.position.copy(b.pos);
+    b.group.position.y = mapElevY(b.pos.x, b.pos.z);
+    b.group.rotation.y = Math.atan2(-sign * bt.axX, -sign * bt.axZ);
+  });
+  place(bt.sideA, -1); place(bt.sideB, 1);
+}
+function updateBattleMarker(bt) {
+  const m = bt.marker; if (!m) return;
+  m.position.set(bt.cx, mapElevY(bt.cx, bt.cz) + 0.15, bt.cz);
+  const la = Math.max(0, bt.sideA.live), lb = Math.max(0, bt.sideB.live), tot = Math.max(1, la + lb), W = 6, fa = la / tot;
+  const barA = m.userData.barA, barB = m.userData.barB;
+  barA.scale.x = Math.max(0.02, W * fa); barA.position.x = -W / 2 + (W * fa) / 2;
+  barB.scale.x = Math.max(0.02, W * (1 - fa)); barB.position.x = -W / 2 + W * fa + (W * (1 - fa)) / 2;
+  m.userData.disc.material.opacity = 0.26 + 0.12 * Math.sin(rtNow * 8);
+}
+function recordClashOutcome(bt) { // the winning warlord's name grows with the war (mirrors the old instant resolve)
+  const win = bt.aWins ? bt.sideA : bt.sideB, los = bt.aWins ? bt.sideB : bt.sideA;
+  let lead = null;
+  for (const b of win.bands) if (b.alive && b.leader && (!lead || (b.leader.renown || 0) > (lead.leader.renown || 0))) lead = b;
+  if (lead && lead.leader) {
+    lead.leader.renown += 3 + 0.10 * los.start;
+    lead.leader.battlesWon = (lead.leader.battlesWon || 0) + 1;
+    lead.leader.skills.strike += 0.4; lead.leader.skills.lead += 0.5;
+    recomputeChar(lead.leader);
+  }
+}
+function finishMapBattle(bt) {
+  if (bt.done) return; bt.done = true;
+  recordClashOutcome(bt);
+  const win = bt.aWins ? bt.sideA : bt.sideB, los = bt.aWins ? bt.sideB : bt.sideA;
+  spawnPopup(tmpV2.set(bt.cx, 3.2, bt.cz), '⚔', '#ffe089');
+  for (const b of los.bands) if (b.alive) { if (b.leader) spawnPopup(b.pos.clone().setY(3.2), b.leader.name + "'s host is broken", '#ff9b6b'); b.inBattle = null; killBand(b); }
+  for (const b of win.bands) if (b.alive) { b.inBattle = null; b.clashCd = 1.5; b._shownSize = -1; setBandLabel(b); }
+  if (bt.marker) { scene.remove(bt.marker); disposeGroup(bt.marker); }
+  const i = mapBattles.indexOf(bt); if (i >= 0) mapBattles.splice(i, 1);
+}
+function teardownEmptyBattle(bt) { // a side was wiped out elsewhere — release the survivors
+  bt.done = true;
+  for (const b of bt.sideA.bands.concat(bt.sideB.bands)) if (b.alive) { b.inBattle = null; b.clashCd = 1; b._shownSize = -1; setBandLabel(b); }
+  if (bt.marker) { scene.remove(bt.marker); disposeGroup(bt.marker); }
+  const i = mapBattles.indexOf(bt); if (i >= 0) mapBattles.splice(i, 1);
+}
+function clearMapBattles() {
+  for (const bt of mapBattles) { bt.done = true; if (bt.marker) { scene.remove(bt.marker); disposeGroup(bt.marker); } }
+  mapBattles.length = 0;
+}
+function updateMapBattles(dt) {
+  for (let i = mapBattles.length - 1; i >= 0; i--) {
+    const bt = mapBattles[i];
+    bt.sideA.bands = bt.sideA.bands.filter(b => b.alive);
+    bt.sideB.bands = bt.sideB.bands.filter(b => b.alive);
+    if (!bt.sideA.bands.length || !bt.sideB.bands.length) { teardownEmptyBattle(bt); continue; }
+    bt.t += dt;
+    const frac = clamp(bt.t / bt.duration, 0, 1);
+    applySideLive(bt.sideA, frac); applySideLive(bt.sideB, frac);
+    layoutBattle(bt); updateBattleMarker(bt);
+    if (frac >= 1) finishMapBattle(bt);
+  }
+}
+
+// ---------- Call to Arms / Crusade: rally every ally to a muster point or an enemy castle ----------
+const CALL_TIMEOUT = 75;              // a standing call fades after this long if not led into battle
+const CRUSADE_RADIUS = MAP_HALF * 3;  // a crusade summons allies map-wide; a field rally is CALL_MUSTER_RADIUS
+let callMarker = null;
+const rallyBannerEl = document.getElementById('rally-banner');
+function makeCallBeacon(color) {
+  const g = new THREE.Group();
+  const pole = boxMesh(0.3, 8.4, 0.3, mat(0x2a1d10)); pole.position.y = 4.2; g.add(pole);
+  for (let i = 0; i < 3; i++) { const f = boxMesh(2.4, 1.0, 0.12, mat(color, { shared: false, emissive: color, emissiveI: 0.45 })); f.position.set(1.35, 7.4 - i * 1.25, 0); g.add(f); }
+  const ring = new THREE.Mesh(cachedGeo('callRing', () => { const c = new THREE.RingGeometry(5.6, 6.6, 40); c.rotateX(-Math.PI / 2); return c; }),
+    mat(color, { shared: false, emissive: color, emissiveI: 0.5 }));
+  ring.material.transparent = true; ring.material.opacity = 0.5; ring.position.y = 0.26; g.add(ring); g.userData.ring = ring;
+  scene.add(g); return g;
+}
+function clearCall() { if (callMarker) { scene.remove(callMarker); disposeGroup(callMarker); } callMarker = null; activeCall = null; if (rallyBannerEl) rallyBannerEl.style.display = 'none'; }
+function raiseCall() {
+  if (mode !== 'map' || encounter) return;
+  if (activeCall) { showWaveBanner('Call Withdrawn', 'You lower the war banner.'); clearCall(); return; } // press G again to cancel
+  const haveAllies = playerPacts.size > 0 || (typeof window !== 'undefined' && window.net && window.net.sharedWorld);
+  if (!haveAllies) { showWaveBanner('No Allies to Call', 'Forge a pact first — ride into a band, Propose Pact, then sound the call.'); return; }
+  // a CRUSADE if you stand near an enemy hold; otherwise a field RALLY on your own banner
+  let cap = null, bd = 34 * 34;
+  for (const c of nations) { if (c.owner === PLAYER_REALM || isAllyFaction(c.owner)) continue; const dx = c.x - player.pos.x, dz = c.z - player.pos.z, d = dx * dx + dz * dz; if (d < bd) { bd = d; cap = c; } }
+  if (cap) {
+    activeCall = { kind: 'crusade', x: cap.x, z: cap.z, cap, radius: CRUSADE_RADIUS, t: 0, done: false };
+    callMarker = makeCallBeacon(0xff6a3a); callMarker.position.set(cap.x, mapElevY(cap.x, cap.z), cap.z);
+    showWaveBanner('⚔ CRUSADE!', 'You call every ally to the walls of ' + cap.def.name + ' — rally, then storm it as one host!');
+  } else {
+    activeCall = { kind: 'rally', x: player.pos.x, z: player.pos.z, radius: CALL_MUSTER_RADIUS, t: 0, done: false };
+    callMarker = makeCallBeacon(0xffd34d); callMarker.position.set(player.pos.x, mapElevY(player.pos.x, player.pos.z), player.pos.z);
+    showWaveBanner('Call to Arms', 'Allied banners within reach march to your side. Lead them into the fight!');
+  }
+  if (typeof window !== 'undefined' && window.net && window.net.broadcastCall) // multiplayer: tell other players (Phase 5 surfaces it)
+    window.net.broadcastCall({ kind: activeCall.kind, x: activeCall.x, z: activeCall.z, hold: cap ? cap.def.name : null });
+  updateRallyBanner();
+}
+function updateRallyBanner() {
+  if (!rallyBannerEl) return;
+  if (!activeCall || mode !== 'map') { rallyBannerEl.style.display = 'none'; return; }
+  const answering = gatherAlliedReinforcements(activeCall.x, activeCall.z, activeCall.radius).length;
+  const left = Math.max(0, Math.ceil(CALL_TIMEOUT - activeCall.t));
+  rallyBannerEl.style.display = 'block';
+  rallyBannerEl.textContent = (activeCall.kind === 'crusade'
+    ? '⚔ CRUSADE on ' + (activeCall.cap ? activeCall.cap.def.name : 'the hold')
+    : '⚑ Rally to your banner') + ' — ' + answering + ' banner' + (answering !== 1 ? 's' : '') + ' marching · ' + left + 's (G to cancel)';
+}
+function updateActiveCall(dt) {
+  activeCall.t += dt;
+  if (activeCall.kind === 'rally') { activeCall.x = player.pos.x; activeCall.z = player.pos.z; if (callMarker) callMarker.position.set(player.pos.x, mapElevY(player.pos.x, player.pos.z), player.pos.z); }
+  if (callMarker && callMarker.userData.ring) callMarker.userData.ring.material.opacity = 0.32 + 0.2 * Math.sin(rtNow * 5);
+  if (activeCall.kind === 'crusade' && activeCall.cap && (activeCall.cap.owner === PLAYER_REALM || isAllyFaction(activeCall.cap.owner))) {
+    showWaveBanner('Crusade Won', activeCall.cap.def.name + ' has fallen to your alliance!'); clearCall(); return;
+  }
+  if (activeCall.t > CALL_TIMEOUT) { showWaveBanner('The Host Disperses', 'Your call fades unanswered.'); clearCall(); return; }
+  updateRallyBanner();
+}
+addEventListener('keydown', (e) => { if (e.code === 'KeyG' && mode === 'map' && !encounter) { e.preventDefault(); raiseCall(); } });
+
 function updateMap(dt) {
   if (encounter) return; // a parley/siege prompt is open — the whole map holds until you choose
   const serverDriven = isServerMap(); // when online, the server owns the macro war (clashes/conquests)
+  tickMapDiplomacy(dt, serverDriven); // evolve faction relations: server truth online, shared kernel in solo
   // the party glides across the map as a banner; faster than enemy bands so you can flee
   const dir = inputDir();
   if (dir.lengthSq() > 0) {
@@ -2770,6 +3169,7 @@ function updateMap(dt) {
   if (npz === opz) player.vel.z = 0;
   if (player.mapToken) {
     player.mapToken.position.copy(player.pos);
+    player.mapToken.position.y = mapElevY(player.pos.x, player.pos.z);
     player.mapToken.rotation.y = player.facing;
   }
 
@@ -2781,12 +3181,24 @@ function updateMap(dt) {
     if (band.parleyCd > 0) band.parleyCd -= dt;
     const to = tmpV.subVectors(player.pos, band.pos); to.y = 0;
     const d = to.length();
+    if (band.inBattle) {
+      // locked in a living clash — its banner is driven by the battle system. Hold here, but let
+      // the player ride in to join the fray (a bigger token, so a slightly wider reach).
+      if (d < 4.2 && band.parleyCd <= 0 && -(player.vel.x * to.x + player.vel.z * to.z) > 0.3) { openEncounter(band); return; }
+      continue;
+    }
     // The hosts wage their OWN war and pay the unaligned player no mind — they
     // hunt rival nations, not you. You choose your fights by riding into a band.
     let mvx, mvz;
-    const rival = nearestRival(band, 70);
-    const objective = rival ? null : nearestEnemyCapital(band.faction, band.pos.x, band.pos.z, 85);
-    if (rival) {
+    // a standing Call to Arms overrides an allied band's own war: it marches to the muster point
+    const answeringCall = activeCall && !activeCall.done && isAllyFaction(band.faction) &&
+      Math.hypot(band.pos.x - activeCall.x, band.pos.z - activeCall.z) <= activeCall.radius;
+    const rival = answeringCall ? null : nearestRival(band, 70);
+    const objective = (answeringCall || rival) ? null : nearestEnemyCapital(band.faction, band.pos.x, band.pos.z, 85);
+    if (answeringCall) {                                       // rally to your banner / the crusade's walls
+      const rx = activeCall.x - band.pos.x, rz = activeCall.z - band.pos.z, rd = Math.hypot(rx, rz) || 1;
+      if (rd < 10) { mvx = 0; mvz = 0; } else { mvx = rx / rd; mvz = rz / rd; }
+    } else if (rival) {
       const rx = rival.pos.x - band.pos.x, rz = rival.pos.z - band.pos.z, rd = Math.hypot(rx, rz) || 1;
       const sign = rival.size > band.size * 2.4 ? -1 : 1; // charge a fair fight; edge off a far larger host
       mvx = sign * rx / rd; mvz = sign * rz / rd;
@@ -2803,6 +3215,7 @@ function updateMap(dt) {
     if (bnx === band.pos.x && bnz === band.pos.z) { band.wanderDir = rand(0, Math.PI * 2); band.wanderT = rand(0.6, 1.5); } // shore-blocked → turn
     band.pos.x = bnx; band.pos.z = bnz;
     band.group.position.copy(band.pos);
+    band.group.position.y = mapElevY(band.pos.x, band.pos.z);
     // ride into a band (moving toward it) to meet it — then choose: attack, or just hail
     if (d < 3.4 && band.parleyCd <= 0 && -(player.vel.x * to.x + player.vel.z * to.z) > 1) { openEncounter(band); return; }
   }
@@ -2815,23 +3228,27 @@ function updateMap(dt) {
     if (dx * dx + dz * dz < 4.6 * 4.6 && cap.parleyCd <= 0 && -(player.vel.x * dx + player.vel.z * dz) > 1) { openSiege(cap); return; }
   }
 
-  // rival hosts that have collided clash among themselves
+  // rival hosts that collide LOCK INTO a living battle (or reinforce one already raging)
   for (let i = 0; !serverDriven && i < parties.length; i++) {
-    const a = parties[i];
-    if (!a.alive || a.clashCd > 0) continue;
+    const p = parties[i];
+    if (!p.alive || p.clashCd > 0) continue; // locked bands carry a huge clashCd — they never initiate
     for (let j = i + 1; j < parties.length; j++) {
-      const b = parties[j];
-      if (!b.alive || b.clashCd > 0 || a.faction === b.faction) continue;
-      const dx = a.pos.x - b.pos.x, dz = a.pos.z - b.pos.z;
-      if (dx * dx + dz * dz < 3.6 * 3.6) { resolveBandClash(a, b); break; }
+      const q = parties[j];
+      if (!q.alive || !areFactionEnemies(q.faction, p.faction)) continue; // allies & truces don't clash
+      const dx = p.pos.x - q.pos.x, dz = p.pos.z - q.pos.z;
+      if (dx * dx + dz * dz >= 3.6 * 3.6) continue;
+      if (q.inBattle) joinSide(q.inBattle, p); // p (free) reinforces q's ongoing clash
+      else startMapBattle(p, q);               // two free hosts meet — a new visible battle begins
+      break;
     }
   }
+  updateMapBattles(dt); // advance every living clash: bleed the lines, then resolve
   // a host that reaches a rival hold strong enough storms it — the banner changes hands
   for (const band of parties) {
     if (serverDriven) break;
-    if (!band.alive) continue;
+    if (!band.alive || band.inBattle) continue;
     for (const cap of nations) {
-      if (cap.owner === band.faction || cap.conquerCd > 0) continue;
+      if (cap.conquerCd > 0 || !areFactionEnemies(band.faction, cap.owner)) continue; // only storm enemy holds
       const dx = band.pos.x - cap.x, dz = band.pos.z - cap.z;
       if (dx * dx + dz * dz < 3.6 * 3.6 && band.size >= cap.garrison * 0.5) { conquerByBand(cap, band); break; }
     }
@@ -2848,6 +3265,7 @@ function updateMap(dt) {
     let add = Math.min(3, targetPopulation() - aliveParties);
     while (add-- > 0) { reinforceMap(); aliveParties++; }
   }
+  if (activeCall) updateActiveCall(dt); // advance a standing Call to Arms / Crusade
   if (aliveParties === 0 && !serverDriven) enterMap(); // somehow emptied → next, bigger region
   sendPresenceMaybe(dt); // multiplayer: heartbeat your banner + refresh rivals
   enemyCountEl.textContent = 'Band ' + warbandTotal() + ' · Foes nearby: ' + aliveParties;
@@ -2872,6 +3290,48 @@ function defKey(def) {
   return def.cls || (def === ALLY_LONGSWORD ? 'long' : def === ALLY_ARCHER ? 'archer' : def === ALLY_THROWER ? 'thrower' : 'sword');
 }
 
+// ---------- Allied reinforcements: pacted bands & answered banners fight on YOUR side ----------
+// A "borrowed" soldier fields like one of yours but never folds into your persistent warband (it
+// belongs to its own nation/ally) — applyBattleGrowth drops them, and their deaths don't dock your XP.
+const ALLY_RECRUIT_MIX = ['sword', 'sword', 'long', 'archer', 'sword', 'long', 'thrower'];
+function makeBorrowedChar(classKey, factionName, level) {
+  const c = makeChar(classKey, { team: 'ally', notability: 1 });
+  c.borrowed = true; c.allyFaction = factionName || 'Allies';
+  c.skills.strike = rand(0, 6 + level * 4); c.skills.guard = rand(0, 4 + level * 3);
+  recomputeChar(c);
+  return c;
+}
+function buildAllyReinforcement(size, level, factionName) {
+  const out = [];
+  for (let i = 0; i < size; i++) {
+    const k = ALLY_RECRUIT_MIX[i % ALLY_RECRUIT_MIX.length];
+    out.push({ def: ALLY_DEF_BY_CLASS[k], char: makeBorrowedChar(k, factionName, level) });
+  }
+  return out;
+}
+const ALLY_JOIN_RADIUS = 36; // pacted bands this close to a fight rush in spontaneously
+function gatherAlliedReinforcements(x, z, radius) {
+  const helpers = [];
+  for (const b of parties) {
+    if (!b.alive || b.inBattle || !isAllyFaction(b.faction)) continue;
+    if (Math.hypot(b.pos.x - x, b.pos.z - z) <= radius) helpers.push(b);
+  }
+  return helpers;
+}
+// assemble every ally that answers: pre-committed hosts (a clash you rode into), bands a Call summoned,
+// and any pacted band right beside the fight. Committed bands leave the map (consumed into your host).
+function assembleAllies(bx, bz, preCommitted) {
+  const contributors = []; let banners = 0;
+  const take = (b) => { if (b && b.size > 0) { contributors.push({ size: b.size, level: b.level || mapLevel, faction: b.faction }); banners++; } };
+  if (preCommitted) for (const b of preCommitted) take(b);
+  const radius = (activeCall && !activeCall.done) ? (activeCall.radius || CALL_MUSTER_RADIUS) : ALLY_JOIN_RADIUS; // a Call widens the reach
+  for (const b of gatherAlliedReinforcements(bx, bz, radius)) {
+    if (preCommitted && preCommitted.indexOf(b) >= 0) continue;
+    take(b); b.inBattle = null; killBand(b); // marches off the map to fight beside you
+  }
+  return { contributors, banners };
+}
+
 const BATTLE_FRONT = 0; // enemies mass toward +Z; the player faces them
 function enterBattle(band) {
   battleParty = band;
@@ -2888,6 +3348,12 @@ function enterBattle(band) {
   ensureWarbandRoster();                          // name & carry forward every soldier you field
   beginBattleCareers();
   playerReserve = warbandRoster.map(c => ({ def: ALLY_DEF_BY_CLASS[classKeyOf(c.archetype)], char: c })); // named, growable
+  // allies answer the call: nearby pacted bands (and any host you rode in to aid) join YOUR side
+  const muster = assembleAllies(band.pos.x, band.pos.z, band.alliedBands);
+  battleAllyBanners = muster.banners; battleReinforced = 0;
+  coopMult = clamp(1 + 0.05 * muster.banners, 1, 1.5); // working together: harder hits, more grit (up to +50%)
+  for (const c of muster.contributors) { for (const it of buildAllyReinforcement(c.size, c.level, c.faction && c.faction.name)) playerReserve.push(it); battleReinforced += c.size; }
+  if (activeCall) clearCall(); // the muster is led into battle — the call is answered and lowered
   enemyReserve = buildEnemyRoster(band.size, band.level);
   enemiesRemaining = enemyReserve.length;
   // size the arena to the forces actually on the field
@@ -2900,6 +3366,9 @@ function enterBattle(band) {
   player.facing = BATTLE_FRONT;
   fieldBatch(); // muster both front lines so you can plan against the real threat
   updateEnemyCount();
+  if (battleAllyBanners > 0) showWaveBanner(battleAllyBanners + ' Banner' + (battleAllyBanners > 1 ? 's' : '') + ' Answer!',
+    '+' + battleReinforced + ' allied troops at your side · coordination +' + Math.round((coopMult - 1) * 100) + '% might. Strike as one!');
+  coopMaybeHostBattle(band); // shared world: beacon this fight so allies can ride in to join it live
   enterPlanPhase(band); // deploy & command your warband, then Begin Battle
 }
 
@@ -3475,6 +3944,7 @@ function checkBattleEnd() {
 }
 function winBattle() {
   mode = 'muster'; gameRunning = false;
+  if (coopRole === 'host') coopHostEnd(true); // tell any joined ally the shared battle is won
   commandPanelOpen = false; timeScale = 1; // drop tactical-slow/command state on the muster screen
   if (cmdDeck) cmdDeck.classList.remove('open');
   // survivors carry their growing careers forward; the fielded fallen are gone for good.
@@ -3640,17 +4110,30 @@ const encOverlay = document.getElementById('encounter');
 const encTitle = encOverlay.querySelector('h1');
 const encInfo = document.getElementById('enc-info');
 const encAttackBtn = document.getElementById('enc-attack');
+const encAllyBtn = document.getElementById('enc-ally');
 const encHailBtn = document.getElementById('enc-hail');
 const swatch = (color) => `<span style="display:inline-block;width:14px;height:14px;border-radius:3px;` +
   `vertical-align:middle;margin-right:9px;background:#${color.toString(16).padStart(6, '0')};` +
   `border:1px solid rgba(255,255,255,.45)"></span>`;
 function openEncounter(band) {
-  encounter = { kind: 'band', band };
+  if (band.inBattle) return openBattleEncounter(band); // a clash you can ride into
+  const ally = isAllyFaction(band.faction);
+  encounter = { kind: 'band', band, ally };
   player.vel.set(0, 0, 0);
-  encTitle.textContent = 'Banners Meet';
-  encAttackBtn.textContent = 'Attack'; encHailBtn.textContent = 'Say Hi'; encAttackBtn.style.display = '';
-  const kind = band.size <= 5 ? 'raiding pack' : 'war host';
-  encInfo.innerHTML = `${swatch(band.faction.color)}A ${kind} of <b>${band.faction.name}</b> — ${band.size} strong. They have no quarrel with you. Your word?`;
+  const kind = band.size <= 5 ? (ally ? 'patrol' : 'raiding pack') : 'war host';
+  if (ally) {
+    encTitle.textContent = 'Allied Banners';
+    encInfo.innerHTML = `${swatch(band.faction.color)}A ${kind} of <b>${band.faction.name}</b> — ${band.size} strong — marches under your pact. They'll answer your <b>call to arms</b> (press G).`;
+    encAttackBtn.style.display = 'none';
+    encAllyBtn.style.display = ''; encAllyBtn.textContent = 'Break Pact';
+    encHailBtn.textContent = 'Greet';
+  } else {
+    encTitle.textContent = 'Banners Meet';
+    encInfo.innerHTML = `${swatch(band.faction.color)}A ${kind} of <b>${band.faction.name}</b> — ${band.size} strong. They have no quarrel with you. Your word?`;
+    encAttackBtn.style.display = ''; encAttackBtn.textContent = 'Attack';
+    encAllyBtn.style.display = ''; encAllyBtn.textContent = 'Propose Pact';
+    encHailBtn.textContent = 'Say Hi';
+  }
   encOverlay.classList.remove('hidden');
 }
 function openSiege(cap) {
@@ -3663,9 +4146,46 @@ function openSiege(cap) {
     : `${swatch(cap.owner.color)}<b>${cap.def.name}</b>, a ${cap.owner.name} hold — garrison <b>${cap.garrison}</b>. Storm the walls?`;
   encAttackBtn.textContent = 'Lay Siege'; encHailBtn.textContent = 'Leave';
   encAttackBtn.style.display = yours ? 'none' : '';
+  encAllyBtn.style.display = 'none';
   encOverlay.classList.remove('hidden');
 }
 function closeEncounter() { encOverlay.classList.add('hidden'); encounter = null; }
+// ride into a living clash on the map: throw in beside the host you rode up to
+function openBattleEncounter(band) {
+  const bt = band.inBattle; if (!bt) return;
+  const mySide = bt.sideA.bands.includes(band) ? bt.sideA : bt.sideB;
+  const foeSide = mySide === bt.sideA ? bt.sideB : bt.sideA;
+  encounter = { kind: 'joinbattle', bt, mySide, foeSide, band };
+  player.vel.set(0, 0, 0);
+  const myAlly = isAllyFaction(mySide.faction), foeAlly = isAllyFaction(foeSide.faction);
+  const tag = (s, isAlly) => (isAlly ? '✦ ' : '') + s.faction.name;
+  const myN = sideSize(mySide), foeN = sideSize(foeSide);
+  encTitle.textContent = myAlly ? 'Your Ally Is Beset!' : 'A Battle Rages';
+  encInfo.innerHTML = `${swatch(mySide.faction.color)}<b>${tag(mySide, myAlly)}</b> (${myN}) is locked in battle with ` +
+    `${swatch(foeSide.faction.color)}<b>${tag(foeSide, foeAlly)}</b> (${foeN}). ` +
+    (myAlly ? 'Charge in and save them!' : 'Throw in beside ' + mySide.faction.name + '?');
+  encAttackBtn.textContent = myAlly ? 'To Their Aid ⚔' : 'Join the Fray'; encAttackBtn.style.display = '';
+  encAllyBtn.style.display = 'none';
+  encHailBtn.textContent = 'Ride On';
+  encOverlay.classList.remove('hidden');
+}
+// pull a living clash off the map (its bands merge into the pitched battle the player just joined)
+function consumeMapBattle(bt) {
+  bt.done = true;
+  if (bt.marker) { scene.remove(bt.marker); disposeGroup(bt.marker); bt.marker = null; }
+  for (const b of bt.sideA.bands.concat(bt.sideB.bands)) { b.inBattle = null; killBand(b); }
+  const i = mapBattles.indexOf(bt); if (i >= 0) mapBattles.splice(i, 1);
+}
+// the player throws in with one side of a living clash — fight the opposing host as a pitched battle
+function startJoinBattle(e) {
+  const bt = e.bt, foe = e.foeSide, ally = e.mySide;
+  const enemySize = Math.max(2, sideSize(foe)), enemyFaction = foe.faction, allyName = ally.faction.name;
+  const cx = bt.cx, cz = bt.cz, allyBands = ally.bands.slice(); // captured for the allied muster (Phase 3 fields them)
+  consumeMapBattle(bt);
+  enterBattle({ size: enemySize, level: mapLevel, alive: true, raider: enemySize <= 5,
+    pos: { x: cx, z: cz }, group: null, faction: enemyFaction, alliedBands: allyBands });
+  showWaveBanner('Into the Fray', 'You charge in beside ' + allyName + ' against ' + enemyFaction.name + ' — ' + enemySize + ' strong!');
+}
 // lay siege: fight the garrison as a pitched battle, in the hold's biome
 function startSiege(cap) {
   siegeCapital = cap;
@@ -3675,12 +4195,28 @@ function startSiege(cap) {
 encAttackBtn.addEventListener('click', () => {
   const e = encounter; closeEncounter(); if (!e) return;
   if (e.kind === 'band') { if (e.band && e.band.alive) enterBattle(e.band); }
+  else if (e.kind === 'joinbattle') { if (e.bt && !e.bt.done) startJoinBattle(e); }
   else startSiege(e.cap);
 });
 encHailBtn.addEventListener('click', () => {
   const e = encounter; closeEncounter(); if (!e) return;
-  if (e.kind === 'band') { if (e.band) { e.band.parleyCd = 6; showWaveBanner('Parley', 'You hail the ' + e.band.faction.name + ' ' + (e.band.size <= 5 ? 'pack' : 'host') + '. They give you the road and march on.'); } }
+  if (e.kind === 'band') { if (e.band) { e.band.parleyCd = 6; if (!e.ally) showWaveBanner('Parley', 'You hail the ' + e.band.faction.name + ' ' + (e.band.size <= 5 ? 'pack' : 'host') + '. They give you the road and march on.'); } }
+  else if (e.kind === 'joinbattle') { if (e.band) e.band.parleyCd = 4; } // ride on — let the clash play out
   else { e.cap.parleyCd = 3; } // leave the gates be
+});
+// diplomacy: forge or break a standing pact with an AI nation
+encAllyBtn.addEventListener('click', () => {
+  const e = encounter; closeEncounter(); if (!e || e.kind !== 'band' || !e.band) return;
+  const fac = e.band.faction; e.band.parleyCd = 6;
+  if (e.ally) {
+    playerPacts.delete(fac); refreshAlliedLabels(fac);
+    showWaveBanner('Pact Broken', 'You renounce your alliance with ' + fac.name + '.');
+  } else if (Math.random() < pactAcceptChance()) {
+    playerPacts.add(fac); refreshAlliedLabels(fac);
+    showWaveBanner('Alliance Forged', fac.name + ' marches with you now — rally them with a call to arms (G).');
+  } else {
+    showWaveBanner('Pact Declined', fac.name + ' will not yet swear to your banner. Win more renown, then ask again.');
+  }
 });
 
 // ---------- HUD ----------
@@ -3743,8 +4279,11 @@ function startGame() {
 
   score = 0; addScore(0);
   wave = 0; betweenWaves = false; musterOpen = false; mapLevel = 0;
+  playerPacts.clear(); // fresh campaign: no standing alliances
+  if (typeof clearCall === 'function') clearCall(); // no lingering call into a new game
   shuffleHeroDeck(); // fresh campaign, fresh villains
   worldReflected = false; if (typeof window !== 'undefined' && window.net) window.net.loadWorld(); // refresh the living-world digest on login
+  coopRole = null; initCoopMaybe(); // shared world: open the co-op channel so allies can join your battles
   startOverlay.classList.add('hidden');
   gameoverOverlay.classList.add('hidden');
   hud.classList.remove('hidden');
@@ -3755,6 +4294,7 @@ function startGame() {
 function doGameOver() {
   if (!player.alive) return;
   player.alive = false;
+  if (coopRole === 'host') coopHostEnd(false); // the host fell — release any joined ally
   if (playerChar) playerChar.deaths++;
   applyBattleGrowth(false); // the fight is lost, but the survivors keep what they learned
   gameRunning = false;
@@ -3887,6 +4427,9 @@ function loop(now) {
       updateProjectiles(gdt);
       fieldBatch();      // top up each side from its reserve — continuous reinforcement
       checkBattleEnd();
+      if (coopRole === 'host') coopHostTick(gdt); // broadcast the arena to any ally who joined
+    } else if (mode === 'coopguest') {
+      updateCoopGuest(gdt); // a guest watching/aiding an ally's battle, rendered from host snapshots
     } else if (mode !== 'menu' && player.obj) {
       // player has fallen (or muster screen up) — the battle plays on behind the overlay
       rebuildSepGrid();
@@ -3906,6 +4449,7 @@ function loop(now) {
     updatePopups(gdt);
     if (mode === 'map') updateMapCamera(dt);
     else if (mode === 'plan' || commandPanelOpen) updatePlanCamera(dt);
+    else if (mode === 'coopguest') { /* camera is set inside updateCoopGuest */ }
     else if (player.obj) updateCamera(dt);
 
     // damage vignette: impact flash decays; low health pulses the edges red
@@ -3922,6 +4466,192 @@ function loop(now) {
   renderer.render(scene, camera);
   requestAnimationFrame(loop);
 }
+
+// ---------- Real-time co-op: two players, one live arena (host-authoritative over /coop) ----------
+// The HOST runs the real battle sim and broadcasts compact snapshots; a GUEST hands over their
+// warband (which fights on the host's side via the Phase-3 borrowed-ally path) and watches the
+// shared arena live, sharing the spoils. All of this is GATED on a shared world + a live co-op
+// socket, so offline single-player never touches a line of it. Live cross-device play is a v1
+// (host-authoritative, snapshot-interpolated; no client prediction yet — see BATTLE_CONTROLS.md).
+let coopRole = null;          // null | 'host' | 'guest'
+let coopWired = false, coopSnapAcc = 0, coopInputAcc = 0;
+const COOP_SNAP_DT = 1 / 15;  // host broadcasts ~15 snapshots/sec
+const coopPuppets = new Map(); // guest-side remote bodies, keyed by team+id
+const coopJoined = new Set();  // guest account/conn ids already fielded on the host (no double-join)
+const coopName = () => (playerChar ? playerChar.name : 'A Wanderer');
+const coopOnline = () => !!(typeof window !== 'undefined' && window.coop && window.coop.connected);
+function coopAvailable() { return !!(typeof window !== 'undefined' && window.coop && window.coop.available()); }
+
+function initCoopMaybe() { // connect once when playing a shared world; wire the message handlers
+  if (!coopAvailable() || coopWired) return;
+  window.coop.connect(coopName(), 'shared').then((ok) => { if (ok) wireCoop(); });
+}
+function wireCoop() {
+  if (coopWired || !window.coop) return; coopWired = true;
+  window.coop.on('msg', onCoopMsg);
+  window.coop.on('peer-join', (m) => { if (coopRole === 'host') showWaveBanner('Ally Incoming', (m.name || 'An ally') + ' rides to join your battle!'); });
+  window.coop.on('peer-leave', () => {});
+  window.coop.on('beacons', renderBeaconPanel);
+  window.coop.on('joined', onCoopJoined);
+  window.coop.on('host-gone', () => { if (coopRole === 'guest') { showWaveBanner('Battle Over', 'Your ally\'s battle has ended.'); leaveCoopGuest(); } });
+}
+
+// ----- HOST: beacon the fight, broadcast the arena, field a guest's handed-over warband -----
+function coopMaybeHostBattle(band) {
+  if (!coopOnline() || !coopAvailable()) return;
+  coopRole = 'host'; coopJoined.clear();
+  window.coop.host({ host: coopName(), faction: PLAYER_REALM.name, x: Math.round(band.pos.x), z: Math.round(band.pos.z),
+    hold: siegeCapital ? siegeCapital.def.name : null, enemy: band.size, enemyFaction: band.faction ? band.faction.name : '?', lvl: mapLevel });
+}
+function coopHostTick(dt) {
+  if (coopRole !== 'host' || !coopOnline() || !window.coop.peers.length) return;
+  coopSnapAcc += dt; if (coopSnapAcc < COOP_SNAP_DT) return; coopSnapAcc = 0;
+  const al = [], en = [];
+  for (const a of allies) if (a.alive) al.push([a.char ? a.char.id : 0, Math.round(a.pos.x * 10), Math.round(a.pos.z * 10), Math.round(a.facing * 100)]);
+  for (const e of enemies) if (e.alive) en.push([e.char ? e.char.id : 0, Math.round(e.pos.x * 10), Math.round(e.pos.z * 10), Math.round(e.facing * 100)]);
+  window.coop.send({ k: 'snap', pl: [Math.round(player.pos.x * 10), Math.round(player.pos.z * 10), Math.round(player.facing * 100), player.alive ? 1 : 0], al, en });
+}
+function fieldGuestRoster(fromId, roster, name) {
+  if (coopJoined.has(fromId) || !Array.isArray(roster)) return;
+  coopJoined.add(fromId);
+  let n = 0;
+  for (const o of roster.slice(0, 60)) {
+    const k = classKeyOf(o.archetype || 'sword');
+    const c = makeChar(k, { team: 'ally', name: o.name }); c.borrowed = true; c.allyFaction = name || 'Ally';
+    if (o.skills) c.skills = Object.assign(c.skills, o.skills); recomputeChar(c);
+    playerReserve.push({ def: ALLY_DEF_BY_CLASS[k], char: c }); n++;
+  }
+  battleAllyBanners += 1; battleReinforced += n; coopMult = clamp(coopMult + 0.05, 1, 1.6); // a human ally is a real boon
+  if (mode === 'battle' || mode === 'plan') fieldBatch();
+  showWaveBanner((name || 'An ally') + ' Joins!', '+' + n + ' of their warband fight at your side. Win this together!');
+}
+function coopHostEnd(won) {
+  if (coopRole !== 'host') return;
+  if (coopOnline()) { window.coop.send({ k: 'end', won: !!won }); window.coop.leave(); }
+  coopRole = null; coopJoined.clear();
+}
+
+// ----- GUEST: discover joinable battles, hand over your warband, watch the shared arena live -----
+let beaconPanel = null;
+function ensureBeaconPanel() {
+  if (beaconPanel) return beaconPanel;
+  beaconPanel = document.createElement('div');
+  beaconPanel.id = 'coop-panel';
+  beaconPanel.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);min-width:340px;max-width:80vw;' +
+    'background:rgba(16,12,24,.95);border:1px solid #ffd34d;border-radius:14px;padding:20px 22px;z-index:60;color:#f3ead8;' +
+    'box-shadow:0 10px 40px rgba(0,0,0,.6);display:none;font-family:inherit';
+  document.body.appendChild(beaconPanel);
+  return beaconPanel;
+}
+function openBeaconPanel() {
+  if (mode !== 'map') return;
+  if (!coopAvailable()) { showWaveBanner('Co-op Needs a Shared World', 'Add ?mp to the URL (or set Shared World) to fight alongside other players.'); return; }
+  if (!coopOnline()) { initCoopMaybe(); showWaveBanner('Reaching the Allies…', 'Connecting to the war-net — try again in a moment.'); return; }
+  const p = ensureBeaconPanel();
+  p.innerHTML = '<h2 style="margin:0 0 10px;color:#ffd34d;font-size:22px">Allied Battles</h2><div id="coop-list" style="font-size:14px;opacity:.8">Scanning the war-net…</div>' +
+    '<div style="margin-top:14px;text-align:right"><button id="coop-close" style="background:#2a2233;color:#f3ead8;border:1px solid #6b5e7a;border-radius:8px;padding:7px 14px;cursor:pointer">Close</button></div>';
+  p.style.display = 'block';
+  document.getElementById('coop-close').onclick = () => { p.style.display = 'none'; };
+  window.coop.list();
+}
+function renderBeaconPanel(m) {
+  if (!beaconPanel || beaconPanel.style.display === 'none') return;
+  const list = document.getElementById('coop-list'); if (!list) return;
+  const rows = (m.list || []).filter(b => b.beacon);
+  if (!rows.length) { list.innerHTML = 'No allies are in battle right now. Lead a fight yourself, or wait for a call to arms.'; return; }
+  list.innerHTML = rows.map((b, i) => {
+    const bc = b.beacon || {};
+    return '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;border-top:1px solid #3a3247">' +
+      '<span><b>' + (bc.host || 'An ally') + '</b> vs <b>' + (bc.enemyFaction || 'foes') + '</b>' + (bc.hold ? ' · siege of ' + bc.hold : '') + ' · ' + (bc.enemy || '?') + ' strong</span>' +
+      '<button data-room="' + b.room + '" class="coop-join" style="background:#3a6fd0;color:#fff;border:none;border-radius:8px;padding:7px 14px;cursor:pointer">Join ⚔</button></div>';
+  }).join('');
+  for (const btn of list.querySelectorAll('.coop-join')) btn.onclick = () => { joinCoopBattle(btn.getAttribute('data-room')); };
+}
+function joinCoopBattle(room) { if (beaconPanel) beaconPanel.style.display = 'none'; window.coop.join(room); }
+function coopRosterPayload() {
+  const out = [];
+  if (playerChar) out.push({ name: playerChar.name, archetype: playerChar.archetype, skills: playerChar.skills });
+  for (const c of warbandRoster) if (!c.fallen) out.push({ name: c.name, archetype: c.archetype, skills: c.skills });
+  return out.slice(0, 60);
+}
+function onCoopJoined(m) {
+  coopRole = 'guest';
+  window.coop.send({ k: 'join-roster', name: coopName(), roster: coopRosterPayload() });
+  enterCoopGuest(m.beacon || {});
+}
+function makePuppet(team) {
+  const g = new THREE.Group();
+  const col = team === 'e' ? 0xff6a5a : team === 'host' ? 0xffd34d : 0x6bd0ff;
+  const body = boxMesh(0.8, 1.5, 0.5, mat(col, { shared: false })); body.position.y = 0.95; g.add(body);
+  const head = boxMesh(0.55, 0.55, 0.55, mat(col, { shared: false })); head.position.y = 1.95; g.add(head);
+  if (team === 'host') { const c = boxMesh(0.2, 1.6, 0.2, mat(0xffe089, { shared: false })); c.position.set(0.7, 2.3, 0); g.add(c); } // your ally's banner
+  scene.add(g); return { obj: g, tx: 0, tz: 0, tf: 0 };
+}
+function clearCoopPuppets() { for (const [, p] of coopPuppets) { scene.remove(p.obj); disposeGroup(p.obj); } coopPuppets.clear(); }
+function enterCoopGuest(beacon) {
+  mode = 'coopguest'; gameRunning = false; commandPanelOpen = false; timeScale = 1;
+  clearBattlefield(); clearCoopPuppets();
+  setBattleDressing(true);
+  applyBiome(biomeAt(beacon.x || 0, beacon.z || 0));
+  if (player.mapToken) player.mapToken.visible = false; player.obj.visible = false;
+  const enc = document.getElementById('encounter'); if (enc) enc.classList.add('hidden'); encounter = null;
+  if (document.exitPointerLock) document.exitPointerLock(); pointerLocked = false;
+  hud.classList.remove('hidden');
+  showWaveBanner('Side by Side', 'Your warband fights in ' + (beacon.host || 'your ally') + '\'s battle. Hold the line together!');
+}
+function coopApplySnap(s) {
+  const seen = new Set();
+  const put = (arr, team) => { if (!arr) return; for (const b of arr) { const id = team + b[0] + ':' + (b[1] + b[2]); seen.add(id); let p = coopPuppets.get(id); if (!p) { p = makePuppet(team); coopPuppets.set(id, p); } p.tx = b[1] / 10; p.tz = b[2] / 10; p.tf = b[3] / 100; } };
+  // ally/enemy ids can repeat across frames only loosely (fodder shares id 0); key by id+coarse-pos to keep bodies stable-ish
+  put(s.al, 'a'); put(s.en, 'e');
+  if (s.pl) { const id = 'host'; seen.add(id); let p = coopPuppets.get(id); if (!p) { p = makePuppet('host'); coopPuppets.set(id, p); } p.tx = s.pl[0] / 10; p.tz = s.pl[1] / 10; p.tf = s.pl[2] / 100; }
+  for (const [id, p] of coopPuppets) if (!seen.has(id)) { scene.remove(p.obj); disposeGroup(p.obj); coopPuppets.delete(id); }
+}
+function updateCoopGuest(dt) {
+  let cx = 0, cz = 0, n = 0;
+  const k = clamp(dt * 12, 0, 1);
+  for (const [, p] of coopPuppets) {
+    p.obj.position.x = lerp(p.obj.position.x, p.tx, k);
+    p.obj.position.z = lerp(p.obj.position.z, p.tz, k);
+    p.obj.rotation.y = p.tf;
+    cx += p.obj.position.x; cz += p.obj.position.z; n++;
+  }
+  if (n) { cx /= n; cz /= n; }
+  camera.position.set(cx, 60, cz - 46); camera.lookAt(cx, 0, cz + 8); // overhead view of the shared arena
+  // send a light input heartbeat (host v1 doesn't drive a guest avatar yet — reserved for hero control)
+  coopInputAcc += dt; if (coopInputAcc > 0.1 && coopOnline()) { coopInputAcc = 0; const d = inputDir(); window.coop.send({ k: 'input', mv: [+d.x.toFixed(2), +d.z.toFixed(2)] }); }
+}
+function coopGuestEnd(won) {
+  // share the spoils: every survivor of your committed warband grows a little from the shared victory
+  const grow = (c) => { if (!c) return; c.battles++; if (won) c.battlesWon++; c.renown += won ? 3 : 1; c.skills.strike += 0.1; c.skills.guard += 0.1; recomputeChar(c); };
+  grow(playerChar); for (const c of warbandRoster) grow(c);
+  saveCareers();
+  showWaveBanner(won ? 'Victory, Together!' : 'A Hard Day', won ? 'Your ally\'s host carried the field — and your name rode with it.' : 'The line broke, but your warband lives to fight again.');
+  leaveCoopGuest();
+}
+function leaveCoopGuest() {
+  clearCoopPuppets();
+  if (coopOnline()) window.coop.leave();
+  coopRole = null;
+  if (mode === 'coopguest') enterMap();
+}
+function onCoopMsg(m) {
+  const d = m && m.data; if (!d) return;
+  if (coopRole === 'host') {
+    if (d.k === 'join-roster') fieldGuestRoster(m.from, d.roster, d.name);
+    // d.k === 'input' reserved for future guest-avatar control
+  } else if (coopRole === 'guest') {
+    if (d.k === 'snap') coopApplySnap(d);
+    else if (d.k === 'end') coopGuestEnd(d.won);
+  }
+}
+// discovery: press J on the map to find and join an ally's battle
+addEventListener('keydown', (e) => { if (e.code === 'KeyJ' && mode === 'map' && !encounter) { e.preventDefault(); openBeaconPanel(); } });
+// debug/verification hooks
+BV.coop = () => ({ role: coopRole, online: coopOnline(), available: coopAvailable(), peers: (window.coop && window.coop.peers) || [], puppets: coopPuppets.size, room: window.coop && window.coop.room });
+BV.coopBuildSnapshot = () => { const al = [], en = []; for (const a of allies) if (a.alive) al.push([a.char ? a.char.id : 0, Math.round(a.pos.x * 10), Math.round(a.pos.z * 10), Math.round(a.facing * 100)]); for (const e of enemies) if (e.alive) en.push([e.char ? e.char.id : 0, Math.round(e.pos.x * 10), Math.round(e.pos.z * 10), Math.round(e.facing * 100)]); return { pl: [Math.round(player.pos.x * 10), Math.round(player.pos.z * 10), Math.round(player.facing * 100), 1], al, en }; };
+BV.coopApplySnap = (s) => { enterCoopGuestForTest(); coopApplySnap(s); return { puppets: coopPuppets.size }; };
+function enterCoopGuestForTest() { if (mode !== 'coopguest') { mode = 'coopguest'; } }
 
 // ---------- Boot ----------
 buildWorld();
@@ -3968,6 +4698,13 @@ BV.world = () => ({ mode, mapLevel, parties: parties.filter(p => p.alive).length
 BV.enterBattleWith = (size) => { enterBattle({ size, level: mapLevel, alive: true, raider: size <= 5, pos: player.pos.clone(), group: makePartyToken(size) }); };
 BV.biomeAt = (x, z) => biomeAt(x, z).name;
 BV.factions = () => parties.filter(p => p.alive).map(p => ({ size: p.size, faction: p.faction.name }));
+BV.diplomacy = () => ({
+  relations: Array.from(worldRelations.values()).map(r => ({ a: r.a, b: r.b, opinion: Math.round(r.opinion), stance: r.stance, truceUntil: r.truceUntil || 0 })),
+  myStance: (f) => stanceLocal(PLAYER_REALM.name, f),
+  stanceBetween: (a, b) => stanceLocal(a, b),
+  factionState: (typeof window !== 'undefined' && window.net && window.net.world && window.net.world.factionState) || null,
+  serverDriven: isServerMap()
+});
 BV.parties = parties; // live band array — debug/verification (read positions, force a clash)
 BV.nations = () => nations.map(n => ({ name: n.def.name, owner: n.owner.name, garrison: n.garrison, x: Math.round(n.x), z: Math.round(n.z) }));
 BV.allyOrders = () => { const o = {}; for (const a of allies) if (a.alive) o[a.order] = (o[a.order] || 0) + 1; return o; };
@@ -3994,8 +4731,42 @@ BV.advance = (secs, dt = 0.016) => { // deterministic battle stepping for headle
 BV.advanceMap = (secs, dt = 0.05) => { // deterministic overworld stepping (off-map wars) for headless tests
   const n = Math.round(secs / dt);
   for (let i = 0; i < n && mode === 'map' && !encounter; i++) { frameNo++; updateMap(dt); }
-  return { mode, parties: parties.filter(p => p.alive).length };
+  return { mode, parties: parties.filter(p => p.alive).length, battles: mapBattles.length };
 };
+// living-battle inspection + a forced 1v? clash for timing calibration tests
+BV.mapBattles = () => mapBattles.map(b => ({ a: b.sideA.faction.name, b: b.sideB.faction.name,
+  na: Math.round(b.sideA.live), nb: Math.round(b.sideB.live), t: +b.t.toFixed(2), dur: +b.duration.toFixed(2), aWins: b.aWins }));
+BV.startClash = (sizeA, sizeB) => {
+  const cx = player.pos.x, cz = player.pos.z;
+  const mk = (nation, sz, ox) => {
+    const g = makePartyToken(sz, nation.def); g.position.set(cx + ox, 0, cz); scene.add(g);
+    const band = { group: g, pos: g.position.clone(), size: sz, alive: true, speed: 5, faction: nation.def,
+      raider: sz <= 5, clashCd: 0, parleyCd: 0, wanderT: 1, wanderDir: 0, level: mapLevel,
+      leader: makeBandLeader(sz, mapLevel, sz > 5), quality: 1 };
+    parties.push(band); setBandLabel(band); return band;
+  };
+  const a = mk(nations[0], sizeA, -1.2), b = mk(nations[1], sizeB, 1.2);
+  return startMapBattle(a, b).duration;
+};
+BV.pacts = () => [...playerPacts].map(f => f.name);
+BV.openEncounter = openEncounter; // debug: pop the parley/aid screen for a given band
+BV.bandOfRelation = (ally) => parties.find(p => p.alive && !p.inBattle && isAllyFaction(p.faction) === ally) || null;
+BV.allyWith = (i) => { const c = nations[i]; if (c) { playerPacts.add(c.def); refreshAlliedLabels(c.def); } return BV.pacts(); };
+BV.alliedBandsNear = (radius = 1e9) => parties.filter(p => p.alive && isAllyFaction(p.faction) &&
+  Math.hypot(p.pos.x - player.pos.x, p.pos.z - player.pos.z) <= radius).length;
+BV.raiseCall = raiseCall;
+BV.tp = (x, z) => { player.pos.set(x, 0, z); player.vel.set(0, 0, 0); if (player.mapToken) player.mapToken.position.copy(player.pos); return [Math.round(x), Math.round(z)]; };
+BV.activeCall = () => activeCall && { kind: activeCall.kind, t: +activeCall.t.toFixed(1), radius: activeCall.radius,
+  answering: gatherAlliedReinforcements(activeCall.x, activeCall.z, activeCall.radius).length, hold: activeCall.cap && activeCall.cap.def.name };
+BV.coopState = () => ({ banners: battleAllyBanners, reinforced: battleReinforced, coopMult: +coopMult.toFixed(3),
+  reserveBorrowed: playerReserve.filter(it => it.char && it.char.borrowed).length, reserveTotal: playerReserve.length,
+  alliesAlive: allies.filter(a => a.alive).length, borrowedAlive: allies.filter(a => a.alive && a.char && a.char.borrowed).length });
+// test: drop a pacted band right next to the player so the next battle pulls it in as reinforcement
+BV.spawnAllyBandHere = (size = 12) => { playerPacts.add(nations[0].def);
+  const g = makePartyToken(size, nations[0].def); g.position.set(player.pos.x + 2, 0, player.pos.z + 2); scene.add(g);
+  const band = { group: g, pos: g.position.clone(), size, alive: true, speed: 5, faction: nations[0].def, raider: size <= 5,
+    clashCd: 0, parleyCd: 0, wanderT: 1, wanderDir: 0, level: mapLevel, leader: makeBandLeader(size, mapLevel, true), quality: 1 };
+  parties.push(band); setBandLabel(band); return BV.alliedBandsNear(40); };
 BV.dbg = () => { const a = allies.find(x => x.alive && !x.def.ranged); const e = enemies.find(x => x.alive);
   return { gameRunning, mode, freeze: BV.freeze, frameNo, alliesN: allies.length, enemiesN: enemies.length,
     ally: a ? { state: a.state, order: a.order, hasTgt: !!(a.target && a.target.alive), dist: a.target ? Math.round(a.pos.distanceTo(a.target.pos)) : -1, z: Math.round(a.pos.z), vel: +a.vel.length().toFixed(2) } : null,
@@ -4070,6 +4841,7 @@ function applyServerWorldOnce() {
     const cap = nations.find(c => c.def && c.def.name === sc.def_name);
     if (cap) { const own = nationByName(sc.owner_name); if (own && own !== cap.owner) { cap.owner = own; recolorCapital(cap); } }
   }
+  if (w.relations) setRelations(w.relations); // mirror the server's authoritative faction relations
   showWhileAway(w);
   renderOtherPlayers();
 }
@@ -4084,7 +4856,8 @@ function isServerMap() { return !!(typeof window !== 'undefined' && window.net &
 function serverArmyToBand(a) {
   const fac = nationByName(a.faction) || NATIONS[0];
   const g = makePartyToken(a.size, fac);
-  g.position.set(clamp(a.x, -MAP_HALF + 1, MAP_HALF - 1), 0, clamp(a.z, -MAP_HALF + 1, MAP_HALF - 1));
+  const ax = clamp(a.x, -MAP_HALF + 1, MAP_HALF - 1), az = clamp(a.z, -MAP_HALF + 1, MAP_HALF - 1);
+  g.position.set(ax, mapElevY(ax, az), az);
   scene.add(g);
   const leader = makeChar('longsword', { team: 'enemy', name: a.name, renown: a.renown || 0, notability: 2 });
   leader.skills.strike = (a.renown || 0) * 0.3; recomputeChar(leader); // display/feel only; server owns the truth
@@ -4109,7 +4882,7 @@ function makeOtherPlayerToken(name, size) {
 function renderOtherPlayers() {
   clearOtherPlayers();
   const ps = (window.net && window.net.world && window.net.world.players) || [];
-  for (const p of ps) { const g = makeOtherPlayerToken(p.name, p.size); g.position.set(clamp(p.x, -MAP_HALF + 1, MAP_HALF - 1), 0, clamp(p.z, -MAP_HALF + 1, MAP_HALF - 1)); scene.add(g); otherPlayerTokens.push(g); }
+  for (const p of ps) { const g = makeOtherPlayerToken(p.name, p.size); const px = clamp(p.x, -MAP_HALF + 1, MAP_HALF - 1), pz = clamp(p.z, -MAP_HALF + 1, MAP_HALF - 1); g.position.set(px, mapElevY(px, pz), pz); scene.add(g); otherPlayerTokens.push(g); }
 }
 let presenceT = 0;
 function sendPresenceMaybe(dt) {

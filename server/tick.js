@@ -6,6 +6,7 @@
 // sleep / restart / a week away are one code path. Presence lets players share a world.
 const { db } = require('./db');
 const WorldSim = require('../sim/world-sim.js');
+const D = require('./diplomacy');
 
 const TICK_SECONDS = 20;
 const MAX_CATCHUP_TICKS = 300;
@@ -42,6 +43,7 @@ function seedWorld(worldId) {
   }
   let have = db.prepare("SELECT count(*) n FROM warlords WHERE world_id=? AND status='alive'").get(worldId).n;
   for (; have < NATIONS.length * 2; have++) spawnWarlord(worldId, pick(NATIONS), 0);
+  D.seedDiplomacy(worldId);   // relation matrix + faction posture (idempotent)
   db.prepare('UPDATE worlds SET last_tick_at=? WHERE id=? AND last_tick_at=0').run(Math.floor(Date.now() / 1000), worldId);
 }
 
@@ -61,25 +63,33 @@ function doClash(worldId, tick, a, b) {
     db.prepare('UPDATE warlords SET size=? WHERE id=?').run(losSize, los.id);
   }
 }
-function nearestEnemyCap(worldId, faction, x, z) {
+function nearestEnemyCap(worldId, faction, x, z, relMap) {
   const caps = db.prepare('SELECT * FROM capitals WHERE world_id=? AND owner_name!=?').all(worldId, faction);
   let best = null, bd = 1e18;
-  for (const c of caps) { const p = capPos(c.idx); const d = (p.x - x) * (p.x - x) + (p.z - z) * (p.z - z); if (d < bd) { bd = d; best = { row: c, x: p.x, z: p.z, d2: d }; } }
+  for (const c of caps) {
+    if (relMap && !WorldSim.areEnemies(D.stanceBetween(relMap, faction, c.owner_name))) continue; // only storm a hold you're at war/hostile with
+    const p = capPos(c.idx); const d = (p.x - x) * (p.x - x) + (p.z - z) * (p.z - z); if (d < bd) { bd = d; best = { row: c, x: p.x, z: p.z, d2: d }; }
+  }
   return best;
 }
-function nearestRival(armies, a) {
+function nearestRival(armies, a, relMap) {
   let best = null, bd = 1e18;
-  for (const o of armies) { if (o.id === a.id || o.faction === a.faction) continue; const d = (o.x - a.x) * (o.x - a.x) + (o.z - a.z) * (o.z - a.z); if (d < bd) { bd = d; best = o; } }
+  for (const o of armies) {
+    if (o.id === a.id || o.faction === a.faction) continue;
+    if (relMap && !WorldSim.areEnemies(D.stanceBetween(relMap, a.faction, o.faction))) continue; // allies/non-aggression are not rivals
+    const d = (o.x - a.x) * (o.x - a.x) + (o.z - a.z) * (o.z - a.z); if (d < bd) { bd = d; best = o; }
+  }
   return best ? { o: best, d2: bd } : null;
 }
 function runTick(worldId, tick) {
   const armies = db.prepare("SELECT * FROM warlords WHERE world_id=? AND status='alive'").all(worldId);
   if (armies.length < 2) { seedWorld(worldId); return; }
+  const relMap = D.relationsFor(worldId);   // who is at war with whom this tick (drives every target choice)
   const upd = db.prepare('UPDATE warlords SET x=?, z=?, tx=?, tz=? WHERE id=?');
   // 1. march toward a rival, else an enemy hold, else wander
   for (const a of armies) {
-    const rv = nearestRival(armies, a);
-    const cap = nearestEnemyCap(worldId, a.faction, a.x, a.z);
+    const rv = nearestRival(armies, a, relMap);
+    const cap = nearestEnemyCap(worldId, a.faction, a.x, a.z, relMap);
     let tx, tz;
     if (rv && rv.d2 < 70 * 70) { tx = rv.o.x; tz = rv.o.z; }
     else if (cap) { tx = cap.x; tz = cap.z; }
@@ -93,22 +103,27 @@ function runTick(worldId, tick) {
   const clashed = new Set();
   for (let i = 0; i < armies.length; i++) for (let j = i + 1; j < armies.length; j++) {
     const a = armies[i], b = armies[j];
-    if (a.faction === b.faction || clashed.has(a.id) || clashed.has(b.id)) continue;
+    if (!WorldSim.areEnemies(D.stanceBetween(relMap, a.faction, b.faction)) || clashed.has(a.id) || clashed.has(b.id)) continue; // allies & truces don't fight
     if ((a.x - b.x) * (a.x - b.x) + (a.z - b.z) * (a.z - b.z) <= CLASH_RANGE * CLASH_RANGE) { clashed.add(a.id); clashed.add(b.id); doClash(worldId, tick, a, b); }
   }
   // 3. conquests: an army on an enemy hold, strong enough, takes it
   for (const a of db.prepare("SELECT * FROM warlords WHERE world_id=? AND status='alive'").all(worldId)) {
     if (clashed.has(a.id)) continue;
-    const cap = nearestEnemyCap(worldId, a.faction, a.x, a.z);
+    const cap = nearestEnemyCap(worldId, a.faction, a.x, a.z, relMap);
     if (cap && cap.d2 <= CAP_RANGE * CAP_RANGE && a.size >= cap.row.garrison * 0.5) {
+      const loser = cap.row.owner_name;
       db.prepare('UPDATE capitals SET owner_name=? WHERE id=?').run(a.faction, cap.row.id);
       db.prepare('UPDATE warlords SET renown=renown+10, size=? WHERE id=?').run(Math.max(2, a.size - Math.round(cap.row.garrison * 0.4)), a.id);
       ev(worldId, tick, 'capital_taken', a.faction + ' seized ' + cap.row.def_name + ' under ' + a.name);
+      D.bumpRelation(worldId, loser, a.faction, -D.CONQUEST_SHOCK, tick); // the wronged nation seethes (may tip into war)
     }
   }
-  // 4. keep the war populated
+  // 4. diplomacy: drift relations + posture, then record any nation that has fallen
+  D.tickDiplomacy(worldId, tick);
+  D.handleCollapse(worldId, tick);
+  // 5. keep the war populated — only LIVING nations march in (a fallen banner stays fallen)
   const alive = db.prepare("SELECT count(*) n FROM warlords WHERE world_id=? AND status='alive'").get(worldId).n;
-  if (alive < NATIONS.length * 2 && Math.random() < 0.5) spawnWarlord(worldId, pick(NATIONS), tick);
+  if (alive < NATIONS.length * 2 && Math.random() < 0.5) { const nat = D.aliveNations(worldId); if (nat.length) spawnWarlord(worldId, pick(nat), tick); }
 }
 
 function pruneWorld(worldId) {
@@ -146,7 +161,7 @@ function forceTicks(worldId, n) { seedWorld(worldId); return runTicks(worldId, n
 
 // ----- positional reads + multiplayer presence -----
 function getArmies(worldId) {
-  return db.prepare("SELECT id, name, faction, archetype, x, z, size, renown, kills, battles_won FROM warlords WHERE world_id=? AND status='alive' ORDER BY id").all(worldId);
+  return db.prepare("SELECT id, name, faction, archetype, x, z, size, renown, kills, battles_won, intent, intent_target_kind, intent_target_id, loyalty, personality_json, grudge_faction FROM warlords WHERE world_id=? AND status='alive' ORDER BY id").all(worldId);
 }
 function getCapitals(worldId) {
   return db.prepare('SELECT idx, def_name, owner_name, garrison FROM capitals WHERE world_id=? ORDER BY idx').all(worldId)

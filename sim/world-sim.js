@@ -187,6 +187,141 @@
     return { decision: null, summary: a + ' and ' + b + ' shift their standing' };
   }
 
+  // ============================================================================
+  // Destiny engine (Step 7). Pure & deterministic — the same math runs on the server
+  // (authority) and the client (projection), so a given (population, world snapshot,
+  // tick) yields the same fates everywhere. Reads the WHOLE population + macro state,
+  // assigns each character a fated arc (advancing 0..1), then rolls the population up
+  // into a world "age". CHRONICLE-ONLY: returns labels + lore + chronicle events,
+  // never any mechanical modifier — nothing in combat/marching/diplomacy reads it.
+  // ============================================================================
+  var DESTINY_TITLES = {
+    conqueror: 'Conqueror', champion: 'Champion of the Vale', kingslayer: 'Kingslayer',
+    bulwark: 'The Bulwark', dynast: 'Founder of a Line', betrayer: 'The Faithless',
+    doomed: 'The Doomed', wanderer: 'The Unremembered'
+  };
+  var AGE_TITLES = {
+    age_of_ambition: 'The Age of Ambition', age_of_blood: 'The Age of Blood',
+    the_uniting: 'The Uniting', the_long_dusk: 'The Long Dusk', the_long_peace: 'The Long Peace'
+  };
+  function destinyTitle(k) { return DESTINY_TITLES[k] || DESTINY_TITLES.wanderer; }
+  function ageTitle(k) { return AGE_TITLES[k] || AGE_TITLES.age_of_ambition; }
+
+  var DST = { FATE_STEP: 0.06, FATE_WOVEN: 0.35, FULFILL_TH: 0.85, SWITCH_MARGIN: 0.10,
+    AGE_SWITCH_TH: 0.30, WANDER_FLOOR: 0.18 };
+  function clamp01(x) { return x < 0 ? 0 : x > 1 ? 1 : x; }
+  // saturating 0..1 — diminishing returns, nobody runs to infinity (same spirit as effSkill)
+  function sat(x, scale) { return 1 - Math.exp(-Math.max(0, x || 0) / scale); }
+
+  // score every eligible archetype for one character → {key: score in ~0..1}.
+  // Player/warband (kind 'char') are scored from their OWN deeds only — their fate is never
+  // dragged down by their banner's weakness (mirrors diplomacy's "the player's standing is earned").
+  function destinyScores(ch, world) {
+    var p = ch.personality || {};
+    var amb = p.ambition != null ? p.ambition : 0.5;
+    var cau = p.caution != null ? p.caution : 0.5;
+    var ven = p.vengeance != null ? p.vengeance : 0.5;
+    var loy01 = ch.loyalty != null ? clamp01(ch.loyalty / 100) : (p.loyalty != null ? p.loyalty : 0.6);
+    var R = sat(ch.renown, 150), K = sat(ch.kills, 40), W = sat(ch.battlesWon, 20), S = sat(ch.size, 50);
+    var isChar = ch.kind === 'char';
+    var mean = world.mean || 1;
+    var fpow = isChar ? 1 : ((world.powerOf[ch.faction] || 0) / (mean || 1));
+    var weak = isChar ? 0 : clamp01(1 - fpow), strong = clamp01(fpow - 1);
+    var posture = isChar ? 'consolidate' : (world.postureOf[ch.faction] || 'consolidate');
+    var holdsCap = isChar ? 0 : ((world.capsOf[ch.faction] || 0) > 0 ? 1 : 0);
+    var alive = isChar ? 1 : (world.aliveOf[ch.faction] === false ? 0 : 1);
+    var age01 = (ch.bornTick != null && world.tick != null) ? sat(world.tick - ch.bornTick, 400) : R;
+
+    var s = {};
+    s.champion = clamp01(0.42 * R + 0.30 * W + 0.22 * K);            // earned in the field
+    s.kingslayer = clamp01(0.55 * K + 0.28 * ven + 0.18 * W - 0.25 * S); // a feller of leaders, not a host-general
+    s.wanderer = DST.WANDER_FLOOR;
+    if (!isChar) {                                   // arcs that need a host / a banner / a holdfast
+      // a faction holds its own capital by default, so holdsCap alone is no signal — the real
+      // "we are on the defensive" cue is the DEFEND posture; that (not mere ownership) makes a bulwark.
+      s.conqueror = clamp01(0.40 * S + 0.26 * R + 0.22 * amb + (posture === 'expand' ? 0.18 : 0) + 0.16 * strong);
+      s.bulwark = clamp01((posture === 'defend' ? 0.34 : 0) + 0.28 * cau + 0.18 * holdsCap + 0.14 * R + 0.10 * weak);
+      s.dynast = clamp01(0.45 * age01 + 0.20 * holdsCap + 0.15 * alive + 0.12 * R - 0.30 * weak); // an old, enduring name
+      s.betrayer = clamp01(0.48 * (1 - loy01) + 0.34 * amb + 0.20 * weak - 0.20 * holdsCap);
+      s.doomed = clamp01(0.42 * weak + 0.30 * (posture === 'desperate' ? 1 : 0) + 0.30 * (1 - S) - 0.40 * R);
+    }
+    return s;
+  }
+  function bestDestiny(scores) {
+    var bk = 'wanderer', bs = -1;
+    for (var k in scores) if (scores[k] > bs) { bs = scores[k]; bk = k; }
+    return { key: bk, score: bs };
+  }
+
+  // the world age, from population-wide aggregates + balance of power. Sticky: it holds the
+  // previous age until a rival reading's momentum clears a floor, so it doesn't flicker each tick.
+  function ageOf(world, prevAge) {
+    var conc = world.totalCaps ? (world.strongestShareCaps || 0) : 0; // strongest's share of all holds
+    var nA = world.nationsAlive != null ? world.nationsAlive : 5;
+    var wars = world.warPairs || 0;
+    var age, mom;
+    if (conc >= 0.6) { age = 'the_uniting'; mom = clamp01(conc); }
+    else if (nA <= 2) { age = 'the_long_dusk'; mom = clamp01((5 - nA) / 4); }
+    else if (wars >= 4) { age = 'age_of_blood'; mom = clamp01(wars / 6); }
+    else if (wars === 0) { age = 'the_long_peace'; mom = 0.5; }
+    else { age = 'age_of_ambition'; mom = clamp01(0.3 + wars / 8); }
+    var changed = false;
+    if (prevAge && prevAge !== age && mom < DST.AGE_SWITCH_TH) age = prevAge;  // hold until momentum builds
+    else if (prevAge !== age) changed = true;
+    return { age: age, momentum: mom, changed: changed };
+  }
+  function prophecyLine(age, top) {
+    if (!top) return ageTitle(age) + ' settles over a silent vale.';
+    var who = top.name + ' of ' + top.faction + ', marked as ' + destinyTitle(top.destiny);
+    switch (age) {
+      case 'age_of_blood': return 'The vale runs red — ' + who + '.';
+      case 'the_uniting': return 'One crown nears — ' + who + '.';
+      case 'the_long_dusk': return 'The long dusk falls — ' + who + '.';
+      case 'the_long_peace': return 'A wary peace holds — ' + who + '.';
+      default: return 'An age of ambition dawns — ' + who + '.';
+    }
+  }
+
+  // one destiny step over the whole population.
+  // characters: [{id, kind:'warlord'|'char', name, faction, renown, kills, battlesWon, size,
+  //               bornTick, personality:{ambition,caution,loyalty,vengeance}, loyalty, destiny, fate}]
+  // world: { tick, mean, powerOf, postureOf, aliveOf, capsOf, totalCaps, strongestShareCaps,
+  //          nationsAlive, warPairs, prevAge }
+  // Returns ONLY the character rows worth persisting, the new world destiny, and chronicle events.
+  function computeDestiny(characters, world, ctx, rnd) {
+    ctx = ctx || {}; rnd = rnd || Math.random; world = world || {};
+    world.powerOf = world.powerOf || {}; world.postureOf = world.postureOf || {};
+    world.aliveOf = world.aliveOf || {}; world.capsOf = world.capsOf || {};
+    var charUpdates = [], events = [], top = null;
+    for (var i = 0; i < characters.length; i++) {
+      var ch = characters[i];
+      var jitter = (rnd() - 0.5) * 1e-6;             // deterministic tie-break, one draw per char in load order
+      var scores = destinyScores(ch, world);
+      var best = bestDestiny(scores); best.score += jitter;
+      var oldKey = ch.destiny || 'wanderer', oldFate = ch.fate || 0;
+      var curScore = scores[oldKey] != null ? scores[oldKey] : -1;
+      // hysteresis: keep the current arc unless a rival clears it by a margin
+      var key = (best.key !== oldKey && best.score > curScore + DST.SWITCH_MARGIN) ? best.key : oldKey;
+      var target = scores[key] != null ? scores[key] : best.score;
+      var df = target - oldFate; if (df > DST.FATE_STEP) df = DST.FATE_STEP; else if (df < -DST.FATE_STEP) df = -DST.FATE_STEP;
+      var fate = clamp01(oldFate + df);              // fate eases toward the strength of the chosen arc
+      // chronicle milestones, gated by FATE (the measure of how marked one is) so each fires once as
+      // a fate climbs — wanderers (fate near the floor) never trip them, so the log isn't spammed.
+      var nonWander = key !== 'wanderer';
+      if (nonWander && oldFate < DST.FATE_WOVEN && fate >= DST.FATE_WOVEN)
+        events.push({ type: 'destiny', summary: 'A fate settles on ' + ch.name + ' of ' + ch.faction + ' — ' + destinyTitle(key) });
+      if (nonWander && oldFate < DST.FULFILL_TH && fate >= DST.FULFILL_TH)
+        events.push({ type: 'destiny', summary: 'The prophecy holds — ' + ch.name + ' of ' + ch.faction + ' is become ' + destinyTitle(key) });
+      if (key !== oldKey || Math.abs(fate - oldFate) > 0.01) charUpdates.push({ id: ch.id, kind: ch.kind, destiny: key, fate: fate });
+      // the prophecy's standard-bearer = the most-fated non-wanderer (renown breaks early ties before fate builds)
+      var rank = nonWander ? (fate * 0.7 + sat(ch.renown, 150) * 0.3) : -1;
+      if (rank >= 0 && (!top || rank > top._r)) top = { name: ch.name, faction: ch.faction, destiny: key, _r: rank };
+    }
+    var a = ageOf(world, world.prevAge);
+    if (a.changed) events.push({ type: 'age', summary: 'The age turns: ' + ageTitle(a.age) });
+    return { charUpdates: charUpdates, world: { age: a.age, prophecy: prophecyLine(a.age, top), momentum: a.momentum, changed: a.changed }, events: events };
+  }
+
   return {
     SKILL_SCALE: SKILL_SCALE, SKILL_CAP: SKILL_CAP,
     effSkill: effSkill, mulberry32: mulberry32,
@@ -195,6 +330,9 @@
     stanceFromOpinion: stanceFromOpinion, rawStance: rawStance,
     areEnemies: areEnemies, areAllies: areAllies, areNonAggression: areNonAggression,
     canonPair: canonPair, pairKey: pairKey, balanceOfPower: balanceOfPower,
-    updateDiplomacy: updateDiplomacy, STANCE_TH: STANCE_TH
+    updateDiplomacy: updateDiplomacy, STANCE_TH: STANCE_TH,
+    // destiny kernel
+    computeDestiny: computeDestiny, destinyTitle: destinyTitle, ageTitle: ageTitle,
+    DESTINY_TITLES: DESTINY_TITLES, AGE_TITLES: AGE_TITLES
   };
 });

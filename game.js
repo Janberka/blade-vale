@@ -1053,6 +1053,7 @@ function classKeyOf(arch) { return (arch === 'long' || arch === 'archer' || arch
 const GIVEN_NAMES = ['Aldric','Bram','Cedwyn','Doran','Eadric','Falk','Garrec','Hale','Ivo','Joren','Kell','Lorne','Maddoc','Nael','Osric','Perrin','Quenn','Roderic','Sefton','Tomas','Ulf','Varin','Wend','Yorin','Ansel','Brand','Corin','Dunmar','Edra','Freya','Gerda','Halla','Ingrid','Jorah','Kara','Linnet','Mira','Nessa','Orla','Petra','Romilda','Sigrun','Thora','Ysolde'];
 const BYNAMES = ['the Bold','the Quiet','Ironhand','the Younger','Oakheart','the Swift','Stonefist','the Grim','Redmane','the Tall','Hawkeye','the Patient','Coldbrook','the Stout','Wolfsbane','the Lucky','Greycloak','the Fierce','Longstride','the Sly','Brightblade','the Steady','Hardwin','the Wary','Blackbriar','Frostbeard','Stormcrow'];
 function pick(a) { return a[(Math.random() * a.length) | 0]; }
+function shuffleInPlace(a) { for (let i = a.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; const t = a[i]; a[i] = a[j]; a[j] = t; } return a; }
 function roman(n) { const t = [[10,'X'],[9,'IX'],[5,'V'],[4,'IV'],[1,'I']]; let s = ''; for (const e of t) while (n >= e[0]) { s += e[1]; n -= e[0]; } return s; }
 function genName(set) {
   for (let i = 0; i < 40; i++) {
@@ -1077,6 +1078,7 @@ function makeChar(archetype, opts = {}) {
     xp: 0, renown: opts.renown || 0, popularity: 0,
     kills: 0, battles: 0, battlesLed: 0, battlesWon: 0, deaths: 0,
     rank: 'Recruit', notability: opts.notability || 1,
+    destiny: null, fate: 0,                       // server-computed fated arc (chronicle-only; hydrated from /profile)
     dmgBonus: 0, guardEff: 1, hpBonus: 0,
     localKills: 0, localStrike: 0, localGuard: 0, fielded: false, fallen: false,
   };
@@ -1180,6 +1182,7 @@ function deserChar(o) {
   c.skills = Object.assign({ strike: 0, guard: 0, lead: 0, aim: 0 }, o.skills);
   c.xp = o.xp || 0; c.renown = o.renown || 0; c.popularity = o.popularity || 0;
   c.kills = o.kills || 0; c.battles = o.battles || 0; c.battlesLed = o.battlesLed || 0; c.battlesWon = o.battlesWon || 0; c.deaths = o.deaths || 0;
+  c.destiny = o.destiny || null; c.fate = o.fate || 0;
   recomputeChar(c); return c;
 }
 function saveCareers() {
@@ -2330,6 +2333,7 @@ const MAP_HALF = 90;      // overworld half-size — much larger than a battle a
 const FIELD_CAP = 50;     // combatants PER SIDE on the field at once (≤100 bodies total)
 const parties = [];       // roaming enemy bands on the map
 let mapLevel = 0;         // rises each time you clear the map — bands get bigger
+let universeSeed = 1;     // identifies THIS game universe — rerolled on refresh; mixes into worldSeed so terrain/capitals/diplomacy all differ run-to-run
 let mapSpawnT = 0;        // timer for trickling fresh bands onto the map
 let playerReserve = [], enemyReserve = []; // defs waiting to march into the battle
 let battleParty = null;   // the map band currently being fought
@@ -2358,7 +2362,7 @@ function _fbm(x, z, seed) {
   for (let o = 0; o < 4; o++) { v += amp * _vnoise(x * f, z * f, seed + o * 31); norm += amp; f *= 2; amp *= 0.5; }
   return v / norm;
 }
-const worldSeed = () => mapLevel * 1000 + 7;
+const worldSeed = () => ((mapLevel * 1000 + 7) ^ (universeSeed * 2654435761)) >>> 0;
 const TERR_SCALE = 1 / 42;
 function elevationAt(x, z) {
   const base = _fbm((x + 1000) * TERR_SCALE, (z - 1000) * TERR_SCALE, worldSeed() + 1);
@@ -3358,6 +3362,9 @@ function enterBattle(band) {
   if (activeCall) clearCall(); // the muster is led into battle — the call is answered and lowered
   enemyReserve = buildEnemyRoster(band.size, band.level);
   enemiesRemaining = enemyReserve.length;
+  // big hosts overflow the field cap: shuffle both reserves so the OPENING line is a
+  // representative mix of the whole army, not LIFO-biased to the last class mustered
+  shuffleInPlace(playerReserve); shuffleInPlace(enemyReserve);
   // size the arena to the forces actually on the field
   const onField = Math.min(FIELD_CAP, playerReserve.length) + Math.min(FIELD_CAP, enemyReserve.length);
   applyArenaSize(clamp(FRONT_GAP + 22 + onField * 0.3, ARENA_BASE, ARENA_MAX)); // big enough to hold the gap + both lines
@@ -4786,6 +4793,9 @@ BV.dmg = { damagePlayer, damageEnemy, damageCombatant };
 BV.spawnProjectile = spawnProjectile;
 
 // ---------- Charsheet: inspect any soldier's career (press V) ----------
+// shared titles so client + server render the destiny engine's labels identically (WorldSim is global)
+function wsAgeTitle(k) { return (typeof WorldSim !== 'undefined' && WorldSim.ageTitle) ? WorldSim.ageTitle(k) : (k || ''); }
+function wsDestinyTitle(k) { return (typeof WorldSim !== 'undefined' && WorldSim.destinyTitle) ? WorldSim.destinyTitle(k) : (k || ''); }
 const charsheetOverlay = document.getElementById('charsheet');
 function csSkill(label, raw) {
   const pct = Math.round(effSkill(raw));
@@ -4798,6 +4808,7 @@ function csCard(c, isYou) {
       c.battles + ' battles' + (c.battlesWon ? ' (' + c.battlesWon + ' won)' : '') + '</div>' +
     csSkill('Strike', c.skills.strike) + csSkill('Guard', c.skills.guard) +
     '<div class="cs-stat">+' + c.dmgBonus + ' dmg · +' + c.hpBonus + ' HP · guard ×' + c.guardEff.toFixed(2) + '</div>' +
+    (c.destiny && c.destiny !== 'wanderer' ? '<div class="cs-destiny">✦ Destiny: ' + wsDestinyTitle(c.destiny) + '</div>' : '') +
   '</div>';
 }
 function renderCharsheet() {
@@ -4831,10 +4842,19 @@ BV.toggleCharsheet = toggleCharsheet;
 let worldReflected = false;
 const whileawayOverlay = document.getElementById('whileaway');
 function nationByName(nm) { if (PLAYER_REALM && nm === PLAYER_REALM.name) return PLAYER_REALM; for (const n of NATIONS) if (n.name === nm) return n; return null; }
+function destinyHeaderHtml(d) {
+  if (!d || !d.age) return '';
+  const fates = (d.fated || []).slice(0, 4)
+    .map(f => '<span class="wa-fate">' + f.name + ' — ' + (f.destinyTitle || wsDestinyTitle(f.destiny)) + '</span>').join('');
+  return '<div class="wa-age">' + (d.ageTitle || wsAgeTitle(d.age)) + '</div>' +
+    (d.prophecy ? '<div class="wa-prophecy">' + d.prophecy + '</div>' : '') +
+    (fates ? '<div class="wa-fates">' + fates + '</div>' : '');
+}
 function showWhileAway(w) {
   if (!whileawayOverlay || !w || !w.events || !w.events.length) return;
-  const tag = (t) => t === 'capital_taken' ? 'cap' : t === 'leader_fell' ? 'fell' : t === 'warlord_rose' ? 'rose' : '';
-  document.getElementById('wa-body').innerHTML = w.events.slice(0, 24).map(e => '<div class="wa-ev ' + tag(e.type) + '">' + e.summary + '</div>').join('');
+  const tag = (t) => t === 'capital_taken' ? 'cap' : t === 'leader_fell' ? 'fell' : t === 'warlord_rose' ? 'rose' : (t === 'destiny' || t === 'age') ? 'fate' : '';
+  document.getElementById('wa-body').innerHTML = destinyHeaderHtml(w.destiny) +
+    w.events.slice(0, 24).map(e => '<div class="wa-ev ' + tag(e.type) + '">' + e.summary + '</div>').join('');
   const sub = document.getElementById('wa-sub'); if (sub) sub.textContent = w.events.length + ' tidings reached you while you were away.';
   whileawayOverlay.classList.remove('hidden');
   if (document.exitPointerLock) document.exitPointerLock();
@@ -4902,5 +4922,218 @@ function sendPresenceMaybe(dt) {
 }
 BV.serverBands = () => parties.filter(p => p.alive && p.serverId).map(p => ({ name: p.leader && p.leader.name, faction: p.faction.name, size: p.size, serverId: p.serverId }));
 BV.otherPlayers = () => otherPlayerTokens.length;
+
+// ============================================================================
+//  STARTING STATIONS — "what you are" calculates "what you have"
+// ----------------------------------------------------------------------------
+//  Every universe (a fresh worldSeed, rerolled on refresh) deals the player a
+//  STATION. The station is the single input; everything else — host size, unit
+//  mix, holdings, renown, sworn allies, the war you open in, and the very fight
+//  you're dropped into — is DERIVED from it. A Prince fields ≥100 men; an Outlaw
+//  a desperate dozen. Refresh, or hit "New Universe", to be dealt another.
+// ============================================================================
+const STATIONS = [
+  { key: 'outlaw',   title: 'Outlaw',            weight: 3, menLo: 6,   menHi: 13,  holdings: 0, pacts: 0, renownLo: 0,   renownHi: 25,  regionLo: 0, regionHi: 1, enemyFactor: 1.5,  encounter: 'ambush',
+    mix: { sword: 0.70, long: 0.05, archer: 0.15, thrower: 0.10 }, blurb: 'Landless and hunted — a fistful of blades and nothing left to lose.' },
+  { key: 'sellsword', title: 'Sellsword Captain', weight: 3, menLo: 18,  menHi: 30,  holdings: 0, pacts: 1, renownLo: 30,  renownHi: 90,  regionLo: 1, regionHi: 2, enemyFactor: 1.15, encounter: 'field',
+    mix: { sword: 0.50, long: 0.12, archer: 0.22, thrower: 0.16 }, blurb: 'A free company under contract — paid to win other men’s wars.' },
+  { key: 'knight',   title: 'Hedge Knight',      weight: 3, menLo: 24,  menHi: 42,  holdings: 0, pacts: 1, renownLo: 60,  renownHi: 140, regionLo: 1, regionHi: 2, enemyFactor: 1.0,  encounter: 'field',
+    mix: { sword: 0.55, long: 0.18, archer: 0.15, thrower: 0.12 }, blurb: 'A sworn sword and a small retinue, riding for land and renown.' },
+  { key: 'baron',    title: 'Marcher Baron',     weight: 2, menLo: 45,  menHi: 70,  holdings: 1, pacts: 1, renownLo: 140, renownHi: 300, regionLo: 2, regionHi: 3, enemyFactor: 0.95, encounter: 'defend',
+    mix: { sword: 0.50, long: 0.20, archer: 0.18, thrower: 0.12 }, blurb: 'Lord of a border hold — one castle to keep and a rival across the river.' },
+  { key: 'prince',   title: 'Prince',            weight: 2, menLo: 100, menHi: 150, holdings: 1, pacts: 2, renownLo: 300, renownHi: 520, regionLo: 3, regionHi: 4, enemyFactor: 0.9,  encounter: 'field',
+    mix: { sword: 0.45, long: 0.22, archer: 0.20, thrower: 0.13 }, blurb: 'Heir to a realm — a host of a hundred at your back and a throne to claim.' },
+  { key: 'king',     title: 'High King',         weight: 1, menLo: 160, menHi: 240, holdings: 2, pacts: 2, renownLo: 520, renownHi: 900, regionLo: 4, regionHi: 5, enemyFactor: 0.8,  encounter: 'siege',
+    mix: { sword: 0.42, long: 0.24, archer: 0.20, thrower: 0.14 }, blurb: 'Crowned and warlike — two holds, sworn vassals, and a grand campaign.' },
+];
+const ENCOUNTER_VERB = {
+  ambush: n => `Ambushed — ${n} raiders close in`,
+  field:  n => `A host of ${n} bars your path`,
+  defend: n => `${n} march on your hold — break the siege`,
+  siege:  n => `Storm the capital — ${n} defenders man the walls`,
+};
+let currentStation = null;
+
+function _rngInt(rng, lo, hi) { return lo + Math.floor(rng() * (hi - lo + 1)); }
+function _shuffleIdx(rng, n) { const a = []; for (let i = 0; i < n; i++) a.push(i); for (let i = n - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); const t = a[i]; a[i] = a[j]; a[j] = t; } return a; }
+function _compFromMix(total, mix) {
+  const comp = { sword: 0, long: 0, archer: 0, thrower: 0 }; let used = 0;
+  for (const k of WARBAND_KEYS) { comp[k] = Math.max(0, Math.round(total * (mix[k] || 0))); used += comp[k]; }
+  comp.sword += total - used; if (comp.sword < 0) { comp.thrower += comp.sword; comp.sword = 0; } // never below zero
+  if (comp.thrower < 0) comp.thrower = 0;
+  return comp;
+}
+
+// Deal a station + all its derived state from a universe seed. Pure: same seed → same deal.
+function rollStation(seed) {
+  const rng = WorldSim.mulberry32((seed * 2654435761) >>> 0);
+  const totalW = STATIONS.reduce((s, d) => s + d.weight, 0);
+  let r = rng() * totalW, def = STATIONS[0];
+  for (const d of STATIONS) { if ((r -= d.weight) < 0) { def = d; break; } }
+  const men = _rngInt(rng, def.menLo, def.menHi);
+  const region = _rngInt(rng, def.regionLo, def.regionHi);
+  const renown = _rngInt(rng, def.renownLo, def.renownHi);
+  const idx = _shuffleIdx(rng, NATIONS.length);   // role assignment among the realms
+  const homeIdx = idx[0];
+  const rivalIdx = idx[idx.length - 1];
+  const pactIdx = idx.slice(1, 1 + def.pacts).filter(i => i !== rivalIdx);
+  const holdingIdx = idx.filter(i => i !== rivalIdx).slice(0, def.holdings); // home + allies, never the rival
+  const comp = _compFromMix(men, def.mix);
+  const enemy = Math.max(4, Math.round(men * def.enemyFactor + region * 6));
+  return { seed, def, key: def.key, title: def.title, blurb: def.blurb, encounter: def.encounter,
+    men, comp, region, renown, homeIdx, rivalIdx, pactIdx, holdingIdx, holdings: def.holdings, enemy };
+}
+
+function stationDisplayName(s) {
+  const home = NATIONS[s.homeIdx].name;
+  if (s.holdings > 0) return `${s.title} of ${home}`;
+  if (s.pactIdx.length) return `${s.title} in service of ${NATIONS[s.pactIdx[0]].name}`;
+  return s.title;
+}
+
+// Relations seeded FROM the station: your realm + sworn allies friendly, your rival at war,
+// the rest wary strangers; AI neighbours stay sore (the pentagon) and gang on your rival's friends.
+function seedStationRelations(s) {
+  if (!_wsOK()) return;
+  const all = NATIONS.map(n => n.name).concat([PLAYER_REALM.name]);
+  const pr = PLAYER_REALM.name, homeName = NATIONS[s.homeIdx].name, rivalName = NATIONS[s.rivalIdx].name;
+  const pactNames = new Set(s.pactIdx.map(i => NATIONS[i].name));
+  const out = [];
+  for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) {
+    const a = all[i], b = all[j]; let opinion = 0;
+    if (a === pr || b === pr) {
+      const other = a === pr ? b : a;
+      if (other === homeName || pactNames.has(other)) opinion = 75;       // your dynasty + sworn allies
+      else if (other === rivalName) opinion = -80;                        // the war you wake up in
+      else opinion = -10;                                                 // wary strangers
+    } else {
+      const ni = NATIONS.findIndex(n => n.name === a), nj = NATIONS.findIndex(n => n.name === b);
+      const dd = Math.abs(ni - nj); opinion = (dd === 1 || dd === NATIONS.length - 1) ? -25 : 5;
+      if ((a === rivalName && pactNames.has(b)) || (b === rivalName && pactNames.has(a))) opinion = -50; // rival leans on your friends
+    }
+    const c = WorldSim.canonPair(a, b);
+    out.push({ a: c.a, b: c.b, opinion, stance: WorldSim.stanceFromOpinion(opinion, null) });
+  }
+  setRelations(out); soloRelSeeded = true;
+}
+
+// Apply a station onto live game state: warband, war chest, renown, sworn pacts, relations.
+function applyStation(s) {
+  for (const k of WARBAND_KEYS) warbandComp[k] = s.comp[k];
+  xp = 40 + s.region * 30;                                  // a little to spend at the picker
+  if (!playerChar) loadCareers();
+  if (playerChar) { playerChar.renown = s.renown; recomputeChar(playerChar); }
+  warbandRoster.length = 0; warbandNameSet.clear();          // a new universe musters a fresh host
+  ensureWarbandRoster();
+  playerPacts.clear();
+  for (const i of s.pactIdx) playerPacts.add(NATIONS[i]);
+  seedStationRelations(s);
+}
+
+// Flip the player's holdings to their banner on this universe's map.
+function claimHoldings(s) {
+  for (const i of s.holdingIdx) { const cap = nations[i]; if (cap) { cap.owner = PLAYER_REALM; recolorCapital(cap); } }
+}
+
+// Boot a brand-new universe from a station and drop straight into its calculated fight.
+function startStationGame(s) {
+  currentStation = s;
+  clearBattlefield();
+  clearParties();
+  if (player.obj) { scene.remove(player.obj); disposeGroup(player.obj); }
+  loadCareers();
+  initPlayer();
+  score = 0; addScore(0);
+  wave = 0; betweenWaves = false; musterOpen = false;
+  mapLevel = s.region;                                       // region difficulty IS the station's tier
+  if (typeof clearCall === 'function') clearCall();
+  shuffleHeroDeck();
+  worldReflected = false; if (typeof window !== 'undefined' && window.net) window.net.loadWorld();
+  coopRole = null; initCoopMaybe();
+  startOverlay.classList.add('hidden');
+  gameoverOverlay.classList.add('hidden');
+  hud.classList.remove('hidden');
+
+  applyStation(s);
+  renderWarbandPicker();
+  placeCapitals();                                          // this universe's land + capitals
+  claimHoldings(s);
+
+  const rivalNation = NATIONS[s.rivalIdx];
+  const rivalCap = nations[s.rivalIdx] || nations[0];
+  const pos = { x: rivalCap.x, z: rivalCap.z };             // the fight takes the biome of the rival's land
+  enterBattle({ size: s.enemy, level: mapLevel, alive: true, raider: s.enemy <= 5,
+    pos, group: makePartyToken(s.enemy, rivalNation), faction: rivalNation, alliedBands: null });
+  updateStationReadout(s);
+}
+
+// Deal a universe. With no seed → a fresh random one. Refresh defaults to a NEW universe;
+// only an explicitly PINNED seed (#u=<seed>, set via the seed box) reproduces on refresh.
+function bootUniverse(seed) {
+  if (seed == null) seed = (Math.random() * 0xffffffff) >>> 0;
+  universeSeed = seed >>> 0;
+  startStationGame(rollStation(universeSeed));
+}
+
+// ---------- Station readout + "New Universe" (reroll) panel ----------
+let stationPanel = null;
+function buildStationPanel() {
+  if (stationPanel) return stationPanel;
+  const p = document.createElement('div');
+  p.id = 'station-panel';
+  p.style.cssText = 'position:fixed;bottom:12px;left:12px;z-index:100000;width:260px;padding:12px 14px;' +
+    'background:rgba(16,12,24,.88);border:1px solid #ffd34d;border-radius:12px;color:#f4ecdc;' +
+    'font:13px/1.45 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.55);pointer-events:auto;backdrop-filter:blur(3px)';
+  p.innerHTML =
+    '<button id="sp-reroll" style="width:100%;margin-bottom:8px;padding:8px;border:0;border-radius:8px;cursor:pointer;' +
+      'background:linear-gradient(180deg,#ffd86b,#e0a52c);color:#241a06;font-weight:800;letter-spacing:.4px">⟳ NEW UNIVERSE</button>' +
+    '<div id="sp-title" style="font-size:16px;font-weight:800;color:#ffe089"></div>' +
+    '<div id="sp-blurb" style="opacity:.8;font-style:italic;margin:3px 0 8px"></div>' +
+    '<div id="sp-stats" style="font-weight:700;color:#9adcff"></div>' +
+    '<div id="sp-stand" style="margin-top:4px;font-size:12px;opacity:.92"></div>' +
+    '<div id="sp-fight" style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,211,77,.25);color:#ff9a8a;font-weight:700"></div>' +
+    '<div style="margin-top:8px;display:flex;gap:6px;align-items:center">' +
+      '<span style="opacity:.6;font-size:11px">seed</span>' +
+      '<input id="sp-seed" inputmode="numeric" style="flex:1;min-width:0;padding:4px 6px;border:1px solid #574a2c;border-radius:6px;background:#0d0a14;color:#cdbd92;font:12px monospace">' +
+      '<button id="sp-go" style="padding:4px 8px;border:0;border-radius:6px;cursor:pointer;background:#3a3050;color:#e8def8;font-weight:700">Go</button>' +
+    '</div>';
+  document.body.appendChild(p);
+  p.querySelector('#sp-reroll').addEventListener('click', () => { try { if (typeof location !== 'undefined') location.hash = ''; } catch (e) {} bootUniverse(); }); // unpin → next refresh is fresh too
+  const go = () => { const v = parseInt(p.querySelector('#sp-seed').value, 10); if (isNaN(v)) return; try { if (typeof location !== 'undefined') location.hash = 'u=' + (v >>> 0); } catch (e) {} bootUniverse(v >>> 0); }; // pin: this exact universe reloads on refresh
+  p.querySelector('#sp-go').addEventListener('click', go);
+  p.querySelector('#sp-seed').addEventListener('keydown', (e) => { if (e.code === 'Enter') { e.preventDefault(); go(); } });
+  stationPanel = p;
+  return p;
+}
+function updateStationReadout(s) {
+  const p = buildStationPanel();
+  const nm = n => NATIONS[n].name;
+  const holds = s.holdingIdx.map(nm);
+  const allies = s.pactIdx.map(nm);
+  p.querySelector('#sp-title').textContent = stationDisplayName(s);
+  p.querySelector('#sp-blurb').textContent = s.blurb;
+  p.querySelector('#sp-stats').textContent =
+    `${s.men} men · ${holds.length} hold${holds.length === 1 ? '' : 's'} · renown ${s.renown} · region ${roman(s.region + 1)}`;
+  p.querySelector('#sp-stand').innerHTML =
+    (holds.length ? `<span style="color:#7fd0ff">Holds:</span> ${holds.join(', ')}<br>` : '') +
+    (allies.length ? `<span style="color:#7dff9a">Sworn:</span> ${allies.join(', ')}<br>` : '') +
+    `<span style="color:#ff8a7a">At war:</span> ${nm(s.rivalIdx)}`;
+  p.querySelector('#sp-fight').textContent = (ENCOUNTER_VERB[s.encounter] || ENCOUNTER_VERB.field)(s.enemy);
+  p.querySelector('#sp-seed').value = String(s.seed);
+}
+
+// debug / verification hooks
+BV.rollStation = rollStation;
+BV.bootUniverse = bootUniverse;
+BV.station = () => currentStation && { seed: currentStation.seed, title: stationDisplayName(currentStation),
+  men: currentStation.men, comp: currentStation.comp, region: currentStation.region, renown: currentStation.renown,
+  holds: currentStation.holdingIdx.map(i => NATIONS[i].name), allies: currentStation.pactIdx.map(i => NATIONS[i].name),
+  rival: NATIONS[currentStation.rivalIdx].name, enemy: currentStation.enemy, encounter: currentStation.encounter };
+BV.universeSeed = () => universeSeed;
+
+// Auto-deal a universe on load — refresh = a new starting point, dropped into its fight.
+// Honour #u=<seed> in the URL so a shared/bookmarked universe loads reproducibly.
+const _bootMatch = (typeof location !== 'undefined' && location.hash || '').match(/u=(\d+)/);
+bootUniverse(_bootMatch ? (parseInt(_bootMatch[1], 10) >>> 0) : undefined);
 
 })();

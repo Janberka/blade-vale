@@ -7,6 +7,7 @@
 const { db } = require('./db');
 const WorldSim = require('../sim/world-sim.js');
 const D = require('./diplomacy');
+const Destiny = require('./destiny');
 
 const TICK_SECONDS = 20;
 const MAX_CATCHUP_TICKS = 300;
@@ -32,9 +33,13 @@ function ev(worldId, tick, type, summary) { db.prepare('INSERT INTO world_events
 
 function spawnWarlord(worldId, faction, tick) {
   const p = factionCapPos(faction);
-  db.prepare('INSERT INTO warlords(world_id, name, faction, archetype, skills_json, renown, size, x, z, born_tick) VALUES (?,?,?,?,?,?,?,?,?,?)')
+  // a temperament at birth — ambition/caution/loyalty/vengeance ∈ [0,1] (the Phase-B field, now populated).
+  // The destiny engine reads this to diverge fates; nothing in combat/diplomacy reads it (chronicle-only).
+  const pers = { ambition: +rand(0, 1).toFixed(2), caution: +rand(0, 1).toFixed(2), loyalty: +rand(0.3, 1).toFixed(2), vengeance: +rand(0, 1).toFixed(2) };
+  db.prepare('INSERT INTO warlords(world_id, name, faction, archetype, skills_json, renown, size, x, z, born_tick, personality_json, loyalty) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
     .run(worldId, genName(), faction, 'longsword', JSON.stringify({ strike: Math.random() * 14, lead: Math.random() * 6 }),
-      Math.random() * 12, 12 + ((Math.random() * 20) | 0), clamp(p.x + rand(-12, 12), -MAP_HALF, MAP_HALF), clamp(p.z + rand(-12, 12), -MAP_HALF, MAP_HALF), tick || 0);
+      Math.random() * 12, 12 + ((Math.random() * 20) | 0), clamp(p.x + rand(-12, 12), -MAP_HALF, MAP_HALF), clamp(p.z + rand(-12, 12), -MAP_HALF, MAP_HALF), tick || 0,
+      JSON.stringify(pers), Math.round(pers.loyalty * 100));
 }
 function seedWorld(worldId) {
   if (!db.prepare('SELECT count(*) n FROM capitals WHERE world_id=?').get(worldId).n) {
@@ -44,6 +49,7 @@ function seedWorld(worldId) {
   let have = db.prepare("SELECT count(*) n FROM warlords WHERE world_id=? AND status='alive'").get(worldId).n;
   for (; have < NATIONS.length * 2; have++) spawnWarlord(worldId, pick(NATIONS), 0);
   D.seedDiplomacy(worldId);   // relation matrix + faction posture (idempotent)
+  Destiny.seedDestiny(worldId); // world destiny / "age" row (idempotent)
   db.prepare('UPDATE worlds SET last_tick_at=? WHERE id=? AND last_tick_at=0').run(Math.floor(Date.now() / 1000), worldId);
 }
 
@@ -121,6 +127,9 @@ function runTick(worldId, tick) {
   // 4. diplomacy: drift relations + posture, then record any nation that has fallen
   D.tickDiplomacy(worldId, tick);
   D.handleCollapse(worldId, tick);
+  // 4b. destiny: read the whole population + the macro state diplomacy just refreshed, and advance
+  // each character's fated arc + the world "age" (chronicle-only; self-gated to a slow cadence)
+  Destiny.tickDestiny(worldId, tick);
   // 5. keep the war populated — only LIVING nations march in (a fallen banner stays fallen)
   const alive = db.prepare("SELECT count(*) n FROM warlords WHERE world_id=? AND status='alive'").get(worldId).n;
   if (alive < NATIONS.length * 2 && Math.random() < 0.5) { const nat = D.aliveNations(worldId); if (nat.length) spawnWarlord(worldId, pick(nat), tick); }
@@ -161,7 +170,7 @@ function forceTicks(worldId, n) { seedWorld(worldId); return runTicks(worldId, n
 
 // ----- positional reads + multiplayer presence -----
 function getArmies(worldId) {
-  return db.prepare("SELECT id, name, faction, archetype, x, z, size, renown, kills, battles_won, intent, intent_target_kind, intent_target_id, loyalty, personality_json, grudge_faction FROM warlords WHERE world_id=? AND status='alive' ORDER BY id").all(worldId);
+  return db.prepare("SELECT id, name, faction, archetype, x, z, size, renown, kills, battles_won, intent, intent_target_kind, intent_target_id, loyalty, personality_json, grudge_faction, destiny, fate FROM warlords WHERE world_id=? AND status='alive' ORDER BY id").all(worldId);
 }
 function getCapitals(worldId) {
   return db.prepare('SELECT idx, def_name, owner_name, garrison FROM capitals WHERE world_id=? ORDER BY idx').all(worldId)

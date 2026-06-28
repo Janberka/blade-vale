@@ -6,6 +6,7 @@ const { db, migrate } = require('./db');
 const { ensureAccount, ensureSharedWorld } = require('./seed');
 const tick = require('./tick');
 const diplomacy = require('./diplomacy');
+const destiny = require('./destiny');
 const validate = require('./validate');
 const coop = require('./ws'); // real-time co-op battle relay (WebSocket, no external deps)
 
@@ -39,7 +40,8 @@ function rowToChar(r) {
     skills: JSON.parse(r.skills_json || '{}'),
     xp: r.xp, renown: r.renown, popularity: r.popularity, rank: r.rank,
     kills: r.kills, battles: r.battles, battlesLed: r.battles_led, battlesWon: r.battles_won,
-    deaths: r.deaths, notability: r.notability
+    deaths: r.deaths, notability: r.notability,
+    destiny: r.destiny || null, fate: r.fate || 0   // server-computed fated arc (chronicle-only)
   };
 }
 function charParams(c, worldId, accountId) {
@@ -131,7 +133,8 @@ const server = http.createServer(async (req, res) => {
         worldId: wid, shared: wid !== world.id, account: acct.id, simTick,
         capitals: tick.getCapitals(wid), armies, warlords,
         players: tick.getPresence(wid, acct.id), events,
-        relations: diplomacy.relationsForApi(wid), factionState: diplomacy.factionStateForApi(wid)
+        relations: diplomacy.relationsForApi(wid), factionState: diplomacy.factionStateForApi(wid),
+        destiny: destiny.destinyForApi(wid)
       });
     }
 

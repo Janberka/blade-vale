@@ -176,6 +176,7 @@
   .cs-skill .cs-bar > i { display: block; height: 100%; background: linear-gradient(90deg,#4dd2ff,#5b8bff); }
   .cs-skill b { width: 24px; text-align: right; color: #cfe6ff; }
   .cs-stat { font-size: 12px; color: #9adcff; margin-top: 7px; opacity: .9; }
+  .cs-destiny { font-size: 12px; color: #ffcf5b; margin-top: 6px; letter-spacing: .3px; }
   .cs-empty { opacity: .6; padding: 20px; }
 
   /* ===== While you were away (living-world digest) ===== */
@@ -185,6 +186,12 @@
   .wa-ev.cap { border-left-color: #6bd0ff; }
   .wa-ev.fell { border-left-color: #ff8a8a; }
   .wa-ev.rose { border-left-color: #9aff6b; color: #d8ffce; }
+  .wa-ev.fate { border-left-color: #d6a3ff; color: #efe0ff; }
+  /* world destiny / "age" banner atop the digest */
+  .wa-age { font-size: 22px; font-weight: 700; color: #e9d8ff; text-align: center; letter-spacing: 1px; margin: 2px 0 4px; }
+  .wa-prophecy { font-size: 14px; font-style: italic; color: #cbb6e8; text-align: center; margin-bottom: 8px; }
+  .wa-fates { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-bottom: 12px; }
+  .wa-fate { font-size: 11px; color: #d6a3ff; border: 1px solid rgba(214,163,255,.35); border-radius: 12px; padding: 2px 9px; background: rgba(214,163,255,.08); }
 </style>
 </head>
 <body>
@@ -292,9 +299,9 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="sim/world-sim.js?v=1"></script>
+<script src="sim/world-sim.js?v=2"></script>
 <script src="client-net.js?v=1"></script>
 <script src="net-battle.js?v=1"></script>
-<script src="game.js?v=9"></script>
+<script src="game.js?v=10"></script>
 </body>
 </html>

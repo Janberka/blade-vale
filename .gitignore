@@ -1,0 +1,11 @@
+node_modules/
+server/world.db
+server/world.db-shm
+server/world.db-wal
+server/launchd.log
+.backup/
+
+# Claude Code local scratch / machine-local settings
+.claude/*.txt
+.claude/marker-test
+.claude/settings.local.json

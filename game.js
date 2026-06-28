@@ -1,0 +1,4074 @@
+/* Blade Vale — a low poly hack & slash with AI sword-fighting enemies.
+   Built on Three.js. Everything (characters, world, FX) is procedural geometry. */
+
+(() => {
+'use strict';
+
+const THREE_OK = typeof THREE !== 'undefined';
+if (!THREE_OK) { alert('Failed to load Three.js'); return; }
+
+// ---------- Quality tiers (cheap Android first-class) ----------
+// low: no dynamic shadows, no torch lights, 1x pixels, no AA
+// medium: 1024 shadows, 4 torch lights, 1.5x pixels
+// high: 2048 shadows, all torch lights, up to 2x pixels
+let qualityTier = (() => {
+  try {
+    const saved = localStorage.getItem('bv-quality');
+    if (saved === 'low' || saved === 'medium' || saved === 'high') return saved;
+  } catch (e) { /* storage unavailable */ }
+  const mobile = /Android|Mobi|iPhone|iPad/i.test(navigator.userAgent);
+  const lowMem = navigator.deviceMemory && navigator.deviceMemory <= 4;
+  return (mobile || lowMem) ? 'low' : 'high';
+})();
+const TIERS = {
+  low:    { pixelRatio: 1,   shadows: false, shadowSize: 0,    torchLights: 0,  aa: false },
+  medium: { pixelRatio: 1.5, shadows: true,  shadowSize: 1024, torchLights: 4,  aa: true },
+  high:   { pixelRatio: Math.min(window.devicePixelRatio, 2), shadows: true, shadowSize: 2048, torchLights: 10, aa: true },
+};
+
+// ---------- Renderer / Scene / Camera ----------
+const canvas = document.getElementById('game');
+const renderer = new THREE.WebGLRenderer({
+  canvas, antialias: TIERS[qualityTier].aa, powerPreference: 'high-performance',
+});
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(TIERS[qualityTier].pixelRatio);
+renderer.shadowMap.enabled = TIERS[qualityTier].shadows;
+renderer.shadowMap.type = THREE.PCFShadowMap; // PCFSoft costs ~2x on tile GPUs for little gain here
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x9fc6e8);
+scene.fog = new THREE.Fog(0x9fc6e8, 45, 95);
+
+const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 300);
+
+// ---------- Lighting ----------
+const hemi = new THREE.HemisphereLight(0xcfe8ff, 0x4a5a3a, 0.85);
+scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xfff2d6, 1.15);
+sun.position.set(30, 50, 20);
+sun.castShadow = TIERS[qualityTier].shadows;
+sun.shadow.mapSize.set(TIERS[qualityTier].shadowSize || 1024, TIERS[qualityTier].shadowSize || 1024);
+const sc = sun.shadow.camera;
+sc.near = 1; sc.far = 140; sc.left = -60; sc.right = 60; sc.top = 60; sc.bottom = -60;
+scene.add(sun);
+scene.add(new THREE.AmbientLight(0x404a5a, 0.4));
+
+// ---------- Helpers ----------
+// The battleground GROWS as the war escalates: each wave widens the field.
+const ARENA_BASE = 38, ARENA_MAX = 280;
+let ARENA = ARENA_BASE; // current half-size of the playable square
+// Battles open with a wide no-man's-land: the two hosts start FRONT_GAP apart and
+// ADVANCE at a march (MARCH_PACE of full speed) until contact — so the lines take
+// tens of seconds to close instead of clashing instantly. Tunable.
+const FRONT_GAP = 200;     // z-distance from your line to the enemy line at the start (~33s march for swordsmen)
+const MARCH_PACE = 0.42;   // melee advance at this fraction of full speed while > ~26u from contact
+const ZONE_LEASH = 7;      // a zone-holder engages foes within this margin of its rectangle, then returns
+// per-group pace: RUSH sprints to the objective at full speed; MARCH (default, and every enemy)
+// advances at MARCH_PACE until ~26u from contact, then breaks into the closing charge.
+function paceFactor(f, dist) { return f.pace === 'rush' ? 1 : (dist > 26 ? MARCH_PACE : 1); }
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const lerp = (a, b, t) => a + (b - a) * t;
+const tmpV = new THREE.Vector3();
+const tmpV2 = new THREE.Vector3();
+// stepFighter-local scratch (never passed across function calls; separation()
+// owns tmpV/sepV, so these must stay distinct — see the aliasing postmortems)
+const sfA = new THREE.Vector3();
+const sfB = new THREE.Vector3();
+const _crouchBox = new THREE.Box3(); // measures the crouched body to keep feet on the ground
+let elapsed = 0;   // gameplay time (slows during hit-stop)
+let rtNow = 0;     // wall-clock seconds, drives camera shake even during hit-stop
+
+// Game feel: trauma-based camera shake + hit-stop freeze frames.
+let trauma = 0;    // 0..1, decays each frame; shake amplitude = trauma^2
+let hitstop = 0;   // seconds of slow-motion remaining
+function addShake(amount) { trauma = Math.min(1, trauma + amount); }
+function addHitstop(t) { hitstop = Math.max(hitstop, t); }
+
+// Debug / verification hooks (also lets us freeze a frame to inspect poses).
+const BV = { freeze: false };
+window.BV = BV;
+
+// Geometry cache: identical shapes share one GPU buffer instead of allocating
+// per character/effect. Cached resources are flagged so disposeGroup skips them.
+const geoCache = new Map();
+function cachedGeo(key, make) {
+  let g = geoCache.get(key);
+  if (!g) { g = make(); g.userData.cached = true; geoCache.set(key, g); }
+  return g;
+}
+
+// Phong instead of Standard: PBR fragments are what melt cheap Android GPUs,
+// and flat-shaded low-poly looks near-identical under Phong.
+// Shared (cached) materials are reused across everyone and are tint-proof;
+// per-character tintable materials pass shared:false.
+const matCache = new Map();
+function mat(color, opts = {}) {
+  const make = () => new THREE.MeshPhongMaterial({
+    color, flatShading: opts.smooth ? false : true,
+    shininess: opts.metal ? 28 : 5,
+    specular: opts.metal ? 0x555555 : 0x0a0a0a,
+    emissive: opts.emissive ?? 0x000000, emissiveIntensity: opts.emissiveI ?? 1,
+  });
+  if (opts.shared === false) return make();
+  const key = color + '|' + (opts.smooth ? 1 : 0) + (opts.metal ? 'm' : '') +
+              '|' + (opts.emissive ?? 0) + '|' + (opts.emissiveI ?? 1);
+  let m = matCache.get(key);
+  if (!m) {
+    m = make();
+    m.userData.cached = true;
+    m.userData.noTint = true; // shared materials must never take a hit-flash tint
+    matCache.set(key, m);
+  }
+  return m;
+}
+function boxMesh(w, h, d, m) {
+  const me = new THREE.Mesh(cachedGeo('box:' + w + ',' + h + ',' + d, () => new THREE.BoxGeometry(w, h, d)), m);
+  me.castShadow = true; me.receiveShadow = true;
+  return me;
+}
+// Rounded capsule as a SINGLE lathed mesh (1 draw call instead of 3).
+// Centered at origin, axis along Y.
+function softCapsule(radius, length, m) {
+  const geo = cachedGeo('capsule:' + radius + ',' + length, () => {
+    const pts = [];
+    const half = length / 2, STEPS = 4;
+    for (let i = 0; i <= STEPS; i++) { // bottom hemisphere profile
+      const a = -Math.PI / 2 + (i / STEPS) * (Math.PI / 2);
+      pts.push(new THREE.Vector2(Math.cos(a) * radius, -half + Math.sin(a) * radius));
+    }
+    for (let i = 0; i <= STEPS; i++) { // top hemisphere profile
+      const a = (i / STEPS) * (Math.PI / 2);
+      pts.push(new THREE.Vector2(Math.cos(a) * radius, half + Math.sin(a) * radius));
+    }
+    return new THREE.LatheGeometry(pts, 10);
+  });
+  const me = new THREE.Mesh(geo, m);
+  me.castShadow = true;
+  return me;
+}
+function sphereMesh(r, m, wseg = 12, hseg = 9) {
+  const me = new THREE.Mesh(cachedGeo('sph:' + r + ',' + wseg + ',' + hseg,
+    () => new THREE.SphereGeometry(r, wseg, hseg)), m);
+  me.castShadow = true; me.receiveShadow = true;
+  return me;
+}
+
+// ---------- World ----------
+let arenaPad = null;
+let ground = null; // hoisted: biomes recolor it per region when entering battle
+function buildWorld() {
+  // Low-poly ground: built ONCE at the MAXIMUM size — only the playable
+  // bound (pad, treeline, torches, confine walls) moves as the arena grows.
+  const seg = 64;
+  const geo = new THREE.PlaneGeometry(ARENA_MAX * 2 + 24, ARENA_MAX * 2 + 24, seg, seg);
+  geo.rotateX(-Math.PI / 2);
+  const pos = geo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), z = pos.getZ(i);
+    const edge = Math.max(Math.abs(x), Math.abs(z));
+    let h = Math.sin(x * 0.12) * Math.cos(z * 0.12) * 0.7 + (Math.random() - 0.5) * 0.35;
+    if (edge > ARENA_MAX) h += (edge - ARENA_MAX) * 0.9; // raise the far borders into hills
+    pos.setY(i, h);
+  }
+  geo.computeVertexNormals();
+  ground = new THREE.Mesh(geo, mat(0x6f9e54, { shared: false }));
+  ground.receiveShadow = true;
+  scene.add(ground);
+
+  // A dirt arena pad in the middle — scaled up as the battleground widens.
+  arenaPad = new THREE.Mesh(new THREE.CircleGeometry(ARENA_BASE - 2, 48), mat(0x8a6a45, { shared: false }));
+  arenaPad.rotateX(-Math.PI / 2); arenaPad.position.y = 0.05; arenaPad.receiveShadow = true;
+  scene.add(arenaPad);
+
+  // Scatter trees + rocks as INSTANCED meshes whose matrices are re-laid out
+  // around the CURRENT arena edge every time the battleground grows.
+  const trees = [], rocks = [];
+  for (let i = 0; i < 70; i++) {
+    const a = Math.random() * Math.PI * 2;
+    if (Math.random() < 0.6) {
+      trees.push({ a, off: rand(-6, 16), s: rand(0.8, 1.4), rot: Math.random() * Math.PI, trunkH: rand(2, 3.4), green: Math.random() < 0.5 });
+    } else {
+      rocks.push({ a, off: rand(-6, 16), inner: false, fx: 0, fz: 0, rad: rand(0.6, 1.8), ys: rand(0.6, 1), rx: Math.random(), ry: Math.random(), rz: Math.random() });
+    }
+  }
+  for (let i = 0; i < 6; i++) {
+    rocks.push({ a: 0, off: 0, inner: true, fx: rand(-1, 1), fz: rand(-1, 1), rad: rand(0.6, 1.8), ys: rand(0.6, 1), rx: Math.random(), ry: Math.random(), rz: Math.random() });
+  }
+  buildInstancedDeco(trees, rocks);
+
+  // Ring of torches for atmosphere — repositioned outward as the field grows.
+  for (let i = 0; i < 10; i++) {
+    scene.add(makeTorch((i / 10) * Math.PI * 2));
+  }
+}
+
+// One InstancedMesh per part kind: trunks, canopy cones (per-instance color), rocks.
+// Descriptors are kept so refreshDecoMatrices() can re-lay everything out
+// around the current arena edge whenever the battleground grows.
+const decoState = { trees: null, rocks: null, trunks: null, cones: null, rockMesh: null };
+function buildInstancedDeco(trees, rocks) {
+  decoState.trees = trees;
+  decoState.rocks = rocks;
+  decoState.trunks = new THREE.InstancedMesh(new THREE.BoxGeometry(0.6, 1, 0.6), mat(0x6b4a2e), trees.length);
+  decoState.cones = new THREE.InstancedMesh(new THREE.ConeGeometry(1, 1.8, 6), mat(0x3f7a3a), trees.length * 3);
+  decoState.rockMesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 0), mat(0x8d8f95), rocks.length);
+  const darkGreen = new THREE.Color(0x3f7a3a), lightGreen = new THREE.Color(0x4f8a3f);
+  trees.forEach((t, i) => {
+    for (let k = 0; k < 3; k++) decoState.cones.setColorAt(i * 3 + k, t.green ? darkGreen : lightGreen);
+  });
+  if (decoState.cones.instanceColor) decoState.cones.instanceColor.needsUpdate = true;
+  for (const im of [decoState.trunks, decoState.cones, decoState.rockMesh]) {
+    im.castShadow = true; im.receiveShadow = true;
+    scene.add(im);
+  }
+  refreshDecoMatrices();
+}
+function refreshDecoMatrices() {
+  const { trees, rocks, trunks, cones, rockMesh } = decoState;
+  if (!trees) return;
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
+  const v = new THREE.Vector3(), sc = new THREE.Vector3();
+  trees.forEach((t, i) => {
+    const x = Math.cos(t.a) * (ARENA + t.off), z = Math.sin(t.a) * (ARENA + t.off);
+    q.setFromEuler(e.set(0, t.rot, 0));
+    m4.compose(v.set(x, t.trunkH * t.s / 2, z), q, sc.set(t.s, t.trunkH * t.s, t.s));
+    trunks.setMatrixAt(i, m4);
+    for (let k = 0; k < 3; k++) {
+      const cs = (2.6 - k * 0.6) * t.s;
+      m4.compose(v.set(x, (t.trunkH + k * 1.1) * t.s, z), q, sc.set(cs, t.s, cs));
+      cones.setMatrixAt(i * 3 + k, m4);
+    }
+  });
+  rocks.forEach((r, i) => {
+    const x = r.inner ? r.fx * (ARENA - 8) : Math.cos(r.a) * (ARENA + r.off);
+    const z = r.inner ? r.fz * (ARENA - 8) : Math.sin(r.a) * (ARENA + r.off);
+    q.setFromEuler(e.set(r.rx, r.ry, r.rz));
+    m4.compose(v.set(x, r.rad * 0.5, z), q, sc.set(r.rad, r.rad * r.ys, r.rad));
+    rockMesh.setMatrixAt(i, m4);
+  });
+  trunks.instanceMatrix.needsUpdate = true;
+  cones.instanceMatrix.needsUpdate = true;
+  rockMesh.instanceMatrix.needsUpdate = true;
+}
+function makeTorch(angle) {
+  const g = new THREE.Group();
+  const pole = boxMesh(0.25, 3, 0.25, mat(0x4a3520));
+  pole.position.y = 1.5; g.add(pole);
+  const flame = new THREE.Mesh(cachedGeo('flame', () => new THREE.IcosahedronGeometry(0.45, 0)),
+    mat(0xff7b2e, { emissive: 0xff5a1e, emissiveI: 2.2 }));
+  flame.position.y = 3.2; g.add(flame);
+  // point lights are a per-pixel tax on mobile — only some torches get one
+  if (torches.length < TIERS[qualityTier].torchLights) {
+    const light = new THREE.PointLight(0xff7b3e, 1.4, 16, 2);
+    light.position.y = 3.2; g.add(light);
+    g.userData.light = light;
+  }
+  g.userData.flame = flame;
+  g.userData.angle = angle; // ring position recomputed when the arena grows
+  g.position.set(Math.cos(angle) * (ARENA - 1), 0, Math.sin(angle) * (ARENA - 1));
+  torches.push(g);
+  return g;
+}
+
+// ---------- The battleground widens as the war escalates ----------
+function applyArenaSize(size) {
+  ARENA = size;
+  // dirt pad scales out from its base radius
+  if (arenaPad) arenaPad.scale.setScalar((size - 2) / (ARENA_BASE - 2));
+  // torch ring slides outward
+  for (const t of torches) {
+    const a = t.userData.angle;
+    t.position.set(Math.cos(a) * (size - 1), 0, Math.sin(a) * (size - 1));
+  }
+  // treeline and rocks re-ring the new edge
+  refreshDecoMatrices();
+  // fog and shadow coverage keep pace with the field
+  scene.fog.near = Math.max(45, size * 1.2);
+  scene.fog.far = Math.max(95, size * 2.5);
+  camera.far = Math.max(300, size * 4);
+  camera.updateProjectionMatrix();
+  const ext = size + 14;
+  const sc2 = sun.shadow.camera;
+  sc2.left = -ext; sc2.right = ext; sc2.top = ext; sc2.bottom = -ext;
+  sc2.updateProjectionMatrix();
+}
+const torches = [];
+
+// ---------- Humanoid builder ----------
+// Anatomical low-poly rig:
+//   root
+//   ├─ hipL/hipR (pivot) ─ thigh ─ kneeL/kneeR (pivot) ─ shin + foot
+//   ├─ pelvis
+//   └─ upperBody (pivot at waist: lean/twist)
+//       ├─ torso, shoulder pads, neck, head
+//       └─ shoulderL/R (pivot) ─ upper arm ─ elbowL/R (pivot) ─ forearm ─ hand (+ sword R)
+function buildHumanoid(palette, scale = 1, weapon = 'sword') {
+  const g = new THREE.Group();
+  const casters = []; // the few big parts that are worth a shadow-pass draw
+  // per-character copies: these take hit-flash tints, so they can't be shared
+  const skin = mat(palette.skin, { smooth: true, shared: false });
+  const cloth = mat(palette.cloth, { smooth: true, shared: false });
+  const accent = mat(palette.accent, { smooth: true, shared: false });
+
+  // --- Legs (attached to root so torso lean doesn't drag them) ---
+  const hipY = 1.34;
+  function makeLeg(side) {
+    const hip = new THREE.Group(); hip.position.set(0.27 * side, hipY, 0);
+    const thigh = softCapsule(0.21, 0.42, accent); thigh.position.y = -0.3; hip.add(thigh);
+    const knee = new THREE.Group(); knee.position.y = -0.64; hip.add(knee);
+    const shin = softCapsule(0.165, 0.4, accent); shin.position.y = -0.28; knee.add(shin);
+    casters.push(thigh, shin);
+    const foot = sphereMesh(0.21, cloth);
+    foot.position.set(0, -0.6, 0.13); foot.scale.set(1, 0.5, 1.55); knee.add(foot);
+    g.add(hip);
+    return { hip, knee };
+  }
+  // facing +Z, the anatomical RIGHT side is -X (forward × up); sides were mirrored before
+  const legL = makeLeg(1), legR = makeLeg(-1);
+
+  // --- Pelvis ---
+  const pelvis = sphereMesh(0.4, accent, 14, 10);
+  pelvis.position.y = 1.42; pelvis.scale.set(1.12, 0.72, 0.85); g.add(pelvis);
+
+  // --- Upper body (pivots at the waist for lean / twist) ---
+  const upperBody = new THREE.Group(); upperBody.position.y = 1.55; g.add(upperBody);
+
+  const torso = softCapsule(0.46, 0.55, cloth);
+  torso.position.y = 0.45; torso.scale.set(1.05, 1, 0.76);
+  upperBody.add(torso);
+
+  // Neck + round head
+  const neck = softCapsule(0.13, 0.12, skin); neck.position.y = 1.12; upperBody.add(neck);
+  const head = sphereMesh(0.42, skin, 16, 12);
+  head.position.y = 1.42; upperBody.add(head);
+  const eyeM = mat(0x141414, { smooth: true, rough: 0.35 });
+  for (const ex of [-0.16, 0.16]) {
+    const e = sphereMesh(0.075, eyeM, 8, 6);
+    e.position.set(ex, 1.47, 0.36); e.scale.z = 0.55; upperBody.add(e);
+  }
+
+  // --- Arms: shoulder pivot → upper arm → elbow pivot → forearm → hand ---
+  function makeArm(side) {
+    const shoulder = new THREE.Group();
+    shoulder.position.set(0.58 * side, 0.95, 0);
+    // deltoid pad rides the shoulder joint
+    const pad = sphereMesh(0.225, cloth, 10, 8);
+    pad.position.set(0.04 * side, -0.02, 0); shoulder.add(pad);
+    const upper = softCapsule(0.155, 0.32, skin);
+    upper.position.y = -0.32; shoulder.add(upper);
+    const elbow = new THREE.Group(); elbow.position.y = -0.58; shoulder.add(elbow);
+    const fore = softCapsule(0.13, 0.3, skin);
+    fore.position.y = -0.25; elbow.add(fore);
+    const hand = new THREE.Group(); hand.position.y = -0.5; elbow.add(hand);
+    const fist = sphereMesh(0.155, skin, 10, 8); hand.add(fist);
+    upperBody.add(shoulder);
+    return { shoulder, elbow, hand };
+  }
+  const armL = makeArm(1);
+  const armR = makeArm(-1); // sword arm on the true anatomical right
+
+  // --- Held weapon ---
+  // sword in the right fist (grip at the hand origin); blade perpendicular to the forearm
+  function makeSword(longer) {
+    const bladeLen = 1.35 * (longer ? 1.45 : 1);
+    const g = new THREE.Group();
+    const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.055, longer ? 0.46 : 0.34, 8), mat(0x241812, { smooth: true }));
+    g.add(grip);
+    const pommel = sphereMesh(0.07, mat(0x6a5630, { metal: 0.5, rough: 0.4, smooth: true }), 8, 6);
+    pommel.position.y = longer ? -0.27 : -0.21; g.add(pommel);
+    const guard = boxMesh(longer ? 0.52 : 0.42, 0.07, 0.14, mat(0x3a2a18, { metal: 0.4 }));
+    guard.position.y = 0.2; g.add(guard);
+    const blade = boxMesh(longer ? 0.1 : 0.085, bladeLen, 0.2, mat(palette.blade ?? 0xd9e2ec, { metal: 0.6, rough: 0.3 }));
+    blade.position.y = 0.2 + bladeLen / 2 + 0.02; g.add(blade);
+    casters.push(blade);
+    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.105, 0.22, 4), blade.material);
+    tip.position.y = 0.2 + bladeLen + 0.13; tip.rotation.y = Math.PI / 4; tip.castShadow = true; g.add(tip);
+    g.rotation.x = SWORD_BASE_X;
+    armR.hand.add(g);
+    return g;
+  }
+  function makeBow() {
+    const b = new THREE.Group();
+    const arcLen = Math.PI * 0.78;
+    const arc = new THREE.Mesh(new THREE.TorusGeometry(0.85, 0.045, 6, 12, arcLen), mat(0x6b4a2e, { smooth: true }));
+    arc.castShadow = true;
+    arc.rotation.z = Math.PI / 2 - arcLen / 2;
+    b.add(arc);
+    const string = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 2 * 0.85 * Math.sin(arcLen / 2), 4), mat(0xddddcc, { smooth: true }));
+    string.position.x = 0.85 * Math.cos(arcLen / 2);
+    b.add(string);
+    b.rotation.x = Math.PI / 2;
+    b.userData.fixedGrip = true; // the wrist channel must not spin the bow
+    armL.hand.add(b);
+    return b;
+  }
+
+  let held, bow = null;
+  if (weapon === 'bow') {
+    // archers (and the player) carry a bow AND a sheathed sidearm sword
+    bow = makeBow();           // left hand, shown by default
+    held = makeSword(false);   // right hand, hidden until drawn for melee
+    held.visible = false;
+  } else if (weapon === 'rock') {
+    held = new THREE.Group();
+    held.add(sphereMesh(0.26, mat(0x8d8f95, { rough: 1 }), 6, 5));
+    held.userData.fixedGrip = true;
+    armR.hand.add(held);
+  } else {
+    held = makeSword(weapon === 'longsword');
+  }
+  const sword = held;
+
+  // shadow budget: only big silhouette parts cast, characters never receive —
+  // PCF blur erases sub-0.2-unit features, so the ground shadow looks identical
+  // while the shadow pass shrinks ~4x and character fragments skip PCF sampling
+  g.traverse(c => { if (c.isMesh) { c.castShadow = false; c.receiveShadow = false; } });
+  casters.push(torso, head, pelvis);
+  for (const c of casters) c.castShadow = true;
+
+  g.scale.setScalar(scale);
+  return {
+    group: g,
+    parts: {
+      torso, head, upperBody, sword, bow,
+      shoulderL: armL.shoulder, elbowL: armL.elbow,
+      shoulderR: armR.shoulder, elbowR: armR.elbow,
+      hipL: legL.hip, kneeL: legL.knee,
+      hipR: legR.hip, kneeR: legR.knee,
+    },
+  };
+}
+const SWORD_BASE_X = 1.4;
+
+// ---------- Pose system ----------
+// Named guard positions. Characters SNAP between these with short eased blends —
+// windup telegraphs, strikes whip through, recovery settles back to guard.
+// Channels: shoulder R/L (x,z), elbows (x), waist lean (x) & twist (y), wrist pitch.
+const POSES = {
+  relax:      { shRx:  0.08, shRz:  0.18, elR: -0.25, shLx:  0.08, shLz: -0.18, elL: -0.25, leanX: 0,     twistY: 0,     wristX: -0.5 },
+  guard:      { shRx: -0.55, shRz: -0.05, elR: -1.35, shLx: -0.45, shLz:  0.30, elL: -0.70, leanX: 0.06,  twistY: -0.30, wristX: 1.15 },
+  windupR:    { shRx: -1.90, shRz:  0.95, elR: -1.60, shLx: -0.45, shLz:  0.40, elL: -0.60, leanX: -0.12, twistY:  0.65, wristX: -0.20 },
+  strikeR:    { shRx: -0.55, shRz: -1.05, elR: -0.30, shLx:  0.15, shLz:  0.45, elL: -0.35, leanX: 0.30,  twistY: -0.65, wristX: 0.90 },
+  windupL:    { shRx: -1.60, shRz: -1.00, elR: -2.00, shLx: -0.30, shLz:  0.35, elL: -0.50, leanX: -0.12, twistY: -0.55, wristX: -0.10 },
+  strikeL:    { shRx: -0.60, shRz:  1.00, elR: -0.35, shLx: -0.35, shLz:  0.40, elL: -0.60, leanX: 0.28,  twistY:  0.60, wristX: 0.90 },
+  windupOver: { shRx: -2.75, shRz:  0.20, elR: -1.30, shLx: -1.30, shLz:  0.45, elL: -1.10, leanX: -0.22, twistY:  0.10, wristX: 0.30 },
+  strikeOver: { shRx: -0.35, shRz:  0.05, elR: -0.55, shLx: -0.25, shLz:  0.40, elL: -0.60, leanX: 0.50,  twistY: -0.05, wristX: 1.60 },
+  hurt:       { shRx: -0.30, shRz:  0.55, elR: -1.00, shLx: -0.50, shLz:  0.60, elL: -1.20, leanX: -0.28, twistY:  0.15, wristX: 0 },
+  block:      { shRx: -1.15, shRz: -0.45, elR: -1.30, shLx: -1.15, shLz:  0.50, elL: -1.45, leanX: -0.08, twistY: -0.20, wristX: 0.55 },
+  // archery: bow arm (left) extended at the target, string hand drawn to the cheek
+  aimBow:     { shRx: -1.35, shRz:  0.30, elR: -2.20, shLx: -1.50, shLz:  0.10, elL: -0.12, leanX: 0,     twistY:  0.70, wristX: 0 },
+  looseBow:   { shRx: -1.25, shRz:  0.60, elR: -0.50, shLx: -1.50, shLz:  0.10, elL: -0.12, leanX: 0.04,  twistY:  0.60, wristX: 0 },
+};
+
+// Attack moves: which guards to snap between. Combos cycle through them.
+const MOVES = {
+  slashR: { windup: 'windupR',    strike: 'strikeR',    overhead: false },
+  slashL: { windup: 'windupL',    strike: 'strikeL',    overhead: false },
+  chop:   { windup: 'windupOver', strike: 'strikeOver', overhead: true },
+};
+const PLAYER_COMBO = ['slashR', 'slashL', 'chop'];
+
+const easeOut = t => 1 - Math.pow(1 - t, 3);
+
+function makeAnimator(parts) {
+  const cur = { ...POSES.relax };
+  return { parts, cur, start: { ...cur }, target: POSES.relax, t: 1, dur: 1, name: 'relax' };
+}
+function setPose(anim, name, dur = 0.15) {
+  if (anim.name === name) return;
+  anim.name = name;
+  anim.start = { ...anim.cur };
+  anim.target = POSES[name];
+  anim.t = 0; anim.dur = Math.max(dur, 0.001);
+}
+function updateAnimator(anim, dt) {
+  anim.t = Math.min(anim.t + dt, anim.dur);
+  const k = easeOut(anim.t / anim.dur);
+  const c = anim.cur, p = anim.parts;
+  for (const key in anim.target) c[key] = lerp(anim.start[key] ?? 0, anim.target[key], k);
+  // z-channels and twist are authored for a +X sword arm; the rig mirrors to -X,
+  // so outward/twist directions negate here
+  p.shoulderR.rotation.set(c.shRx, 0, -c.shRz);
+  p.elbowR.rotation.x = c.elR;
+  p.shoulderL.rotation.set(c.shLx, 0, -c.shLz);
+  p.elbowL.rotation.x = c.elL;
+  p.upperBody.rotation.set(c.leanX, -c.twistY, 0);
+  if (!p.sword.userData.fixedGrip) p.sword.rotation.x = SWORD_BASE_X + c.wristX;
+}
+
+// Procedural legs: walk cycle with knee flex during the swing-through.
+function walkLegs(parts, phase, amp = 0.55, crouch = 0) {
+  const a = Math.sin(phase) * amp;
+  parts.hipL.rotation.x = a - 0.6 * crouch;             // crouch folds into the
+  parts.hipR.rotation.x = -a - 0.6 * crouch;            // target, not stacked on
+  parts.kneeL.rotation.x = Math.max(0, -Math.cos(phase)) * amp * 1.3 + 1.55 * crouch;
+  parts.kneeR.rotation.x = Math.max(0,  Math.cos(phase)) * amp * 1.3 + 1.55 * crouch;
+}
+// Settle legs into a stance: fencing stagger when fighting, neutral otherwise.
+function restLegs(parts, dt, fighting, crouch = 0) {
+  // weapon-side (right) foot leads, matching the guard's shoulder twist
+  const t = fighting
+    ? { hipL: 0.28, hipR: -0.22, kneeL: 0.38, kneeR: 0.30 }
+    : { hipL: 0, hipR: 0, kneeL: 0.05, kneeR: 0.05 };
+  const hipOff = -0.6 * crouch, kneeOff = 1.55 * crouch; // stable crouch-inclusive target
+  const s = clamp(dt * 8, 0, 1);
+  parts.hipL.rotation.x = lerp(parts.hipL.rotation.x, t.hipL + hipOff, s);
+  parts.hipR.rotation.x = lerp(parts.hipR.rotation.x, t.hipR + hipOff, s);
+  parts.kneeL.rotation.x = lerp(parts.kneeL.rotation.x, t.kneeL + kneeOff, s);
+  parts.kneeR.rotation.x = lerp(parts.kneeR.rotation.x, t.kneeR + kneeOff, s);
+}
+
+// ---------- Floating health bar (billboard) ----------
+const barMats = new Map(); // shared per color, never tinted/disposed
+function barMat(color) {
+  let m = barMats.get(color);
+  if (!m) {
+    m = new THREE.MeshBasicMaterial({ color });
+    m.userData.cached = true; m.userData.noTint = true;
+    barMats.set(color, m);
+  }
+  return m;
+}
+function makeHealthBar(color = 0xff4d4d) {
+  const g = new THREE.Group();
+  const bg = new THREE.Mesh(cachedGeo('bar-bg', () => new THREE.PlaneGeometry(1.6, 0.22)), barMat(0x111111));
+  const fill = new THREE.Mesh(cachedGeo('bar-fill', () => new THREE.PlaneGeometry(1.5, 0.14)), barMat(color));
+  fill.position.z = 0.01;
+  g.add(bg); g.add(fill);
+  g.userData.fill = fill;
+  g.visible = false; // only shown once the fighter has taken damage
+  return g;
+}
+
+// ---------- Hit spark FX (pooled — zero allocation per hit after warmup) ----------
+const sparks = [];
+const sparkPool = [];
+const sparkMats = new Map(); // shared MeshBasicMaterial per color
+function spawnSparks(pos, color = 0xffdf6b, count = 8) {
+  let m = sparkMats.get(color);
+  if (!m) { m = new THREE.MeshBasicMaterial({ color }); sparkMats.set(color, m); }
+  for (let i = 0; i < count; i++) {
+    let s = sparkPool.pop();
+    if (!s) {
+      s = new THREE.Mesh(cachedGeo('spark', () => new THREE.TetrahedronGeometry(0.12)), m);
+      s.userData.vel = new THREE.Vector3();
+    }
+    s.material = m;
+    s.position.copy(pos);
+    s.scale.setScalar(1);
+    s.visible = true;
+    s.userData.vel.set(rand(-1, 1), rand(0.4, 1.6), rand(-1, 1)).normalize().multiplyScalar(rand(4, 9));
+    s.userData.life = 0.45;
+    scene.add(s);
+    sparks.push(s);
+  }
+}
+function updateSparks(dt) {
+  for (let i = sparks.length - 1; i >= 0; i--) {
+    const s = sparks[i];
+    s.userData.life -= dt;
+    s.userData.vel.y -= 22 * dt;
+    s.position.addScaledVector(s.userData.vel, dt);
+    s.rotation.x += dt * 8; s.rotation.y += dt * 6;
+    const k = clamp(s.userData.life / 0.45, 0, 1);
+    s.scale.setScalar(k);
+    if (s.userData.life <= 0) {
+      scene.remove(s);
+      s.visible = false;
+      sparkPool.push(s);
+      sparks.splice(i, 1);
+    }
+  }
+}
+
+// ---------- Slash arc FX (sells the cut) ----------
+const arcs = [];
+function spawnSlashArc(pos, facing, mv, scale = 1, color = 0xfff2c8) {
+  const group = new THREE.Group();
+  group.position.copy(pos);
+  group.rotation.y = facing;
+  const len = 1.9;
+  const geoKey = 'arc:' + scale + ':' + (mv.overhead ? 1 : 0);
+  const m = new THREE.Mesh(
+    cachedGeo(geoKey, () => new THREE.RingGeometry(0.85 * scale, 2.3 * scale, 14, 1,
+      (mv.overhead ? 0.7 : -Math.PI / 2) - len / 2, len)),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthWrite: false }));
+  if (mv.overhead) { m.rotation.y = -Math.PI / 2; group.position.y += 1.1; }
+  else { m.rotation.x = -Math.PI / 2; group.position.y += 1.35; }
+  group.add(m);
+  group.userData = { life: 0.16, mat: m.material };
+  scene.add(group);
+  arcs.push(group);
+}
+function updateArcs(dt) {
+  for (let i = arcs.length - 1; i >= 0; i--) {
+    const a = arcs[i];
+    a.userData.life -= dt;
+    const k = clamp(a.userData.life / 0.16, 0, 1);
+    a.userData.mat.opacity = 0.85 * k;
+    a.scale.setScalar(1 + (1 - k) * 0.3);
+    if (a.userData.life <= 0) {
+      scene.remove(a);
+      disposeGroup(a); // cache-aware: shared ring geometry survives
+      arcs.splice(i, 1);
+    }
+  }
+}
+
+// ---------- Projectiles (arrows + thrown rocks) ----------
+const projectiles = [];
+function spawnProjectile(shooter, target, R) {
+  // release from shoulder height, aim at the target's UPPER BODY (chest/head)
+  const from = shooter.pos.clone(); from.y = 1.8 * shooter.def.scale;
+  const tScale = target.def ? target.def.scale : 1;
+  const to = target.pos.clone(); to.y = 2.1 * tScale;
+  const flight = Math.max(0.05, from.distanceTo(to) / R.projSpeed);
+  // lead a moving target — long shots need real prediction to stay threatening
+  if (target.vel) { to.x += target.vel.x * flight * 0.75; to.z += target.vel.z * flight * 0.75; }
+  const vel = to.sub(from).normalize().multiplyScalar(R.projSpeed);
+  let gravity = 2; // arrows sag slightly
+  let mesh;
+  if (R.kind === 'rock') {
+    gravity = 18;
+    mesh = new THREE.Mesh(cachedGeo('proj-rock', () => new THREE.IcosahedronGeometry(0.24, 0)), mat(0x8d8f95));
+  } else {
+    mesh = new THREE.Group();
+    const shaft = new THREE.Mesh(cachedGeo('proj-shaft', () => new THREE.CylinderGeometry(0.03, 0.03, 0.85, 5)), mat(0x7a5a36, { smooth: true }));
+    shaft.rotation.x = Math.PI / 2; mesh.add(shaft); // align along local +Z for lookAt
+    const head = new THREE.Mesh(cachedGeo('proj-head', () => new THREE.ConeGeometry(0.06, 0.16, 4)), mat(0xb9c2cc, { metal: 0.5 }));
+    head.rotation.x = Math.PI / 2; head.position.z = 0.5; mesh.add(head);
+  }
+  // ballistic elevation: loft the shot so gravity drop lands it on the mark,
+  // not in the dirt short of it — essential for long-range arrows
+  vel.y += gravity * flight * 0.5;
+  mesh.castShadow = true;
+  mesh.position.copy(from);
+  scene.add(mesh);
+  projectiles.push({ mesh, vel, gravity, team: shooter.team, dmg: shooter.def.dmg, kind: R.kind, life: 3, ownerChar: shooter.char || null, ownerTrait: shooter.heroTrait || null });
+}
+function updateProjectiles(dt) {
+  for (let i = projectiles.length - 1; i >= 0; i--) {
+    const p = projectiles[i];
+    p.vel.y -= p.gravity * dt;
+    p.mesh.position.addScaledVector(p.vel, dt);
+    if (p.kind === 'rock') { p.mesh.rotation.x += dt * 9; p.mesh.rotation.z += dt * 7; }
+    else { tmpV.copy(p.mesh.position).add(p.vel); p.mesh.lookAt(tmpV); }
+    p.life -= dt;
+    let dead = p.life <= 0 || p.mesh.position.y <= 0.05 ||
+               Math.abs(p.mesh.position.x) > ARENA + 2 || Math.abs(p.mesh.position.z) > ARENA + 2;
+    if (!dead) {
+      // hit the first opposing combatant in the path
+      const foes = p.team === 'ally' ? enemies : opposingPlayerSide;
+      for (const v of foes) {
+        if (!v.alive) continue;
+        const s = v.def ? v.def.scale : 1;
+        // a crouching player is short enough that upper-body shots pass overhead
+        const top = (v === player && player.crouching) ? 1.4 : 2.6 * s;
+        const dx = v.pos.x - p.mesh.position.x, dz = v.pos.z - p.mesh.position.z;
+        if (dx * dx + dz * dz < 0.7 * 0.7 * s * s && p.mesh.position.y < top) {
+          damageCombatant(v, p.dmg, { pos: p.mesh.position.clone(), char: p.ownerChar, heroTrait: p.ownerTrait });
+          spawnSparks(p.mesh.position.clone(), p.kind === 'rock' ? 0xb0a890 : 0xffe08a, 4);
+          dead = true;
+          break;
+        }
+      }
+    }
+    if (dead) {
+      scene.remove(p.mesh);
+      disposeGroup(p.mesh); // cache-aware: shared geos/materials survive
+      projectiles.splice(i, 1);
+    }
+  }
+}
+
+// Damage number popups (pooled sprites — canvas + texture reused, capped count).
+const popups = [];
+const popupPool = [];
+const MAX_POPUPS = 8;
+function obtainPopup() {
+  let p = popupPool.pop();
+  if (p) return p;
+  const c = document.createElement('canvas'); c.width = 128; c.height = 64;
+  const ctx = c.getContext('2d');
+  const tex = new THREE.CanvasTexture(c);
+  const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true }));
+  spr.scale.set(1.5, 0.75, 1);
+  return { c, ctx, tex, spr };
+}
+function spawnPopup(pos, text, color = '#ffdf6b') {
+  if (popups.length >= MAX_POPUPS) { // recycle the oldest rather than grow
+    const old = popups.shift();
+    scene.remove(old.spr); popupPool.push(old);
+  }
+  const p = obtainPopup();
+  const { ctx } = p;
+  ctx.clearRect(0, 0, 128, 64);
+  ctx.font = 'bold 48px Trebuchet MS, sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.lineWidth = 6; ctx.strokeStyle = '#000'; ctx.strokeText(text, 64, 32);
+  ctx.fillStyle = color; ctx.fillText(text, 64, 32);
+  p.tex.needsUpdate = true;
+  p.spr.position.copy(pos); p.spr.position.y += 1;
+  p.spr.material.opacity = 1;
+  p.life = 0.9;
+  scene.add(p.spr);
+  popups.push(p);
+}
+function updatePopups(dt) {
+  for (let i = popups.length - 1; i >= 0; i--) {
+    const p = popups[i];
+    p.life -= dt;
+    p.spr.position.y += 2.2 * dt;
+    p.spr.material.opacity = clamp(p.life / 0.9, 0, 1);
+    if (p.life <= 0) {
+      scene.remove(p.spr);
+      popupPool.push(p);
+      popups.splice(i, 1);
+    }
+  }
+}
+
+// ---------- Player ----------
+const player = {
+  obj: null, parts: null, anim: null,
+  pos: new THREE.Vector3(0, 0, 0),
+  vel: new THREE.Vector3(),
+  facing: 0,           // yaw radians
+  hp: 100, maxHp: 100,
+  stamina: 100, maxStam: 100,
+  speed: 9,
+  // attack
+  attacking: false, attackT: 0, attackDur: 0.46, attackPhase: 0, move: 'slashR',
+  atkScale: 1, aimTarget: null, hitDone: false, combo: 0, comboTimer: 0, queued: false, cooldown: 0,
+  // dodge
+  rolling: false, rollT: 0, rollDur: 0.45, rollDir: new THREE.Vector3(), iFrames: false,
+  // block
+  blocking: false,
+  // crouch: duck under projectiles + sneak
+  crouching: false, crouchT: 0,
+  // weapon: 'sword' (melee) or 'bow' (ranged) — toggled with F
+  weapon: 'sword', shooting: false, shootT: 0, shootDur: 0.5, shotReleased: false,
+  hurtFlash: 0,
+  walkPhase: 0,
+  alive: true,
+};
+const PLAYER_BOW_DMG = 30;
+const PLAYER_BOW_RANGED = { kind: 'arrow', projSpeed: 60 };
+
+function setPlayerWeaponVisual() {
+  const p = player.parts;
+  if (p.sword) p.sword.visible = player.weapon === 'sword';
+  if (p.bow) p.bow.visible = player.weapon === 'bow';
+}
+function initPlayer() {
+  // built with the dual rig (sword in right hand, bow in left) so the player can swap
+  const h = buildHumanoid({ skin: 0xe0a878, cloth: 0x2f5fae, accent: 0x223a66, blade: 0xeaf2ff }, 1, 'bow');
+  player.obj = h.group; player.parts = h.parts;
+  player.anim = makeAnimator(h.parts);
+  updateAnimator(player.anim, 0.05); // apply the relax pose for the menu
+  scene.add(player.obj);
+  player.pos.set(0, 0, 0);
+  player.maxHp = 100 + (player.char ? player.char.hpBonus : 0); // earned vigor raises your ceiling
+  player.hp = player.maxHp; player.stamina = player.maxStam;
+  player.facing = 0; player.alive = true;
+  player.attacking = false; player.rolling = false; player.combo = 0;
+  player.comboTimer = 0; player.queued = false; player.cooldown = 0;
+  player.hurtFlash = 0; player.iFrames = false; player.atkScale = 1;
+  player.aimTarget = null;
+  player.crouching = false; player.crouchT = 0;
+  player.weapon = 'sword'; player.shooting = false; player.shotReleased = false;
+  setPlayerWeaponVisual();
+  hideCombo();
+}
+
+// ---------- Enemies ----------
+const enemies = [];
+// Stats are tuned to PLAYER PARITY: the hero moves ~8.8 u/s effective and swings
+// every ~0.4s for 26+; everyone on the field now fights in that same weight class.
+// (NPC effective speed ≈ def.speed * 6 / 7.13 given the velocity damping.)
+const ENEMY_TYPES = {
+  grunt:  { hp: 70,  speed: 9.5, dmg: 16, range: 2.3, atkWind: 0.34, atkRec: 0.38, cd: 0.55, scale: 1.0, score: 150,
+            moves: ['slashR', 'chop'],
+            palette: { skin: 0x8a9a5b, cloth: 0x6b2222, accent: 0x401414, blade: 0xb9c2cc } },
+  brute:  { hp: 160, speed: 7.5, dmg: 30, range: 2.8, atkWind: 0.5,  atkRec: 0.55, cd: 0.9, scale: 1.4, score: 350,
+            moves: ['chop'],
+            palette: { skin: 0x7a6a4b, cloth: 0x3a2a4a, accent: 0x241433, blade: 0x9aa4ae } },
+  rogue:  { hp: 55,  speed: 11,  dmg: 14, range: 2.1, atkWind: 0.26, atkRec: 0.30, cd: 0.4, scale: 0.9, score: 200,
+            moves: ['slashR', 'slashL'],
+            palette: { skin: 0xc09a6b, cloth: 0x244a3a, accent: 0x143326, blade: 0xd9e2ec } },
+  longsword: { hp: 95, speed: 8.5, dmg: 24, range: 3.2, atkWind: 0.42, atkRec: 0.5, cd: 0.8, scale: 1.1, score: 250,
+            moves: ['slashR', 'slashL'], weapon: 'longsword',
+            palette: { skin: 0x9a8a6b, cloth: 0x3a3f4a, accent: 0x23272e, blade: 0xc8d4e0 } },
+  archer: { hp: 45,  speed: 9.5, dmg: 12, range: 2.0, atkWind: 0.5,  atkRec: 0.3, cd: 1.4, scale: 0.95, score: 200,
+            moves: ['slashR'], weapon: 'bow',
+            ranged: { kind: 'arrow', range: 70, minRange: 12, projSpeed: 52 },
+            palette: { skin: 0xc09a6b, cloth: 0x5a4a23, accent: 0x32230f, blade: 0xb9c2cc } },
+  thrower: { hp: 95, speed: 7.5, dmg: 18, range: 2.4, atkWind: 0.55, atkRec: 0.4, cd: 1.9, scale: 1.25, score: 220,
+            moves: ['chop'], weapon: 'rock',
+            ranged: { kind: 'rock', range: 12, minRange: 4, projSpeed: 14 },
+            palette: { skin: 0x97876b, cloth: 0x59442e, accent: 0x33271a, blade: 0x8d8f95 } },
+};
+
+// ---------- Enemy heroes: named champions who lead the host ----------
+// Each has a story, a signature trait that bends the rules, and a bounty.
+//   guardbreaker — their blows pierce a raised guard
+//   juggernaut   — never staggers, barely shoved
+//   duelist      — blinding attack tempo
+//   swift        — runs faster than you
+//   deadeye      — lethal, fast, long-flying projectiles
+const HEROES = [
+  { name: 'Varg the Red-Handed', base: 'grunt', trait: 'guardbreaker',
+    story: 'He burned the mill at Eastmere with the millers still inside. Shields mean nothing to him.',
+    mult: { hp: 5, dmg: 1.6, speed: 1.05, cd: 0.8 }, scale: 1.35,
+    palette: { skin: 0x9a5a4a, cloth: 0x7a1414, accent: 0x2a0a0a, blade: 0xd0c8c0 } },
+  { name: 'The Pale Knight', base: 'longsword', trait: 'juggernaut',
+    story: 'No one has seen his face. The few who tried describe only the cold. He does not stagger. He does not stop.',
+    mult: { hp: 6, dmg: 1.5, speed: 0.95, cd: 0.85 }, scale: 1.3,
+    palette: { skin: 0xd8d8e0, cloth: 0xc9cfdb, accent: 0x8a93a6, blade: 0xeaf2ff } },
+  { name: 'Old Maren', base: 'grunt', trait: 'duelist',
+    story: 'She taught half the marauder host to hold a sword. The other half learned by surviving her.',
+    mult: { hp: 4, dmg: 1.5, speed: 1.1, cd: 0.45, atkWind: 0.7 }, scale: 1.2,
+    palette: { skin: 0xc8b8a0, cloth: 0x4a5040, accent: 0x23281e, blade: 0xeaf2ff } },
+  { name: 'Brakka Two-Stones', base: 'thrower', trait: 'deadeye',
+    story: 'She felled a knight at sixty paces. The second stone was for his horse.',
+    mult: { hp: 4, dmg: 1.5, speed: 1.05, cd: 0.6, projSpeed: 1.5, range: 1.3 }, scale: 1.4,
+    palette: { skin: 0xb08a5a, cloth: 0x8a6a2a, accent: 0x4a3a14, blade: 0x8d8f95 } },
+  { name: 'Finch the Collector', base: 'rogue', trait: 'swift',
+    story: 'Small, quick, and owed money by every cutthroat in the host. He always collects.',
+    mult: { hp: 4, dmg: 1.5, speed: 1.25, cd: 0.5 }, scale: 1.05,
+    palette: { skin: 0xd0a880, cloth: 0x2a1a3a, accent: 0x14081f, blade: 0xd9e2ec } },
+  { name: 'Ulfric Ironjaw', base: 'brute', trait: 'guardbreaker',
+    story: 'He bit through a shield rim at the sack of Harrow. Your guard is just slower food.',
+    mult: { hp: 4.5, dmg: 1.5, speed: 1.1, cd: 0.75 }, scale: 1.25,
+    palette: { skin: 0x8a8a86, cloth: 0x5a3a28, accent: 0x2e1d14, blade: 0xb9c2cc } },
+];
+let heroDeck = [], heroIdx = 0;
+function shuffleHeroDeck() {
+  heroDeck = HEROES.slice();
+  for (let i = heroDeck.length - 1; i > 0; i--) {
+    const j = (Math.random() * (i + 1)) | 0;
+    [heroDeck[i], heroDeck[j]] = [heroDeck[j], heroDeck[i]];
+  }
+  heroIdx = 0;
+}
+function nextHero() { return heroDeck[heroIdx++ % heroDeck.length]; }
+
+function makeNameSprite(text) {
+  const c = document.createElement('canvas'); c.width = 512; c.height = 64;
+  const ctx = c.getContext('2d');
+  ctx.font = 'bold 38px Trebuchet MS, sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.lineWidth = 7; ctx.strokeStyle = '#000'; ctx.strokeText(text, 256, 32);
+  ctx.fillStyle = '#ffd34d'; ctx.fillText(text, 256, 32);
+  const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true }));
+  spr.scale.set(4.8, 0.6, 1);
+  return spr;
+}
+
+function spawnEnemy(type, x, z, hero, char = null) {
+  let def = ENEMY_TYPES[type];
+  if (hero) {
+    const m = hero.mult;
+    def = { ...def, palette: hero.palette, scale: def.scale * hero.scale,
+      hp: Math.round(def.hp * m.hp), dmg: Math.round(def.dmg * m.dmg),
+      speed: def.speed * (m.speed || 1), cd: def.cd * (m.cd || 1),
+      atkWind: def.atkWind * (m.atkWind || 1), score: def.score * 5 + 500 };
+    if (def.ranged) def.ranged = { ...def.ranged,
+      projSpeed: def.ranged.projSpeed * (m.projSpeed || 1), range: def.ranged.range * (m.range || 1) };
+  }
+  if (char) def = materializeDef(def, char); // a battle-hardened enemy hits harder too
+  const h = buildHumanoid(def.palette, def.scale, def.weapon || 'sword');
+  scene.add(h.group);
+  const bar = makeHealthBar();
+  bar.position.y = 3.6 * def.scale;
+  h.group.add(bar);
+  const e = {
+    team: 'enemy',
+    obj: h.group, parts: h.parts, anim: makeAnimator(h.parts), bar, def, type, char: char || null,
+    pos: new THREE.Vector3(x, 0, z),
+    vel: new THREE.Vector3(),
+    facing: 0,
+    hp: def.hp, maxHp: def.hp,
+    state: 'chase',        // chase | windup | recover | hurt | dead
+    role: 'flank',         // engage (fight head-on) | flank (circle behind)
+    slotAngle: 0,          // world-space bearing of the flank slot around the player
+    target: null, slotOn: null, waiting: false,
+    strafeDir: Math.random() < 0.5 ? -1 : 1, // stable orbit direction while waiting
+    timer: 0, cd: rand(0, def.cd), hitDone: false, move: def.moves[0],
+    walkPhase: Math.random() * 6,
+    flash: 0, alive: true, deadT: 0,
+  };
+  if (hero) {
+    e.isHero = true;
+    e.heroName = hero.name;
+    e.heroTrait = hero.trait;
+    // horned helm marks a champion on the field
+    const hornM = mat(0x1a1612, { metal: 0.4 });
+    for (const side of [-1, 1]) {
+      const horn = new THREE.Mesh(cachedGeo('horn', () => new THREE.ConeGeometry(0.12, 0.6, 5)), hornM);
+      horn.position.set(0.3 * side, 0.32, 0);
+      horn.rotation.z = -side * 0.85;
+      h.parts.head.add(horn);
+    }
+    const label = makeNameSprite(hero.name);
+    label.position.y = 3.6 * def.scale + 0.7;
+    h.group.add(label);
+  }
+  setPose(e.anim, 'guard', 0.3);
+  h.group.position.copy(e.pos);
+  enemies.push(e);
+  return e;
+}
+
+// ---------- Allies (your warband) ----------
+const allies = [];
+const ALLY_DEF = { hp: 100, speed: 10, dmg: 22, range: 2.4, atkWind: 0.32, atkRec: 0.36, cd: 0.5, scale: 1.0,
+                   moves: ['slashR', 'slashL', 'chop'], weapon: 'sword', cls: 'sword' };
+const ALLY_LONGSWORD = { hp: 110, speed: 9, dmg: 26, range: 3.1, atkWind: 0.4, atkRec: 0.45, cd: 0.7, scale: 1.05,
+                   moves: ['slashR', 'slashL'], weapon: 'longsword', cls: 'long' };
+const ALLY_ARCHER = { hp: 70, speed: 10, dmg: 14, range: 2.0, atkWind: 0.5, atkRec: 0.3, cd: 1.3, scale: 0.95,
+                   moves: ['slashR'], weapon: 'bow', ranged: { kind: 'arrow', range: 70, minRange: 12, projSpeed: 52 }, cls: 'archer' };
+const ALLY_THROWER = { hp: 100, speed: 7.5, dmg: 18, range: 2.4, atkWind: 0.55, atkRec: 0.4, cd: 1.8, scale: 1.15,
+                   moves: ['chop'], weapon: 'rock', ranged: { kind: 'rock', range: 12, minRange: 4, projSpeed: 14 }, cls: 'thrower' };
+
+// XP economy: each wave you earn XP from kills (minus losses), and spend it at
+// the muster to recruit. A bigger army costs more XP; a costly victory earns
+// less, so it grows slower. Wealth is conserved: xp + (cost of fielded roster).
+const WARBAND_KEYS = ['sword', 'long', 'archer', 'thrower'];
+const UNIT_COST = { sword: 8, long: 14, archer: 11, thrower: 12 };
+const KILL_XP = 8;    // per enemy slain that wave — tuned for fast army growth
+const HERO_XP = 40;   // per champion slain
+const LOSS_XP = 12;   // lost per fallen warband member
+const BAND_XP = 5;    // victory bounty per soldier in the host you broke
+const BAND_XP_FLOOR = 35; // even a 3-bandit pack is worth hunting down
+const STARTING_WEALTH = 90; // a strong opening warband + spare to spend
+const warbandComp = { sword: 2, long: 0, archer: 1, thrower: 1 };
+let xp = 0;
+let waveKills = 0, waveHeroKills = 0, waveLosses = 0; // this-wave tally for XP
+function warbandTotal() { return WARBAND_KEYS.reduce((s, k) => s + warbandComp[k], 0); }
+function warbandCost(comp = warbandComp) { return WARBAND_KEYS.reduce((s, k) => s + comp[k] * UNIT_COST[k], 0); }
+function resetEconomy() {
+  warbandComp.sword = 2; warbandComp.long = 0; warbandComp.archer = 1; warbandComp.thrower = 1;
+  xp = STARTING_WEALTH - warbandCost();
+  waveKills = waveHeroKills = waveLosses = 0;
+}
+function warbandLoadout() {
+  const defs = [];
+  for (let i = 0; i < warbandComp.sword; i++) defs.push(ALLY_DEF);
+  for (let i = 0; i < warbandComp.long; i++) defs.push(ALLY_LONGSWORD);
+  for (let i = 0; i < warbandComp.archer; i++) defs.push(ALLY_ARCHER);
+  for (let i = 0; i < warbandComp.thrower; i++) defs.push(ALLY_THROWER);
+  return defs;
+}
+// blue/teal faction so they read as "your side" against the red marauders
+const ALLY_PALETTES = [
+  { skin: 0xe0b088, cloth: 0x356fb0, accent: 0x223a66, blade: 0xeaf2ff },
+  { skin: 0xd2a070, cloth: 0x2f8f93, accent: 0x1c5a5e, blade: 0xeaf2ff },
+  { skin: 0xe8b894, cloth: 0x4a64b5, accent: 0x2a3a73, blade: 0xeaf2ff },
+  { skin: 0xc89a6a, cloth: 0x2f9f74, accent: 0x1c6048, blade: 0xeaf2ff },
+];
+
+// ---------- Careers: every fighter is a named individual who grows by fighting ----------
+// A Character is the PERSISTENT identity behind a body on the field. Bodies (allies[]/
+// enemies[]) are transient; their `.char` carries the name, skills, renown and kill record
+// across battles. Skills accumulate from ACTUAL combat — landing hits, scoring kills,
+// blocking blows — and convert, with diminishing returns, into stronger blows and a
+// hardier guard. The player is a Character like any other. (Step 1: client-only, mirrored
+// to localStorage; the Node server + always-on living world arrive in later steps.)
+const CAREERS_KEY = 'bv-careers';
+const SKILL_SCALE = 60, SKILL_CAP = 100;
+function effSkill(raw) { return SKILL_CAP * (1 - Math.exp(-Math.max(0, raw) / SKILL_SCALE)); }
+const RANKS = [['Recruit', 0], ['Veteran', 40], ['Sergeant', 120], ['Captain', 300], ['Commander', 700]];
+function rankFor(renown) { let r = RANKS[0][0]; for (const e of RANKS) if (renown >= e[1]) r = e[0]; return r; }
+const ALLY_DEF_BY_CLASS = { sword: ALLY_DEF, long: ALLY_LONGSWORD, archer: ALLY_ARCHER, thrower: ALLY_THROWER };
+function classKeyOf(arch) { return (arch === 'long' || arch === 'archer' || arch === 'thrower') ? arch : 'sword'; }
+
+const GIVEN_NAMES = ['Aldric','Bram','Cedwyn','Doran','Eadric','Falk','Garrec','Hale','Ivo','Joren','Kell','Lorne','Maddoc','Nael','Osric','Perrin','Quenn','Roderic','Sefton','Tomas','Ulf','Varin','Wend','Yorin','Ansel','Brand','Corin','Dunmar','Edra','Freya','Gerda','Halla','Ingrid','Jorah','Kara','Linnet','Mira','Nessa','Orla','Petra','Romilda','Sigrun','Thora','Ysolde'];
+const BYNAMES = ['the Bold','the Quiet','Ironhand','the Younger','Oakheart','the Swift','Stonefist','the Grim','Redmane','the Tall','Hawkeye','the Patient','Coldbrook','the Stout','Wolfsbane','the Lucky','Greycloak','the Fierce','Longstride','the Sly','Brightblade','the Steady','Hardwin','the Wary','Blackbriar','Frostbeard','Stormcrow'];
+function pick(a) { return a[(Math.random() * a.length) | 0]; }
+function roman(n) { const t = [[10,'X'],[9,'IX'],[5,'V'],[4,'IV'],[1,'I']]; let s = ''; for (const e of t) while (n >= e[0]) { s += e[1]; n -= e[0]; } return s; }
+function genName(set) {
+  for (let i = 0; i < 40; i++) {
+    let nm = pick(GIVEN_NAMES);
+    if (Math.random() < 0.55) nm += ' ' + pick(BYNAMES);
+    if (!set || !set.has(nm)) { if (set) set.add(nm); return nm; }
+  }
+  let n = 2, nm;
+  do { nm = pick(GIVEN_NAMES) + ' ' + roman(n++); } while (set && set.has(nm));
+  if (set) set.add(nm);
+  return nm;
+}
+
+let charIdSeq = 0;
+function makeChar(archetype, opts = {}) {
+  return {
+    id: ++charIdSeq,
+    name: opts.name || genName(opts.nameSet),
+    archetype, team: opts.team || 'ally',
+    isHero: !!opts.hero, trait: opts.hero ? opts.hero.trait : null, isPlayer: !!opts.isPlayer,
+    skills: { strike: 0, guard: 0, lead: 0, aim: 0 },
+    xp: 0, renown: opts.renown || 0, popularity: 0,
+    kills: 0, battles: 0, battlesLed: 0, battlesWon: 0, deaths: 0,
+    rank: 'Recruit', notability: opts.notability || 1,
+    dmgBonus: 0, guardEff: 1, hpBonus: 0,
+    localKills: 0, localStrike: 0, localGuard: 0, fielded: false, fallen: false,
+  };
+}
+function recomputeChar(c) {
+  const s = effSkill(c.skills.strike), g = effSkill(c.skills.guard);
+  c.dmgBonus = Math.round(s * 0.30);          // 0 → +30 dmg at the skill cap
+  c.guardEff = 1 + g * 0.004;                 // 1 → 1.4: a cheaper, harder guard
+  c.hpBonus = Math.round((s + g) * 0.5);      // 0 → +100 maxHp at the cap
+  c.rank = rankFor(c.renown);
+  return c;
+}
+// A grown fighter hits harder and weathers more — a per-instance def clone carries it onto
+// the field. Bonuses are recomputed only at battle-end/muster, never in the hot loop, so a
+// strike just reads f.def.dmg as before. No bonus → returns the shared base def, unchanged.
+function materializeDef(baseDef, char) {
+  if (!char || (!char.dmgBonus && !char.hpBonus)) return baseDef;
+  const d = Object.assign({}, baseDef);
+  d.dmg = baseDef.dmg + char.dmgBonus;
+  d.hp = baseDef.hp + char.hpBonus;
+  return d;
+}
+
+// The player's warband: a persistent muster of named soldiers — the identities behind the
+// anonymous warbandComp counts. Reconciled to the counts at battle start; survivors carry
+// their growing careers from one battle to the next; the fallen are gone for good.
+let playerChar = null;
+let warbandRoster = [];
+const warbandNameSet = new Set();
+function ensureWarbandRoster() {
+  for (const k of WARBAND_KEYS) {
+    const living = warbandRoster.filter(c => !c.fallen && classKeyOf(c.archetype) === k);
+    while (living.length < warbandComp[k]) {
+      const c = makeChar(k, { team: 'ally', nameSet: warbandNameSet });
+      warbandRoster.push(c); living.push(c);
+    }
+    while (living.length > warbandComp[k]) {         // sold/culled units: the greenest leave first
+      living.sort((a, b) => a.renown - b.renown);
+      const cut = living.shift();
+      warbandNameSet.delete(cut.name);
+      const idx = warbandRoster.indexOf(cut); if (idx >= 0) warbandRoster.splice(idx, 1);
+    }
+  }
+}
+
+// world bands: a named warlord leads every host on the map (Step 2: client-side identities;
+// the server makes them durable in a later step). Renown grows with the wars they win.
+const worldNameSet = new Set();
+const ENEMY_ARCHS = ['grunt', 'rogue', 'longsword', 'brute', 'archer', 'thrower'];
+function makeBandLeader(size, level, host) {
+  const c = makeChar(ENEMY_ARCHS[(Math.random() * ENEMY_ARCHS.length) | 0], {
+    team: 'enemy', nameSet: worldNameSet, notability: 2,
+    renown: Math.round(rand(4, 16 + level * 12 + (host ? size * 0.5 : 0))) });
+  c.skills.strike = rand(0, 14 + level * 8);
+  c.skills.guard = rand(0, 8 + level * 5);
+  c.skills.lead = rand(0, 4 + level * 3);
+  recomputeChar(c);
+  return c;
+}
+
+// per-battle career bookkeeping
+let battleKillFeed = [];
+let enemyNameSet = new Set();
+function beginBattleCareers() {
+  battleKillFeed = []; enemyNameSet = new Set();
+  for (const c of warbandRoster) { c.localKills = c.localStrike = c.localGuard = 0; c.fielded = false; c.fallen = false; }
+  if (playerChar) { playerChar.localKills = playerChar.localStrike = playerChar.localGuard = 0; }
+}
+function foldChar(c, won) {
+  c.skills.strike += c.localStrike + 0.10;   // +0.10 just for surviving the press
+  c.skills.guard += c.localGuard + 0.10;
+  c.kills += c.localKills;
+  c.battles++;
+  c.renown += 2 + 0.5 * c.localKills + (won ? 1 : 0);
+  if (won) c.battlesWon++;
+  c.localKills = c.localStrike = c.localGuard = 0; c.fielded = false;
+  recomputeChar(c);
+}
+// fold the battle's deeds into every survivor, drop the fallen, re-derive the warband counts
+function applyBattleGrowth(won) {
+  const survivors = [], seen = new Set();
+  for (const a of allies) if (a.alive && a.char && a.char !== playerChar) { foldChar(a.char, won); survivors.push(a.char); seen.add(a.char); }
+  for (const item of playerReserve) if (item && item.char && !seen.has(item.char)) { survivors.push(item.char); seen.add(item.char); } // never fielded → no growth, but they live
+  if (playerChar) foldChar(playerChar, won);
+  warbandRoster = survivors;
+  warbandNameSet.clear(); for (const c of warbandRoster) warbandNameSet.add(c.name);
+  for (const k of WARBAND_KEYS) warbandComp[k] = 0;
+  for (const c of warbandRoster) warbandComp[classKeyOf(c.archetype)]++;
+  saveCareers();
+}
+
+// persistence (Step 1: a localStorage mirror; the server becomes authoritative later)
+function serChar(c) {
+  return { id: c.id, name: c.name, archetype: c.archetype, team: c.team, isHero: c.isHero, trait: c.trait, isPlayer: c.isPlayer,
+    skills: c.skills, xp: c.xp, renown: c.renown, popularity: c.popularity,
+    kills: c.kills, battles: c.battles, battlesLed: c.battlesLed, battlesWon: c.battlesWon, deaths: c.deaths, notability: c.notability };
+}
+function deserChar(o) {
+  const c = makeChar(o.archetype, { name: o.name, team: o.team, notability: o.notability, isPlayer: o.isPlayer });
+  c.id = o.id; c.isHero = o.isHero; c.trait = o.trait;
+  c.skills = Object.assign({ strike: 0, guard: 0, lead: 0, aim: 0 }, o.skills);
+  c.xp = o.xp || 0; c.renown = o.renown || 0; c.popularity = o.popularity || 0;
+  c.kills = o.kills || 0; c.battles = o.battles || 0; c.battlesLed = o.battlesLed || 0; c.battlesWon = o.battlesWon || 0; c.deaths = o.deaths || 0;
+  recomputeChar(c); return c;
+}
+function saveCareers() {
+  const payload = { v: 1, seq: charIdSeq, mapLevel,
+    player: playerChar ? serChar(playerChar) : null,
+    warband: warbandRoster.filter(c => !c.fallen).map(serChar) };
+  try { localStorage.setItem(CAREERS_KEY, JSON.stringify(payload)); } catch (e) { /* private mode / quota */ }
+  // push to the backend (authoritative when reachable); offline → the localStorage mirror above
+  // stands in and client-net queues an outbox that flushes on reconnect
+  if (typeof window !== 'undefined' && window.net) {
+    window.net.saveCareers(payload);
+    if (battleKillFeed && battleKillFeed.length) {
+      window.net.saveDeeds(battleKillFeed.map(k => ({ kind: 'kill', actor: k.killer, target: k.victim,
+        summary: k.killer + ' slew ' + k.victim + (k.hero ? ' (a champion)' : '') })));
+    }
+  }
+}
+function loadCareers() {
+  let data = null;
+  // prefer the server profile (pre-fetched by client-net before the game starts); fall back to
+  // the localStorage mirror when the backend is unreachable
+  const srv = (typeof window !== 'undefined' && window.net && window.net.profile);
+  if (srv && (srv.player || (srv.warband && srv.warband.length))) {
+    data = { player: srv.player, warband: srv.warband || [] };
+  } else {
+    try { const raw = localStorage.getItem(CAREERS_KEY); if (raw) data = JSON.parse(raw); } catch (e) { data = null; }
+  }
+  warbandRoster.length = 0; warbandNameSet.clear();
+  if (data && data.player) playerChar = deserChar(data.player);
+  else playerChar = makeChar('sword', { team: 'ally', nameSet: warbandNameSet, notability: 3, isPlayer: true });
+  if (data && data.warband) for (const o of data.warband) { const c = deserChar(o); warbandRoster.push(c); warbandNameSet.add(c.name); }
+  let maxId = (data && data.seq) || 0;
+  if (playerChar) maxId = Math.max(maxId, playerChar.id);
+  for (const c of warbandRoster) maxId = Math.max(maxId, c.id);
+  charIdSeq = maxId;
+  player.char = playerChar;
+}
+
+function spawnAlly(x, z, palette, def = ALLY_DEF, char = null) {
+  if (!char) char = makeChar(defKey(def), { team: 'ally' }); // legacy callers still get a name
+  def = materializeDef(def, char);                            // a grown soldier fields harder stats
+  const h = buildHumanoid(palette, def.scale, def.weapon || 'sword');
+  scene.add(h.group);
+  const bar = makeHealthBar(0x6bff8a); // green bar marks a friendly
+  bar.position.y = 3.6 * def.scale;
+  h.group.add(bar);
+  const label = makeNameSprite(char.name);    // a name floats over every soldier you lead
+  label.scale.set(3.4, 0.42, 1); label.position.y = 3.6 * def.scale + 0.5;
+  h.group.add(label);
+  const a = {
+    team: 'ally',
+    obj: h.group, parts: h.parts, anim: makeAnimator(h.parts), bar, def, char,
+    pos: new THREE.Vector3(x, 0, z),
+    vel: new THREE.Vector3(),
+    facing: 0,
+    hp: def.hp, maxHp: def.hp,
+    state: 'chase',
+    target: null, slotOn: null, waiting: false,
+    strafeDir: Math.random() < 0.5 ? -1 : 1,
+    timer: 0, cd: rand(0, def.cd), hitDone: false, move: def.moves[0],
+    walkPhase: Math.random() * 6,
+    flash: 0, alive: true, deadT: 0,
+    order: 'free', holdPos: null, zone: null, homeSlot: null, pace: 'march', // order: free|hold|zone|attackmove · pace: march|rush
+    selRing: null, group: null, grpRing: null,
+  };
+  setPose(a.anim, 'guard', 0.3);
+  h.group.position.copy(a.pos);
+  allies.push(a);
+  return a;
+}
+function clearAllies() {
+  for (const a of allies) { scene.remove(a.obj); disposeGroup(a.obj); }
+  allies.length = 0;
+}
+// form the warband up in a line abreast, a few paces ahead of the player,
+// all facing the direction the enemy host will charge from
+function rallyAllies(frontYaw = 0) {
+  clearAllies();
+  const defs = warbandLoadout(); // the player's chosen composition
+  const fdx = Math.sin(frontYaw), fdz = Math.cos(frontYaw); // toward the host
+  const rdx = Math.cos(frontYaw), rdz = -Math.sin(frontYaw); // along the line
+  // big armies form ranks: rows of up to 24, melee rows ahead, ranged rows behind
+  const ROW = 24;
+  const melee = defs.filter(d => !d.ranged), ranged = defs.filter(d => d.ranged);
+  let idx = 0;
+  const place = (def, col, rowWidth, row, baseAhead) => {
+    const lateral = (col - (rowWidth - 1) / 2) * 2.6;
+    const ahead = baseAhead - row * 2.3;
+    const x = clamp(player.pos.x + fdx * ahead + rdx * lateral, -ARENA + 1, ARENA - 1);
+    const z = clamp(player.pos.z + fdz * ahead + rdz * lateral, -ARENA + 1, ARENA - 1);
+    const a = spawnAlly(x, z, ALLY_PALETTES[idx++ % ALLY_PALETTES.length], def);
+    a.facing = frontYaw;
+  };
+  melee.forEach((def, i) => {
+    const row = Math.floor(i / ROW), width = Math.min(ROW, melee.length - row * ROW);
+    place(def, i % ROW, width, row, 3);
+  });
+  ranged.forEach((def, i) => {
+    const row = Math.floor(i / ROW), width = Math.min(ROW, ranged.length - row * ROW);
+    place(def, i % ROW, width, row, -1.5 - Math.ceil(melee.length / ROW) * 0.5);
+  });
+}
+
+// ---------- Input ----------
+const keys = {};
+let cameraAngle = Math.PI; // mouse-look yaw; the camera orbits the character
+let cameraDist = 7.5, cameraHeight = 4;
+let pointerLocked = false;
+
+// third-person mouse look: pointer lock on the canvas, mouse steers the camera
+canvas.addEventListener('click', () => {
+  // don't re-grab the cursor while the mid-battle command deck is open (it would vanish mid-order)
+  if (gameRunning && !commandPanelOpen && !pointerLocked && canvas.requestPointerLock) canvas.requestPointerLock();
+});
+document.addEventListener('pointerlockchange', () => {
+  pointerLocked = document.pointerLockElement === canvas;
+  // losing the cursor mid-battle (Esc / alt-tab) surfaces the command deck instead of stranding the player
+  if (!pointerLocked && mode === 'battle' && gameRunning && !commandPanelOpen) openCommandDeck();
+});
+addEventListener('mousemove', (e) => {
+  if (!pointerLocked || !gameRunning) return;
+  cameraAngle -= e.movementX * 0.0035;
+  cameraHeight = clamp(cameraHeight + e.movementY * 0.02, 2.2, 10);
+});
+
+addEventListener('keydown', (e) => {
+  keys[e.code] = true;
+  if (mode === 'plan' || commandPanelOpen) { handlePlanKey(e); return; } // commanding: keys order troops, not the fighter
+  if (e.code === 'Space') { e.preventDefault(); requestDodge(); }
+  if (e.code === 'KeyF') toggleWeapon();
+});
+addEventListener('keyup', (e) => { keys[e.code] = false; });
+canvas.addEventListener('mousedown', (e) => { if (!(mode === 'plan' || commandPanelOpen) && e.button === 0) requestAttack(); });
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+function toggleWeapon() {
+  if (!gameRunning || !player.alive || player.attacking || player.shooting || player.rolling) return;
+  player.weapon = player.weapon === 'sword' ? 'bow' : 'sword';
+  setPlayerWeaponVisual();
+}
+function requestAttack() {
+  if (!gameRunning || !player.alive || player.rolling) return;
+  if (player.weapon === 'bow') { startBowShot(); return; }
+  if (player.attacking) { player.queued = true; return; }
+  if (player.cooldown > 0) return;
+  startAttack();
+}
+// nearest enemy in the forward aim cone (else a point straight ahead) for the bow
+function playerBowTarget() {
+  const ax = Math.sin(player.facing), az = Math.cos(player.facing);
+  let best = null, bd = Infinity;
+  for (const e of enemies) {
+    if (!e.alive) continue;
+    const dx = e.pos.x - player.pos.x, dz = e.pos.z - player.pos.z, d = Math.hypot(dx, dz);
+    if (d < 0.2) continue;
+    if ((dx * ax + dz * az) / d < 0.5) continue; // outside ~60° cone ahead
+    if (d < bd) { bd = d; best = e; }
+  }
+  return best || { pos: new THREE.Vector3(player.pos.x + ax * 50, 0, player.pos.z + az * 50) };
+}
+function startBowShot() {
+  if (player.shooting || player.cooldown > 0 || player.stamina < 6) return;
+  player.stamina -= 6;
+  player.shooting = true; player.shootT = 0; player.shotReleased = false;
+  setPose(player.anim, 'aimBow', 0.12);
+}
+function startAttack() {
+  player.attacking = true; player.attackT = 0; player.attackPhase = 0;
+  player.hitDone = false; player.queued = false;
+  // swings cost stamina; tired arms swing slower — and when exhausted,
+  // sometimes with a ragged hesitation before the cut
+  const stam = player.stamina;
+  player.stamina = Math.max(0, stam - 9);
+  const fatigue = clamp(1 - stam / 40, 0, 1);
+  player.atkScale = 1 + fatigue * 0.55 + (stam < 10 ? Math.random() * 0.3 : 0);
+  // aim assist: acquire the closest enemy (nearby ones in front win ties),
+  // the swing steers onto them during the windup
+  player.aimTarget = null;
+  let bestScore = Infinity;
+  for (const e of enemies) {
+    if (!e.alive) continue;
+    const d = e.pos.distanceTo(player.pos);
+    if (d > 7.5) continue;
+    const yaw = Math.atan2(e.pos.x - player.pos.x, e.pos.z - player.pos.z);
+    const score = d + Math.abs(angleDelta(player.facing, yaw)) * 0.8;
+    if (score < bestScore) { bestScore = score; player.aimTarget = e; }
+  }
+  player.combo = (player.comboTimer > 0 ? player.combo + 1 : 1);
+  player.comboTimer = 1.4;
+  player.move = PLAYER_COMBO[(player.combo - 1) % PLAYER_COMBO.length];
+  showCombo(player.combo);
+}
+function requestDodge() {
+  if (!gameRunning || !player.alive || player.rolling) return;
+  if (player.stamina < 30) return;
+  player.stamina -= 30;
+  player.rolling = true; player.rollT = 0; player.iFrames = true;
+  player.attacking = false;
+  setPose(player.anim, 'guard', 0.12); // dodge-cancel: don't hold a windup through the roll
+  // roll in the current movement direction, else straight ahead
+  const dir = inputDir();
+  if (dir.lengthSq() > 0.01) player.rollDir.copy(dir);
+  else player.rollDir.set(Math.sin(player.facing), 0, Math.cos(player.facing));
+}
+
+// WASD on the look axis: W is ALWAYS straight toward where you're looking,
+// S directly away, A/D perpendicular side-steps. Built from explicit
+// forward/right basis vectors so no camera angle can skew it.
+function inputDir() {
+  let f = 0, s = 0;
+  if (keys['KeyW']) f += 1;
+  if (keys['KeyS']) f -= 1;
+  if (keys['KeyD']) s += 1;
+  if (keys['KeyA']) s -= 1;
+  const v = new THREE.Vector3();
+  if (!f && !s) return v;
+  const yaw = cameraAngle + Math.PI; // look direction
+  // forward = (sin yaw, 0, cos yaw); right = forward x up = (-cos yaw, 0, sin yaw)
+  v.set(Math.sin(yaw) * f - Math.cos(yaw) * s, 0, Math.cos(yaw) * f + Math.sin(yaw) * s);
+  return v.normalize();
+}
+
+// ---------- Combat resolution ----------
+const PLAYER_ATK_RANGE = 3.0;
+const PLAYER_ATK_ARC = 0.35; // cos threshold of frontal arc
+
+function playerHitCheck() {
+  const baseDmg = 26;
+  const dmg = baseDmg + player.combo * 4 + (player.char ? player.char.dmgBonus : 0); // combos + earned skill
+  const fdir = new THREE.Vector3(Math.sin(player.facing), 0, Math.cos(player.facing));
+  for (const e of enemies) {
+    if (!e.alive) continue;
+    tmpV.subVectors(e.pos, player.pos); tmpV.y = 0;
+    const dist = tmpV.length();
+    if (dist > PLAYER_ATK_RANGE + (e.def.scale - 1)) continue;
+    tmpV.normalize();
+    if (fdir.dot(tmpV) < PLAYER_ATK_ARC) continue;
+    damageEnemy(e, dmg, fdir, true, player); // player blow: full juice
+  }
+}
+
+// byPlayer gates the screen juice (shake/hit-stop/damage numbers) so the dozens of
+// ally-vs-enemy clashes in a battle don't constantly rattle the camera.
+function damageEnemy(e, dmg, fromDir, byPlayer, attacker) {
+  if (!e.alive) return;
+  e.hp -= dmg;
+  e.flash = 0.12;
+  if (attacker && attacker.char) attacker.char.localStrike += 0.05; // a landed blow sharpens the arm
+  // interrupting an attack must not skip the cooldown — otherwise a struck
+  // enemy counterattacks 0.18s later, faster than its own attack cycle
+  if (e.heroTrait === 'juggernaut') {
+    e.vel.addScaledVector(fromDir, 1.2); // barely moves, never staggers
+  } else {
+    e.cd = Math.max(e.cd, (e.state === 'windup' || e.state === 'recover') ? e.def.cd * 0.6 : 0.4);
+    e.state = 'hurt'; e.timer = 0.18;
+    setPose(e.anim, 'hurt', 0.06);
+    e.vel.addScaledVector(fromDir, 6); // knockback
+  }
+  const hp = e.obj.position.clone(); hp.y = 2;
+  spawnSparks(hp, 0xffe08a, byPlayer ? 8 : 5);
+  if (byPlayer) { spawnPopup(hp, String(dmg), '#ffe08a'); addShake(0.22); addHitstop(0.05); }
+  if (e.hp <= 0) killEnemy(e, byPlayer, attacker);
+}
+
+function killEnemy(e, byPlayer, killer) {
+  e.alive = false; e.state = 'dead'; e.deadT = 0;
+  if (killer && killer.char) { killer.char.localKills++; killer.char.localStrike += 0.40;
+    if (e.char) battleKillFeed.push({ killer: killer.char.name, victim: e.char.name, hero: !!e.isHero }); }
+  e.bar.visible = false;
+  addScore(e.def.score + (byPlayer ? player.combo * 10 : 0));
+  enemiesRemaining--;
+  spawnSparks(e.obj.position.clone().setY(2), 0xff6b6b, 14);
+  if (byPlayer) { addShake(0.35); addHitstop(0.09); } // your kills hit hardest
+  waveKills++; // every felled foe is worth XP at the muster
+  if (e.isHero) {
+    // a champion falls: the field feels it, and the bounty is rich
+    waveHeroKills++;
+    showWaveBanner(e.heroName + ' has fallen', 'Word spreads of your deed — a rich bounty in XP.');
+    addShake(0.5); addHitstop(0.12);
+  }
+  updateEnemyCount();
+}
+
+function damageAlly(a, dmg, fromDir, attacker) {
+  if (!a.alive) return;
+  a.hp -= dmg;
+  a.flash = 0.12;
+  if (attacker && attacker.char) attacker.char.localStrike += 0.05;
+  a.cd = Math.max(a.cd, (a.state === 'windup' || a.state === 'recover') ? a.def.cd * 0.6 : 0.4);
+  a.state = 'hurt'; a.timer = 0.18;
+  setPose(a.anim, 'hurt', 0.06);
+  a.vel.addScaledVector(fromDir, 6);
+  spawnSparks(a.obj.position.clone().setY(2), 0xffd0d0, 6);
+  if (a.hp <= 0) killAlly(a, attacker);
+  else if (a.char) a.char.localGuard += 0.05; // weathered a blow and lived → a harder guard
+}
+function killAlly(a, killer) {
+  a.alive = false; a.state = 'dead'; a.deadT = 0;
+  if (a.char) a.char.fallen = true;
+  if (killer && killer.char) { killer.char.localKills++; killer.char.localStrike += 0.40;
+    if (a.char) battleKillFeed.push({ killer: killer.char.name, victim: a.char.name, hero: false }); }
+  a.bar.visible = false;
+  selected.delete(a); a.group = null; // drop the fallen from any selection/squad
+  spawnSparks(a.obj.position.clone().setY(2), 0x9adcff, 14);
+  waveLosses++; // a fallen comrade docks your XP earnings
+  if (commandPanelOpen) renderDeck(); // keep the live squad counts honest while you command
+}
+
+// Route a hit to the right handler based on which side the victim is on.
+function damageCombatant(victim, dmg, attacker) {
+  if (victim === player) {
+    if (attacker && attacker.char) attacker.char.localStrike += 0.05; // drawing the player's blood trains the arm too
+    damagePlayer(dmg, attacker.pos, attacker.heroTrait === 'guardbreaker');
+    return;
+  }
+  const dir = new THREE.Vector3().subVectors(victim.pos, attacker.pos).setY(0);
+  if (dir.lengthSq() > 1e-6) dir.normalize(); else dir.set(0, 0, 1);
+  if (victim.team === 'ally') damageAlly(victim, dmg, dir, attacker);
+  else damageEnemy(victim, dmg, dir, false, attacker);
+}
+
+function nearestEnemy(maxDist) {
+  let best = null, bd = maxDist;
+  for (const e of enemies) {
+    if (!e.alive) continue;
+    const d = e.pos.distanceTo(player.pos);
+    if (d < bd) { bd = d; best = e; }
+  }
+  return best;
+}
+
+function damagePlayer(dmg, fromPos, pierceGuard) {
+  if (!player.alive || player.iFrames) return;
+  if (pierceGuard && player.blocking) {
+    // a guardbreaker's blow goes straight through a raised guard
+    spawnPopup(player.obj.position.clone().setY(2.2), 'GUARD PIERCED', '#ff9b4d');
+  }
+  // directional block: a raised guard negates frontal hits at a stamina cost
+  if (player.blocking && !pierceGuard) {
+    tmpV.subVectors(fromPos, player.pos).setY(0).normalize();
+    const fdir = new THREE.Vector3(Math.sin(player.facing), 0, Math.cos(player.facing));
+    if (fdir.dot(tmpV) > 0.2) {
+      const clangPos = player.obj.position.clone().addScaledVector(tmpV, 1.1).setY(1.6);
+      const blockCost = Math.ceil(12 / (player.char ? player.char.guardEff : 1)); // a trained guard tires slower
+      if (player.stamina >= blockCost) {
+        player.stamina -= blockCost;
+        if (player.char) player.char.localGuard += 0.08; // a clean block hones the guard
+        spawnSparks(clangPos, 0xcfe8ff, 10);
+        spawnPopup(player.obj.position.clone().setY(2.2), 'BLOCKED', '#9adcff');
+        player.vel.addScaledVector(tmpV.negate(), 3); // shove, no damage
+        addShake(0.28); addHitstop(0.04); // steel-on-steel clang
+        updateHUD();
+        return;
+      }
+      // stamina exhausted: guard break — partial damage and a heavy stagger
+      player.stamina = 0;
+      dmg = Math.ceil(dmg * 0.6);
+      spawnSparks(clangPos, 0xffaa66, 12);
+      spawnPopup(player.obj.position.clone().setY(2.2), 'GUARD BREAK', '#ffb066');
+      player.vel.addScaledVector(tmpV.negate(), 5);
+      addShake(0.55);
+    }
+  }
+  player.hp -= dmg;
+  player.hurtFlash = 0.25;
+  flashDamage(0.45 + dmg / 25); // heavier hits flood more red
+  addShake(0.5); addHitstop(0.07);
+  // don't let the flinch replace an in-progress swing
+  if (!player.attacking) setPose(player.anim, 'hurt', 0.06);
+  spawnPopup(player.obj.position.clone().setY(2), String(dmg), '#ff7b7b');
+  // small knockback
+  tmpV.subVectors(player.pos, fromPos).setY(0).normalize();
+  player.vel.addScaledVector(tmpV, 5);
+  // reset combo on hit
+  player.combo = 0; player.comboTimer = 0; hideCombo();
+  if (player.hp <= 0) { player.hp = 0; doGameOver(); }
+  updateHUD();
+}
+
+// ---------- Pack director ----------
+// Wolf-pack tactics: the 2 enemies best-placed to fight engage the player head-on;
+// everyone else becomes a flanker that circles to a slot in the player's rear arc
+// and only commits to a strike once it's actually behind them (where blocks can't reach).
+const MAX_ATTACKERS_PER_VICTIM = 2; // nobody joins a fight that already has two attackers
+const playerFwd = new THREE.Vector3(0, 0, 1); // refreshed each frame in resolveTargets
+
+function assignPackRoles(pack) {
+  // slot-holders press the player; waiting overflow becomes the circling flankers
+  const flankers = [];
+  for (const e of pack) {
+    e.role = e.waiting ? 'flank' : 'engage';
+    if (e.waiting) flankers.push(e);
+  }
+  // fan flankers across the rear arc, assigning slots by current bearing to minimise crossing
+  const rear = player.facing + Math.PI;
+  flankers.sort((a, b) =>
+    angleDelta(rear, Math.atan2(a.pos.x - player.pos.x, a.pos.z - player.pos.z)) -
+    angleDelta(rear, Math.atan2(b.pos.x - player.pos.x, b.pos.z - player.pos.z)));
+  const n = flankers.length;
+  for (let i = 0; i < n; i++) {
+    // fan within ±63° of directly-behind — inside the dot<-0.25 "behind" gate (±75°)
+    const off = n === 1 ? 0 : lerp(-1, 1, i / (n - 1)) * 1.1;
+    flankers[i].slotAngle = rear + off;
+  }
+}
+
+// ---------- Battle director: give every fighter a target each frame ----------
+function nearestOf(pos, list, current, stick) {
+  let best = null, bd = Infinity;
+  for (const o of list) {
+    if (!o.alive) continue;
+    const d = pos.distanceTo(o.pos) - (o === current ? (stick || 0) : 0);
+    if (d < bd) { bd = d; best = o; }
+  }
+  return best;
+}
+
+// stickiness: keep a fighter committed to its current duel/slot unless a foe is clearly closer
+function distAdj(f, o) {
+  let d = f.pos.distanceTo(o.pos);
+  // stealth: a crouching player looks ~12 units farther, so enemies are slow to
+  // pick him and prefer the (visible) warband — lets you flank into the backline
+  if (o === player && player.crouching) d += 12;
+  if (f.target === o) d -= 0.8;
+  if (f.slotOn === o) d -= 1.2;
+  return d;
+}
+
+// Greedy nearest-with-capacity assignment: each victim accepts at most `cap`
+// committed attackers; extras first spread to another foe with a free slot,
+// and only if every duel is full do they mark `waiting` and hold back.
+function assignSide(fighters, opponents, cap) {
+  if (!opponents.length) {
+    for (const f of fighters) { f.target = null; f.slotOn = null; f.waiting = false; }
+    return;
+  }
+  const counts = new Map();
+  // closer fighters claim slots first — keys precomputed once, not inside the comparator
+  for (const f of fighters) {
+    let bd = Infinity;
+    for (const o of opponents) { const d = distAdj(f, o); if (d < bd) bd = d; }
+    f._claimKey = bd;
+  }
+  const order = fighters.slice().sort((a, b) => a._claimKey - b._claimKey);
+  for (const f of order) {
+    if (f.def.ranged) {
+      // ranged units shoot from afar — they don't crowd a victim, so they ignore
+      // the melee duel cap: always lock the nearest foe, never "wait", never take a slot
+      let best = null, bd = Infinity;
+      for (const o of opponents) { const d = distAdj(f, o); if (d < bd) { bd = d; best = o; } }
+      f.target = best; f.slotOn = null; f.waiting = false;
+      continue;
+    }
+    let bestFree = null, bdFree = Infinity, bestAny = null, bdAny = Infinity;
+    for (const o of opponents) {
+      const d = distAdj(f, o);
+      if (d < bdAny) { bdAny = d; bestAny = o; }
+      if ((counts.get(o) || 0) < cap && d < bdFree) { bdFree = d; bestFree = o; }
+    }
+    if (bestFree) {
+      f.target = bestFree; f.slotOn = bestFree; f.waiting = false;
+      counts.set(bestFree, (counts.get(bestFree) || 0) + 1);
+    } else {
+      f.target = bestAny; f.slotOn = null; f.waiting = true;
+    }
+  }
+}
+
+function resolveTargets() {
+  playerFwd.set(Math.sin(player.facing), 0, Math.cos(player.facing));
+  const liveEnemies = [], liveAllies = [];
+  for (const e of enemies) if (e.alive && e.state !== 'dead') liveEnemies.push(e);
+  for (const a of allies) if (a.alive && a.state !== 'dead') liveAllies.push(a);
+
+  // both sides obey the duel cap: at most 2 attackers commit to any one victim
+  assignSide(liveAllies, liveEnemies, MAX_ATTACKERS_PER_VICTIM);
+  const oppOfEnemies = player.alive ? [player, ...liveAllies] : liveAllies;
+  assignSide(liveEnemies, oppOfEnemies, MAX_ATTACKERS_PER_VICTIM);
+
+  // wolf-pack flanking applies to those squared up against the player
+  assignPackRoles(liveEnemies.filter(e => e.target === player));
+}
+
+// ---------- Generic melee fighter (shared by allies + enemies) ----------
+const opposingPlayerSide = []; // player + living allies — what an enemy strike can hit
+function refreshOpposingPlayerSide() {
+  opposingPlayerSide.length = 0;
+  if (player.alive) opposingPlayerSide.push(player);
+  for (const a of allies) if (a.alive) opposingPlayerSide.push(a);
+}
+// archers sheathe the bow and draw a sidearm sword in melee, and back again at range
+function setRangedMode(f, ranged) {
+  const melee = !ranged;
+  if (f.meleeMode === melee) return;
+  f.meleeMode = melee;
+  const p = f.parts;
+  if (p.bow) { // only true archers have a bow to swap; throwers keep the rock in hand
+    p.bow.visible = ranged;
+    if (p.sword) p.sword.visible = melee;
+  }
+}
+function fighterStrike(f) {
+  const R = f.def.ranged;
+  if (R && !f.meleeMode) {
+    // loose the arrow / hurl the rock at the assigned target
+    setPose(f.anim, R.kind === 'arrow' ? 'looseBow' : 'strikeOver', 0.08);
+    if (f.target && f.target.alive) spawnProjectile(f, f.target, R);
+    return;
+  }
+  const mv = MOVES[f.move];
+  setPose(f.anim, mv.strike, 0.08);
+  spawnSlashArc(f.pos, f.facing, mv, f.def.scale, f.team === 'ally' ? 0xcfe8ff : 0xffb09a);
+  const fdir = new THREE.Vector3(Math.sin(f.facing), 0, Math.cos(f.facing));
+  const reach = f.def.range + f.def.scale * 0.6;
+  // cleave: hit every opposing combatant in the frontal arc
+  const foes = f.team === 'ally' ? enemies : opposingPlayerSide;
+  for (const t of foes) {
+    if (!t.alive) continue;
+    const to = new THREE.Vector3().subVectors(t.pos, f.pos).setY(0);
+    const d = to.length();
+    if (d > reach + ((t.def ? t.def.scale : 1) - 1)) continue;
+    if (d > 0.001) to.normalize();
+    if (fdir.dot(to) < 0.2) continue;
+    damageCombatant(t, f.def.dmg, f);
+  }
+  if (f.team === 'enemy') { // enemy swings near the player rumble the camera even on a miss
+    const pd = f.pos.distanceTo(player.pos);
+    if (pd < 8) addShake(0.12 * (1 - pd / 8) * f.def.scale);
+  }
+}
+
+function stepFighter(f, dt) {
+  if (f.flash > 0) { f.flash -= dt; setTint(f.parts, f.flash > 0 ? (f.team === 'ally' ? 0x99aacc : 0x887766) : null); }
+
+  const tgt = f.target;
+  const hasTgt = tgt && tgt.alive;
+  let dist = Infinity, desiredFacing = f.facing;
+  if (hasTgt) {
+    const to = tmpV.subVectors(tgt.pos, f.pos); to.y = 0;
+    dist = to.length();
+    if (dist > 0.001) to.normalize();
+    desiredFacing = Math.atan2(to.x, to.z);
+  }
+  f.cd -= dt;
+  f.moving = false;
+  const atkRange = f.def.range + f.def.scale * 0.4;
+  const isPlayerPack = f.team === 'enemy' && tgt === player;
+
+  if (f.state === 'hurt') {
+    f.timer -= dt;
+    if (f.timer <= 0) f.state = 'chase';
+  } else if (f.state === 'windup') {
+    if (hasTgt) f.facing = angleLerp(f.facing, desiredFacing, dt * 3);
+    f.timer -= dt;
+    if (f.timer <= 0) { fighterStrike(f); f.state = 'recover'; f.timer = f.def.atkRec; }
+  } else if (f.state === 'recover') {
+    f.timer -= dt;
+    if (f.timer < f.def.atkRec * 0.5) setPose(f.anim, 'guard', 0.3);
+    if (f.timer <= 0) { f.state = 'chase'; f.cd = f.def.cd; }
+  } else { // chase
+    setPose(f.anim, 'guard', 0.25);
+    const cmd = f.team === 'ally' ? f.order : 'free';
+    if (cmd === 'hold' && f.holdPos) {
+      // COMMANDED HOLD: march to the assigned ground, then fight only what enters range
+      const hd = f.pos.distanceTo(f.holdPos);
+      if (hd > 2.0) {
+        const mv = sfA.subVectors(f.holdPos, f.pos).setY(0);
+        if (mv.lengthSq() > 0) mv.normalize();
+        mv.addScaledVector(separation(f), 0.7); if (mv.lengthSq() > 1e-4) mv.normalize();
+        f.vel.addScaledVector(mv, f.def.speed * paceFactor(f, hd) * dt * 6); // march/rush to the position
+        f.facing = angleLerp(f.facing, Math.atan2(mv.x, mv.z), dt * 8);
+        f.walkPhase += dt * f.def.speed * 1.6; f.moving = true;
+      } else {
+        const foe = nearestOpponentOf(f), R = f.def.ranged;
+        if (foe) {
+          const fd = f.pos.distanceTo(foe.pos), reach = R ? R.range : atkRange;
+          f.facing = angleLerp(f.facing, Math.atan2(foe.pos.x - f.pos.x, foe.pos.z - f.pos.z), dt * 6);
+          if (fd <= reach && f.cd <= 0) {
+            f.target = foe;
+            if (R) { setRangedMode(f, true); f.state = 'windup'; f.timer = f.def.atkWind; f.hitDone = false; setPose(f.anim, R.kind === 'arrow' ? 'aimBow' : 'windupOver', Math.min(f.def.atkWind * 0.6, 0.22)); }
+            else { f.state = 'windup'; f.timer = f.def.atkWind; f.hitDone = false; f.move = f.def.moves[(Math.random() * f.def.moves.length) | 0]; setPose(f.anim, MOVES[f.move].windup, Math.min(f.def.atkWind * 0.45, 0.16)); }
+          } else { if (R) setRangedMode(f, true); restLegs(f.parts, dt, true); }
+        } else restLegs(f.parts, dt, true);
+      }
+    } else if (cmd === 'zone' && f.zone) {
+      // COMMANDED HOLD-ZONE: garrison a rectangle. Archers/throwers loose at anything within
+      // weapon range without leaving the zone; melee engage only what enters it, then fall back in.
+      const z = f.zone, R = f.def.ranged;
+      const foe = R ? nearestOpponentOf(f) : nearestFoeInRect(f, z, ZONE_LEASH);
+      const reach = R ? R.range : atkRange;
+      const fd = foe ? f.pos.distanceTo(foe.pos) : Infinity;
+      if (foe && fd <= reach) {
+        // in range — face the foe and strike (ranged units shoot from where they stand)
+        f.facing = angleLerp(f.facing, Math.atan2(foe.pos.x - f.pos.x, foe.pos.z - f.pos.z), dt * 6);
+        if (f.cd <= 0) {
+          f.target = foe;
+          if (R) { setRangedMode(f, true); f.state = 'windup'; f.timer = f.def.atkWind; f.hitDone = false; setPose(f.anim, R.kind === 'arrow' ? 'aimBow' : 'windupOver', Math.min(f.def.atkWind * 0.6, 0.22)); }
+          else { f.state = 'windup'; f.timer = f.def.atkWind; f.hitDone = false; f.move = f.def.moves[(Math.random() * f.def.moves.length) | 0]; setPose(f.anim, MOVES[f.move].windup, Math.min(f.def.atkWind * 0.45, 0.16)); }
+        } else { if (R) setRangedMode(f, true); restLegs(f.parts, dt, true); }
+      } else if (!R && foe && fd > reach * 0.9) { // melee only: step onto the intruder (ZONE_LEASH keeps it from chasing off the field)
+        const mv = sfA.subVectors(foe.pos, f.pos).setY(0);
+        if (mv.lengthSq() > 0) mv.normalize();
+        mv.addScaledVector(separation(f), 0.7); if (mv.lengthSq() > 1e-4) mv.normalize();
+        f.vel.addScaledVector(mv, f.def.speed * paceFactor(f, fd) * dt * 6);
+        f.walkPhase += dt * f.def.speed * 1.6; f.moving = true;
+      } else {
+        // nothing to engage in range — march/rush back to the assigned slot and stand the watch
+        if (R) setRangedMode(f, true);
+        const home = f.homeSlot || sfB.set((z.minX + z.maxX) / 2, 0, (z.minZ + z.maxZ) / 2);
+        const hd = f.pos.distanceTo(home);
+        if (hd > 1.6) {
+          const mv = sfA.subVectors(home, f.pos).setY(0);
+          if (mv.lengthSq() > 0) mv.normalize();
+          mv.addScaledVector(separation(f), 0.7); if (mv.lengthSq() > 1e-4) mv.normalize();
+          f.vel.addScaledVector(mv, f.def.speed * paceFactor(f, hd) * dt * 6);
+          f.facing = angleLerp(f.facing, Math.atan2(mv.x, mv.z), dt * 8);
+          f.walkPhase += dt * f.def.speed * 1.6; f.moving = true;
+        } else { f.facing = angleLerp(f.facing, BATTLE_FRONT, dt * 4); restLegs(f.parts, dt, true); }
+      }
+    } else if (!hasTgt) {
+      // no foe in sight: free allies regroup on the player; attack-movers press the front; enemies idle
+      if (f.team === 'ally' && cmd === 'attackmove') {
+        const mv = sfA.set(Math.sin(BATTLE_FRONT), 0, Math.cos(BATTLE_FRONT)).addScaledVector(separation(f), 1.0);
+        if (mv.lengthSq() > 1e-4) mv.normalize();
+        f.vel.addScaledVector(mv, f.def.speed * paceFactor(f, Infinity) * dt * 6); // attack-move: march, or rush full-speed
+        f.facing = angleLerp(f.facing, BATTLE_FRONT, dt * 6);
+        f.walkPhase += dt * f.def.speed * 1.6; f.moving = true;
+      } else if (f.team === 'ally' && player.alive) {
+        const pd = f.pos.distanceTo(player.pos);
+        if (pd > 4.5) {
+          const mv = new THREE.Vector3().subVectors(player.pos, f.pos).setY(0).normalize();
+          f.vel.addScaledVector(mv, f.def.speed * 0.7 * dt * 6);
+          f.walkPhase += dt * f.def.speed * 1.4; f.moving = true;
+        }
+      }
+      if (!f.moving) restLegs(f.parts, dt, true);
+    } else {
+      f.facing = angleLerp(f.facing, desiredFacing, dt * 6);
+      // attack discipline: a waiting fighter NEVER starts an attack — its victim
+      // already has two committed attackers; it holds position until a slot frees
+      let aggressive = !f.waiting, behind = false;
+      if (isPlayerPack && aggressive) {
+        const fromP = tmpV2.subVectors(f.pos, player.pos).setY(0);
+        const distP = fromP.length();
+        if (distP > 0.001) fromP.normalize();
+        behind = playerFwd.dot(fromP) < -0.25;
+        aggressive = f.role === 'engage' || behind;
+      }
+      const R = f.def.ranged;
+      if (R) {
+        // skirmisher: advance only until the shot is there, kite anyone who closes in
+        const threatD = nearestOpponentDist(f);
+        const meleeRange = f.def.range + f.def.scale * 0.4;
+        if (threatD <= meleeRange + 0.8) {
+          // cornered: draw the sidearm and fight in melee instead of fleeing
+          setRangedMode(f, false);
+          const foe = nearestOpponentOf(f);
+          if (foe) f.facing = angleLerp(f.facing, Math.atan2(foe.pos.x - f.pos.x, foe.pos.z - f.pos.z), dt * 8);
+          const fdist = foe ? f.pos.distanceTo(foe.pos) : Infinity;
+          if (fdist <= meleeRange && f.cd <= 0) {
+            f.state = 'windup'; f.timer = f.def.atkWind; f.hitDone = false; f.move = 'slashR';
+            setPose(f.anim, MOVES.slashR.windup, Math.min(f.def.atkWind * 0.45, 0.16));
+          } else if (foe && fdist > meleeRange * 0.85) {
+            const mv = sfA.subVectors(foe.pos, f.pos).setY(0);
+            if (mv.lengthSq() > 0) mv.normalize();
+            mv.addScaledVector(separation(f), 1.2).normalize();
+            f.vel.addScaledVector(mv, f.def.speed * dt * 6);
+            f.walkPhase += dt * f.def.speed * 1.6; f.moving = true;
+          }
+        } else if (threatD < R.minRange) {
+          // a melee threat is closing but not yet on us — kite back to shooting range
+          setRangedMode(f, true);
+          const away = sfA.subVectors(f.pos, nearestOpponentOf(f).pos).setY(0);
+          if (away.lengthSq() > 0) away.normalize();
+          away.addScaledVector(separation(f), 0.8).normalize();
+          f.vel.addScaledVector(away, f.def.speed * 0.9 * dt * 6);
+          f.walkPhase += dt * f.def.speed * 1.4; f.moving = true;
+        } else if (setRangedMode(f, true), dist > R.range) {
+          // close to firing range — no further
+          const mv = sfA.subVectors(tgt.pos, f.pos).setY(0);
+          if (mv.lengthSq() > 0) mv.normalize();
+          mv.addScaledVector(separation(f), 1.0).normalize();
+          f.vel.addScaledVector(mv, f.def.speed * dt * 6);
+          f.walkPhase += dt * f.def.speed * 1.6; f.moving = true;
+        } else if (f.cd <= 0) {
+          // in range and off cooldown: draw and loose (ranged units never "wait")
+          f.state = 'windup'; f.timer = f.def.atkWind; f.hitDone = false;
+          setPose(f.anim, R.kind === 'arrow' ? 'aimBow' : 'windupOver', Math.min(f.def.atkWind * 0.6, 0.22));
+        } else {
+          // in range, between shots (or duel cap full): drift laterally
+          const fromT = tmpV2.subVectors(f.pos, tgt.pos).setY(0);
+          if (fromT.lengthSq() > 1e-6) fromT.normalize();
+          const curAng = Math.atan2(fromT.x, fromT.z);
+          const mv = sfA.set(Math.cos(curAng), 0, -Math.sin(curAng)).multiplyScalar(f.strafeDir * 0.4)
+            .addScaledVector(separation(f), 1.0);
+          if (mv.lengthSq() > 1e-4) {
+            mv.normalize();
+            f.vel.addScaledVector(mv, f.def.speed * 0.5 * dt * 6);
+            f.walkPhase += dt * f.def.speed * 0.8; f.moving = true;
+          }
+        }
+      } else if (aggressive && dist <= atkRange && f.cd <= 0) {
+        f.state = 'windup'; f.timer = f.def.atkWind; f.hitDone = false;
+        f.move = f.def.moves[Math.floor(Math.random() * f.def.moves.length)];
+        setPose(f.anim, MOVES[f.move].windup, Math.min(f.def.atkWind * 0.45, 0.16));
+      } else if (aggressive) {
+        if (dist > atkRange * 0.85) { // close in — march across the field (or rush), full-speed charge near contact
+          const mv = sfA.subVectors(tgt.pos, f.pos).setY(0);
+          if (mv.lengthSq() > 0) mv.normalize();
+          mv.addScaledVector(separation(f), 1.2).normalize();
+          f.vel.addScaledVector(mv, f.def.speed * paceFactor(f, dist) * dt * 6);
+          f.walkPhase += dt * f.def.speed * 1.6; f.moving = true;
+        }
+      } else if (isPlayerPack) {
+        // flank: orbit toward the assigned rear slot around the player
+        const radius = 3.6 * f.def.scale;
+        const fromP = tmpV2.subVectors(f.pos, player.pos).setY(0);
+        const distP = fromP.length();
+        if (distP > 0.001) fromP.normalize();
+        const curAng = Math.atan2(fromP.x, fromP.z);
+        const angErr = angleDelta(curAng, f.slotAngle);
+        const radial = sfB.copy(fromP).multiplyScalar(-clamp(distP - radius, -1.2, 1.2));
+        const mv = sfA.set(Math.cos(curAng), 0, -Math.sin(curAng))
+          .multiplyScalar((Math.sign(angErr) || 1) * clamp(Math.abs(angErr) * 1.6, 0, 1))
+          .add(radial).addScaledVector(separation(f), 1.0);
+        if (mv.lengthSq() > 1e-4) mv.normalize();
+        f.vel.addScaledVector(mv, f.def.speed * 0.92 * dt * 6);
+        f.walkPhase += dt * f.def.speed * 1.4; f.moving = true;
+      } else {
+        // waiting on a full duel: hold a slow standoff orbit around it until a slot frees
+        const radius = 3.4 * f.def.scale;
+        const fromT = tmpV2.subVectors(f.pos, tgt.pos).setY(0);
+        const distT = fromT.length();
+        if (distT > 0.001) fromT.normalize();
+        const curAng = Math.atan2(fromT.x, fromT.z);
+        const radial = sfB.copy(fromT).multiplyScalar(-clamp(distT - radius, -1.2, 1.2));
+        const mv = sfA.set(Math.cos(curAng), 0, -Math.sin(curAng))
+          .multiplyScalar(f.strafeDir * 0.45)
+          .add(radial).addScaledVector(separation(f), 1.0);
+        if (mv.lengthSq() > 1e-4) mv.normalize();
+        f.vel.addScaledVector(mv, f.def.speed * 0.75 * dt * 6);
+        f.walkPhase += dt * f.def.speed * 1.1; f.moving = true;
+      }
+    }
+  }
+
+  // physics
+  f.vel.multiplyScalar(Math.pow(0.0008, dt));
+  f.pos.addScaledVector(f.vel, dt);
+  confine(f.pos);
+  f.obj.position.copy(f.pos);
+  f.obj.rotation.y = f.facing;
+
+  // crowd LOD: distant fighters animate every 3rd frame, far ones hold their
+  // pose entirely — AI and movement still run every frame for all of them
+  if (f.lodOff === undefined) f.lodOff = (Math.random() * 3) | 0;
+  const camD2 = f.pos.distanceToSquared(camera.position);
+  const animate = camD2 < 1600 ? true                             // <40u: every frame
+    : camD2 < 4900 ? ((frameNo + f.lodOff) % 3 === 0)             // <70u: third-frame
+    : false;                                                      // beyond: static
+  if (animate) {
+    if (f.moving) {
+      walkLegs(f.parts, f.walkPhase);
+      f.obj.position.y = Math.abs(Math.cos(f.walkPhase)) * 0.05 * f.def.scale;
+    } else {
+      restLegs(f.parts, dt, true);
+    }
+    updateAnimator(f.anim, dt);
+  }
+  // health bar: hidden until first blood (heroes always show theirs)
+  const hpFrac = clamp(f.hp / f.maxHp, 0, 1);
+  f.bar.visible = (hpFrac < 1 || f.isHero) && camD2 < 4900;
+  if (f.bar.visible) {
+    f.bar.lookAt(camera.position);
+    f.bar.userData.fill.scale.x = hpFrac;
+    f.bar.userData.fill.position.x = -(1 - hpFrac) * 0.75;
+  }
+}
+
+function deathStep(f, dt) {
+  f.deadT += dt;
+  f.obj.rotation.z = lerp(f.obj.rotation.z, Math.PI / 2, clamp(f.deadT * 4, 0, 1));
+  f.obj.position.y = -clamp((f.deadT - 0.6) * 1.5, 0, 3);
+  return f.deadT > 2.2;
+}
+
+function updateEnemies(dt) {
+  refreshOpposingPlayerSide();
+  for (let i = enemies.length - 1; i >= 0; i--) {
+    const e = enemies[i];
+    if (!e.alive) {
+      if (deathStep(e, dt)) { scene.remove(e.obj); disposeGroup(e.obj); enemies.splice(i, 1); }
+      continue;
+    }
+    stepFighter(e, dt);
+  }
+}
+function updateAllies(dt) {
+  for (let i = allies.length - 1; i >= 0; i--) {
+    const a = allies[i];
+    if (!a.alive) {
+      if (deathStep(a, dt)) { scene.remove(a.obj); disposeGroup(a.obj); allies.splice(i, 1); }
+      continue;
+    }
+    stepFighter(a, dt);
+  }
+}
+
+// nearest living opponent (any, not just the assigned target) — what a skirmisher kites from
+function nearestOpponentOf(f) {
+  const foes = f.team === 'ally' ? enemies : opposingPlayerSide;
+  let best = null, bd = Infinity;
+  for (const o of foes) {
+    if (!o.alive) continue;
+    const d = f.pos.distanceTo(o.pos);
+    if (d < bd) { bd = d; best = o; }
+  }
+  return best || f.target;
+}
+function nearestOpponentDist(f) {
+  const o = nearestOpponentOf(f);
+  return o ? f.pos.distanceTo(o.pos) : Infinity;
+}
+// nearest foe sitting inside a zone-holder's rectangle (expanded by margin m) — what it defends against
+function nearestFoeInRect(f, z, m) {
+  const foes = f.team === 'ally' ? enemies : opposingPlayerSide;
+  let best = null, bd = Infinity;
+  for (const o of foes) {
+    if (!o.alive) continue;
+    if (o.pos.x < z.minX - m || o.pos.x > z.maxX + m || o.pos.z < z.minZ - m || o.pos.z > z.maxZ + m) continue;
+    const d = f.pos.distanceTo(o.pos);
+    if (d < bd) { bd = d; best = o; }
+  }
+  return best;
+}
+
+// everyone avoids stacking — keeps the melee from collapsing into a single pile.
+// A uniform spatial grid (rebuilt once per frame) makes this O(n) instead of
+// O(n²), which is what lets armies grow into the hundreds.
+// separation() returns a SHARED scratch vector: consume it immediately.
+const sepV = new THREE.Vector3();
+const sepGrid = new Map();
+const SEP_CELL = 2.2;
+function rebuildSepGrid() {
+  sepGrid.clear();
+  const put = (o) => {
+    if (!o.alive) return;
+    const k = Math.floor(o.pos.x / SEP_CELL) * 4096 + Math.floor(o.pos.z / SEP_CELL);
+    let arr = sepGrid.get(k);
+    if (!arr) { arr = []; sepGrid.set(k, arr); }
+    arr.push(o);
+  };
+  for (const e of enemies) put(e);
+  for (const a of allies) put(a);
+  if (player.alive) put(player);
+}
+function separation(self) {
+  sepV.set(0, 0, 0);
+  const cx = Math.floor(self.pos.x / SEP_CELL), cz = Math.floor(self.pos.z / SEP_CELL);
+  for (let gx = cx - 1; gx <= cx + 1; gx++) {
+    for (let gz = cz - 1; gz <= cz + 1; gz++) {
+      const arr = sepGrid.get(gx * 4096 + gz);
+      if (!arr) continue;
+      for (let i = 0; i < arr.length; i++) {
+        const o = arr[i];
+        if (o === self || !o.alive) continue;
+        const d2 = self.pos.distanceToSquared(o.pos);
+        if (d2 < 4.84 && d2 > 1e-6) {
+          const d = Math.sqrt(d2);
+          sepV.add(tmpV.subVectors(self.pos, o.pos).setY(0).normalize().multiplyScalar((2.2 - d) / 2.2));
+        }
+      }
+    }
+  }
+  return sepV;
+}
+
+// ---------- Player update ----------
+function updatePlayer(dt) {
+  if (!player.alive) return;
+  const p = player.parts;
+
+  // stamina regen (slower while holding a block)
+  player.blocking = false;
+  player.stamina = clamp(player.stamina + dt * ((keys['ShiftLeft'] || keys['ShiftRight']) ? 9 : 22), 0, player.maxStam);
+  if (player.hurtFlash > 0) player.hurtFlash -= dt;
+  if (player.cooldown > 0) player.cooldown -= dt;
+  if (player.comboTimer > 0) { player.comboTimer -= dt; if (player.comboTimer <= 0) { player.combo = 0; hideCombo(); } }
+
+  let walking = false;
+  player.crouching = false; // only the normal-movement branch may re-enable it
+
+  if (player.rolling) {
+    player.rollT += dt;
+    const k = player.rollT / player.rollDur;
+    player.iFrames = k < 0.7;
+    const rollSpeed = player.speed * 1.9 * (1 - k * 0.4);
+    player.vel.copy(player.rollDir).multiplyScalar(rollSpeed);
+    player.facing = Math.atan2(player.rollDir.x, player.rollDir.z);
+    // forward roll spin + tucked legs
+    player.obj.rotation.x = Math.sin(k * Math.PI) * -1.2;
+    const s = clamp(dt * 14, 0, 1);
+    p.hipL.rotation.x = lerp(p.hipL.rotation.x, -1.3, s);
+    p.hipR.rotation.x = lerp(p.hipR.rotation.x, -1.3, s);
+    p.kneeL.rotation.x = lerp(p.kneeL.rotation.x, 2.1, s);
+    p.kneeR.rotation.x = lerp(p.kneeR.rotation.x, 2.1, s);
+    if (k >= 1) { player.rolling = false; player.iFrames = false; player.obj.rotation.x = 0; }
+  } else {
+    player.obj.rotation.x = 0;
+    const dir = inputDir();
+    const aimYaw = cameraAngle + Math.PI; // where the mouse points
+    const locked = pointerLocked || BV.fakeLock; // fakeLock: automated-test hook
+    if (player.shooting) {
+      // bow: draw, then loose an arrow toward the aim (rooted while drawing)
+      player.shootT += dt;
+      const k = player.shootT / player.shootDur;
+      if (locked) player.facing = angleLerp(player.facing, aimYaw, dt * 12);
+      if (!player.shotReleased && k >= 0.55) {
+        setPose(player.anim, 'looseBow', 0.06);
+        spawnProjectile({ pos: player.pos, def: { scale: 1, dmg: PLAYER_BOW_DMG + (player.char ? player.char.dmgBonus : 0) }, team: 'ally', char: player.char },
+          playerBowTarget(), PLAYER_BOW_RANGED);
+        addShake(0.06);
+        player.shotReleased = true;
+      }
+      if (k >= 1) { player.shooting = false; player.cooldown = 0.12; }
+      restLegs(p, dt, true);
+    } else if (player.attacking && (keys['ShiftLeft'] || keys['ShiftRight'])) {
+      // block-cancel: bail out of the swing into a raised guard immediately
+      player.attacking = false; player.queued = false; player.cooldown = 0.05;
+      player.blocking = true; // protects against a strike landing this same frame
+      setPose(player.anim, 'block', 0.08);
+      restLegs(p, dt, true);
+    } else if (player.attacking) {
+      player.attackT += dt;
+      // fatigue stretches the whole swing (atkScale >= 1)
+      const k = player.attackT / (player.attackDur * player.atkScale);
+      const mv = MOVES[player.move];
+      // sharp guard transitions: windup snap → hold → strike whip → settle
+      if (player.attackPhase === 0) { setPose(player.anim, mv.windup, 0.10 * player.atkScale); player.attackPhase = 1; }
+      if (player.attackPhase === 1 && k >= 0.38) {
+        setPose(player.anim, mv.strike, 0.085);
+        spawnSlashArc(player.pos, player.facing, mv, 1, 0xfff2c8);
+        addShake(0.09); // swing whoosh
+        player.attackPhase = 2;
+      }
+      if (player.attackPhase === 2 && k >= 0.74) {
+        if (player.queued) {
+          startAttack(); // chain straight from the follow-through into the next windup
+        } else {
+          // settle back to guard gently — a sharp snap here reads as a phantom block
+          setPose(player.anim, 'guard', 0.30); player.attackPhase = 3;
+        }
+      }
+      // lunge with the strike
+      if (k > 0.3 && k < 0.5) player.vel.addScaledVector(new THREE.Vector3(Math.sin(player.facing), 0, Math.cos(player.facing)), player.speed * 2 * dt * 6);
+      // hit window rides the strike snap
+      if (!player.hitDone && k > 0.42 && k < 0.66) { playerHitCheck(); player.hitDone = true; }
+      if (k >= 1) {
+        player.attacking = false; player.cooldown = 0.04;
+        if (player.queued) startAttack();
+      }
+      // track the acquired target; otherwise swing where the mouse points
+      const tgt = player.aimTarget;
+      if (tgt && tgt.alive && k < 0.6) {
+        player.facing = angleLerp(player.facing,
+          Math.atan2(tgt.pos.x - player.pos.x, tgt.pos.z - player.pos.z), dt * 12);
+      } else if (locked) {
+        player.facing = angleLerp(player.facing, aimYaw, dt * 10);
+      } else if (dir.lengthSq() > 0) {
+        player.facing = angleLerp(player.facing, Math.atan2(dir.x, dir.z), dt * 4);
+      }
+      restLegs(p, dt, true);
+    } else if (keys['ShiftLeft'] || keys['ShiftRight']) {
+      // hold-to-block: sword up, face the mouse aim (or the nearest threat), creep
+      player.blocking = true;
+      setPose(player.anim, 'block', 0.08);
+      if (locked) {
+        player.facing = angleLerp(player.facing, aimYaw, dt * 10);
+      } else {
+        const threat = nearestEnemy(9);
+        if (threat) {
+          player.facing = angleLerp(player.facing,
+            Math.atan2(threat.pos.x - player.pos.x, threat.pos.z - player.pos.z), dt * 6);
+        }
+      }
+      if (dir.lengthSq() > 0) {
+        player.vel.addScaledVector(dir, player.speed * 0.35 * dt * 9);
+        player.walkPhase += dt * 5;
+        walkLegs(p, player.walkPhase, 0.3);
+      } else {
+        restLegs(p, dt, true);
+      }
+    } else {
+      // hold C to crouch: duck under upper-body shots + sneak (slower, lower profile)
+      player.crouching = !!keys['KeyC'];
+      // hold the hurt flinch briefly, otherwise combat guard
+      if (player.hurtFlash <= 0.05) setPose(player.anim, 'guard', 0.22);
+      // mouse-locked: the mouse steers the character — facing always tracks the
+      // aim, so W is forward, S backpedals, and A/D are true side-steps
+      if (locked) player.facing = angleLerp(player.facing, aimYaw, dt * 14);
+      const spd = player.crouching ? player.speed * 0.45 : player.speed;
+      if (dir.lengthSq() > 0) {
+        player.vel.addScaledVector(dir, spd * dt * 9);
+        if (!locked) player.facing = angleLerp(player.facing, Math.atan2(dir.x, dir.z), dt * 12);
+        // backpedaling plays the walk cycle in reverse
+        const fwdDot = dir.x * Math.sin(player.facing) + dir.z * Math.cos(player.facing);
+        player.walkPhase += dt * (player.crouching ? 6 : 10) * (fwdDot < -0.1 ? -1 : 1);
+        walkLegs(p, player.walkPhase, player.crouching ? 0.3 : 0.65, player.crouchT);
+        walking = true;
+      } else {
+        restLegs(p, dt, true, player.crouchT);
+      }
+    }
+  }
+
+  // physics integrate
+  player.vel.multiplyScalar(Math.pow(0.0001, dt));
+  player.pos.addScaledVector(player.vel, dt);
+  confine(player.pos);
+  player.obj.position.copy(player.pos);
+  if (walking) player.obj.position.y = Math.abs(Math.cos(player.walkPhase)) * 0.06;
+  player.obj.rotation.y = player.facing;
+  player.crouchT = lerp(player.crouchT, player.crouching ? 1 : 0, clamp(dt * 12, 0, 1));
+
+  updateAnimator(player.anim, dt);
+  // idle breathing on top of the pose
+  if (!player.attacking && !player.rolling) {
+    p.upperBody.rotation.x += Math.sin(elapsed * 2.4) * 0.018;
+  }
+
+  // crouch: knees break in walkLegs/restLegs (stable target); here we sink the
+  // hips and lean the spine — both set absolutely each frame, so safe to add to
+  if (player.crouchT > 0.001) {
+    const ct = player.crouchT;
+    player.obj.position.y -= 0.7 * ct;       // hips sink toward the folded legs
+    // lean ramps gently at first, then HARD once the knees hit their limit —
+    // a deep crouch tips the torso forward over the knees instead of sinking more
+    const deep = Math.max(0, (ct - 0.4) / 0.6);
+    p.upperBody.rotation.x += 0.22 * ct + 0.4 * deep;
+    // hard floor: never let the fold clip the body through the ground
+    const minY = _crouchBox.setFromObject(player.obj).min.y;
+    if (minY < 0) player.obj.position.y -= minY; // lift so the lowest point rests at ground
+  }
+
+  // hurt tint
+  setTint(player.parts, player.hurtFlash > 0 ? 0x992222 : null);
+
+  updateHUD();
+}
+
+// ---------- Utility ----------
+function confine(pos) {
+  pos.x = clamp(pos.x, -ARENA + 1, ARENA - 1);
+  pos.z = clamp(pos.z, -ARENA + 1, ARENA - 1);
+  pos.y = 0;
+}
+function angleDelta(a, b) {
+  let d = ((b - a + Math.PI) % (Math.PI * 2)) - Math.PI;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return d;
+}
+function angleLerp(a, b, t) {
+  return a + angleDelta(a, b) * clamp(t, 0, 1);
+}
+function setTint(parts, color) {
+  // base emissive is stored on the MATERIAL (shared across meshes), not the mesh —
+  // per-mesh storage poisons the restore value for every mesh after the first
+  for (const k in parts) {
+    const o = parts[k];
+    if (!o) continue; // some slots (e.g. bow on a swordsman) are null
+    o.traverse((c) => {
+      if (c.isMesh && c.material && c.material.emissive && !c.material.userData.noTint) {
+        const ud = c.material.userData;
+        if (ud._baseEmissive === undefined) ud._baseEmissive = c.material.emissive.getHex();
+        c.material.emissive.setHex(color === null ? ud._baseEmissive : color);
+      }
+    });
+  }
+}
+function disposeGroup(g) {
+  g.traverse((c) => {
+    if (c.isSprite) { // hero name labels carry their own canvas texture
+      if (c.material && !c.material.userData.cached) {
+        if (c.material.map) c.material.map.dispose();
+        c.material.dispose();
+      }
+      return;
+    }
+    if (!c.isMesh) return;
+    // cached geometries/materials are shared across many objects — never dispose them
+    if (c.geometry && !c.geometry.userData.cached) c.geometry.dispose();
+    if (c.material && !c.material.userData.cached) {
+      if (c.material.map) c.material.map.dispose();
+      c.material.dispose();
+    }
+  });
+}
+
+// ---------- Camera ----------
+const camBase = new THREE.Vector3(0, 12, 16); // smoothed follow position, pre-shake
+function updateCamera(dt) {
+  if (!pointerLocked) { // keyboard orbit fallback when the mouse isn't captured
+    if (keys['KeyQ']) cameraAngle -= dt * 2;
+    if (keys['KeyE']) cameraAngle += dt * 2;
+  }
+  // over-the-shoulder: shift the frame so the character sits left of center,
+  // leaving room on the right where the sword swings
+  const ox = Math.cos(cameraAngle) * 0.7, oz = -Math.sin(cameraAngle) * 0.7;
+  const tx = player.pos.x + ox + Math.sin(cameraAngle) * cameraDist;
+  const tz = player.pos.z + oz + Math.cos(cameraAngle) * cameraDist;
+  camBase.x = lerp(camBase.x, tx, clamp(dt * 6, 0, 1));
+  camBase.z = lerp(camBase.z, tz, clamp(dt * 6, 0, 1));
+  camBase.y = lerp(camBase.y, cameraHeight, clamp(dt * 6, 0, 1));
+  camera.position.copy(camBase);
+  camera.lookAt(player.pos.x + ox, 1.7, player.pos.z + oz);
+  if (trauma > 0) {
+    trauma = Math.max(0, trauma - dt * 2.0);
+    const sh = trauma * trauma;
+    const t = rtNow * 30;
+    camera.position.x += Math.sin(t) * sh * 0.5;
+    camera.position.y += Math.cos(t * 1.31) * sh * 0.4;
+    camera.position.z += Math.sin(t * 1.73) * sh * 0.35;
+    camera.rotation.z += Math.sin(t * 1.13) * sh * 0.035;
+  }
+}
+// strategic overview: a high, steeply-tilted camera looking down on the warband token
+function updateMapCamera(dt) {
+  const k = clamp(dt * 4, 0, 1);
+  camBase.x = lerp(camBase.x, player.pos.x, k);
+  camBase.y = lerp(camBase.y, 46, k);
+  camBase.z = lerp(camBase.z, player.pos.z + 20, k); // slight south offset = tilt, not pure top-down
+  camera.position.copy(camBase);
+  camera.lookAt(player.pos.x, 0, player.pos.z);
+}
+
+// ---------- Game state ----------
+let wave = 0;             // battle counter
+let enemiesRemaining = 0; // enemy bodies left to kill this battle (field + reserve)
+let score = 0;
+let gameRunning = false;  // true while a battle is actively simulating with the player alive
+let betweenWaves = false, betweenTimer = 0; // (legacy, unused by the batch system)
+let mode = 'menu';        // menu | map | battle | muster | gameover
+
+// ---------- Overworld map + batched battles ----------
+const MAP_HALF = 90;      // overworld half-size — much larger than a battle arena
+const FIELD_CAP = 50;     // combatants PER SIDE on the field at once (≤100 bodies total)
+const parties = [];       // roaming enemy bands on the map
+let mapLevel = 0;         // rises each time you clear the map — bands get bigger
+let mapSpawnT = 0;        // timer for trickling fresh bands onto the map
+let playerReserve = [], enemyReserve = []; // defs waiting to march into the battle
+let battleParty = null;   // the map band currently being fought
+let lastBattle = null;    // { size, raider } of the band you just beat — for the XP bounty
+let encounter = null;     // { kind:'band'|'capital', band?, cap? } awaiting the player's choice
+let siegeCapital = null;  // the hold being stormed in the current battle (for conquest on win)
+let advanceRegion = false; // set when you take every hold — the next map is a fresh land
+
+// ---------- Coherent value noise: the world is generated, not scattered ----------
+// Two smooth fields (elevation + moisture) plus latitude (temperature) drive a
+// natural biome layout with soft transitions, seas, and coastlines.
+const SEA_LEVEL = 0.38;
+function _nHash(ix, iz, seed) { const h = Math.sin(ix * 127.1 + iz * 311.7 + seed * 53.7) * 43758.5453; return h - Math.floor(h); }
+function _vnoise(x, z, seed) {
+  const ix = Math.floor(x), iz = Math.floor(z), fx = x - ix, fz = z - iz;
+  const ux = fx * fx * (3 - 2 * fx), uz = fz * fz * (3 - 2 * fz);
+  const a = _nHash(ix, iz, seed), b = _nHash(ix + 1, iz, seed), c = _nHash(ix, iz + 1, seed), d = _nHash(ix + 1, iz + 1, seed);
+  return a * (1 - ux) * (1 - uz) + b * ux * (1 - uz) + c * (1 - ux) * uz + d * ux * uz;
+}
+function _fbm(x, z, seed) {
+  let v = 0, amp = 0.5, f = 1, norm = 0;
+  for (let o = 0; o < 4; o++) { v += amp * _vnoise(x * f, z * f, seed + o * 31); norm += amp; f *= 2; amp *= 0.5; }
+  return v / norm;
+}
+const worldSeed = () => mapLevel * 1000 + 7;
+const TERR_SCALE = 1 / 42;
+function elevationAt(x, z) {
+  const base = _fbm((x + 1000) * TERR_SCALE, (z - 1000) * TERR_SCALE, worldSeed() + 1);
+  // land sits in the temperate mid-range; only noise peaks reach mountains
+  const nx = x / MAP_HALF, nz = z / MAP_HALF, d = Math.sqrt(nx * nx + nz * nz);
+  const coast = clamp((d - 0.72) / 0.42, 0, 1); // 0 inland → 1 at the open-sea rim
+  return clamp(0.30 + base * 0.55 - coast * 0.62, 0, 1);
+}
+function moistureAt(x, z) { return _fbm((x - 2200) * TERR_SCALE * 1.15, (z + 1700) * TERR_SCALE * 1.15, worldSeed() + 19); }
+function tempAt(x, z) {
+  // climate is latitude-led: 0 = frozen north, 1 = hot south. small noise softens
+  // the band edges; altitude cools the highlands so peaks stay snowbound.
+  const lat = (z + MAP_HALF) / (2 * MAP_HALF);
+  return clamp(lat * 0.95 + 0.03 + _fbm(x * 0.025, z * 0.025, worldSeed() + 41) * 0.1 - elevationAt(x, z) * 0.18, 0, 1);
+}
+const isWater = (x, z) => elevationAt(x, z) < SEA_LEVEL;
+
+// ---------- Biomes: classified from the fields, with battle backdrops ----------
+const B = {
+  OCEAN:    { name: 'Ocean',     water: true, ground: 0x16415f },
+  SHALLOW:  { name: 'Coast',     water: true, ground: 0x2b7aa6 },
+  BEACH:    { name: 'Coast',     ground: 0xddd2a0, pad: 0xc8bd86, fog: 0xd6e6ea, sky: 0xe3eef2, tree: 0x7a9a55, treeChance: 0.02, rockChance: 0.06 },
+  GRASS:    { name: 'Grassland', ground: 0x6f9e54, pad: 0x8a6a45, fog: 0x9fc6e8, sky: 0x9fc6e8, tree: 0x4f8a3f, treeChance: 0.10, rockChance: 0.04 },
+  SAVANNA:  { name: 'Savanna',   ground: 0x9a9c58, pad: 0x9a8a4f, fog: 0xcfd2a0, sky: 0xdcdca8, tree: 0x8a9a4a, treeChance: 0.06, rockChance: 0.10 },
+  FOREST:   { name: 'Forest',    ground: 0x3f6b34, pad: 0x5a6038, fog: 0x86a98e, sky: 0x93b89e, tree: 0x2f6a30, treeChance: 0.50, rockChance: 0.05 },
+  TAIGA:    { name: 'Taiga',     ground: 0x47675a, pad: 0x4f5f50, fog: 0xacc2c2, sky: 0xbcd0cc, tree: 0x356a52, treeChance: 0.42, rockChance: 0.10 },
+  DESERT:   { name: 'Desert',    ground: 0xc9a266, pad: 0xb8924f, fog: 0xe6d09c, sky: 0xeedaa6, tree: 0x9a8a4a, treeChance: 0.02, rockChance: 0.28 },
+  TUNDRA:   { name: 'Tundra',    ground: 0xdde7f0, pad: 0xc6d2dc, fog: 0xcfe0ee, sky: 0xdcebf6, tree: 0x6f8a7a, treeChance: 0.07, rockChance: 0.14 },
+  MOUNTAIN: { name: 'Mountains', ground: 0x8c8c86, pad: 0x77756f, fog: 0xc8ccd2, sky: 0xd2d6dc, tree: 0x5a6a55, treeChance: 0.05, rockChance: 0.34 },
+};
+function biomeAt(x, z) {
+  const e = elevationAt(x, z);
+  if (e < SEA_LEVEL) return e < SEA_LEVEL - 0.10 ? B.OCEAN : B.SHALLOW;
+  if (e < SEA_LEVEL + 0.035) return B.BEACH;          // a sandy coastal strip
+  if (e > 0.80) return B.MOUNTAIN;                    // snow-capped peaks at any latitude
+  // CLIMATE BANDS, north (cold) → south (hot); moisture varies the band within itself
+  const t = tempAt(x, z), m = moistureAt(x, z);
+  if (t < 0.20) return B.TUNDRA;                          // frozen north
+  if (t < 0.38) return m > 0.45 ? B.TAIGA : B.TUNDRA;     // cold: boreal forest / open tundra
+  if (t < 0.58) return m > 0.45 ? B.FOREST : B.GRASS;     // temperate: forest / grassland
+  if (t < 0.78) return m > 0.50 ? B.FOREST : B.SAVANNA;   // warm: woodland / savanna
+  return m < 0.40 ? B.DESERT : B.SAVANNA;                 // hot south: desert / dry savanna
+}
+
+// ---------- Nations: five countries, each a homeland that wars for territory ----------
+const NATIONS = [
+  { name: 'Valgard',  color: 0xb0202a },
+  { name: 'Eorland',  color: 0x1d7d82 },
+  { name: 'Sunmarch', color: 0xc69020 },
+  { name: 'Mournhold', color: 0x7a3cae },
+  { name: 'Frostmere', color: 0x3a6ea5 },
+];
+const PLAYER_REALM = { name: 'Your Banner', color: 0x2f6fd0 }; // captured holds fly your colors
+let nations = [];           // this region's capitals: [{ def, owner, x, z, garrison, group, ... }]
+const _tcA = new THREE.Color(), _tcB = new THREE.Color();
+// a capital is a real prize — its garrison outnumbers a field host
+function garrisonSize() { return Math.round(rand(18, 28) + mapLevel * 8); }
+function nearestLand(x, z) { // spiral out from a point until we find dry ground
+  if (!isWater(x, z)) return [x, z];
+  for (let r = 4; r < MAP_HALF; r += 4) for (let a = 0; a < 12; a++) {
+    const ax = clamp(x + Math.cos(a / 12 * Math.PI * 2) * r, -MAP_HALF + 3, MAP_HALF - 3);
+    const az = clamp(z + Math.sin(a / 12 * Math.PI * 2) * r, -MAP_HALF + 3, MAP_HALF - 3);
+    if (!isWater(ax, az)) return [ax, az];
+  }
+  return [0, 0];
+}
+function placeCapitals() {
+  nations = [];
+  for (let i = 0; i < NATIONS.length; i++) {
+    const ang = (i / NATIONS.length) * Math.PI * 2 + worldSeed() * 0.0013;
+    const [cx, cz] = nearestLand(Math.cos(ang) * MAP_HALF * 0.5, Math.sin(ang) * MAP_HALF * 0.5);
+    nations.push({ def: NATIONS[i], owner: NATIONS[i], x: cx, z: cz, garrison: garrisonSize(), parleyCd: 0, conquerCd: 0, group: null });
+  }
+}
+function nationAt(x, z) { // Voronoi: land belongs to its nearest capital
+  let best = null, bd = Infinity;
+  for (const n of nations) { const dx = n.x - x, dz = n.z - z, d = dx * dx + dz * dz; if (d < bd) { bd = d; best = n; } }
+  return best;
+}
+function spawnPointFor(nation, awayFromPlayer) { // a land tile inside this nation's territory
+  for (let t = 0; t < 80; t++) {
+    const ang = rand(0, Math.PI * 2), r = rand(4, MAP_HALF * 0.55);
+    const x = clamp(nation.x + Math.cos(ang) * r, -MAP_HALF + 3, MAP_HALF - 3);
+    const z = clamp(nation.z + Math.sin(ang) * r, -MAP_HALF + 3, MAP_HALF - 3);
+    if (isWater(x, z) || nationAt(x, z) !== nation) continue;
+    if (awayFromPlayer && Math.hypot(x - player.pos.x, z - player.pos.z) < 30) continue;
+    return [x, z];
+  }
+  return [nation.x, nation.z];
+}
+
+// ---------- Strategic worldmap terrain (top-down view only) ----------
+let mapTerrain = null, mapTerrainLevel = -1;
+// blended terrain color: water depth gradient, or biome tinted toward its owner nation
+function terrainColorAt(x, z, out) {
+  const e = elevationAt(x, z);
+  if (e < SEA_LEVEL) { out.setHex(0x123a5e).lerp(_tcB.setHex(0x2f86b4), clamp(e / SEA_LEVEL, 0, 1)); return out; }
+  out.setHex(biomeAt(x, z).ground);
+  out.multiplyScalar(clamp(0.80 + (e - SEA_LEVEL) * 0.4, 0.7, 1.0));   // gentle relief shading (never over-bright)
+  const n = nationAt(x, z);
+  if (n) out.lerp(_tcB.setHex(n.def.color), 0.13);                     // political wash
+  return out;
+}
+function buildMapTerrain() {
+  if (mapTerrain && mapTerrainLevel === mapLevel) { mapTerrain.visible = true; return; }
+  if (mapTerrain) { scene.remove(mapTerrain); disposeGroup(mapTerrain); mapTerrain = null; }
+  mapTerrain = new THREE.Group();
+  const col = new THREE.Color();
+  // 1) smooth vertex-colored terrain sheet — soft biome transitions + coastlines
+  const SEG = 84;
+  const tgeo = new THREE.PlaneGeometry(MAP_HALF * 2, MAP_HALF * 2, SEG, SEG);
+  tgeo.rotateX(-Math.PI / 2);
+  const pos = tgeo.attributes.position, cArr = new Float32Array(pos.count * 3);
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), z = pos.getZ(i);
+    pos.setY(i, 0.06);
+    terrainColorAt(x, z, col);
+    cArr[i * 3] = col.r; cArr[i * 3 + 1] = col.g; cArr[i * 3 + 2] = col.b;
+  }
+  tgeo.setAttribute('color', new THREE.BufferAttribute(cArr, 3));
+  tgeo.computeVertexNormals();
+  const sheet = new THREE.Mesh(tgeo, new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 3 }));
+  sheet.receiveShadow = true;
+  mapTerrain.add(sheet);
+  // 2) national borders — a dark line wherever two territories meet on land
+  const seg = [], bstep = 3, by = 0.22;
+  for (let x = -MAP_HALF; x < MAP_HALF; x += bstep) for (let z = -MAP_HALF; z < MAP_HALF; z += bstep) {
+    if (isWater(x, z)) continue;
+    const n = nationAt(x, z);
+    if (!isWater(x + bstep, z) && nationAt(x + bstep, z) !== n) seg.push(x + bstep, by, z - bstep / 2, x + bstep, by, z + bstep / 2);
+    if (!isWater(x, z + bstep) && nationAt(x, z + bstep) !== n) seg.push(x - bstep / 2, by, z + bstep, x + bstep / 2, by, z + bstep);
+  }
+  if (seg.length) {
+    const lgeo = new THREE.BufferGeometry();
+    lgeo.setAttribute('position', new THREE.Float32BufferAttribute(seg, 3));
+    mapTerrain.add(new THREE.LineSegments(lgeo, new THREE.LineBasicMaterial({ color: 0x241f2e })));
+  }
+  // 3) trees + rocks scattered on land by biome density (never on water)
+  const trees = [], rocks = [];
+  for (let x = -MAP_HALF + 4; x < MAP_HALF - 4; x += 6.5) for (let z = -MAP_HALF + 4; z < MAP_HALF - 4; z += 6.5) {
+    const jx = x + rand(-2, 2), jz = z + rand(-2, 2);
+    if (isWater(jx, jz)) continue;
+    const b = biomeAt(jx, jz);
+    if (Math.random() < b.treeChance) trees.push([jx, jz, b.tree]);
+    else if (Math.random() < b.rockChance) rocks.push([jx, jz]);
+  }
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), v = new THREE.Vector3(), s = new THREE.Vector3();
+  if (trees.length) {
+    const trunks = new THREE.InstancedMesh(new THREE.BoxGeometry(0.5, 1, 0.5), mat(0x6b4a2e), trees.length);
+    const cones = new THREE.InstancedMesh(new THREE.ConeGeometry(1.5, 3.2, 6), mat(0xffffff), trees.length);
+    trees.forEach(([x, z, c], i) => {
+      const sc = rand(0.8, 1.5), th = rand(2, 3) * sc;
+      q.setFromEuler(e.set(0, rand(0, Math.PI), 0));
+      m4.compose(v.set(x, th / 2, z), q, s.set(sc, th, sc)); trunks.setMatrixAt(i, m4);
+      m4.compose(v.set(x, th + 1.2 * sc, z), q, s.set(sc, sc, sc)); cones.setMatrixAt(i, m4);
+      col.setHex(c); cones.setColorAt(i, col);
+    });
+    trunks.castShadow = cones.castShadow = true;
+    if (cones.instanceColor) cones.instanceColor.needsUpdate = true;
+    mapTerrain.add(trunks); mapTerrain.add(cones);
+  }
+  if (rocks.length) {
+    const rm = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 0), mat(0x8d8f95), rocks.length);
+    rocks.forEach(([x, z], i) => {
+      const r = rand(0.6, 1.6);
+      q.setFromEuler(e.set(Math.random(), Math.random(), Math.random()));
+      m4.compose(v.set(x, r * 0.5, z), q, s.set(r, r * rand(0.6, 1), r)); rm.setMatrixAt(i, m4);
+    });
+    rm.castShadow = rm.receiveShadow = true;
+    mapTerrain.add(rm);
+  }
+  // 4) capital strongholds + nation name labels
+  for (const n of nations) { n.group = makeCapital(n); recolorCapital(n); mapTerrain.add(n.group); }
+  scene.add(mapTerrain);
+  mapTerrainLevel = mapLevel;
+}
+// A walled keep: outer curtain wall with crenellated towers, a gatehouse, a central
+// keep, and the owner's banners. Banner/roof materials are per-capital and mutable,
+// so a conquered hold can re-fly the conqueror's colors.
+function makeCapital(cap) {
+  const g = new THREE.Group();
+  const stone = mat(0x9a8f80), stoneDk = mat(0x807769), wood = mat(0x33240f);
+  const ownerMats = [];
+  const ownerMat = () => { const m = mat(cap.owner.color, { shared: false }); ownerMats.push(m); return m; };
+  const half = 3.6, wallH = 1.9, base = 0.3;
+  const yard = boxMesh(7.8, base, 7.8, stoneDk); yard.position.y = base / 2; g.add(yard); // courtyard slab
+  const wall = (w, h, d, x, z) => { const m = boxMesh(w, h, d, stone); m.position.set(x, base + h / 2, z); g.add(m); };
+  wall(7.6, wallH, 0.5, 0, -half);                 // north curtain
+  wall(0.5, wallH, 7.6, -half, 0);                 // west curtain
+  wall(0.5, wallH, 7.6,  half, 0);                 // east curtain
+  wall(2.3, wallH, 0.5, -2.65, half);              // south curtain (split for the gate)
+  wall(2.3, wallH, 0.5,  2.65, half);
+  // parapet caps so the walls read crenellated without a merlon per metre
+  const cap2 = (w, d, x, z) => { const m = boxMesh(w, 0.4, d, stoneDk); m.position.set(x, base + wallH + 0.15, z); g.add(m); };
+  cap2(7.6, 0.55, 0, -half); cap2(0.55, 7.6, -half, 0); cap2(0.55, 7.6, half, 0);
+  cap2(2.3, 0.55, -2.65, half); cap2(2.3, 0.55, 2.65, half);
+  // gatehouse: two towers flanking the gap + a lintel
+  const gh = wallH + 0.7;
+  for (const sx of [-1.45, 1.45]) { const m = boxMesh(0.9, gh, 0.9, stoneDk); m.position.set(sx, base + gh / 2, half); g.add(m); }
+  const lintel = boxMesh(3.2, 0.5, 0.9, stone); lintel.position.set(0, base + wallH + 0.25, half); g.add(lintel);
+  // four corner towers with pointed, owner-colored roofs
+  const towerH = 3.2;
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+    const tw = boxMesh(1.25, towerH, 1.25, stone); tw.position.set(sx * half, base + towerH / 2, sz * half); g.add(tw);
+    const roof = new THREE.Mesh(cachedGeo('caproof', () => new THREE.ConeGeometry(1.0, 1.4, 4)), ownerMat());
+    roof.castShadow = true; roof.rotation.y = Math.PI / 4; roof.position.set(sx * half, base + towerH + 0.7, sz * half); g.add(roof);
+  }
+  // central keep with battlements
+  const keepH = 4.6;
+  const keep = boxMesh(2.9, keepH, 2.9, stone); keep.position.y = base + keepH / 2; g.add(keep);
+  for (let i = -1; i <= 1; i++) for (const [ax, az] of [[i * 1.0, -1.45], [i * 1.0, 1.45], [-1.45, i * 1.0], [1.45, i * 1.0]]) {
+    const m = boxMesh(0.55, 0.55, 0.55, stoneDk); m.position.set(ax, base + keepH + 0.2, az); g.add(m);
+  }
+  // the great banner over the keep
+  const pole = boxMesh(0.14, 2.4, 0.14, wood); pole.position.set(0, base + keepH + 1.4, 0); g.add(pole);
+  const flag = boxMesh(1.7, 1.05, 0.08, ownerMat()); flag.position.set(0.9, base + keepH + 1.95, 0); g.add(flag);
+  const label = makeNameSprite(cap.def.name);
+  label.scale.set(6.6, 0.82, 1); label.position.y = base + keepH + 3.4; g.add(label);
+  g.userData.ownerMats = ownerMats;
+  g.userData.label = label;
+  g.position.set(cap.x, 0, cap.z);
+  return g;
+}
+// repaint a hold's banners/roofs to its current owner (after a conquest)
+function recolorCapital(cap) {
+  if (!cap.group) return;
+  for (const m of cap.group.userData.ownerMats) m.color.setHex(cap.owner.color);
+}
+
+// show/hide the battle set-dressing (arena pad, torch ring, edge treeline) vs the strategic map terrain
+function setBattleDressing(on) {
+  if (ground) ground.visible = on;     // battle: bumpy biome ground; map: flat biome plane is the surface
+  if (arenaPad) arenaPad.visible = on;
+  for (const t of torches) t.visible = on;
+  const d = decoState;
+  if (d.trunks) d.trunks.visible = on;
+  if (d.cones) d.cones.visible = on;
+  if (d.rockMesh) d.rockMesh.visible = on;
+  if (mapTerrain) mapTerrain.visible = !on;
+  for (const p of parties) if (p.group) p.group.visible = !on; // roaming map banners don't belong on the battlefield
+}
+// repaint the battlefield to look like the biome the clash happens in
+function applyBiome(b) {
+  if (ground) ground.material.color.setHex(b.ground);
+  if (arenaPad) arenaPad.material.color.setHex(b.pad);
+  scene.fog.color.setHex(b.fog);
+  scene.background.setHex(b.sky);
+  const cones = decoState.cones;
+  if (cones && cones.instanceColor) {
+    const c = new THREE.Color(b.tree);
+    for (let i = 0; i < cones.count; i++) cones.setColorAt(i, c);
+    cones.instanceColor.needsUpdate = true;
+  }
+}
+
+// ---------- The player's own party banner (shown on the strategic map) ----------
+function makePlayerToken(size) {
+  const g = new THREE.Group();
+  const h = 4.4;
+  const pole = boxMesh(0.2, h, 0.2, mat(0x2a1d10)); pole.position.y = h / 2; g.add(pole);
+  const flag = boxMesh(1.8, 1.1, 0.08, mat(0x2f5fae)); flag.position.set(1.0, h - 0.62, 0); g.add(flag);
+  const trim = boxMesh(1.8, 0.16, 0.1, mat(0xffd34d)); trim.position.set(1.0, h - 1.18, 0); g.add(trim);
+  const label = makeNameSprite('★ ' + size);
+  label.scale.set(2.8, 0.62, 1); label.position.y = h + 0.7; g.add(label);
+  g.userData.label = label;
+  return g;
+}
+
+function clearBattlefield() {
+  for (const e of enemies) { scene.remove(e.obj); disposeGroup(e.obj); }
+  enemies.length = 0;
+  clearAllies();
+  for (const s of sparks) { scene.remove(s); s.visible = false; sparkPool.push(s); }
+  sparks.length = 0;
+  for (const p of popups) { scene.remove(p.spr); popupPool.push(p); }
+  popups.length = 0;
+  for (const a of arcs) { scene.remove(a); disposeGroup(a); }
+  arcs.length = 0;
+  for (const p of projectiles) { scene.remove(p.mesh); disposeGroup(p.mesh); }
+  projectiles.length = 0;
+  for (const g of planGroups) { if (g.zoneMesh) g.zoneMesh.visible = false; if (g.holdMarker) g.holdMarker.visible = false; } // re-shown when the plan rebinds
+}
+function clearParties() {
+  for (const p of parties) { scene.remove(p.group); disposeGroup(p.group); }
+  parties.length = 0;
+}
+
+// --- map party tokens: a faction-colored banner + a floating troop count ---
+function makePartyToken(size, faction) {
+  const small = size <= 5; // scrappy little packs get a smaller banner + a skull
+  const g = new THREE.Group();
+  const h = small ? 2.6 : 3.6;
+  const pole = boxMesh(0.18, h, 0.18, mat(0x3a2a18));
+  pole.position.y = h / 2; g.add(pole);
+  const flag = boxMesh(small ? 1.0 : 1.5, small ? 0.6 : 0.95, 0.08, mat(faction ? faction.color : 0x8a1a1a));
+  flag.position.set(small ? 0.55 : 0.86, h - 0.55, 0); g.add(flag);
+  const label = makeNameSprite((small ? '☠ ' : '⚔ ') + size);
+  label.scale.set(small ? 2.0 : 2.6, small ? 0.45 : 0.55, 1); label.position.y = h + 0.6; g.add(label);
+  g.userData.label = label;
+  return g;
+}
+// after a clash trims a band, repaint its floating troop count
+function setBandLabel(band) {
+  const g = band.group, old = g.userData.label;
+  if (old) {
+    g.remove(old);
+    if (old.material) { if (old.material.map) old.material.map.dispose(); old.material.dispose(); }
+  }
+  const small = band.size <= 5;
+  const lead = band.leader ? band.leader.name + '  ' : '';
+  const label = makeNameSprite(lead + (small ? '☠ ' : '⚔ ') + band.size);
+  label.scale.set(small ? 3.2 : 4.6, small ? 0.5 : 0.6, 1);
+  label.position.y = (small ? 2.6 : 3.6) + 0.6;
+  g.add(label); g.userData.label = label;
+}
+// escalating threat: warbands grow with the region cleared AND total battles fought,
+// so the host keeps getting stronger the longer the campaign runs
+function warbandSize() { return Math.round(rand(10, 26) + (mapLevel + wave * 0.6) * 7); }
+// a band musters from its nation's homeland (on land, inside its borders)
+function spawnBand(size, speed, awayFromPlayer, nation) {
+  nation = nation || nations[(Math.random() * nations.length) | 0];
+  const def = nation.def;
+  const [x, z] = spawnPointFor(nation, awayFromPlayer);
+  const g = makePartyToken(size, def);
+  g.position.set(x, 0, z);
+  scene.add(g);
+  const band = { group: g, pos: g.position.clone(), size, alive: true, speed, faction: def,
+    raider: size <= 5, clashCd: 0, parleyCd: 0,
+    wanderT: rand(0, 3), wanderDir: rand(0, Math.PI * 2), level: mapLevel,
+    leader: makeBandLeader(size, mapLevel, size > 5),     // a named warlord leads every host
+    quality: 1 + 0.04 * mapLevel + (size > 5 ? 0.1 : 0) }; // troop quality rises with the region
+  parties.push(band);
+  setBandLabel(band); // banner now shows the warlord's name + their strength
+}
+// how many bands the region should hold — the map should always feel crowded
+function targetPopulation() { return 24 + mapLevel * 3; }
+function spawnMapParties() {
+  // every nation fields hosts and packs from its own territory; spread evenly
+  const total = targetPopulation();
+  for (let i = 0; i < total; i++) {
+    const nation = nations[i % nations.length];
+    const host = Math.random() < 0.4;
+    spawnBand(host ? warbandSize() : 2 + ((Math.random() * 4) | 0), host ? 4.5 : 6.0, false, nation);
+  }
+}
+// trickle fresh hosts onto the map so it never empties — the war never ends
+function reinforceMap() {
+  const nation = nations[(Math.random() * nations.length) | 0];
+  const host = Math.random() < 0.4;
+  spawnBand(host ? warbandSize() : 2 + ((Math.random() * 4) | 0), host ? 4.5 : 6.0, true, nation);
+}
+
+function enterMap() {
+  mode = 'map'; gameRunning = false;
+  encounter = null; siegeCapital = null;
+  const encEl = document.getElementById('encounter'); if (encEl) encEl.classList.add('hidden');
+  const pb = document.getElementById('cmd-deck'); if (pb) pb.classList.add('hidden'); commandPanelOpen = false; timeScale = 1;
+  clearBattlefield();
+  applyArenaSize(MAP_HALF);
+  player.pos.set(0, 0, 0); player.vel.set(0, 0, 0);
+  player.alive = true; player.hp = player.maxHp; player.stamina = player.maxStam;
+  player.attacking = player.shooting = player.rolling = player.blocking = false; player.crouchT = 0;
+  player.obj.scale.y = 1; player.obj.rotation.set(0, 0, 0);
+  cameraAngle = 0; // top-down map: W = up the screen (toward -Z), D = right
+  mapSpawnT = 6;
+  if (advanceRegion || !parties.some(p => p.alive)) { advanceRegion = false; clearParties(); mapLevel++; placeCapitals(); spawnMapParties(); }
+  applyServerWorldOnce(); // mirror the server's living world (capital owners) + show what changed while away
+  // strategic worldmap dressing: biome terrain in, battle set-dressing out, neutral sky
+  buildMapTerrain();
+  setBattleDressing(false);
+  if (ground) ground.material.color.setHex(0x6f9e54);
+  scene.fog.color.setHex(0x9fc6e8); scene.background.setHex(0x9fc6e8);
+  const [plx, plz] = nearestLand(0, 0); player.pos.set(plx, 0, plz); // never start at sea
+  // the player rides the map as a banner party, like the rival hosts — not the walking hero
+  if (player.mapToken) { scene.remove(player.mapToken); disposeGroup(player.mapToken); }
+  player.mapToken = makePlayerToken(warbandTotal());
+  player.mapToken.position.copy(player.pos);
+  scene.add(player.mapToken);
+  player.obj.visible = false;
+  musterOverlay.classList.add('hidden');
+  gameoverOverlay.classList.add('hidden');
+  hud.classList.remove('hidden');
+  if (document.exitPointerLock) document.exitPointerLock(); // map roams with WASD; no aim needed
+  pointerLocked = false;
+  updateHUD();
+}
+
+// nearest living band of a DIFFERENT faction within `radius` — drives the inter-host war
+function nearestRival(band, radius) {
+  let best = null, bestD = radius * radius;
+  for (const o of parties) {
+    if (!o.alive || o === band || o.faction === band.faction) continue;
+    const dx = o.pos.x - band.pos.x, dz = o.pos.z - band.pos.z, d2 = dx * dx + dz * dz;
+    if (d2 < bestD) { bestD = d2; best = o; }
+  }
+  return best;
+}
+// two rival bands meet off-map: the bigger host wins, bloodied; the smaller is wiped out
+function killBand(band) {
+  band.alive = false;
+  scene.remove(band.group); disposeGroup(band.group);
+}
+// rival hosts trade blows: each round both sides take casualties, the smaller
+// folds first. They stay locked and exchange every ~0.5s so you SEE the battle.
+function resolveBandClash(a, b) {
+  a.clashCd = b.clashCd = 0.5;
+  // character-weighted resolution: the better-led, higher-quality host usually prevails,
+  // even outnumbered. (Step 2: resolved client-side via the shared sim; the server seeds
+  // and owns this in a later step. Falls back to simple attrition if the module is absent.)
+  if (typeof WorldSim === 'undefined' || !WorldSim.resolveClash) {
+    a.size -= Math.max(1, Math.round(b.size * 0.25));
+    b.size -= Math.max(1, Math.round(a.size * 0.25));
+    if (a.size <= 0) killBand(a); else setBandLabel(a);
+    if (b.size <= 0) killBand(b); else setBandLabel(b);
+    spawnPopup(tmpV2.copy(a.pos).lerp(b.pos, 0.5).setY(2.4), '⚔', '#ffe089');
+    return;
+  }
+  const r = WorldSim.resolveClash(a, b, Math.random);
+  r.winner.size -= r.winnerLoss;
+  r.loser.size -= r.loserLoss;
+  if (r.winner.leader) { // a victorious warlord's name grows with the war
+    r.winner.leader.renown += 3 + 0.12 * (r.loser.size + r.loserLoss);
+    r.winner.leader.battlesWon = (r.winner.leader.battlesWon || 0) + 1;
+    r.winner.leader.skills.strike += 0.4; r.winner.leader.skills.lead += 0.5;
+    recomputeChar(r.winner.leader);
+  }
+  spawnPopup(tmpV2.copy(a.pos).lerp(b.pos, 0.5).setY(2.4), '⚔', '#ffe089');
+  if (r.leaderFell && r.loser.leader) { // the broken side's commander is cut down — and remembered
+    spawnPopup(r.loser.pos.clone().setY(3.2), r.loser.leader.name + ' falls!', '#ff9b6b');
+    if (r.loser.size > 0) r.loser.leader = makeBandLeader(r.loser.size, r.loser.level, r.loser.size > 5); // a successor raises the banner
+  }
+  if (a.size <= 0) { if (a.leader) spawnPopup(a.pos.clone().setY(3.2), a.leader.name + "'s host is broken", '#ff9b6b'); killBand(a); } else setBandLabel(a);
+  if (b.size <= 0) { if (b.leader) spawnPopup(b.pos.clone().setY(3.2), b.leader.name + "'s host is broken", '#ff9b6b'); killBand(b); } else setBandLabel(b);
+}
+
+// nearest hold NOT already flying this nation's colors — a host's march objective
+function nearestEnemyCapital(faction, x, z, radius) {
+  let best = null, bd = radius * radius;
+  for (const cap of nations) {
+    if (cap.owner === faction) continue;
+    const dx = cap.x - x, dz = cap.z - z, d = dx * dx + dz * dz;
+    if (d < bd) { bd = d; best = cap; }
+  }
+  return best;
+}
+// a host storms a rival hold: the garrison bleeds it, but the banner changes hands
+function conquerByBand(cap, band) {
+  cap.owner = band.faction; recolorCapital(cap);
+  band.size = Math.max(2, band.size - Math.round(cap.garrison * 0.45));
+  if (band.leader) { band.leader.renown += 12 + 0.3 * cap.garrison; band.leader.skills.lead += 1; recomputeChar(band.leader); } // taking a hold makes a name
+  setBandLabel(band);
+  cap.garrison = Math.round(band.size * 0.7 + garrisonSize() * 0.3);
+  cap.conquerCd = 9;
+  spawnPopup(tmpV2.set(cap.x, 3, cap.z), '⚑', '#ffe089');
+}
+
+// move within the map but never onto the sea — slide along coastlines axis-by-axis
+function landStep(x, z, dx, dz) {
+  let nx = clamp(x + dx, -MAP_HALF + 1, MAP_HALF - 1);
+  let nz = clamp(z + dz, -MAP_HALF + 1, MAP_HALF - 1);
+  if (isWater(nx, z)) nx = x;
+  if (isWater(x, nz)) nz = z;
+  return [nx, nz];
+}
+
+function updateMap(dt) {
+  if (encounter) return; // a parley/siege prompt is open — the whole map holds until you choose
+  // the party glides across the map as a banner; faster than enemy bands so you can flee
+  const dir = inputDir();
+  if (dir.lengthSq() > 0) {
+    player.vel.addScaledVector(dir, player.speed * 1.5 * dt * 9);
+    player.facing = angleLerp(player.facing, Math.atan2(dir.x, dir.z), dt * 12);
+  }
+  player.vel.multiplyScalar(Math.pow(0.0001, dt));
+  const opx = player.pos.x, opz = player.pos.z;
+  const [npx, npz] = landStep(opx, opz, player.vel.x * dt, player.vel.z * dt);
+  player.pos.x = npx; player.pos.z = npz; player.pos.y = 0;
+  if (npx === opx) player.vel.x = 0; // bumped the coast — kill that component
+  if (npz === opz) player.vel.z = 0;
+  if (player.mapToken) {
+    player.mapToken.position.copy(player.pos);
+    player.mapToken.rotation.y = player.facing;
+  }
+
+  let aliveParties = 0;
+  for (const band of parties) {
+    if (!band.alive) continue;
+    aliveParties++;
+    if (band.clashCd > 0) band.clashCd -= dt;
+    if (band.parleyCd > 0) band.parleyCd -= dt;
+    const to = tmpV.subVectors(player.pos, band.pos); to.y = 0;
+    const d = to.length();
+    // The hosts wage their OWN war and pay the unaligned player no mind — they
+    // hunt rival nations, not you. You choose your fights by riding into a band.
+    let mvx, mvz;
+    const rival = nearestRival(band, 70);
+    const objective = rival ? null : nearestEnemyCapital(band.faction, band.pos.x, band.pos.z, 85);
+    if (rival) {
+      const rx = rival.pos.x - band.pos.x, rz = rival.pos.z - band.pos.z, rd = Math.hypot(rx, rz) || 1;
+      const sign = rival.size > band.size * 2.4 ? -1 : 1; // charge a fair fight; edge off a far larger host
+      mvx = sign * rx / rd; mvz = sign * rz / rd;
+    } else if (objective) {                                    // no rival near → march on an enemy hold
+      const rx = objective.x - band.pos.x, rz = objective.z - band.pos.z, rd = Math.hypot(rx, rz) || 1;
+      mvx = rx / rd; mvz = rz / rd;
+    } else {                                                   // nothing to take → wander home ground
+      band.wanderT -= dt;
+      if (band.wanderT <= 0) { band.wanderDir += rand(-1.2, 1.2); band.wanderT = rand(1.5, 4); }
+      mvx = Math.sin(band.wanderDir); mvz = Math.cos(band.wanderDir);
+    }
+    const sp = band.speed || 5;
+    const [bnx, bnz] = landStep(band.pos.x, band.pos.z, mvx * sp * dt, mvz * sp * dt);
+    if (bnx === band.pos.x && bnz === band.pos.z) { band.wanderDir = rand(0, Math.PI * 2); band.wanderT = rand(0.6, 1.5); } // shore-blocked → turn
+    band.pos.x = bnx; band.pos.z = bnz;
+    band.group.position.copy(band.pos);
+    // ride into a band (moving toward it) to meet it — then choose: attack, or just hail
+    if (d < 3.4 && band.parleyCd <= 0 && -(player.vel.x * to.x + player.vel.z * to.z) > 1) { openEncounter(band); return; }
+  }
+
+  // ride up to a stronghold to lay siege (or leave); also age the hold's timers
+  for (const cap of nations) {
+    if (cap.parleyCd > 0) cap.parleyCd -= dt;
+    if (cap.conquerCd > 0) cap.conquerCd -= dt;
+    const dx = player.pos.x - cap.x, dz = player.pos.z - cap.z;
+    if (dx * dx + dz * dz < 4.6 * 4.6 && cap.parleyCd <= 0 && -(player.vel.x * dx + player.vel.z * dz) > 1) { openSiege(cap); return; }
+  }
+
+  // rival hosts that have collided clash among themselves
+  for (let i = 0; i < parties.length; i++) {
+    const a = parties[i];
+    if (!a.alive || a.clashCd > 0) continue;
+    for (let j = i + 1; j < parties.length; j++) {
+      const b = parties[j];
+      if (!b.alive || b.clashCd > 0 || a.faction === b.faction) continue;
+      const dx = a.pos.x - b.pos.x, dz = a.pos.z - b.pos.z;
+      if (dx * dx + dz * dz < 3.6 * 3.6) { resolveBandClash(a, b); break; }
+    }
+  }
+  // a host that reaches a rival hold strong enough storms it — the banner changes hands
+  for (const band of parties) {
+    if (!band.alive) continue;
+    for (const cap of nations) {
+      if (cap.owner === band.faction || cap.conquerCd > 0) continue;
+      const dx = band.pos.x - cap.x, dz = band.pos.z - cap.z;
+      if (dx * dx + dz * dz < 3.6 * 3.6 && band.size >= cap.garrison * 0.5) { conquerByBand(cap, band); break; }
+    }
+  }
+  // sweep out the fallen so the map and counts stay clean
+  for (let i = parties.length - 1; i >= 0; i--) if (!parties[i].alive) parties.splice(i, 1);
+
+  // keep the region topped up to its target so there's always a fight nearby —
+  // wars and your hunts thin the bands, fresh hosts march in to replace them
+  aliveParties = parties.length;
+  mapSpawnT -= dt;
+  if (mapSpawnT <= 0) {
+    mapSpawnT = 2.2;
+    let add = Math.min(3, targetPopulation() - aliveParties);
+    while (add-- > 0) { reinforceMap(); aliveParties++; }
+  }
+  if (aliveParties === 0) enterMap(); // somehow emptied → next, bigger region
+  enemyCountEl.textContent = 'Band ' + warbandTotal() + ' · Foes nearby: ' + aliveParties;
+}
+
+// --- build an enemy band roster (a flat list of defs), scaled to its size ---
+function buildEnemyRoster(size, level) {
+  const roster = [];
+  const add = (type, n) => { for (let i = 0; i < n; i++) roster.push({ type }); };
+  add('archer', Math.round(size * 0.15));
+  add('thrower', Math.round(size * 0.1));
+  add('brute', Math.round(size * 0.12));
+  add('longsword', Math.round(size * 0.12));
+  add('rogue', Math.round(size * 0.12));
+  while (roster.length < size) roster.push({ type: 'grunt' });
+  roster.length = size;
+  const nHeroes = size >= 40 ? 2 : size >= 16 ? 1 : 0;
+  for (let i = 0; i < nHeroes; i++) { const h = nextHero(); roster.push({ type: h.base, hero: h }); }
+  return roster;
+}
+function defKey(def) {
+  return def.cls || (def === ALLY_LONGSWORD ? 'long' : def === ALLY_ARCHER ? 'archer' : def === ALLY_THROWER ? 'thrower' : 'sword');
+}
+
+const BATTLE_FRONT = 0; // enemies mass toward +Z; the player faces them
+function enterBattle(band) {
+  battleParty = band;
+  wave++;
+  waveKills = waveHeroKills = waveLosses = 0;
+  clearBattlefield();
+  // the clash takes on the look of the map region it's fought in
+  applyBiome(biomeAt(band.pos.x, band.pos.z));
+  setBattleDressing(true);
+  if (player.mapToken) player.mapToken.visible = false;
+  player.obj.visible = true;
+  cameraAngle = Math.PI; // battle camera sits behind the player, facing the host
+  if (!playerChar) loadCareers();                // debug entry points may skip startGame
+  ensureWarbandRoster();                          // name & carry forward every soldier you field
+  beginBattleCareers();
+  playerReserve = warbandRoster.map(c => ({ def: ALLY_DEF_BY_CLASS[classKeyOf(c.archetype)], char: c })); // named, growable
+  enemyReserve = buildEnemyRoster(band.size, band.level);
+  enemiesRemaining = enemyReserve.length;
+  // size the arena to the forces actually on the field
+  const onField = Math.min(FIELD_CAP, playerReserve.length) + Math.min(FIELD_CAP, enemyReserve.length);
+  applyArenaSize(clamp(FRONT_GAP + 22 + onField * 0.3, ARENA_BASE, ARENA_MAX)); // big enough to hold the gap + both lines
+  cameraDist = 7.5; cameraHeight = 4;
+  player.pos.set(0, 0, 0); player.vel.set(0, 0, 0); player.obj.position.set(0, 0, 0);
+  player.obj.rotation.set(0, 0, 0); player.obj.scale.y = 1;
+  player.alive = true; player.hp = player.maxHp; player.stamina = player.maxStam;
+  player.facing = BATTLE_FRONT;
+  fieldBatch(); // muster both front lines so you can plan against the real threat
+  updateEnemyCount();
+  enterPlanPhase(band); // deploy & command your warband, then Begin Battle
+}
+
+// ---------- Command Deck: build, position & command squads (plan AND mid-battle) ----------
+const selected = new Set();        // allies currently selected
+let planGroups = [];               // squads: [{ id, name, color, order, anchor, lastPreset }]
+let planGroupCounter = 0, activeGroupId = null;
+const GROUP_COLORS = [0xffd34d, 0x4dd2ff, 0xff7bd0, 0x9aff6b, 0xffa24d, 0xc08bff, 0xff6b6b, 0x6bd0ff, 0xd0ff6b];
+const CLASS_KEYS = ['sword', 'long', 'archer', 'thrower'];
+const CLASS_NAME = { sword: 'Swords', long: 'Longswords', archer: 'Archers', thrower: 'Throwers' };
+const ORDERS = [['attack', 'Charge'], ['hold', 'Hold'], ['regroup', 'Regroup'], ['free', 'Free']];
+const ORDER_LABEL = { attack: 'Charging', hold: 'Holding', zone: 'Holding zone', regroup: 'Regrouping', free: 'At will' };
+const PACES = [['march', '🐢 March'], ['rush', '⚡ Rush']];
+let cmdDeck = null, selBox = null, zoneBox = null;
+let commandPanelOpen = false, timeScale = 1;
+const _planPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+const _planRay = new THREE.Raycaster();
+const _planNDC = new THREE.Vector2();
+let planDrag = null;
+const planActive = () => mode === 'plan' || commandPanelOpen; // tactical input/camera live in both
+
+function setAllySelected(a, on) {
+  if (on && !a.selRing) {
+    const ring = new THREE.Mesh(
+      cachedGeo('selring', () => { const g = new THREE.RingGeometry(0.95, 1.25, 20); g.rotateX(-Math.PI / 2); return g; }),
+      mat(0x7dff9a, { emissive: 0x2a8a40, emissiveI: 0.7 }));
+    ring.position.y = 0.09; a.obj.add(ring); a.selRing = ring;
+  }
+  if (a.selRing) a.selRing.visible = on;
+}
+function clearSelection() { for (const a of selected) setAllySelected(a, false); selected.clear(); }
+function setSelection(list, add) {
+  if (!add) { for (const a of selected) setAllySelected(a, false); selected.clear(); }
+  for (const a of list) if (a.alive) { selected.add(a); setAllySelected(a, true); }
+}
+function selectType(key) { setSelection(allies.filter(a => a.alive && (key === 'all' || defKey(a.def) === key))); }
+function updateGroupRing(a) {
+  const g = a.group != null ? planGroups.find(x => x.id === a.group) : null;
+  if (g) {
+    if (!a.grpRing) {
+      a.grpRing = new THREE.Mesh(
+        cachedGeo('grpring', () => { const ge = new THREE.RingGeometry(1.35, 1.62, 22); ge.rotateX(-Math.PI / 2); return ge; }),
+        mat(0xffffff, { shared: false }));
+      a.grpRing.position.y = 0.07; a.obj.add(a.grpRing);
+    }
+    a.grpRing.material.color.setHex(g.color);
+    a.grpRing.material.emissive.setHex(g.color); a.grpRing.material.emissiveIntensity = 0.4;
+    a.grpRing.visible = true;
+  } else if (a.grpRing) a.grpRing.visible = false;
+}
+// ----- group CRUD -----
+function newGroup() {
+  const g = { id: ++planGroupCounter, name: 'Group ' + planGroupCounter, color: GROUP_COLORS[(planGroupCounter - 1) % GROUP_COLORS.length], order: 'free', pace: 'march', anchor: null, zone: null, zoneMesh: null, holdMarker: null, recipe: { sword: 0, long: 0, archer: 0, thrower: 0 }, lastPreset: null };
+  planGroups.push(g); activeGroupId = g.id;
+  renderDeck();
+  return g;
+}
+function selectGroup(g) {
+  activeGroupId = g.id;
+  setSelection(allies.filter(a => a.alive && a.group === g.id));
+  renderDeck();
+}
+function deleteGroup(g) {
+  for (const a of allies) if (a.group === g.id) { a.group = null; updateGroupRing(a); }
+  disposeZoneOverlay(g); disposeHoldMarker(g);
+  planGroups = planGroups.filter(x => x.id !== g.id);
+  if (activeGroupId === g.id) activeGroupId = planGroups.length ? planGroups[planGroups.length - 1].id : null;
+  renderDeck();
+}
+function resetGroups() {
+  for (const g of planGroups) { disposeZoneOverlay(g); disposeHoldMarker(g); }
+  for (const a of allies) { a.group = null; a.zone = null; a.homeSlot = null; if (a.grpRing) a.grpRing.visible = false; }
+  planGroups = []; planGroupCounter = 0; activeGroupId = null;
+}
+// ----- zone (hold-area) ground overlays: a translucent coloured rectangle so the plan is legible -----
+function buildZoneOverlay(colorHex) {
+  const grp = new THREE.Group();
+  const fillGeo = cachedGeo('zonefill', () => { const g = new THREE.PlaneGeometry(1, 1); g.rotateX(-Math.PI / 2); return g; });
+  const fill = new THREE.Mesh(fillGeo, new THREE.MeshBasicMaterial({ color: colorHex, transparent: true, opacity: 0.12, depthWrite: false, side: THREE.DoubleSide }));
+  fill.position.y = 0.04;
+  const sqGeo = cachedGeo('zonesq', () => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute([-0.5, 0, -0.5, 0.5, 0, -0.5, 0.5, 0, 0.5, -0.5, 0, 0.5, -0.5, 0, -0.5], 3));
+    return g;
+  });
+  const border = new THREE.Line(sqGeo, new THREE.LineBasicMaterial({ color: colorHex, transparent: true, opacity: 0.9 }));
+  border.position.y = 0.06;
+  grp.add(fill); grp.add(border);
+  grp.userData = { fill, border };
+  scene.add(grp);
+  return grp;
+}
+function updateZoneOverlay(g) {
+  if (!g.zone) { if (g.zoneMesh) g.zoneMesh.visible = false; return; }
+  if (!g.zoneMesh) g.zoneMesh = buildZoneOverlay(g.color);
+  else { g.zoneMesh.userData.fill.material.color.setHex(g.color); g.zoneMesh.userData.border.material.color.setHex(g.color); }
+  const r = g.zone, w = Math.max(2, r.maxX - r.minX), d = Math.max(2, r.maxZ - r.minZ);
+  g.zoneMesh.visible = true;
+  g.zoneMesh.position.set((r.minX + r.maxX) / 2, 0, (r.minZ + r.maxZ) / 2);
+  g.zoneMesh.userData.fill.scale.set(w, 1, d);
+  g.zoneMesh.userData.border.scale.set(w, 1, d);
+}
+function disposeZoneOverlay(g) {
+  if (!g.zoneMesh) return;
+  scene.remove(g.zoneMesh);
+  g.zoneMesh.userData.fill.material.dispose();
+  g.zoneMesh.userData.border.material.dispose();
+  g.zoneMesh = null;
+}
+// ----- hold-point marker: a coloured rally flag on the ground so a "move here & hold" order is legible -----
+function buildHoldMarker(colorHex) {
+  const grp = new THREE.Group();
+  const ringGeo = cachedGeo('holdring', () => { const g = new THREE.RingGeometry(1.5, 2.0, 24); g.rotateX(-Math.PI / 2); return g; });
+  const ring = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: colorHex, transparent: true, opacity: 0.85, depthWrite: false, side: THREE.DoubleSide }));
+  ring.position.y = 0.05;
+  const postGeo = cachedGeo('holdpost', () => new THREE.CylinderGeometry(0.12, 0.12, 3.2, 6));
+  const post = new THREE.Mesh(postGeo, new THREE.MeshBasicMaterial({ color: colorHex }));
+  post.position.y = 1.6;
+  const flagGeo = cachedGeo('holdflag', () => new THREE.PlaneGeometry(1.4, 0.8));
+  const flag = new THREE.Mesh(flagGeo, new THREE.MeshBasicMaterial({ color: colorHex, side: THREE.DoubleSide }));
+  flag.position.set(0.7, 2.7, 0);
+  grp.add(ring); grp.add(post); grp.add(flag);
+  grp.userData = { ring, post, flag };
+  scene.add(grp);
+  return grp;
+}
+function updateHoldMarker(g) {
+  const show = g.order === 'hold' && g.anchor;
+  if (!show) { if (g.holdMarker) g.holdMarker.visible = false; return; }
+  if (!g.holdMarker) g.holdMarker = buildHoldMarker(g.color);
+  else for (const m of [g.holdMarker.userData.ring, g.holdMarker.userData.post, g.holdMarker.userData.flag]) m.material.color.setHex(g.color);
+  g.holdMarker.visible = true;
+  g.holdMarker.position.set(g.anchor.x, 0, g.anchor.z);
+}
+function disposeHoldMarker(g) {
+  if (!g.holdMarker) return;
+  scene.remove(g.holdMarker);
+  for (const k of ['ring', 'post', 'flag']) g.holdMarker.userData[k].material.dispose();
+  g.holdMarker = null;
+}
+// ----- remembered squads: persist composition + orders, re-bind to a fresh muster each battle -----
+function refreshGroupRecipe(g) {
+  const r = { sword: 0, long: 0, archer: 0, thrower: 0 };
+  for (const a of allies) if (a.alive && a.group === g.id) { const k = defKey(a.def); if (r[k] != null) r[k]++; }
+  g.recipe = r;
+}
+// at the start of every plan the warband is freshly mustered (new ally objects). Pour the pool
+// back into the squads the player set up last time — by class recipe — and replay their orders.
+function rebindGroupsToPool() {
+  for (const a of allies) { a.group = null; a.zone = null; a.homeSlot = null; a.holdPos = null; a.order = 'free'; if (a.grpRing) a.grpRing.visible = false; }
+  for (const g of planGroups) {
+    for (const key of CLASS_KEYS) {
+      let need = (g.recipe && g.recipe[key]) || 0;
+      for (const a of allies) { if (need <= 0) break; if (a.alive && a.group == null && defKey(a.def) === key) { a.group = g.id; a.pace = g.pace || 'march'; updateGroupRing(a); need--; } }
+    }
+  }
+  for (const g of planGroups) {
+    const members = allies.filter(a => a.alive && a.group === g.id);
+    if (!members.length) { disposeZoneOverlay(g); disposeHoldMarker(g); continue; }
+    for (const a of members) a.pace = g.pace || 'march';
+    if (g.order === 'zone' && g.zone) { assignZone(members, g.zone, true); updateZoneOverlay(g); }
+    else if (g.order === 'hold' && g.anchor) { arrayGroupAt(members, g.anchor, true); updateHoldMarker(g); }
+    else if (g.order === 'attack') applyPresetToMembers(members, 'attack', g);
+    else if (g.order === 'regroup') applyPresetToMembers(members, 'regroup', g);
+  }
+  if (!planGroups.some(g => g.id === activeGroupId)) activeGroupId = planGroups.length ? planGroups[0].id : null;
+}
+// ----- roster pool + composition (field bodies only; over-allocation impossible) -----
+function countPool(key) { let n = 0; for (const a of allies) if (a.alive && a.group == null && defKey(a.def) === key) n++; return n; }
+function assignToGroup(g, key, delta) {
+  if (delta > 0) {
+    let added = 0;
+    for (const a of allies) { if (added >= delta) break; if (a.alive && a.group == null && defKey(a.def) === key) { a.group = g.id; a.pace = g.pace || 'march'; if (g.order && g.order !== 'free' && g.order !== 'zone') applyPresetToMembers([a], g.order, null); updateGroupRing(a); added++; } }
+  } else {
+    const members = allies.filter(a => a.alive && a.group === g.id && defKey(a.def) === key);
+    for (let i = members.length - 1, rem = 0; i >= 0 && rem < -delta; i--, rem++) { members[i].group = null; members[i].zone = null; members[i].homeSlot = null; updateGroupRing(members[i]); }
+  }
+  if (g.order === 'zone' && g.zone) assignZone(allies.filter(a => a.alive && a.group === g.id), g.zone, mode === 'plan'); // re-spread the garrison
+  refreshGroupRecipe(g);
+  renderDeck();
+}
+function addSelectionToGroup() { // legacy convenience: drop the current selection into the active group
+  if (!selected.size) return;
+  const g = planGroups.find(x => x.id === activeGroupId) || newGroup();
+  for (const a of selected) { a.group = g.id; a.pace = g.pace || 'march'; if (g.order && g.order !== 'free' && g.order !== 'zone') applyPresetToMembers([a], g.order, null); updateGroupRing(a); }
+  if (g.order === 'zone' && g.zone) assignZone(allies.filter(a => a.alive && a.group === g.id), g.zone, mode === 'plan');
+  refreshGroupRecipe(g);
+  renderDeck();
+}
+function splitIntoGroups(n, recipe) {
+  for (let i = 0; i < n; i++) { const g = newGroup(); for (const key of CLASS_KEYS) if (recipe[key] > 0) assignToGroup(g, key, recipe[key]); }
+  renderDeck();
+}
+// ----- formation + order anchors -----
+function arrayGroupAt(members, P, teleport) {
+  const sel = members.filter(a => a.alive);
+  if (!sel.length) return;
+  sel.sort((a, b) => (a.def.ranged ? 1 : 0) - (b.def.ranged ? 1 : 0)); // melee front, ranged rear
+  const perRow = Math.max(1, Math.round(Math.sqrt(sel.length) * 1.3));
+  const rows = Math.ceil(sel.length / perRow);
+  sel.forEach((a, i) => {
+    const row = Math.floor(i / perRow), col = i % perRow;
+    const x = clamp(P.x + (col - (perRow - 1) / 2) * 2.3, -ARENA + 1, ARENA - 1);
+    const z = clamp(P.z + ((rows - 1) / 2 - row) * 2.3, -ARENA + 1, ARENA - 1);
+    a.order = 'hold'; a.holdPos = new THREE.Vector3(x, 0, z); a.zone = null; a.homeSlot = null;
+    if (teleport) { a.pos.set(x, 0, z); a.obj.position.copy(a.pos); a.facing = BATTLE_FRONT; a.obj.rotation.y = a.facing; }
+  });
+}
+// distribute a group across a drawn rectangle (a garrison), each soldier given a home slot inside it
+function assignZone(members, rect, teleport) {
+  const live = members.filter(a => a.alive);
+  if (!live.length) return;
+  live.sort((a, b) => (a.def.ranged ? 1 : 0) - (b.def.ranged ? 1 : 0)); // melee toward the leading edge, ranged behind
+  const w = Math.max(2, rect.maxX - rect.minX), d = Math.max(2, rect.maxZ - rect.minZ);
+  const cols = Math.max(1, Math.round(Math.sqrt(live.length * (w / d))));
+  const rows = Math.max(1, Math.ceil(live.length / cols));
+  live.forEach((a, i) => {
+    const c = i % cols, r = Math.floor(i / cols);
+    const fx = cols > 1 ? c / (cols - 1) : 0.5;
+    const fz = rows > 1 ? r / (rows - 1) : 0.5;
+    const x = clamp(rect.minX + (0.12 + fx * 0.76) * w, -ARENA + 1, ARENA - 1);
+    const z = clamp(rect.minZ + (0.12 + fz * 0.76) * d, -ARENA + 1, ARENA - 1);
+    a.order = 'zone'; a.zone = rect; a.holdPos = null; a.homeSlot = new THREE.Vector3(x, 0, z);
+    if (teleport) { a.pos.set(x, 0, z); a.obj.position.copy(a.pos); a.facing = BATTLE_FRONT; a.obj.rotation.y = a.facing; }
+  });
+}
+function enemyCentroid() {
+  let n = 0, x = 0, z = 0;
+  for (const e of enemies) if (e.alive) { n++; x += e.pos.x; z += e.pos.z; }
+  return n ? new THREE.Vector3(x / n, 0, z / n) : new THREE.Vector3(0, 0, ARENA * 0.6);
+}
+function recallAnchor() { // a rally a few paces behind the player
+  const fx = Math.sin(BATTLE_FRONT), fz = Math.cos(BATTLE_FRONT);
+  return new THREE.Vector3(clamp(player.pos.x - fx * 4, -ARENA + 2, ARENA - 2), 0, clamp(player.pos.z - fz * 4, -ARENA + 2, ARENA - 2));
+}
+// presets compile down to the engine's free|hold|attackmove AI (+ an anchor for hold)
+function applyPresetToMembers(members, preset, g) {
+  const live = members.filter(a => a.alive);
+  if (!live.length) return;
+  if (preset === 'attack') { for (const a of live) { a.order = 'attackmove'; a.holdPos = null; a.zone = null; a.homeSlot = null; } }
+  else if (preset === 'free') { for (const a of live) { a.order = 'free'; a.holdPos = null; a.zone = null; a.homeSlot = null; } }
+  else if (preset === 'hold') { for (const a of live) { a.order = 'hold'; a.holdPos = a.pos.clone(); a.zone = null; a.homeSlot = null; } }
+  else { // 'regroup' — fall back and re-form on the player
+    const P = recallAnchor();
+    if (g) g.anchor = P.clone();
+    arrayGroupAt(live, P, mode === 'plan'); // teleport into formation in the plan; march there mid-battle
+  }
+}
+function orderGroup(g, preset) {
+  const members = allies.filter(a => a.alive && a.group === g.id);
+  if (!members.length) return;
+  g.order = preset; g.lastPreset = preset;
+  g.zone = null; disposeZoneOverlay(g); // these presets aren't zone-holds — drop any drawn rectangle
+  applyPresetToMembers(members, preset, g);
+  if (preset === 'hold') { // the "Hold" button holds the current ground — mark where
+    let x = 0, z = 0; for (const a of members) { x += a.pos.x; z += a.pos.z; }
+    g.anchor = new THREE.Vector3(x / members.length, 0, z / members.length); updateHoldMarker(g);
+  } else { g.anchor = null; disposeHoldMarker(g); }
+  renderDeck();
+}
+// ----- pace (march / rush) -----
+function setGroupPace(g, pace) {
+  g.pace = pace;
+  for (const a of allies) if (a.alive && a.group === g.id) a.pace = pace;
+  renderDeck();
+}
+function commandPace(pace) {
+  const g = planGroups.find(x => x.id === activeGroupId);
+  if (g && selected.size && [...selected].every(a => a.group === g.id)) { setGroupPace(g, pace); return; }
+  let any = false; for (const a of selected) if (a.alive) { a.pace = pace; any = true; }
+  if (any) renderDeck();
+}
+// ----- hold-zone (draw a rectangle to garrison an area) -----
+function setGroupZone(g, rect) {
+  g.order = 'zone'; g.lastPreset = 'zone'; g.zone = rect;
+  assignZone(allies.filter(a => a.alive && a.group === g.id), rect, mode === 'plan');
+  updateZoneOverlay(g);
+  renderDeck();
+}
+function commandZone(rect) {
+  const g = planGroups.find(x => x.id === activeGroupId);
+  const members = selected.size ? [...selected].filter(a => a.alive)
+    : (g ? allies.filter(a => a.alive && a.group === g.id) : []);
+  if (!members.length) return;
+  if (g && members.every(a => a.group === g.id)) { setGroupZone(g, rect); return; } // bind to the group (gets the overlay)
+  assignZone(members, rect, mode === 'plan'); renderDeck();                          // ad-hoc selection: no group overlay
+}
+function commandSelection(preset) { // keyboard/ad-hoc: route to the active group, else the raw selection
+  const g = planGroups.find(x => x.id === activeGroupId);
+  if (g && selected.size && [...selected].every(a => a.group === g.id)) { orderGroup(g, preset); return; }
+  const members = [...selected].filter(a => a.alive);
+  if (members.length) { applyPresetToMembers(members, preset, null); renderDeck(); }
+}
+const applyOrder = commandSelection; // back-compat alias
+function deploySelected(P) {
+  const g = planGroups.find(x => x.id === activeGroupId);
+  const sel = selected.size ? [...selected].filter(a => a.alive)
+    : (g ? allies.filter(a => a.alive && a.group === g.id) : []);
+  if (!sel.length) return;
+  arrayGroupAt(sel, P, mode === 'plan');
+  if (g && sel.every(a => a.group === g.id)) { g.order = 'hold'; g.anchor = P.clone(); g.zone = null; disposeZoneOverlay(g); updateHoldMarker(g); }
+  renderDeck();
+}
+// ----- screen<->world picking -----
+function groundPointAt(cx, cy) {
+  _planNDC.set((cx / innerWidth) * 2 - 1, -(cy / innerHeight) * 2 + 1);
+  _planRay.setFromCamera(_planNDC, camera);
+  const p = new THREE.Vector3();
+  return _planRay.ray.intersectPlane(_planPlane, p) ? p : null;
+}
+function allyScreen(a) { tmpV.copy(a.pos); tmpV.y += 1; tmpV.project(camera); return tmpV; }
+function alliesInBox(x0, y0, x1, y1) {
+  const lo = { x: Math.min(x0, x1), y: Math.min(y0, y1) }, hi = { x: Math.max(x0, x1), y: Math.max(y0, y1) };
+  const out = [];
+  for (const a of allies) {
+    if (!a.alive) continue;
+    const s = allyScreen(a); if (s.z > 1) continue;
+    const sx = (s.x * 0.5 + 0.5) * innerWidth, sy = (-s.y * 0.5 + 0.5) * innerHeight;
+    if (sx >= lo.x && sx <= hi.x && sy >= lo.y && sy <= hi.y) out.push(a);
+  }
+  return out;
+}
+function allyAtPoint(cx, cy) {
+  let best = null, bd = 36 * 36;
+  for (const a of allies) {
+    if (!a.alive) continue;
+    const s = allyScreen(a); if (s.z > 1) continue;
+    const sx = (s.x * 0.5 + 0.5) * innerWidth, sy = (-s.y * 0.5 + 0.5) * innerHeight;
+    const dd = (sx - cx) ** 2 + (sy - cy) ** 2; if (dd < bd) { bd = dd; best = a; }
+  }
+  return best;
+}
+// ----- rendering -----
+function renderRoster() {
+  for (const key of CLASS_KEYS) {
+    const el = document.getElementById('pool-' + key); if (!el) continue;
+    const n = countPool(key); el.textContent = n;
+    const row = el.closest('.rost-row'); if (row) row.classList.toggle('empty', n <= 0);
+  }
+}
+function makeStepBtn(txt, disabled, fn) {
+  const b = document.createElement('button'); b.textContent = txt; b.disabled = !!disabled;
+  b.addEventListener('click', (e) => { e.stopPropagation(); fn(); });
+  return b;
+}
+function renderDeck() {
+  const wrap = document.getElementById('cd-cards');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  if (!planGroups.length) wrap.innerHTML = '<div class="cd-empty">No groups yet — <b>Split into N</b> for instant squads, or <b>+ New Group</b>.</div>';
+  for (const g of planGroups) {
+    const members = allies.filter(a => a.alive && a.group === g.id);
+    const hex = '#' + g.color.toString(16).padStart(6, '0');
+    const card = document.createElement('div');
+    card.className = 'group-card' + (g.id === activeGroupId ? ' active' : '');
+    card.style.setProperty('--gc', hex);
+    const head = document.createElement('div'); head.className = 'gc-head';
+    head.innerHTML = `<span class="gc-dot" style="background:${hex}"></span><span class="gc-name">${g.name}</span><span class="gc-count">${members.length}</span><span class="gc-status">${ORDER_LABEL[g.order] || ''}</span>`;
+    head.addEventListener('click', () => selectGroup(g));
+    const del = document.createElement('span'); del.className = 'gc-del'; del.textContent = '×'; del.title = 'disband';
+    del.addEventListener('click', (e) => { e.stopPropagation(); deleteGroup(g); });
+    head.appendChild(del); card.appendChild(head);
+    const rows = document.createElement('div'); rows.className = 'gc-rows';
+    for (const key of CLASS_KEYS) {
+      const cnt = members.filter(a => defKey(a.def) === key).length;
+      const row = document.createElement('div'); row.className = 'stp';
+      const name = document.createElement('span'); name.className = 'stp-name'; name.textContent = CLASS_NAME[key];
+      const val = document.createElement('b'); val.textContent = cnt;
+      row.appendChild(name);
+      row.appendChild(makeStepBtn('−', cnt <= 0, () => assignToGroup(g, key, -1)));
+      row.appendChild(val);
+      row.appendChild(makeStepBtn('+', countPool(key) <= 0, () => assignToGroup(g, key, 1)));
+      rows.appendChild(row);
+    }
+    card.appendChild(rows);
+    const ord = document.createElement('div'); ord.className = 'gc-orders';
+    for (const [k, label] of ORDERS) {
+      const b = document.createElement('button'); b.textContent = label; if (g.order === k) b.className = 'on';
+      b.addEventListener('click', (e) => { e.stopPropagation(); selectGroup(g); orderGroup(g, k); });
+      ord.appendChild(b);
+    }
+    card.appendChild(ord);
+    const pace = document.createElement('div'); pace.className = 'gc-pace';
+    for (const [pk, plabel] of PACES) {
+      const b = document.createElement('button'); b.textContent = plabel; if ((g.pace || 'march') === pk) b.className = 'on';
+      b.addEventListener('click', (e) => { e.stopPropagation(); selectGroup(g); setGroupPace(g, pk); });
+      pace.appendChild(b);
+    }
+    card.appendChild(pace);
+    wrap.appendChild(card);
+  }
+  renderRoster();
+}
+let splitN = 4, splitRecipe = { sword: 0, long: 2, archer: 2, thrower: 0 };
+function renderSplit() {
+  const pop = document.getElementById('split-pop'); if (!pop) return;
+  const recipeStr = CLASS_KEYS.filter(k => splitRecipe[k] > 0).map(k => splitRecipe[k] + ' ' + CLASS_NAME[k]).join(' + ') || '(pick classes)';
+  let shortMsg = '';
+  for (const k of CLASS_KEYS) { const need = splitN * (splitRecipe[k] || 0); if (need > countPool(k)) shortMsg += ` · short ${need - countPool(k)} ${CLASS_NAME[k]}`; }
+  pop.innerHTML =
+    `<div class="sp-row"><span>Groups</span><button data-sp="n-">−</button><b>${splitN}</b><button data-sp="n+">+</button></div>` +
+    CLASS_KEYS.map(k => `<div class="sp-row"><span>${CLASS_NAME[k]}</span><button data-sp="${k}-">−</button><b>${splitRecipe[k]}</b><button data-sp="${k}+">+</button></div>`).join('') +
+    `<div class="sp-prev">= ${splitN} × (${recipeStr})${shortMsg ? `<span class="sp-short">${shortMsg}</span>` : ''}</div>` +
+    `<button class="btn" id="sp-create">Create squads</button>`;
+  pop.querySelectorAll('[data-sp]').forEach(b => b.addEventListener('click', () => {
+    const cmd = b.dataset.sp;
+    if (cmd === 'n-') splitN = Math.max(1, splitN - 1);
+    else if (cmd === 'n+') splitN = Math.min(9, splitN + 1);
+    else { const k = cmd.slice(0, -1); splitRecipe[k] = Math.max(0, (splitRecipe[k] || 0) + (cmd.slice(-1) === '+' ? 1 : -1)); }
+    renderSplit();
+  }));
+  document.getElementById('sp-create').addEventListener('click', () => {
+    splitIntoGroups(splitN, splitRecipe);
+    document.getElementById('split-pop').classList.add('hidden');
+  });
+}
+function renderAll() { renderDeck(); }
+// ----- phase transitions -----
+function enterPlanPhase(band) {
+  mode = 'plan'; gameRunning = false; commandPanelOpen = false; timeScale = 1;
+  player.facing = BATTLE_FRONT;
+  clearSelection(); rebindGroupsToPool(); // keep last battle's squads — re-fill them from the fresh muster
+  if (document.exitPointerLock) document.exitPointerLock(); pointerLocked = false;
+  if (!cmdDeck) { cmdDeck = document.getElementById('cmd-deck'); selBox = document.getElementById('sel-box'); zoneBox = document.getElementById('zone-box'); }
+  hud.classList.add('hidden');
+  cmdDeck.classList.remove('hidden', 'battle', 'open');
+  document.getElementById('cd-begin').textContent = 'Begin Battle ⚔';
+  const title = cmdDeck.querySelector('.cd-title'); if (title) title.textContent = 'Battle Plan';
+  renderAll();
+}
+function beginBattle() {
+  if (mode !== 'plan') return;
+  clearSelection();
+  cmdDeck.classList.add('battle'); cmdDeck.classList.remove('open');
+  hud.classList.remove('hidden');
+  mode = 'battle'; gameRunning = true; commandPanelOpen = false; timeScale = 1;
+  player.pos.set(0, 0, 0); player.vel.set(0, 0, 0); player.obj.position.set(0, 0, 0);
+  player.alive = true; player.hp = player.maxHp; player.stamina = player.maxStam;
+  showWaveBanner('Clash!', 'Hold the line! · press Esc to command your squads');
+  if (canvas.requestPointerLock) canvas.requestPointerLock();
+}
+function openCommandDeck() { // mid-battle: cursor freed (pointer-lock lost) -> tactical command
+  if (mode !== 'battle' || commandPanelOpen) return;
+  commandPanelOpen = true; timeScale = 0.18; // tactical slow while you give orders
+  cmdDeck.classList.add('open');
+  document.getElementById('cd-begin').textContent = 'Resume ⚔';
+  const title = cmdDeck.querySelector('.cd-title'); if (title) title.textContent = 'Command';
+  renderAll();
+}
+function resumeBattle() {
+  commandPanelOpen = false; timeScale = 1;
+  cmdDeck.classList.remove('open');
+  clearSelection();
+  if (canvas.requestPointerLock) canvas.requestPointerLock();
+}
+// a high, tilted overview of the field — your side near, the enemy host beyond
+function updatePlanCamera(dt) {
+  // a steep top-down tilt that FOLLOWS the player and looks forward up the field, so
+  // your line sits front-and-centre and the enemy marches into view as the lines close
+  const k = clamp(dt * 5, 0, 1);
+  // centre on the warband's mass so the camera rides the advance into the clash,
+  // not on the player (who may hang back to command)
+  let cx = player.pos.x, cz = player.pos.z, n = 0, sx = 0, sz = 0;
+  for (const a of allies) if (a.alive) { sx += a.pos.x; sz += a.pos.z; n++; }
+  if (n) { cx = sx / n; cz = sz / n; }
+  camBase.x = lerp(camBase.x, cx, k);
+  camBase.y = lerp(camBase.y, 62, k);
+  camBase.z = lerp(camBase.z, cz - 48, k);
+  camera.position.copy(camBase);
+  camera.lookAt(cx, 0, cz + 14);
+}
+// tactical input — live in plan AND when the mid-battle command deck is open.
+// LEFT mouse is the one tool: with a squad selected, a CLICK marches it to the spot and a
+// DRAGGED box makes it hold that zone. With nothing selected, the same gestures SELECT
+// (click a soldier -> his squad, drag a box -> box-select). No right-click needed.
+addEventListener('mousedown', (e) => {
+  if (!planActive() || e.button !== 0 || (e.target && e.target.closest && e.target.closest('#cmd-deck'))) return;
+  planDrag = { sx: e.clientX, sy: e.clientY, moved: false, add: e.shiftKey, command: selected.size > 0 };
+});
+addEventListener('mousemove', (e) => {
+  if (!planActive() || !planDrag) return;
+  const x0 = planDrag.sx, y0 = planDrag.sy, x1 = e.clientX, y1 = e.clientY;
+  const box = planDrag.command ? zoneBox : selBox; // gold zone-box when commanding, green select-box otherwise
+  if (Math.abs(x1 - x0) + Math.abs(y1 - y0) > 5) { planDrag.moved = true; if (box) box.style.display = 'block'; }
+  if (box) {
+    box.style.left = Math.min(x0, x1) + 'px'; box.style.top = Math.min(y0, y1) + 'px';
+    box.style.width = Math.abs(x1 - x0) + 'px'; box.style.height = Math.abs(y1 - y0) + 'px';
+  }
+});
+addEventListener('mouseup', (e) => {
+  if (!planActive() || !planDrag) return;
+  if (selBox) selBox.style.display = 'none';
+  if (zoneBox) zoneBox.style.display = 'none';
+  const d = planDrag; planDrag = null;
+  if (d.moved) {
+    if (d.command) { // ordered the selected squad to hold a zone (a tiny scrub is really a move order)
+      const p0 = groundPointAt(d.sx, d.sy), p1 = groundPointAt(e.clientX, e.clientY);
+      if (p0 && p1) {
+        const rect = { minX: Math.min(p0.x, p1.x), maxX: Math.max(p0.x, p1.x), minZ: Math.min(p0.z, p1.z), maxZ: Math.max(p0.z, p1.z) };
+        if (rect.maxX - rect.minX < 4 && rect.maxZ - rect.minZ < 4) deploySelected(p1);
+        else commandZone(rect);
+      }
+    } else setSelection(alliesInBox(d.sx, d.sy, e.clientX, e.clientY), d.add); // box-select
+    return;
+  }
+  // a plain click
+  const a = allyAtPoint(e.clientX, e.clientY);
+  if (a) { // clicked a soldier -> select his whole squad (or just him if ungrouped)
+    const g = a.group != null ? planGroups.find(x => x.id === a.group) : null;
+    if (g) selectGroup(g); else setSelection([a], d.add);
+  } else if (d.command) { // clicked open ground with a squad selected -> march there & hold
+    const p = groundPointAt(e.clientX, e.clientY); if (p) deploySelected(p);
+  } else if (!d.add) setSelection([]);
+});
+addEventListener('contextmenu', (e) => { if (planActive()) e.preventDefault(); });
+function handlePlanKey(e) {
+  if (e.code === 'Enter') { mode === 'plan' ? beginBattle() : resumeBattle(); return; }
+  if (e.code === 'Escape') { if (commandPanelOpen) resumeBattle(); return; }
+  if (e.code === 'KeyH') return commandSelection('hold');     // Hold position
+  if (e.code === 'KeyA') return commandSelection('attack');   // Charge
+  if (e.code === 'KeyF') return commandSelection('free');     // Free / at will
+  if (e.code === 'KeyR') return commandSelection('regroup');  // Regroup on the player
+  if (e.code === 'KeyZ') return commandPace('march');         // March (slow, hold the line)
+  if (e.code === 'KeyX') return commandPace('rush');          // Rush (charge at full speed)
+  if (e.code === 'KeyG') return selectType('all');
+  if (e.code === 'KeyN' && mode === 'plan') return void newGroup();
+  const m = e.code.match(/^Digit([1-9])$/);
+  if (m) { const g = planGroups[(+m[1]) - 1]; if (g) selectGroup(g); }
+}
+function wireCmdDeck() {
+  const deck = document.getElementById('cmd-deck'); if (!deck) return;
+  document.getElementById('cd-begin').addEventListener('click', () => { mode === 'plan' ? beginBattle() : resumeBattle(); });
+  document.getElementById('grp-new').addEventListener('click', () => newGroup());
+  document.getElementById('grp-split').addEventListener('click', () => {
+    const p = document.getElementById('split-pop'); p.classList.toggle('hidden');
+    if (!p.classList.contains('hidden')) renderSplit();
+  });
+  const tab = document.getElementById('cd-tab');
+  if (tab) tab.addEventListener('click', () => { if (mode === 'battle' && !commandPanelOpen) { if (document.exitPointerLock) document.exitPointerLock(); openCommandDeck(); } });
+  renderDeck();
+}
+wireCmdDeck();
+
+// continuously tops up each side from its reserve to keep ~FIELD_CAP on the field
+// (no reset between "waves" — fresh fighters just march in as others fall)
+function fieldBatch() {
+  const fdx = Math.sin(BATTLE_FRONT), fdz = Math.cos(BATTLE_FRONT);
+  const rdx = Math.cos(BATTLE_FRONT), rdz = -Math.sin(BATTLE_FRONT);
+  let allyAlive = 0; for (const a of allies) if (a.alive) allyAlive++;
+  while (allyAlive < FIELD_CAP && playerReserve.length) {
+    const it = playerReserve.pop();
+    const def = it.def || it, char = it.char || null; // tolerate a bare def from legacy callers
+    const lat = rand(-32, 32), depth = rand(-6, 4); // a broad line at your end of the field
+    const a = spawnAlly(clamp(player.pos.x + rdx * lat + fdx * depth, -ARENA + 1, ARENA - 1),
+                        clamp(player.pos.z + rdz * lat + fdz * depth, -ARENA + 1, ARENA - 1),
+                        ALLY_PALETTES[(Math.random() * ALLY_PALETTES.length) | 0], def, char);
+    a.facing = BATTLE_FRONT; allyAlive++;
+  }
+  let enemyAlive = 0; for (const e of enemies) if (e.alive) enemyAlive++;
+  while (enemyAlive < FIELD_CAP && enemyReserve.length) {
+    const r = enemyReserve.pop();
+    const lat = rand(-34, 34), depth = FRONT_GAP - rand(0, 16); // the enemy host, a full no-man's-land away
+    const echar = makeChar(r.type, { team: 'enemy', hero: r.hero, name: r.hero ? r.hero.name : undefined,
+      nameSet: enemyNameSet, renown: r.hero ? 200 : 0, notability: r.hero ? 3 : 1 });
+    const e = spawnEnemy(r.type, clamp(fdx * depth + rdx * lat, -ARENA + 1, ARENA - 1),
+                         clamp(fdz * depth + rdz * lat, -ARENA + 1, ARENA - 1), r.hero, echar);
+    e.facing = BATTLE_FRONT + Math.PI; enemyAlive++;
+  }
+}
+function checkBattleEnd() {
+  if (mode !== 'battle') return;
+  if (enemiesRemaining <= 0) winBattle();
+}
+function winBattle() {
+  mode = 'muster'; gameRunning = false;
+  commandPanelOpen = false; timeScale = 1; // drop tactical-slow/command state on the muster screen
+  if (cmdDeck) cmdDeck.classList.remove('open');
+  // survivors carry their growing careers forward; the fielded fallen are gone for good.
+  // (folds skill/renown into every survivor, drops the dead, re-derives warbandComp, saves)
+  applyBattleGrowth(true);
+  if (battleParty) {
+    lastBattle = { size: battleParty.size, raider: battleParty.raider }; // bounty is scaled to the host you broke
+    const bi = parties.indexOf(battleParty);
+    if (bi >= 0) parties.splice(bi, 1);
+    battleParty.alive = false;
+    if (battleParty.group) { scene.remove(battleParty.group); disposeGroup(battleParty.group); } // siege bands have no map token
+    battleParty = null;
+  }
+  if (siegeCapital) { // the garrison broke — the hold is yours
+    const cap = siegeCapital; siegeCapital = null;
+    cap.owner = PLAYER_REALM; recolorCapital(cap);
+    if (typeof window !== 'undefined' && window.net) window.net.reportCapital(nations.indexOf(cap), PLAYER_REALM.name, 'You took ' + cap.def.name); // your conquest persists in the living world
+    cap.garrison = Math.round(garrisonSize() * 0.5); cap.parleyCd = 3;
+    lastBattle.captured = cap.def.name;
+    if (nations.every(n => n.owner === PLAYER_REALM)) lastBattle.conqueredAll = true;
+  }
+  showMuster();
+}
+
+function startWave(n) {
+  wave = n;
+  waveKills = waveHeroKills = waveLosses = 0; // fresh tally for this wave's XP
+  if (pendingTier) { applyQuality(pendingTier); pendingTier = null; } // hitch hides behind the banner
+  // the field widens with every wave — bigger armies need a bigger battleground
+  applyArenaSize(Math.min(ARENA_BASE + (n - 1) * 5, ARENA_MAX));
+  // the marauder host masses at the point of the map FARTHEST from where you
+  // stand right now, and advances as a battle line. brace your side toward it.
+  const frontYaw = Math.hypot(player.pos.x, player.pos.z) > 2
+    ? Math.atan2(-player.pos.x, -player.pos.z)   // opposite side of the arena
+    : rand(0, Math.PI * 2);                      // center of the map: any front
+  const fdx = Math.sin(frontYaw), fdz = Math.cos(frontYaw); // toward the host area
+  const rdx = Math.cos(frontYaw), rdz = -Math.sin(frontYaw); // along the line (lateral)
+  // face the player and the warband at the actual muster point of the host
+  const cx = fdx * (ARENA - 5), cz = fdz * (ARENA - 5);
+  const faceYaw = Math.atan2(cx - player.pos.x, cz - player.pos.z);
+  player.facing = faceYaw;
+  rallyAllies(faceYaw);
+
+  // MATCHED NUMBERS: the host always fields exactly as many soldiers as your
+  // side (warband + you). Waves get harder through a meaner MIX, not headcount.
+  const total = warbandTotal() + 1;
+  const comp = { archer: 0, thrower: 0, brute: 0, longsword: 0, rogue: 0, grunt: 0 };
+  comp.archer = Math.max(1, Math.round(total * Math.min(0.08 + n * 0.02, 0.2)));
+  comp.thrower = n >= 2 ? Math.round(total * 0.1) : 0;
+  comp.brute = n >= 2 ? Math.round(total * Math.min(0.04 + n * 0.025, 0.22)) : 0;
+  comp.longsword = n >= 3 ? Math.round(total * 0.15) : 0;
+  comp.rogue = n >= 3 ? Math.round(total * 0.12) : 0;
+  let specialists = comp.archer + comp.thrower + comp.brute + comp.longsword + comp.rogue;
+  const trimOrder = ['rogue', 'longsword', 'thrower', 'brute', 'archer'];
+  while (specialists > total) { // small armies: trim specialists before grunts
+    for (const k of trimOrder) {
+      if (comp[k] > 0 && specialists > total) { comp[k]--; specialists--; }
+    }
+  }
+  comp.grunt = total - specialists;
+  // champions lead from wave 2 — EXTRA bodies on top of the matched count
+  const heroCount = n >= 12 ? 3 : n >= 7 ? 2 : n >= 2 ? 1 : 0;
+  const waveHeroes = [];
+  for (let i = 0; i < heroCount; i++) waveHeroes.push(nextHero());
+  let toSpawn = [];
+  // ranged units first → they land in the REAR ranks of the formation (rank 0 is farthest)
+  for (let i = 0; i < comp.archer; i++) toSpawn.push('archer');
+  for (let i = 0; i < comp.thrower; i++) toSpawn.push('thrower');
+  for (let i = 0; i < comp.grunt; i++) toSpawn.push('grunt');
+  for (let i = 0; i < comp.longsword; i++) toSpawn.push('longsword');
+  for (let i = 0; i < comp.brute; i++) toSpawn.push('brute');
+  for (let i = 0; i < comp.rogue; i++) toSpawn.push('rogue');
+  enemiesRemaining = toSpawn.length + waveHeroes.length;
+  // arrange them as a loose block on the far side of the front: wide line, ranks
+  // deep — width capped to the arena, depth spacing tightened for huge hosts
+  const perRank = clamp(Math.ceil(Math.sqrt(toSpawn.length) * 1.7), 4, 26);
+  const ranks = Math.ceil(toSpawn.length / perRank);
+  const depthStep = Math.min(2.8, (ARENA * 1.4) / Math.max(1, ranks));
+  const back = Math.atan2(-fdx, -fdz); // host faces back toward the field (the player)
+  toSpawn.forEach((t, i) => {
+    const rank = Math.floor(i / perRank);
+    const col = i % perRank;
+    const lateral = (col - (perRank - 1) / 2) * 2.5 + rand(-0.5, 0.5);
+    const depth = (ARENA - 5) - rank * depthStep + rand(-0.5, 0.5);
+    const x = clamp(fdx * depth + rdx * lateral, -ARENA + 1, ARENA - 1);
+    const z = clamp(fdz * depth + rdz * lateral, -ARENA + 1, ARENA - 1);
+    const en = spawnEnemy(t, x, z);
+    en.facing = back; // already oriented toward the field as they advance
+  });
+  // heroes stride AHEAD of the host, leading the charge
+  waveHeroes.forEach((hero, i) => {
+    const lateral = (i - (waveHeroes.length - 1) / 2) * 5;
+    const depth = ARENA - 9;
+    const x = clamp(fdx * depth + rdx * lateral, -ARENA + 1, ARENA - 1);
+    const z = clamp(fdz * depth + rdz * lateral, -ARENA + 1, ARENA - 1);
+    const en = spawnEnemy(hero.base, x, z, hero);
+    en.facing = back;
+  });
+  if (waveHeroes.length) {
+    const lead = waveHeroes[0];
+    showWaveBanner('Wave ' + n,
+      (waveHeroes.length > 1 ? lead.name + ' and ' + (waveHeroes.length - 1) + ' more lead the host. ' : lead.name + ' leads the host. ') + '“' + lead.story + '”');
+  } else {
+    showWaveBanner('Wave ' + n);
+  }
+  updateEnemyCount();
+}
+
+function checkWaveClear() {
+  if (gameRunning && !betweenWaves && enemiesRemaining <= 0) {
+    betweenWaves = true; betweenTimer = 1.6; musterOpen = false;
+    // bonus heal
+    player.hp = clamp(player.hp + 25, 0, player.maxHp);
+    showWaveBanner('Wave Cleared!  +25 HP');
+  }
+}
+
+// ---------- Between-wave muster: success earns recruits ----------
+let musterOpen = false;
+const musterOverlay = document.getElementById('muster');
+const musterInfo = document.getElementById('muster-info');
+function showMuster() {
+  musterOpen = true;
+  // XP from the wave: a bounty for each foe (and champion) slain, docked for losses,
+  // PLUS a victory bounty scaled to the whole host you broke — so even hunting a
+  // small bandit pack pays off (floor), and crushing a warband pays handsomely.
+  const captured = lastBattle && lastBattle.captured;
+  const conqueredAll = lastBattle && lastBattle.conqueredAll;
+  const kills = waveKills * KILL_XP + waveHeroKills * HERO_XP - waveLosses * LOSS_XP;
+  // storming a stronghold pays a double bounty — a capital is the real prize
+  const bounty = lastBattle ? Math.max(BAND_XP_FLOOR, Math.round(lastBattle.size * BAND_XP)) * (captured ? 2 : 1) : 0;
+  const earned = Math.max(KILL_XP, kills) + bounty;
+  xp += earned;
+  lastBattle = null;
+  const heroBit = waveHeroKills ? ` (${waveHeroKills} champion${waveHeroKills > 1 ? 's' : ''})` : '';
+  const lossBit = waveLosses ? `, lost ${waveLosses}` : ' without a loss';
+  const musterTitle = musterOverlay.querySelector('h1');
+  if (captured) {
+    musterTitle.textContent = conqueredAll ? 'The Realm Is Yours' : captured + ' Has Fallen';
+    musterInfo.textContent = `${captured} flies your banner now.  +${earned} XP. ` +
+      (conqueredAll ? 'Every hold in this land is yours — march on to new shores.' : 'Reinforce, then march on.');
+    if (conqueredAll) advanceRegion = true;
+  } else {
+    musterTitle.textContent = 'Wave Cleared';
+    musterInfo.textContent =
+      `Battle won — slew ${waveKills}${heroBit}${lossBit}.  +${earned} XP (incl. +${bounty} bounty). Reinforce, then march on.`;
+  }
+  // the picker lives wherever it's needed; pull it in front of the march button
+  musterOverlay.insertBefore(document.getElementById('warband-picker'), document.getElementById('next-wave-btn'));
+  renderWarbandPicker();
+  if (document.exitPointerLock) document.exitPointerLock(); // free the cursor for the UI
+  pointerLocked = false;
+  musterOverlay.classList.remove('hidden');
+}
+document.getElementById('next-wave-btn').addEventListener('click', () => {
+  musterOpen = false;
+  enterMap(); // back to the overworld with your reinforced (or reduced) party
+});
+
+// ---------- Encounters: meeting a band (parley) or a stronghold (siege) ----------
+const encOverlay = document.getElementById('encounter');
+const encTitle = encOverlay.querySelector('h1');
+const encInfo = document.getElementById('enc-info');
+const encAttackBtn = document.getElementById('enc-attack');
+const encHailBtn = document.getElementById('enc-hail');
+const swatch = (color) => `<span style="display:inline-block;width:14px;height:14px;border-radius:3px;` +
+  `vertical-align:middle;margin-right:9px;background:#${color.toString(16).padStart(6, '0')};` +
+  `border:1px solid rgba(255,255,255,.45)"></span>`;
+function openEncounter(band) {
+  encounter = { kind: 'band', band };
+  player.vel.set(0, 0, 0);
+  encTitle.textContent = 'Banners Meet';
+  encAttackBtn.textContent = 'Attack'; encHailBtn.textContent = 'Say Hi'; encAttackBtn.style.display = '';
+  const kind = band.size <= 5 ? 'raiding pack' : 'war host';
+  encInfo.innerHTML = `${swatch(band.faction.color)}A ${kind} of <b>${band.faction.name}</b> — ${band.size} strong. They have no quarrel with you. Your word?`;
+  encOverlay.classList.remove('hidden');
+}
+function openSiege(cap) {
+  encounter = { kind: 'capital', cap };
+  player.vel.set(0, 0, 0);
+  const yours = cap.owner === PLAYER_REALM;
+  encTitle.textContent = yours ? 'Your Stronghold' : 'A Stronghold';
+  encInfo.innerHTML = yours
+    ? `${swatch(cap.owner.color)}<b>${cap.def.name}</b> flies your banner. The garrison salutes you.`
+    : `${swatch(cap.owner.color)}<b>${cap.def.name}</b>, a ${cap.owner.name} hold — garrison <b>${cap.garrison}</b>. Storm the walls?`;
+  encAttackBtn.textContent = 'Lay Siege'; encHailBtn.textContent = 'Leave';
+  encAttackBtn.style.display = yours ? 'none' : '';
+  encOverlay.classList.remove('hidden');
+}
+function closeEncounter() { encOverlay.classList.add('hidden'); encounter = null; }
+// lay siege: fight the garrison as a pitched battle, in the hold's biome
+function startSiege(cap) {
+  siegeCapital = cap;
+  enterBattle({ size: cap.garrison, level: mapLevel, alive: true, raider: false, pos: { x: cap.x, z: cap.z }, group: null });
+  showWaveBanner('Siege of ' + cap.def.name, 'Break the ' + cap.owner.name + ' garrison — ' + cap.garrison + ' strong behind the walls!');
+}
+encAttackBtn.addEventListener('click', () => {
+  const e = encounter; closeEncounter(); if (!e) return;
+  if (e.kind === 'band') { if (e.band && e.band.alive) enterBattle(e.band); }
+  else startSiege(e.cap);
+});
+encHailBtn.addEventListener('click', () => {
+  const e = encounter; closeEncounter(); if (!e) return;
+  if (e.kind === 'band') { if (e.band) { e.band.parleyCd = 6; showWaveBanner('Parley', 'You hail the ' + e.band.faction.name + ' ' + (e.band.size <= 5 ? 'pack' : 'host') + '. They give you the road and march on.'); } }
+  else { e.cap.parleyCd = 3; } // leave the gates be
+});
+
+// ---------- HUD ----------
+const hud = document.getElementById('hud');
+const hpFill = document.getElementById('hp-fill');
+const stamFill = document.getElementById('stam-fill');
+const scoreEl = document.getElementById('score');
+const enemyCountEl = document.getElementById('enemy-count');
+const waveBanner = document.getElementById('wave-banner');
+const comboEl = document.getElementById('combo');
+const damageFlash = document.getElementById('damage-flash');
+
+// HUD style writes are gated on change — touching style every frame forces
+// style recalc, which costs real ms on cheap phones
+const hudPrev = { hp: -1, stam: -1, hot: null };
+function updateHUD() {
+  const hp = Math.round(clamp(player.hp / player.maxHp * 100, 0, 100));
+  const stam = Math.round(clamp(player.stamina / player.maxStam * 100, 0, 100));
+  const hot = player.stamina < 40;
+  if (hp !== hudPrev.hp) { hudPrev.hp = hp; hpFill.style.width = hp + '%'; }
+  if (stam !== hudPrev.stam) { hudPrev.stam = stam; stamFill.style.width = stam + '%'; }
+  if (hot !== hudPrev.hot) {
+    hudPrev.hot = hot;
+    // fatigue warning: the bar turns hot once swings start slowing (below 40)
+    stamFill.style.background = hot ? 'linear-gradient(90deg,#ffb04d,#ff6b4d)' : '';
+  }
+}
+function addScore(n) { score += n; scoreEl.textContent = score.toLocaleString(); }
+function updateEnemyCount() { enemyCountEl.textContent = 'Enemies: ' + Math.max(0, enemiesRemaining); }
+let bannerTimer = 0;
+const waveSub = document.getElementById('wave-sub');
+function showWaveBanner(text, sub = '') {
+  waveBanner.textContent = text; waveBanner.style.opacity = '1';
+  waveSub.textContent = sub; waveSub.style.opacity = sub ? '1' : '0';
+  bannerTimer = sub ? 4.5 : 2.2; // give the story time to be read
+}
+function showCombo(n) {
+  if (n < 2) { comboEl.style.opacity = '0'; return; }
+  comboEl.textContent = n + 'x COMBO';
+  comboEl.style.opacity = '1';
+  comboEl.style.transform = 'translateX(-50%) scale(1.25)';
+  requestAnimationFrame(() => comboEl.style.transform = 'translateX(-50%) scale(1)');
+}
+function hideCombo() { comboEl.style.opacity = '0'; }
+let dmgVignette = 0; // 0..1, written to #damage-flash only when it changes
+let lastVig = '';
+function flashDamage(strength = 0.8) { dmgVignette = Math.max(dmgVignette, clamp(strength, 0, 1)); }
+
+// ---------- Game flow ----------
+const startOverlay = document.getElementById('start');
+const gameoverOverlay = document.getElementById('gameover');
+const goSummary = document.getElementById('go-summary');
+
+function startGame() {
+  clearBattlefield();
+  clearParties();
+  if (player.obj) { scene.remove(player.obj); disposeGroup(player.obj); }
+  loadCareers();   // hydrate the player's character + warband careers from the local mirror
+  initPlayer();
+
+  score = 0; addScore(0);
+  wave = 0; betweenWaves = false; musterOpen = false; mapLevel = 0;
+  shuffleHeroDeck(); // fresh campaign, fresh villains
+  worldReflected = false; if (typeof window !== 'undefined' && window.net) window.net.loadWorld(); // refresh the living-world digest on login
+  startOverlay.classList.add('hidden');
+  gameoverOverlay.classList.add('hidden');
+  hud.classList.remove('hidden');
+  renderWarbandPicker();
+  enterMap(); // begin on the overworld, not straight into a fight
+}
+
+function doGameOver() {
+  if (!player.alive) return;
+  player.alive = false;
+  if (playerChar) playerChar.deaths++;
+  applyBattleGrowth(false); // the fight is lost, but the survivors keep what they learned
+  gameRunning = false;
+  commandPanelOpen = false; timeScale = 1; // clear tactical-slow/command state behind the overlay
+  if (cmdDeck) cmdDeck.classList.remove('open');
+  if (document.exitPointerLock) document.exitPointerLock(); // free the cursor for the overlay
+  // ragdoll-ish: tip over
+  player.obj.rotation.z = Math.PI / 2.4;
+  goSummary.textContent = `You fell in battle ${wave}, scoring ${score.toLocaleString()} points.`;
+  setTimeout(() => { gameoverOverlay.classList.remove('hidden'); }, 900);
+}
+
+// start screen keeps your composed army; Fight Again starts a fresh economy
+document.getElementById('start-btn').addEventListener('click', () => startGame());
+document.getElementById('restart-btn').addEventListener('click', () => { resetEconomy(); startGame(); });
+
+// ---------- Warband picker (XP-driven) ----------
+function renderWarbandPicker() {
+  for (const k of WARBAND_KEYS) document.getElementById('wp-' + k).textContent = warbandComp[k];
+  document.getElementById('wp-total').textContent = warbandTotal();
+  document.getElementById('wp-xp').textContent = 'XP ' + xp;
+  // grey out a + you can't afford
+  document.querySelectorAll('#warband-picker button').forEach(btn => {
+    const d = parseInt(btn.dataset.d, 10);
+    btn.disabled = d > 0 && xp < UNIT_COST[btn.dataset.t];
+    btn.style.opacity = btn.disabled ? '0.35' : '';
+  });
+}
+document.querySelectorAll('#warband-picker button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const t = btn.dataset.t, d = parseInt(btn.dataset.d, 10), cost = UNIT_COST[t];
+    if (d > 0) {
+      const n = Math.min(d, Math.floor(xp / cost)); // buy only what you can afford
+      if (n <= 0) return;
+      warbandComp[t] += n; xp -= n * cost;
+    } else {
+      const n = Math.min(-d, warbandComp[t]); // refund returns the XP
+      if (n <= 0) return;
+      warbandComp[t] -= n; xp += n * cost;
+    }
+    renderWarbandPicker();
+  });
+});
+resetEconomy();
+renderWarbandPicker();
+
+// ---------- FPS governor: steps the quality tier down if the device can't keep up ----------
+function applyQuality(tier) {
+  qualityTier = tier;
+  const t = TIERS[tier];
+  renderer.setPixelRatio(t.pixelRatio);
+  renderer.shadowMap.enabled = t.shadows;
+  sun.castShadow = t.shadows;
+  if (t.shadows && sun.shadow.map && sun.shadow.mapSize.x !== t.shadowSize) {
+    sun.shadow.map.dispose(); sun.shadow.map = null;
+    sun.shadow.mapSize.set(t.shadowSize, t.shadowSize);
+  }
+  let lit = 0;
+  for (const torch of torches) {
+    if (torch.userData.light) torch.userData.light.visible = lit++ < t.torchLights;
+  }
+  // materials must recompile when the shadow/light state flips (r128 bakes both
+  // into the shader program); prewarm so the hitch happens HERE, not mid-swing
+  scene.traverse(o => { if (o.isMesh && o.material) o.material.needsUpdate = true; });
+  renderer.compile(scene, camera);
+  try { localStorage.setItem('bv-quality', tier); } catch (e) { /* fine */ }
+}
+// Tier downgrades that change lights/shadows force a full shader recompile —
+// a multi-hundred-ms hitch on weak GPUs. So: drop pixel ratio IMMEDIATELY
+// (free), and defer the recompiling part to the next wave banner.
+let pendingTier = null;
+let fpsAccum = 0, fpsFrames = 0, fpsWindow = 0;
+function governFps(dt) {
+  fpsAccum += dt; fpsFrames++; fpsWindow += dt;
+  if (fpsWindow < 4) return; // judge in 4s windows
+  const avg = fpsFrames / fpsAccum;
+  fpsAccum = 0; fpsFrames = 0; fpsWindow = 0;
+  if (avg < 42 && !pendingTier) {
+    const next = qualityTier === 'high' ? 'medium' : qualityTier === 'medium' ? 'low' : null;
+    if (next) {
+      renderer.setPixelRatio(TIERS[next].pixelRatio); // instant relief, no recompile
+      pendingTier = next;                              // the rest lands behind a banner
+    }
+  }
+}
+
+// ---------- Main loop ----------
+let last = performance.now();
+let frameNo = 0;
+function loop(now) {
+  const dt = Math.min((now - last) / 1000, 0.05);
+  last = now;
+  rtNow = now / 1000;
+  frameNo++;
+
+  // menu idles at ~20fps: no reason to cook the phone before the fight starts
+  if (!gameRunning && !startOverlay.classList.contains('hidden') && frameNo % 3) {
+    requestAnimationFrame(loop);
+    return;
+  }
+
+  if (!BV.freeze) {
+    if (gameRunning) governFps(dt); // auto-degrade quality if the device struggles
+    // hit-stop: gameplay crawls for a few frames on impact; camera/FX timing stay real-time
+    let gdt = dt * timeScale; // tactical-slow while the mid-battle command deck is open
+    if (hitstop > 0) { hitstop -= dt; gdt = dt * 0.08 * timeScale; }
+    elapsed += gdt;
+
+    // ambient torch flicker (not every torch carries a real light on lower tiers)
+    for (const t of torches) {
+      const f = 0.85 + Math.sin(now * 0.01 + t.position.x) * 0.15 + Math.random() * 0.1;
+      if (t.userData.light) t.userData.light.intensity = 1.2 * f;
+      t.userData.flame.scale.setScalar(0.85 + f * 0.25);
+    }
+
+    // huge battles re-pick targets every few frames instead of every frame —
+    // target stickiness hides the staleness, and it keeps the director O(small)
+    const fighterCount = enemies.length + allies.length;
+    const resolveEvery = fighterCount > 240 ? 4 : fighterCount > 100 ? 2 : 1;
+    if (mode === 'map') {
+      updateMap(gdt);
+    } else if (mode === 'plan') {
+      // deployment phase — the battlefield is staged and still while you plan
+    } else if (mode === 'battle' && gameRunning) {
+      updatePlayer(gdt);
+      rebuildSepGrid();
+      if (frameNo % resolveEvery === 0) resolveTargets();
+      updateAllies(gdt);
+      updateEnemies(gdt);
+      updateProjectiles(gdt);
+      fieldBatch();      // top up each side from its reserve — continuous reinforcement
+      checkBattleEnd();
+    } else if (mode !== 'menu' && player.obj) {
+      // player has fallen (or muster screen up) — the battle plays on behind the overlay
+      rebuildSepGrid();
+      if (frameNo % resolveEvery === 0) resolveTargets();
+      updateAllies(gdt);
+      updateEnemies(gdt);
+      updateProjectiles(gdt);
+    }
+
+    if (bannerTimer > 0) {
+      bannerTimer -= dt;
+      if (bannerTimer <= 0) { waveBanner.style.opacity = '0'; waveSub.style.opacity = '0'; }
+    }
+
+    updateSparks(gdt);
+    updateArcs(gdt);
+    updatePopups(gdt);
+    if (mode === 'map') updateMapCamera(dt);
+    else if (mode === 'plan' || commandPanelOpen) updatePlanCamera(dt);
+    else if (player.obj) updateCamera(dt);
+
+    // damage vignette: impact flash decays; low health pulses the edges red
+    dmgVignette = Math.max(0, dmgVignette - dt * 2.2);
+    let vig = dmgVignette;
+    if (gameRunning && player.alive) {
+      const r = player.hp / player.maxHp;
+      if (r < 0.35) vig = Math.max(vig, (1 - r / 0.35) * (0.45 + 0.18 * Math.sin(rtNow * 5)));
+    }
+    const vigStr = vig < 0.005 ? '0' : vig.toFixed(2);
+    if (vigStr !== lastVig) { lastVig = vigStr; damageFlash.style.opacity = vigStr; }
+  }
+
+  renderer.render(scene, camera);
+  requestAnimationFrame(loop);
+}
+
+// ---------- Boot ----------
+buildWorld();
+// preview character on the menu
+initPlayer();
+camera.position.set(0, 12, 16);
+camera.lookAt(0, 1.6, 0);
+requestAnimationFrame(loop);
+
+addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// expose internals for live pose tuning / verification
+BV.player = player; BV.enemies = enemies; BV.POSES = POSES; BV.setPose = setPose;
+BV.updateAnimator = updateAnimator; BV.camera = camera; BV.scene = scene;
+BV.packRoles = () => enemies.filter(e => e.alive).map(e => ({ type: e.type, role: e.role, state: e.state }));
+BV.allies = allies;
+BV.projectiles = projectiles;
+BV.battleStats = () => ({
+  alliesAlive: allies.filter(a => a.alive).length,
+  enemiesAlive: enemies.filter(e => e.alive).length,
+  projectilesInFlight: projectiles.length,
+});
+BV.perf = () => ({
+  tier: qualityTier,
+  drawCalls: renderer.info.render.calls,
+  triangles: renderer.info.render.triangles,
+  geometries: renderer.info.memory.geometries,
+  textures: renderer.info.memory.textures,
+  programs: renderer.info.programs ? renderer.info.programs.length : -1,
+});
+BV.setQuality = applyQuality;
+BV.renderer = renderer;
+BV.debugKillAll = () => { for (const e of enemies) if (e.alive) killEnemy(e, false); };
+BV.showMuster = showMuster;
+BV.setXp = (n) => { xp = Math.max(0, n | 0); renderWarbandPicker(); };
+BV.econ = () => ({ xp, army: warbandTotal(), cost: warbandCost(), waveKills, waveHeroKills, waveLosses });
+BV.world = () => ({ mode, mapLevel, parties: parties.filter(p => p.alive).length,
+  playerReserve: playerReserve.length, enemyReserve: enemyReserve.length, enemiesRemaining,
+  alliesAlive: allies.filter(a => a.alive).length, enemiesAlive: enemies.filter(e => e.alive).length, arena: ARENA });
+BV.enterBattleWith = (size) => { enterBattle({ size, level: mapLevel, alive: true, raider: size <= 5, pos: player.pos.clone(), group: makePartyToken(size) }); };
+BV.biomeAt = (x, z) => biomeAt(x, z).name;
+BV.factions = () => parties.filter(p => p.alive).map(p => ({ size: p.size, faction: p.faction.name }));
+BV.parties = parties; // live band array — debug/verification (read positions, force a clash)
+BV.nations = () => nations.map(n => ({ name: n.def.name, owner: n.owner.name, garrison: n.garrison, x: Math.round(n.x), z: Math.round(n.z) }));
+BV.allyOrders = () => { const o = {}; for (const a of allies) if (a.alive) o[a.order] = (o[a.order] || 0) + 1; return o; };
+BV.allyStats = () => { const g = {}; for (const a of allies) if (a.alive) { const k = defKey(a.def) + ':' + a.order; (g[k] = g[k] || { n: 0, x: 0, z: 0 }); g[k].n++; g[k].x += a.pos.x; g[k].z += a.pos.z; } const o = {}; for (const k in g) o[k] = { n: g[k].n, avgX: Math.round(g[k].x / g[k].n), avgZ: Math.round(g[k].z / g[k].n) }; return o; };
+BV.plan = { selectType, deploySelected, beginBattle, selCount: () => selected.size,
+  newGroup, assignToGroup, splitIntoGroups, orderGroup, openCommandDeck, resumeBattle, countPool,
+  selectGroup: (i) => { const g = planGroups[i]; if (g) selectGroup(g); },
+  orderG: (i, preset) => { const g = planGroups[i]; if (g) orderGroup(g, preset); },
+  zoneG: (i, rect) => { const g = planGroups[i]; if (g) setGroupZone(g, rect); },     // {minX,maxX,minZ,maxZ}
+  paceG: (i, pace) => { const g = planGroups[i]; if (g) setGroupPace(g, pace); },      // 'march' | 'rush'
+  groups: () => planGroups.map(g => ({ name: g.name, order: g.order, pace: g.pace, zone: g.zone, n: allies.filter(a => a.alive && a.group === g.id).length,
+    comp: CLASS_KEYS.map(k => k + ':' + allies.filter(a => a.alive && a.group === g.id && defKey(a.def) === k).length).filter(s => !s.endsWith(':0')).join(' ') })),
+  commandPanelOpen: () => commandPanelOpen };
+BV.siege = (i) => { const c = nations[i]; if (c) openSiege(c); };
+BV.advance = (secs, dt = 0.016) => { // deterministic battle stepping for headless timing tests
+  const n = Math.round(secs / dt);
+  for (let i = 0; i < n && mode === 'battle' && gameRunning; i++) {
+    frameNo++;
+    updatePlayer(dt); rebuildSepGrid(); resolveTargets();
+    updateAllies(dt); updateEnemies(dt); updateProjectiles(dt); fieldBatch(); checkBattleEnd();
+  }
+  return { mode, frameNo, kills: waveKills };
+};
+BV.advanceMap = (secs, dt = 0.05) => { // deterministic overworld stepping (off-map wars) for headless tests
+  const n = Math.round(secs / dt);
+  for (let i = 0; i < n && mode === 'map' && !encounter; i++) { frameNo++; updateMap(dt); }
+  return { mode, parties: parties.filter(p => p.alive).length };
+};
+BV.dbg = () => { const a = allies.find(x => x.alive && !x.def.ranged); const e = enemies.find(x => x.alive);
+  return { gameRunning, mode, freeze: BV.freeze, frameNo, alliesN: allies.length, enemiesN: enemies.length,
+    ally: a ? { state: a.state, order: a.order, hasTgt: !!(a.target && a.target.alive), dist: a.target ? Math.round(a.pos.distanceTo(a.target.pos)) : -1, z: Math.round(a.pos.z), vel: +a.vel.length().toFixed(2) } : null,
+    enemyZ: e ? Math.round(e.pos.z) : null }; };
+BV.isWater = (x, z) => isWater(x, z);
+BV.fieldBatch = fieldBatch;
+BV.killFielded = () => { for (const e of enemies) if (e.alive) killEnemy(e, true); checkBattleEnd(); };
+BV.dmg = { damagePlayer, damageEnemy, damageCombatant };
+BV.spawnProjectile = spawnProjectile;
+
+// ---------- Charsheet: inspect any soldier's career (press V) ----------
+const charsheetOverlay = document.getElementById('charsheet');
+function csSkill(label, raw) {
+  const pct = Math.round(effSkill(raw));
+  return '<div class="cs-skill"><span>' + label + '</span><div class="cs-bar"><i style="width:' + pct + '%"></i></div><b>' + pct + '</b></div>';
+}
+function csCard(c, isYou) {
+  return '<div class="cs-card' + (isYou ? ' you' : '') + '">' +
+    '<div class="cs-name">' + c.name + (isYou ? ' <em>(you)</em>' : '') + ' <span class="cs-rank">' + c.rank + '</span></div>' +
+    '<div class="cs-meta">' + classKeyOf(c.archetype) + ' · Renown ' + Math.round(c.renown) + ' · ' + c.kills + ' kills · ' +
+      c.battles + ' battles' + (c.battlesWon ? ' (' + c.battlesWon + ' won)' : '') + '</div>' +
+    csSkill('Strike', c.skills.strike) + csSkill('Guard', c.skills.guard) +
+    '<div class="cs-stat">+' + c.dmgBonus + ' dmg · +' + c.hpBonus + ' HP · guard ×' + c.guardEff.toFixed(2) + '</div>' +
+  '</div>';
+}
+function renderCharsheet() {
+  if (!charsheetOverlay) return;
+  if (!playerChar) loadCareers();
+  const body = document.getElementById('cs-body');
+  const roster = warbandRoster.slice().sort((a, b) => b.renown - a.renown);
+  body.innerHTML = (playerChar ? csCard(playerChar, true) : '') +
+    (roster.length ? roster.map(c => csCard(c, false)).join('') : '<div class="cs-empty">No warband mustered yet — recruit, then march.</div>');
+}
+function toggleCharsheet(force) {
+  if (!charsheetOverlay) return;
+  const willShow = force !== undefined ? force : charsheetOverlay.classList.contains('hidden');
+  if (willShow) { renderCharsheet(); charsheetOverlay.classList.remove('hidden'); if (document.exitPointerLock) document.exitPointerLock(); }
+  else charsheetOverlay.classList.add('hidden');
+}
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'KeyV') { e.preventDefault(); toggleCharsheet(); }
+  else if (e.code === 'Escape' && charsheetOverlay && !charsheetOverlay.classList.contains('hidden')) toggleCharsheet(false);
+});
+const csClose = document.getElementById('cs-close');
+if (csClose) csClose.addEventListener('click', () => toggleCharsheet(false));
+BV.careers = () => ({ player: playerChar && serChar(playerChar), warband: warbandRoster.map(serChar) });
+BV.fieldNames = () => ({ allies: allies.filter(a => a.alive).map(a => a.char && a.char.name), enemies: enemies.filter(en => en.alive).map(en => en.char && en.char.name) });
+BV.killFeed = () => battleKillFeed.slice();
+BV.toggleCharsheet = toggleCharsheet;
+
+// ---------- Living world: reflect the server's always-on world on login ----------
+// The backend wars on while you're away; on login we mirror its capital ownership onto this
+// region's holds and show a "while you were away" digest of what changed. (Step 4.)
+let worldReflected = false;
+const whileawayOverlay = document.getElementById('whileaway');
+function nationByName(nm) { if (PLAYER_REALM && nm === PLAYER_REALM.name) return PLAYER_REALM; for (const n of NATIONS) if (n.name === nm) return n; return null; }
+function showWhileAway(w) {
+  if (!whileawayOverlay || !w || !w.events || !w.events.length) return;
+  const tag = (t) => t === 'capital_taken' ? 'cap' : t === 'leader_fell' ? 'fell' : t === 'warlord_rose' ? 'rose' : '';
+  document.getElementById('wa-body').innerHTML = w.events.slice(0, 24).map(e => '<div class="wa-ev ' + tag(e.type) + '">' + e.summary + '</div>').join('');
+  const sub = document.getElementById('wa-sub'); if (sub) sub.textContent = w.events.length + ' tidings reached you while you were away.';
+  whileawayOverlay.classList.remove('hidden');
+  if (document.exitPointerLock) document.exitPointerLock();
+  try { localStorage.setItem('bv-lastseen-tick', String(w.simTick || 0)); } catch (e) {}
+}
+function applyServerWorldOnce() {
+  if (worldReflected) return;
+  const w = (typeof window !== 'undefined' && window.net && window.net.world);
+  if (!w) return;
+  worldReflected = true;
+  if (w.capitals) for (const sc of w.capitals) {
+    const cap = nations.find(c => c.def && c.def.name === sc.def_name);
+    if (cap) { const own = nationByName(sc.owner_name); if (own && own !== cap.owner) { cap.owner = own; recolorCapital(cap); } }
+  }
+  showWhileAway(w);
+}
+if (whileawayOverlay) { const wc = document.getElementById('wa-close'); if (wc) wc.addEventListener('click', () => whileawayOverlay.classList.add('hidden')); }
+BV.serverWorld = () => (typeof window !== 'undefined' && window.net && window.net.world);
+
+})();

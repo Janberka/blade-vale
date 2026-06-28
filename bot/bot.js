@@ -181,21 +181,36 @@ async function main() {
   };
 
   // ---- REPL ----
+  // Commands are serialized through a queue: readline fires 'line' back-to-back when stdin is
+  // piped (a script), so we must finish one async command before starting the next, and we must
+  // not exit on EOF until the queue has drained.
   startBeat();
   out(`\nBlade Vale bot — ${me.name} ready. Type "help" for commands. (heartbeat live in the shared world)\n`);
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: me.name.split(' ')[0].toLowerCase() + '> ' });
+  let done = false;
   const cleanup = () => { if (beat) clearInterval(beat); coop.disconnect(); };
-  rl.prompt();
-  rl.on('line', async (line) => {
+  const finish = () => { if (done) return; done = true; cleanup(); rl.close(); process.exit(0); };
+
+  async function handleLine(line) {                  // returns true to stop the REPL
     const parts = line.trim().split(/\s+/), cmd = parts[0];
-    if (!cmd) { rl.prompt(); return; }
-    if (cmd === 'quit' || cmd === 'exit') { cleanup(); rl.close(); return; }
+    if (!cmd) return false;
+    if (cmd === 'quit' || cmd === 'exit') return true;
     const fn = cmds[cmd];
-    if (!fn) { out('unknown command: ' + cmd + ' (try "help")'); rl.prompt(); return; }
+    if (!fn) { out('unknown command: ' + cmd + ' (try "help")'); return false; }
     try { await fn(...parts.slice(1)); } catch (e) { out('error: ' + ((e && e.message) || e)); }
-    rl.prompt();
-  });
-  rl.on('close', () => { cleanup(); process.exit(0); });
+    return false;
+  }
+
+  const queue = []; let draining = false, inputClosed = false;
+  async function drain() {
+    if (draining) return; draining = true;
+    while (queue.length) { if (await handleLine(queue.shift())) { finish(); return; } }
+    draining = false;
+    if (inputClosed) finish(); else rl.prompt();
+  }
+  rl.prompt();
+  rl.on('line', (line) => { queue.push(line); drain(); });
+  rl.on('close', () => { inputClosed = true; if (!draining && !queue.length) finish(); });
 }
 
 const HELP = [

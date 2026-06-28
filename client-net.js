@@ -54,16 +54,28 @@
     return jfetch('/deeds', { method: 'POST', body: JSON.stringify({ deeds: deeds }) }).catch(function () { return null; });
   };
 
-  // ----- the always-on living world (Step 4) -----
+  // ----- the always-on living world (Step 4) + positional armies & multiplayer presence (refinements) -----
   function lastSeenTick() { try { return parseInt(localStorage.getItem('bv-lastseen-tick') || '0', 10) || 0; } catch (e) { return 0; } }
+  // shared-world (multiplayer) toggle: ?mp in the URL, or localStorage 'bv-mp'
+  var SHARED = false;
+  try { SHARED = /[?&]mp(=|&|$)/.test(location.search) || localStorage.getItem('bv-mp') === '1'; } catch (e) {}
+  net.sharedWorld = SHARED;
+  function worldHeaders() { return SHARED ? { 'X-World': 'shared' } : {}; }
+
   net.world = null;
   net.loadWorld = function (since) {
-    return jfetch('/world?since=' + (since != null ? since : lastSeenTick()), { method: 'GET' })
+    return jfetch('/world?since=' + (since != null ? since : lastSeenTick()), { method: 'GET', headers: worldHeaders() })
       .then(function (w) { net.online = true; net.world = w; return w; })
       .catch(function () { return null; });
   };
   net.reportCapital = function (idx, owner, summary) {
-    return jfetch('/world/capital', { method: 'POST', body: JSON.stringify({ idx: idx, owner: owner, summary: summary }) }).catch(function () { return null; });
+    return jfetch('/world/capital', { method: 'POST', headers: worldHeaders(), body: JSON.stringify({ idx: idx, owner: owner, summary: summary }) }).catch(function () { return null; });
+  };
+  net.sendPresence = function (info) { // the player's banner heartbeat (multiplayer)
+    return jfetch('/world/presence', { method: 'POST', headers: worldHeaders(), body: JSON.stringify(info) }).catch(function () { return null; });
+  };
+  net.reportArmyDefeat = function (armyId) { // you broke this server army in person
+    return jfetch('/world/army/defeat', { method: 'POST', headers: worldHeaders(), body: JSON.stringify({ armyId: armyId }) }).catch(function () { return null; });
   };
   // pre-fetch the world alongside the profile so the digest is ready when the player starts
   net.worldReady = net.loadWorld();

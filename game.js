@@ -2653,7 +2653,7 @@ function enterMap() {
   player.obj.scale.y = 1; player.obj.rotation.set(0, 0, 0);
   cameraAngle = 0; // top-down map: W = up the screen (toward -Z), D = right
   mapSpawnT = 6;
-  if (advanceRegion || !parties.some(p => p.alive)) { advanceRegion = false; clearParties(); mapLevel++; placeCapitals(); spawnMapParties(); }
+  if (advanceRegion || !parties.some(p => p.alive)) { advanceRegion = false; clearParties(); mapLevel++; placeCapitals(); if (isServerMap()) syncPartiesFromServer(); else spawnMapParties(); }
   applyServerWorldOnce(); // mirror the server's living world (capital owners) + show what changed while away
   // strategic worldmap dressing: biome terrain in, battle set-dressing out, neutral sky
   buildMapTerrain();
@@ -2755,6 +2755,7 @@ function landStep(x, z, dx, dz) {
 
 function updateMap(dt) {
   if (encounter) return; // a parley/siege prompt is open — the whole map holds until you choose
+  const serverDriven = isServerMap(); // when online, the server owns the macro war (clashes/conquests)
   // the party glides across the map as a banner; faster than enemy bands so you can flee
   const dir = inputDir();
   if (dir.lengthSq() > 0) {
@@ -2815,7 +2816,7 @@ function updateMap(dt) {
   }
 
   // rival hosts that have collided clash among themselves
-  for (let i = 0; i < parties.length; i++) {
+  for (let i = 0; !serverDriven && i < parties.length; i++) {
     const a = parties[i];
     if (!a.alive || a.clashCd > 0) continue;
     for (let j = i + 1; j < parties.length; j++) {
@@ -2827,6 +2828,7 @@ function updateMap(dt) {
   }
   // a host that reaches a rival hold strong enough storms it — the banner changes hands
   for (const band of parties) {
+    if (serverDriven) break;
     if (!band.alive) continue;
     for (const cap of nations) {
       if (cap.owner === band.faction || cap.conquerCd > 0) continue;
@@ -2841,12 +2843,13 @@ function updateMap(dt) {
   // wars and your hunts thin the bands, fresh hosts march in to replace them
   aliveParties = parties.length;
   mapSpawnT -= dt;
-  if (mapSpawnT <= 0) {
+  if (!serverDriven && mapSpawnT <= 0) {
     mapSpawnT = 2.2;
     let add = Math.min(3, targetPopulation() - aliveParties);
     while (add-- > 0) { reinforceMap(); aliveParties++; }
   }
-  if (aliveParties === 0) enterMap(); // somehow emptied → next, bigger region
+  if (aliveParties === 0 && !serverDriven) enterMap(); // somehow emptied → next, bigger region
+  sendPresenceMaybe(dt); // multiplayer: heartbeat your banner + refresh rivals
   enemyCountEl.textContent = 'Band ' + warbandTotal() + ' · Foes nearby: ' + aliveParties;
 }
 
@@ -3479,6 +3482,7 @@ function winBattle() {
   applyBattleGrowth(true);
   if (battleParty) {
     lastBattle = { size: battleParty.size, raider: battleParty.raider }; // bounty is scaled to the host you broke
+    if (battleParty.serverId && typeof window !== 'undefined' && window.net) window.net.reportArmyDefeat(battleParty.serverId); // you broke this server host in person
     const bi = parties.indexOf(battleParty);
     if (bi >= 0) parties.splice(bi, 1);
     battleParty.alive = false;
@@ -4067,8 +4071,55 @@ function applyServerWorldOnce() {
     if (cap) { const own = nationByName(sc.owner_name); if (own && own !== cap.owner) { cap.owner = own; recolorCapital(cap); } }
   }
   showWhileAway(w);
+  renderOtherPlayers();
 }
 if (whileawayOverlay) { const wc = document.getElementById('wa-close'); if (wc) wc.addEventListener('click', () => whileawayOverlay.classList.add('hidden')); }
 BV.serverWorld = () => (typeof window !== 'undefined' && window.net && window.net.world);
+
+// ---------- Server-driven map: the bands ARE the server's warlords; other players visible ----------
+// When online, the map's hosts are seeded from the authoritative server armies (named warlords at
+// their map positions), and rival players' banners are shown. Everything here is gated on isServerMap()
+// so OFFLINE play is exactly the original client sim. (Refinement; full real-time pure-view deferred.)
+function isServerMap() { return !!(typeof window !== 'undefined' && window.net && window.net.world && Array.isArray(window.net.world.armies) && window.net.world.armies.length); }
+function serverArmyToBand(a) {
+  const fac = nationByName(a.faction) || NATIONS[0];
+  const g = makePartyToken(a.size, fac);
+  g.position.set(clamp(a.x, -MAP_HALF + 1, MAP_HALF - 1), 0, clamp(a.z, -MAP_HALF + 1, MAP_HALF - 1));
+  scene.add(g);
+  const leader = makeChar('longsword', { team: 'enemy', name: a.name, renown: a.renown || 0, notability: 2 });
+  leader.skills.strike = (a.renown || 0) * 0.3; recomputeChar(leader); // display/feel only; server owns the truth
+  const band = { group: g, pos: g.position.clone(), size: a.size, alive: true, speed: 4.5, faction: fac,
+    raider: a.size <= 5, clashCd: 0, parleyCd: 0, wanderT: rand(0, 3), wanderDir: rand(0, Math.PI * 2),
+    level: mapLevel, leader, quality: 1.05, serverId: a.id };
+  parties.push(band); setBandLabel(band);
+}
+function syncPartiesFromServer() {
+  clearParties();
+  for (const a of window.net.world.armies) serverArmyToBand(a);
+}
+let otherPlayerTokens = [];
+function clearOtherPlayers() { for (const t of otherPlayerTokens) { scene.remove(t); disposeGroup(t); } otherPlayerTokens.length = 0; }
+function makeOtherPlayerToken(name, size) {
+  const g = makePartyToken(size || 1, { color: 0x39d0ff }); // cyan banner = another living player
+  if (g.userData.label) { g.remove(g.userData.label); if (g.userData.label.material) { if (g.userData.label.material.map) g.userData.label.material.map.dispose(); g.userData.label.material.dispose(); } }
+  const label = makeNameSprite('☆ ' + name);
+  label.scale.set(4.4, 0.56, 1); label.position.y = 4.3; g.add(label); g.userData.label = label;
+  return g;
+}
+function renderOtherPlayers() {
+  clearOtherPlayers();
+  const ps = (window.net && window.net.world && window.net.world.players) || [];
+  for (const p of ps) { const g = makeOtherPlayerToken(p.name, p.size); g.position.set(clamp(p.x, -MAP_HALF + 1, MAP_HALF - 1), 0, clamp(p.z, -MAP_HALF + 1, MAP_HALF - 1)); scene.add(g); otherPlayerTokens.push(g); }
+}
+let presenceT = 0;
+function sendPresenceMaybe(dt) {
+  if (!(window.net && window.net.online)) return;
+  presenceT -= dt; if (presenceT > 0) return;
+  presenceT = 1.5;
+  window.net.sendPresence({ name: playerChar ? playerChar.name : 'A Wanderer', faction: PLAYER_REALM.name, x: player.pos.x, z: player.pos.z, size: warbandTotal(), renown: playerChar ? playerChar.renown : 0 });
+  if (window.net.sharedWorld) window.net.loadWorld().then(() => { if (mode === 'map') renderOtherPlayers(); }); // refresh rivals in MP
+}
+BV.serverBands = () => parties.filter(p => p.alive && p.serverId).map(p => ({ name: p.leader && p.leader.name, faction: p.faction.name, size: p.size, serverId: p.serverId }));
+BV.otherPlayers = () => otherPlayerTokens.length;
 
 })();

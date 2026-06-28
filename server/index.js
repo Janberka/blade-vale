@@ -3,7 +3,7 @@
 // stays client-side and reports its results here. The always-on world tick lands in Step 4.
 const http = require('http');
 const { db, migrate } = require('./db');
-const { ensureAccount } = require('./seed');
+const { ensureAccount, ensureSharedWorld } = require('./seed');
 const tick = require('./tick');
 const validate = require('./validate');
 
@@ -15,7 +15,7 @@ const PORT = process.env.BV_PORT || 8787;
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'Content-Type, X-Player-Token',
+  'Access-Control-Allow-Headers': 'Content-Type, X-Player-Token, X-World',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
 };
 function send(res, code, obj) {
@@ -71,6 +71,7 @@ const server = http.createServer(async (req, res) => {
   try {
     const token = req.headers['x-player-token'] || 'local'; // auth seam: token → account+world (single-player = 'local')
     const { acct, world } = ensureAccount(token);
+    const viewWorldId = (req.headers['x-world'] === 'shared') ? ensureSharedWorld().id : world.id; // solo world (own) or the shared multiplayer world
 
     if (req.method === 'GET' && p === '/api/v1/health') {
       return send(res, 200, { ok: true, ts: Date.now() });
@@ -117,20 +118,37 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && p === '/api/v1/world') {
       const since = parseInt(url.searchParams.get('since') || '0', 10);
-      if (!tick.isActive(world.id)) tick.advanceWorld(world.id); // catch up the away gap on return
-      tick.markActive(world.id);                                  // freeze the tick for this live session (no double-sim)
-      const caps = db.prepare('SELECT idx, def_name, owner_name, garrison FROM capitals WHERE world_id=? ORDER BY idx').all(world.id);
-      const warlords = db.prepare("SELECT name, faction, archetype, renown, size, kills, battles_won FROM warlords WHERE world_id=? AND status='alive' ORDER BY renown DESC LIMIT 8").all(world.id);
-      const events = db.prepare('SELECT tick, type, summary FROM world_events WHERE world_id=? AND tick>? ORDER BY id DESC LIMIT 40').all(world.id, since);
-      const simTick = db.prepare('SELECT sim_tick FROM worlds WHERE id=?').get(world.id).sim_tick;
-      return send(res, 200, { simTick, capitals: caps, warlords, events });
+      const wid = viewWorldId;
+      if (!tick.isActive(wid)) tick.advanceWorld(wid); // catch up the away gap on return
+      tick.markActive(wid);                            // freeze the tick for this live session (no double-sim)
+      const armies = tick.getArmies(wid);
+      const warlords = armies.slice().sort((a, b) => b.renown - a.renown).slice(0, 8);
+      const events = db.prepare('SELECT tick, type, summary FROM world_events WHERE world_id=? AND tick>? ORDER BY id DESC LIMIT 40').all(wid, since);
+      const simTick = db.prepare('SELECT sim_tick FROM worlds WHERE id=?').get(wid).sim_tick;
+      return send(res, 200, {
+        worldId: wid, shared: wid !== world.id, account: acct.id, simTick,
+        capitals: tick.getCapitals(wid), armies, warlords,
+        players: tick.getPresence(wid, acct.id), events
+      });
+    }
+
+    if (req.method === 'POST' && p === '/api/v1/world/presence') { // a player's banner heartbeat
+      const b = await readBody(req);
+      tick.updatePresence(viewWorldId, acct.id, b);
+      return send(res, 200, { ok: true });
+    }
+
+    if (req.method === 'POST' && p === '/api/v1/world/army/defeat') { // the player broke this host in person
+      const b = await readBody(req);
+      const st = db.prepare('SELECT sim_tick FROM worlds WHERE id=?').get(viewWorldId).sim_tick;
+      return send(res, 200, { ok: tick.defeatArmy(viewWorldId, b.armyId | 0, st) });
     }
 
     if (req.method === 'POST' && p === '/api/v1/world/capital') {
       const b = await readBody(req);
-      const st = db.prepare('SELECT sim_tick FROM worlds WHERE id=?').get(world.id).sim_tick;
-      db.prepare('UPDATE capitals SET owner_name=? WHERE world_id=? AND idx=?').run(String(b.owner || ''), world.id, b.idx | 0);
-      db.prepare('INSERT INTO world_events(world_id, tick, type, summary) VALUES (?,?,?,?)').run(world.id, st, 'capital_taken', String(b.summary || 'A hold changed hands'));
+      const st = db.prepare('SELECT sim_tick FROM worlds WHERE id=?').get(viewWorldId).sim_tick;
+      db.prepare('UPDATE capitals SET owner_name=? WHERE world_id=? AND idx=?').run(String(b.owner || ''), viewWorldId, b.idx | 0);
+      db.prepare('INSERT INTO world_events(world_id, tick, type, summary) VALUES (?,?,?,?)').run(viewWorldId, st, 'capital_taken', String(b.summary || 'A hold changed hands'));
       return send(res, 200, { ok: true });
     }
 

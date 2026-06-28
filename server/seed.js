@@ -22,7 +22,22 @@ function ensureAccount(handle) {
 }
 function ensureLocal() { return ensureAccount('local'); }
 
-module.exports = { ensureLocal, ensureAccount };
+// the single shared world any player can join (multiplayer). Owned by a 'system' account so it
+// isn't tied to one player; players appear in it via presence + their own characters.
+function ensureSharedWorld() {
+  let sys = db.prepare("SELECT * FROM accounts WHERE handle = 'system'").get();
+  if (!sys) { const r = db.prepare("INSERT INTO accounts(handle) VALUES ('system')").run(); sys = { id: r.lastInsertRowid }; }
+  let world = db.prepare("SELECT * FROM worlds WHERE kind = 'shared'").get();
+  if (!world) {
+    const seed = (Date.now() % 1000000000) | 0;
+    const r = db.prepare("INSERT INTO worlds(account_id, seed, kind, last_tick_at) VALUES (?, ?, 'shared', ?)").run(sys.id, seed, Math.floor(Date.now() / 1000));
+    world = db.prepare('SELECT * FROM worlds WHERE id = ?').get(r.lastInsertRowid);
+    tick.seedWorld(world.id);
+  }
+  return world;
+}
+
+module.exports = { ensureLocal, ensureAccount, ensureSharedWorld };
 
 if (require.main === module) {
   migrate();

@@ -2810,6 +2810,70 @@ function recolorCapital(cap) {
   for (const m of cap.group.userData.ownerMats) m.color.setHex(cap.owner.color);
 }
 
+// A settlement scaled to its tier: a village is a cluster of thatched huts; a town adds a meeting
+// hall and a wooden palisade; a city is a walled, banner-crowned burg. Banner/roof materials are
+// per-hold and mutable, so a conquered settlement re-flies the conqueror's colors (recolorCapital).
+function makeSettlement(hold) {
+  const g = new THREE.Group();
+  const tier = hold.tier;
+  const wood = mat(0x6b4a2e), thatch = mat(0x9a7b43), stone = mat(0x9a8f80), daub = mat(0xb9a888);
+  const ownerMats = [];
+  const ownerMat = () => { const m = mat(hold.owner.color, { shared: false }); ownerMats.push(m); return m; };
+  const r = _mulberry32(_chunkHash(hold.site.cx, hold.site.cz) ^ (Math.imul(hold.site.idx + 3, 0x9E3779B1) >>> 0));
+  const base = 0.2;
+  const spec = {
+    village: { huts: 5,  spread: 3.0, wall: null,    hall: false, banners: 1, top: 3.4, lbl: 3.6 },
+    town:    { huts: 9,  spread: 5.0, wall: 'wood',  hall: true,  banners: 1, top: 4.4, lbl: 4.6 },
+    city:    { huts: 16, spread: 8.0, wall: 'stone', hall: true,  banners: 3, top: 6.0, lbl: 5.8 },
+  }[tier];
+  const hut = (hx, hz, w, h, body) => {
+    const wall = boxMesh(w, h, w, body); wall.position.set(hx, base + h / 2, hz); wall.castShadow = false; g.add(wall);
+    const roof = new THREE.Mesh(cachedGeo('hutRoof', () => new THREE.ConeGeometry(0.95, 0.8, 4)), thatch);
+    roof.rotation.y = Math.PI / 4; roof.scale.set(w * 1.6, h * 0.85, w * 1.6);
+    roof.position.set(hx, base + h + h * 0.36, hz); g.add(roof);
+  };
+  // a ring of dwellings
+  for (let i = 0; i < spec.huts; i++) {
+    const a = r() * Math.PI * 2, rad = Math.sqrt(r()) * spec.spread;
+    const w = 0.85 + r() * 0.5, h = 0.85 + r() * 0.6 + (tier === 'city' ? r() * 0.9 : 0);
+    hut(Math.cos(a) * rad, Math.sin(a) * rad, w, h, tier === 'city' && r() < 0.4 ? stone : daub);
+  }
+  // a meeting hall at the heart of a town or city
+  if (spec.hall) {
+    const hw = tier === 'city' ? 2.6 : 2.0, hh = tier === 'city' ? 2.6 : 1.8;
+    const hall = boxMesh(hw, hh, hw * 1.3, tier === 'city' ? stone : wood); hall.position.set(0, base + hh / 2, 0); g.add(hall);
+    const roof = new THREE.Mesh(cachedGeo('hallRoof', () => new THREE.ConeGeometry(0.95, 0.9, 4)), ownerMat());
+    roof.rotation.y = Math.PI / 4; roof.scale.set(hw * 1.5, hh * 0.7, hw * 1.95);
+    roof.position.set(0, base + hh + hh * 0.34, 0); roof.castShadow = true; g.add(roof);
+  }
+  // a defensive ring — wooden palisade (town) or a stone curtain with a southern gate gap (city)
+  if (spec.wall) {
+    const wmat = spec.wall === 'stone' ? stone : wood, wallH = spec.wall === 'stone' ? 1.7 : 1.1;
+    const R = spec.spread + 1.7, side = R * 0.82;
+    for (let k = 0; k < 8; k++) {
+      if (tier === 'city' && k === 2) continue;  // leave a gateway
+      const a = k / 8 * Math.PI * 2 + Math.PI / 8;
+      const seg = boxMesh(side, wallH, spec.wall === 'stone' ? 0.5 : 0.3, wmat);
+      seg.position.set(Math.cos(a) * R, base + wallH / 2, Math.sin(a) * R);
+      seg.rotation.y = -a - Math.PI / 2; g.add(seg);
+    }
+  }
+  // owner banners
+  const banner = (bx, bz, bh) => {
+    const pole = boxMesh(0.12, bh, 0.12, wood); pole.position.set(bx, base + bh / 2, bz); g.add(pole);
+    const flag = boxMesh(1.0, 0.62, 0.06, ownerMat()); flag.position.set(bx + 0.55, base + bh - 0.42, bz); g.add(flag);
+  };
+  banner(0, spec.spread * 0.2, spec.top - 0.6);
+  if (spec.banners >= 3) { banner(spec.spread * 0.7, -spec.spread * 0.4, 3.0); banner(-spec.spread * 0.7, -spec.spread * 0.3, 3.0); }
+  // floating name label, sized to the tier
+  const label = makeNameSprite(hold.def.name);
+  label.scale.set(spec.lbl, spec.lbl / 8, 1); label.position.y = base + spec.top; g.add(label);
+  g.userData.ownerMats = ownerMats;
+  g.userData.label = label;
+  g.position.set(hold.x, mapElevY(hold.x, hold.z), hold.z);
+  return g;
+}
+
 // show/hide the battle set-dressing (arena pad, torch ring, edge treeline) vs the strategic map terrain
 function setBattleDressing(on) {
   if (ground) ground.visible = on;     // battle: bumpy biome ground; map: flat biome plane is the surface
@@ -2911,10 +2975,19 @@ function setBandLabel(band) {
 // so the host keeps getting stronger the longer the campaign runs
 function warbandSize() { return Math.round(rand(10, 26) + (mapLevel + wave * 0.6) * 7); }
 // a band musters from its nation's homeland (on land, inside its borders)
+// a land tile in a ring around the player — the war musters wherever you've roamed to, not back home
+function spawnPointNearPlayer(minR, maxR) {
+  for (let t = 0; t < 60; t++) {
+    const ang = rand(0, Math.PI * 2), r = rand(minR, maxR);
+    const x = player.pos.x + Math.cos(ang) * r, z = player.pos.z + Math.sin(ang) * r;
+    if (!isWater(x, z)) return [x, z];
+  }
+  return nearestLand(player.pos.x + rand(-maxR, maxR), player.pos.z + rand(-maxR, maxR));
+}
 function spawnBand(size, speed, awayFromPlayer, nation) {
   nation = nation || nations[(Math.random() * nations.length) | 0];
   const def = nation.def;
-  const [x, z] = spawnPointFor(nation, awayFromPlayer);
+  const [x, z] = spawnPointNearPlayer(awayFromPlayer ? 55 : 16, 150);
   const g = makePartyToken(size, def);
   g.position.set(x, mapElevY(x, z), z);
   scene.add(g);
@@ -2966,6 +3039,7 @@ function enterMap() {
   if (ground) ground.material.color.setHex(0x6f9e54);
   scene.fog.color.setHex(0x9fc6e8); scene.background.setHex(0x9fc6e8);
   const [plx, plz] = nearestLand(0, 0); player.pos.set(plx, 0, plz); // never start at sea
+  updateChunks(true); // re-centre the streamed world on the actual spawn tile
   // the player rides the map as a banner party, like the rival hosts — not the walking hero
   if (player.mapToken) { scene.remove(player.mapToken); disposeGroup(player.mapToken); }
   player.mapToken = makePlayerToken(warbandTotal());
@@ -3055,10 +3129,9 @@ function conquerByBand(cap, band) {
   spawnPopup(tmpV2.set(cap.x, 3, cap.z), '⚑', '#ffe089');
 }
 
-// move within the map but never onto the sea — slide along coastlines axis-by-axis
+// move across the (unbounded) map but never onto the sea — slide along coastlines axis-by-axis
 function landStep(x, z, dx, dz) {
-  let nx = clamp(x + dx, -MAP_HALF + 1, MAP_HALF - 1);
-  let nz = clamp(z + dz, -MAP_HALF + 1, MAP_HALF - 1);
+  let nx = x + dx, nz = z + dz;
   if (isWater(nx, z)) nx = x;
   if (isWater(x, nz)) nz = z;
   return [nx, nz];
@@ -3307,6 +3380,7 @@ function updateMap(dt) {
     player.mapToken.position.y = mapElevY(player.pos.x, player.pos.z);
     player.mapToken.rotation.y = player.facing;
   }
+  updateChunks(); // stream fresh terrain + settlements in as the player crosses chunk lines
 
   let aliveParties = 0;
   for (const band of parties) {

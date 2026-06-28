@@ -8,7 +8,8 @@
     "migrate": "node server/db.js --migrate",
     "seed": "node server/seed.js",
     "server": "node server/index.js",
-    "dev": "node --watch server/index.js"
+    "dev": "node --watch server/index.js",
+    "bot": "node bot/bot.js"
   },
   "dependencies": {
     "better-sqlite3": "^11.8.1"

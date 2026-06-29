@@ -2828,6 +2828,60 @@ function updateMapCamera(dt) {
   camera.lookAt(player.pos.x, gy, player.pos.z);
 }
 
+// ---------- Ride-along: a 3rd-person follow camera for the overworld (like battle mode) ----------
+// Toggle (T) between the strategic eye-in-the-sky and a chase cam that rides behind the hero with
+// the whole warband marching around the banner — exactly the framing you fight in.
+let mapView3rd = false;             // false = strategic top-down; true = 3rd-person ride-along
+const MAP_RIDE = { dist: 12, height: 6.4, look: 1.7, lead: 1.4 }; // chase distance / eye lift / look-at height / hero lead ahead of the banner
+// the hero leads the marching column; this is where the avatar (and the camera's focus) sits
+function rideHeroPos(out) {
+  const gy = mapElevY(player.pos.x, player.pos.z);
+  return out.set(player.pos.x + Math.sin(player.facing) * MAP_RIDE.lead, gy,
+                 player.pos.z + Math.cos(player.facing) * MAP_RIDE.lead);
+}
+function updateMapChaseCamera(dt) {
+  // trail behind the hero's heading; cameraAngle drives inputDir so W stays "forward where you face"
+  cameraAngle = angleLerp(cameraAngle, player.facing + Math.PI, clamp(dt * 5, 0, 1));
+  const focus = rideHeroPos(_rideV);
+  const tx = focus.x + Math.sin(cameraAngle) * MAP_RIDE.dist;
+  const tz = focus.z + Math.cos(cameraAngle) * MAP_RIDE.dist;
+  const k = clamp(dt * 6, 0, 1);
+  camBase.x = lerp(camBase.x, tx, k);
+  camBase.z = lerp(camBase.z, tz, k);
+  camBase.y = lerp(camBase.y, Math.max(focus.y, mapElevY(tx, tz)) + MAP_RIDE.height, k); // clear hills behind the hero
+  camera.position.copy(camBase);
+  camera.lookAt(focus.x, focus.y + MAP_RIDE.look, focus.z);
+}
+const _rideV = new THREE.Vector3();
+// show + walk the hero avatar at the head of the column while riding; hide it in every other map view
+function updateMapHero(dt) {
+  const ride = mapView3rd && !mapCmdMode && !encounter; // (only ever called from updateMap, i.e. mode==='map')
+  if (!ride) { if (player.obj.visible) player.obj.visible = false; return; }
+  player.obj.visible = true;
+  const focus = rideHeroPos(_rideV);
+  player.obj.position.copy(focus);
+  player.obj.rotation.set(0, player.facing, 0);
+  player.obj.scale.y = 1;
+  const moving = inputDir().lengthSq() > 0;
+  const p = player.parts;
+  if (moving) {
+    player.walkPhase += dt * 9;
+    walkLegs(p, player.walkPhase, 0.6);
+    player.obj.position.y = focus.y + Math.abs(Math.cos(player.walkPhase)) * 0.06;
+  } else {
+    setPose(player.anim, 'guard', 0.2);
+    restLegs(p, dt, true);
+  }
+  updateAnimator(player.anim, dt);
+}
+// flip between strategic and ride-along; restore screen-relative control when pulling back out
+function setMapView3rd(on) {
+  if (on === mapView3rd) return;
+  mapView3rd = on;
+  if (!on) { cameraAngle = 0; player.obj.visible = false; } // strategic: W = up the screen again
+  showCmdToast(on ? 'Ride-along view — march with your warband (T to pull back)' : 'Strategic view (T to ride along)');
+}
+
 // ---------- Game state ----------
 let wave = 0;             // battle counter
 let enemiesRemaining = 0; // enemy bodies left to kill this battle (field + reserve)
@@ -3628,8 +3682,10 @@ function buildMapTerrain() {
 // Terrain-aware procedural settlements (villages, towns, castles, capitals).
 // Each place is READ from the land, CLASSIFIED (plain / knoll / hillside / ridge
 // / valley / coastal), then authored by that class: villages & towns are organic
-// clusters that follow the contours; cities & capitals are CASTLES whose curtain
-// wall is an iso-elevation CONTOUR MARCH around the keep — so the hill literally
+// clusters that follow the contours. A SETTLEMENT's outer outline (village footprint,
+// town palisade, city wall) is an irregular, seed-driven blob (sgFootprint) — towns &
+// cities accrete over generations, so no two share a shape — whereas a CASTLE's curtain
+// wall is a tight, near-round iso-elevation CONTOUR MARCH around the keep — so the hill literally
 // shapes its walls (a knoll → a tight ring; a hillside → a D-wall stepping down;
 // a ridge → an elongated wall on the crest). Every element is seated on its OWN
 // mapElevY with a foundation plinth, so nothing floats downhill or buries uphill.
@@ -3774,7 +3830,7 @@ function sgBuildVillage(P) {
       lx = Math.cos(lane) * (step + wob) + Math.cos(lane + Math.PI / 2) * sign * off;
       lz = Math.sin(lane) * (step + wob) + Math.sin(lane + Math.PI / 2) * sign * off; yaw = lane;
     } else {
-      const a = r() * TAU, rd = 1.8 + Math.sqrt(r()) * (R - 1.8); lx = Math.cos(a) * rd; lz = Math.sin(a) * rd; yaw = Math.atan2(-lz, -lx);
+      const a = r() * TAU, maxR = Math.max(2.4, R * P.fp(a)), rd = 1.8 + Math.sqrt(r()) * (maxR - 1.8); lx = Math.cos(a) * rd; lz = Math.sin(a) * rd; yaw = Math.atan2(-lz, -lx);
     }
     if (Math.hypot(lx, lz) < 1.6 || isW(lx, lz)) continue;
     if (!placed.every(p => (p.lx - lx) ** 2 + (p.lz - lz) ** 2 > spec.gap * spec.gap)) continue;
@@ -3814,7 +3870,7 @@ function sgFillHouses(P) {
   let made = 0, tries = 0;
   while (made < n && tries < n * 10) {
     tries++;
-    const a = r() * TAU, rd = inner + Math.sqrt(r()) * (R - inner), lx = Math.cos(a) * rd, lz = Math.sin(a) * rd;
+    const a = r() * TAU, maxR = Math.max(inner + 1, R * P.fp(a)), rd = inner + Math.sqrt(r()) * (maxR - inner), lx = Math.cos(a) * rd, lz = Math.sin(a) * rd;
     if (isW(lx, lz) || blocked(lx, lz)) continue;
     if (!placed.every(p => (p.lx - lx) ** 2 + (p.lz - lz) ** 2 > spec.gap * spec.gap)) continue;
     if (sgHouse(P, lx, lz, { yaw: Math.atan2(-lz, -lx) })) { placed.push({ lx, lz }); made++; }
@@ -3828,28 +3884,54 @@ function sgBuildHold(P) {
   if (spec.wall === 'stone') sgCityWall(P);
   else if (spec.wall === 'palisade') sgPalisade(P);
 }
+// --- the organic footprint of a SETTLEMENT (town/city/village).  A castle's curtain is a tight planned
+//     ring (sgCurtainMarch keeps it round); a town/city, by contrast, ACCRETES over generations, so its
+//     outline is a lumpy, irregular polygon — never the same twice. A few seeded low harmonics give the
+//     lobes, and the terrain stretches the blob along its contour/ridge/shore. Returns fp(a) ∈ ~[0.6,1.4],
+//     a smooth radial multiplier the wall- and house-fill both share so the two always agree. ---
+function sgFootprint(P) {
+  const { r, T } = P;
+  const K = 3 + (r() * 3 | 0), harm = [];                                // 3-5 organic lobes
+  for (let i = 0; i < K; i++) harm.push({ m: 2 + (r() * 4 | 0), ph: r() * TAU, amp: 0.10 + r() * 0.15 });
+  const elongAng = (T.cls === 'RIDGE') ? T.spineAz                       // strung along the crest / contour / shore
+                 : (T.cls === 'HILLSIDE' || T.cls === 'COASTAL') ? T.downhill + Math.PI / 2
+                 : r() * TAU;                                            // on the flat it just leans a random way
+  const elong = 0.12 + r() * 0.32;
+  return a => {
+    let v = 1; for (const h of harm) v += h.amp * Math.cos(h.m * a + h.ph);
+    v *= 1 + elong * Math.cos(2 * (a - elongAng));
+    return clamp(v, 0.6, 1.4);
+  };
+}
+// smallest radius scale R so that, stretched by the footprint fp(a), the ring clears every placed
+// building by `margin`. Lets the town/city wall hug the irregular cluster instead of a fat circle.
+function sgWallEnvelope(P, margin, minR) {
+  const { placed, fp } = P;
+  let Rfit = minR;
+  for (const p of placed) { const a = Math.atan2(p.lz, p.lx), f = fp(a); if (f > 0.01) Rfit = Math.max(Rfit, (Math.hypot(p.lx, p.lz) + margin) / f); }
+  return Rfit;
+}
 function sgPalisade(P) {                                                 // a timber ring fitted around the built cluster, gate downhill
-  const { r, T, pal, seat, S, placed } = P;
-  let R = 3.0; for (const p of placed) R = Math.max(R, Math.hypot(p.lx, p.lz)); R += 1.5;
-  const N = Math.max(12, Math.round(R * 1.2)), wood = sgRgb(pal.wood, 1), gateA = T.downhill;
+  const { r, T, pal, seat, S, fp } = P;
+  const Rfit = sgWallEnvelope(P, 1.5, 3.0), N = Math.max(14, Math.round(Rfit * 1.4 * 1.2)), wood = sgRgb(pal.wood, 1), gateA = T.downhill;
   for (let k = 0; k < N; k++) {
     const a = k / N * TAU;
     if (Math.abs(((a - gateA + Math.PI) % TAU + TAU) % TAU - Math.PI) < 0.34) continue; // gate gap
-    const lx = Math.cos(a) * R, lz = Math.sin(a) * R, y = seat(lx, lz);
+    const R = Rfit * fp(a), lx = Math.cos(a) * R, lz = Math.sin(a) * R, y = seat(lx, lz);
     sgBox(S, lx, y + 0.85, lz, 0.34, 1.6 + r() * 0.2, 0.34, a, wood);
   }
 }
 // A great stone city wall ringing the whole footprint: terrain-seated bays with a level parapet,
 // drum towers round the ring, and three gatehouses (downhill + two flanks) so the city can be entered.
 function sgCityWall(P) {
-  const { r, T, pal, seat, S, spec, placed } = P;
-  let R = spec.R * 0.5; for (const p of placed) R = Math.max(R, Math.hypot(p.lx, p.lz)); R += 2.6;
-  const wallH = (spec.wallH || 1.7) + 0.4, thick = 0.7, N = Math.max(30, Math.round(R * 1.3));
+  const { r, T, pal, seat, S, spec, fp } = P;
+  const Rfit = sgWallEnvelope(P, 2.6, spec.R * 0.5), Rmax = Rfit * 1.4, RA = a => Rfit * fp(a); // ring follows the lumpy footprint
+  const wallH = (spec.wallH || 1.7) + 0.4, thick = 0.7, N = Math.max(30, Math.round(Rmax * 1.3));
   const stone = sgRgb(pal.stone, 1), stoneDk = sgRgb(pal.stoneDk, 1), woodD = sgRgb(pal.wood, 0.72);
   const gateAngs = [T.downhill, T.downhill + TAU / 3, T.downhill - TAU / 3];
   const nearGate = a => gateAngs.reduce((m, g) => Math.min(m, Math.abs(((a - g + Math.PI) % TAU + TAU) % TAU - Math.PI)), 9);
   const V = [];
-  for (let k = 0; k < N; k++) { const a = k / N * TAU, lx = Math.cos(a) * R, lz = Math.sin(a) * R; V.push({ a, lx, lz, y: seat(lx, lz) }); }
+  for (let k = 0; k < N; k++) { const a = k / N * TAU, R = RA(a), lx = Math.cos(a) * R, lz = Math.sin(a) * R; V.push({ a, lx, lz, y: seat(lx, lz) }); }
   for (let i = 0; i < N; i++) {                                          // closed ring of seated wall bays, gateways left open
     const A = V[i], B = V[(i + 1) % N], am = A.a + (((B.a - A.a) + TAU) % TAU) / 2;
     if (nearGate(am) < 0.17) continue;
@@ -3858,14 +3940,14 @@ function sgCityWall(P) {
     sgBox(S, mx, (top + bot) / 2, mz, len, top - bot, thick, ang, stone);
     sgBox(S, mx, top + 0.16, mz, len, 0.3, thick * 1.15, ang, stoneDk);  // level parapet cap
   }
-  const TN = Math.max(10, Math.round(R * 0.45));                         // drum towers, taller & fatter at the gates
+  const TN = Math.max(10, Math.round(Rmax * 0.45));                      // drum towers, taller & fatter at the gates
   for (let k = 0; k < TN; k++) {
-    const a = k / TN * TAU, lx = Math.cos(a) * R, lz = Math.sin(a) * R, y = seat(lx, lz), g = nearGate(a) < 0.2, th = wallH + (g ? 2.0 : 1.0);
+    const a = k / TN * TAU, R = RA(a), lx = Math.cos(a) * R, lz = Math.sin(a) * R, y = seat(lx, lz), g = nearGate(a) < 0.2, th = wallH + (g ? 2.0 : 1.0);
     sgPrism(S, lx, y - 0.7, lz, g ? 1.0 : 0.8, th + 0.7, stone); sgCone8(S, lx, y - 0.7 + th + 0.7, lz, (g ? 1.0 : 0.8) * 1.18, g ? 1.1 : 0.85, stoneDk);
   }
   for (const ga of gateAngs) {                                          // a stone arch over tall timber doors at each opening
-    const d = 0.06, ax = Math.cos(ga - d) * R, az = Math.sin(ga - d) * R, bx = Math.cos(ga + d) * R, bz = Math.sin(ga + d) * R;
-    const lx = Math.cos(ga) * R, lz = Math.sin(ga) * R, y = seat(lx, lz), ang = Math.atan2(-(bz - az), bx - ax), doorH = wallH + 1.6, doorW = 2.8;
+    const d = 0.06, ax = Math.cos(ga - d) * RA(ga - d), az = Math.sin(ga - d) * RA(ga - d), bx = Math.cos(ga + d) * RA(ga + d), bz = Math.sin(ga + d) * RA(ga + d);
+    const R = RA(ga), lx = Math.cos(ga) * R, lz = Math.sin(ga) * R, y = seat(lx, lz), ang = Math.atan2(-(bz - az), bx - ax), doorH = wallH + 1.6, doorW = 2.8;
     sgBox(S, lx, y + wallH + 0.7, lz, doorW + 1.0, 0.95, thick * 1.8, ang, stoneDk);
     sgBox(S, lx, y + doorH / 2, lz, doorW, doorH, 0.5, ang, woodD);
   }
@@ -4002,6 +4084,7 @@ function buildSettlementGroup(X, Z, tier, name, ownerColor, seed) {
   const pal = settlePalette(biomeAt(X, Z)), ownerRGB = sgRgb(ownerColor, 1);
   const S = { pos: [], col: [] }, O = { pos: [], col: [] };
   const P = { r, tier, spec, X, Z, refY, T, pal, ownerRGB, seat, isW, S, O, placed: [], exclude: [] };
+  P.fp = sgFootprint(P);                                                 // this site's own organic outline (towns/cities/villages grow irregularly; the castle curtain stays round)
   if (spec.castle) sgBuildHold(P); else sgBuildVillage(P);
   const g = new THREE.Group();
   if (S.pos.length) g.add(sgMesh(S, settleVCMat()));
@@ -4787,6 +4870,8 @@ function updateActiveCall(dt) {
   updateRallyBanner();
 }
 addEventListener('keydown', (e) => { if (e.code === 'KeyG' && mode === 'map' && !encounter) { e.preventDefault(); raiseCall(); } });
+// T: swap the overworld between the strategic eye-in-the-sky and the 3rd-person ride-along
+addEventListener('keydown', (e) => { if (e.code === 'KeyT' && mode === 'map' && !encounter && !mapCmdMode && !commandPanelOpen) { e.preventDefault(); setMapView3rd(!mapView3rd); } });
 
 // Fold the distance just ridden into the running survey reach, then push fog / stream-radius to match.
 // (The camera lift+pullback is read from mapVista in updateMapCamera so the zoom-out stays smoothed.)
@@ -4809,6 +4894,7 @@ function applyVista(moved, dt) {
 }
 
 function updateMap(dt) {
+  updateMapHero(dt); // ride-along: show/walk the hero at the column's head (hidden in strategic/command/encounter)
   if (encounter) return; // a parley/siege prompt is open — the whole map holds until you choose
   const serverDriven = isServerMap(); // when online, the server owns the macro war (clashes/conquests)
   tickMapDiplomacy(dt, serverDriven); // evolve faction relations: server truth online, shared kernel in solo
@@ -6749,7 +6835,7 @@ function loop(now) {
     updateArcs(gdt);
     updateTrails(gdt);
     updatePopups(gdt);
-    if (mode === 'map') updateMapCamera(dt);
+    if (mode === 'map') (mapView3rd && !mapCmdMode && !encounter ? updateMapChaseCamera : updateMapCamera)(dt);
     else if (mode === 'plan' || commandPanelOpen) updatePlanCamera(dt);
     else if (mode === 'coopguest') { /* camera is set inside updateCoopGuest */ }
     else if (player.obj) updateCamera(dt);
@@ -7083,6 +7169,8 @@ BV.vista = (miles) => {
   return { miles: Math.round(mapMiles), vista: +mapVista.toFixed(3), view: VIEW,
     fog: [Math.round(scene.fog.near), Math.round(scene.fog.far)], camLift: +vlerp(VISTA.camLift).toFixed(1) };
 };
+// ride-along view: read/set the 3rd-person overworld camera (automated-test + console hook)
+BV.rideView = (on) => { if (mode === 'map' && on !== undefined) setMapView3rd(!!on); return mapView3rd; };
 // living-battle inspection + a forced 1v? clash for timing calibration tests
 BV.mapBattles = () => mapBattles.map(b => ({ a: b.sideA.faction.name, b: b.sideB.faction.name,
   na: Math.round(b.sideA.live), nb: Math.round(b.sideB.live), t: +b.t.toFixed(2), dur: +b.duration.toFixed(2), aWins: b.aWins }));

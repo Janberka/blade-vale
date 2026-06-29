@@ -2870,15 +2870,53 @@ function _fbm(x, z, seed) {
   for (let o = 0; o < 4; o++) { v += amp * _vnoise(x * f, z * f, seed + o * 31); norm += amp; f *= 2; amp *= 0.5; }
   return v / norm;
 }
+// Ridged fractal noise: fold each octave at its midline (1-|2v-1|) and square it so the high values
+// line up into CONNECTED spines instead of the round, isolated bumps plain fbm gives. Each octave is
+// gated by the one below (`prev`) so detail only grows along the existing ridge — this is what turns a
+// scatter of peaks into a continuous mountain RANGE. Returns ~0..1, peaking sharply along the crests.
+function _ridge(x, z, seed) {
+  let v = 0, amp = 0.5, f = 1, norm = 0, prev = 1;
+  for (let o = 0; o < 4; o++) {
+    let n = _vnoise(x * f, z * f, seed + o * 31);
+    n = 1 - Math.abs(2 * n - 1); n *= n;
+    v += amp * n * prev; prev = clamp(n * 1.4, 0, 1);
+    norm += amp; f *= 2; amp *= 0.5;
+  }
+  return v / norm;
+}
 const worldSeed = () => ((mapLevel * 1000 + 7) ^ (universeSeed * 2654435761)) >>> 0;
 const TERR_SCALE = 1 / 42;
+// Mountain ranges: a slow "orogeny belt" field decides WHERE the crust is buckled into highlands;
+// a ridged spine field carves the actual peaks within those belts. Together they replace the old
+// scatter of lone peaks with long, connected ranges — and lift far more of the map into hill/rock/
+// snow country. Tune `lift` for how high ranges tower, `beltThresh/beltWidth` for how much of the
+// world is mountainous, `beltScale/spineScale` for the size of ranges vs. individual ridges.
+const MOUNTAINS = {
+  beltScale:  0.16,   // frequency of the belt mask — smaller = broader, fewer, longer ranges
+  beltThresh: 0.48,   // belt onset: land below this stays lowland (more mountains as this drops)
+  beltWidth:  0.34,   // how quickly a belt ramps from foothills to full range
+  spineScale: 1.05,   // frequency of the ridge spines inside a belt — larger = tighter, craggier ridges
+  lift:       0.62,   // how much elevation a full-strength spine adds (the range's prominence)
+};
 function elevationAt(x, z) {
   const base = _fbm((x + 1000) * TERR_SCALE, (z - 1000) * TERR_SCALE, worldSeed() + 1);
   // Broad seas, gulfs, and inland lakes are carved by a slow "continent" field instead of a
   // radial rim, so dry land continues forever in every direction (the old heartland was an
   // island walled off by ocean at the map edge). Peaks still rise from the base noise.
   const cont = _fbm((x - 4000) * TERR_SCALE * 0.20, (z + 4000) * TERR_SCALE * 0.20, worldSeed() + 5);
-  return clamp(0.30 + base * 0.55 + (cont - 0.55) * 0.80, 0, 1);
+  let e = 0.30 + base * 0.55 + (cont - 0.55) * 0.80;
+  // Raise mountain ranges on top of the base land. The belt mask gates WHERE; the ridged spine
+  // shapes the crests. We scale by a "foothill" factor so ranges grow out of already-high ground
+  // rather than erupting straight from the coastline, and only ever ADD to land above the sea — so
+  // water coverage (and the nations' coasts) are untouched no matter how high we push the peaks.
+  const M = MOUNTAINS;
+  const belt = _fbm((x + 6000) * TERR_SCALE * M.beltScale, (z - 6000) * TERR_SCALE * M.beltScale, worldSeed() + 23);
+  const inBelt = clamp((belt - M.beltThresh) / M.beltWidth, 0, 1);
+  if (inBelt > 0 && e > SEA_LEVEL) {
+    const spine = _ridge((x - 1500) * TERR_SCALE * M.spineScale, (z + 1500) * TERR_SCALE * M.spineScale, worldSeed() + 29);
+    e += inBelt * spine * M.lift * clamp((e - SEA_LEVEL) / 0.12, 0, 1);
+  }
+  return clamp(e, 0, 1);
 }
 function moistureAt(x, z) { return _fbm((x - 2200) * TERR_SCALE * 1.15, (z + 1700) * TERR_SCALE * 1.15, worldSeed() + 19); }
 function tempAt(x, z) {
@@ -3104,13 +3142,13 @@ function groundColorBlended(x, z, out) {
 // Display elevation for the strategic map: turn the (gameplay-only) elevation field into
 // real vertical relief so mountains tower and valleys sink. Water dips into a seabed basin
 // beneath its tint; land eases upward, with peaks getting an extra exponential lift.
-const MAP_RELIEF = 15;     // overworld vertical exaggeration — gentler than before so the honeycomb reads calm, not jagged
+const MAP_RELIEF = 17;     // overworld vertical exaggeration — base lift for the rolling country
 function mapElevY(x, z) {
   const e = elevationAt(x, z);
   if (e < SEA_LEVEL) return -0.6 - (SEA_LEVEL - e) * 2.0;              // seabed basin under the water tint
   const land = (e - SEA_LEVEL) / (1 - SEA_LEVEL);                     // 0..~0.76 across the dry range
-  let h = Math.pow(land, 1.5) * MAP_RELIEF;                           // rolling hills lift gently, not pancake-flat
-  if (e > 0.70) h += (e - 0.70) * MAP_RELIEF * 2.2;                   // peaks tower above the foothills
+  let h = Math.pow(land, 1.35) * MAP_RELIEF;                          // gentler exponent lifts the mid-slopes — more land reads as rolling hills
+  if (e > 0.68) h += (e - 0.68) * MAP_RELIEF * 2.6;                   // ranges and peaks tower well above the foothills
   return h;
 }
 // ---------- Infinite world: streaming terrain chunks + a settlement hierarchy ----------

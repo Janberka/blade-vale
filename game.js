@@ -1621,6 +1621,7 @@ if (TOUCH) {
   bindBtn('tb-block', () => { keys['ShiftLeft'] = true; }, () => { keys['ShiftLeft'] = false; });
   bindBtn('tb-weapon', toggleWeapon);
   bindBtn('tb-cmd', () => { if (mode === 'battle' && !commandPanelOpen) openCommandDeck(); });
+  bindBtn('tb-ride', () => { if (mode === 'map' && !encounter && !mapCmdMode) setMapView3rd(!mapView3rd); });
   bindBtn('tb-rally', () => { if (mode === 'map' && !encounter) raiseCall(); });
   bindBtn('tb-beacon', () => { if (mode === 'map' && !encounter) openBeaconPanel(); });
   bindBtn('tb-warband', () => toggleCharsheet());

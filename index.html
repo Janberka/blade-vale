@@ -48,6 +48,28 @@
     font-size: 13px; opacity: .55; letter-spacing: 1px; text-align: center; text-shadow: 0 1px 2px #000;
   }
 
+  /* ===== Just-in-time onboarding hint (one-time, non-blocking, HUD-consistent) ===== */
+  #onboard {
+    position: absolute; left: 50%; top: 64px; transform: translateX(-50%) translateY(-8px);
+    width: min(440px, 88vw); box-sizing: border-box;
+    background: rgba(12,18,30,.86); border: 1px solid rgba(255,207,91,.5); border-radius: 10px;
+    padding: 13px 16px 12px; text-align: left; z-index: 8; pointer-events: none;
+    box-shadow: 0 8px 28px rgba(0,0,0,.55); text-shadow: 0 1px 3px #000;
+    opacity: 0; transition: opacity .35s ease, transform .35s ease; display: none;
+  }
+  #onboard.show { display: block; opacity: 1; transform: translateX(-50%) translateY(0); }
+  #onboard .ob-title { font-size: 14px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: #ffe2a8; margin-bottom: 6px; padding-right: 18px; }
+  #onboard .ob-body { font-size: 14px; line-height: 1.55; color: #e7eefb; opacity: .92; }
+  #onboard .ob-body b { color: #ffcf5b; }
+  #onboard .ob-foot { margin-top: 10px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  #onboard .ob-got { cursor: pointer; pointer-events: auto; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; font-weight: 700;
+    padding: 6px 16px; border: 1px solid #ffcf5b; border-radius: 6px; background: rgba(255,180,80,.14); color: #ffe2a8; }
+  #onboard .ob-got:hover { background: rgba(255,180,80,.3); }
+  #onboard .ob-skip { cursor: pointer; pointer-events: auto; font-size: 11px; letter-spacing: .5px; color: #9fb2cc; opacity: .8; background: none; border: none; text-decoration: underline; }
+  #onboard .ob-skip:hover { opacity: 1; color: #cfe9ff; }
+  #onboard .ob-x { position: absolute; top: 8px; right: 10px; cursor: pointer; pointer-events: auto; color: #9fb2cc; background: none; border: none; font-size: 17px; line-height: 1; opacity: .8; }
+  #onboard .ob-x:hover { opacity: 1; color: #fff; }
+
   .overlay {
     position: fixed; inset: 0; display: flex; flex-direction: column;
     align-items: center; justify-content: center; text-align: center;
@@ -276,6 +298,16 @@
   <div id="cmd-toast"></div>
   <div id="rally-banner" style="position:fixed; top:74px; left:50%; transform:translateX(-50%); display:none; padding:8px 18px; background:rgba(20,10,30,.80); border:1px solid #ffd34d; border-radius:10px; color:#ffe089; font-weight:700; letter-spacing:.4px; text-align:center; z-index:30; box-shadow:0 4px 18px rgba(0,0,0,.5); pointer-events:none; max-width:70vw"></div>
   <div id="controls-hint">MAP: WASD roam · ride into a band to parley/pact · ride into a clash to join · ride into a stronghold to siege · <b>G</b> call to arms / crusade · take every capital to win &nbsp;|&nbsp; BATTLE: MOUSE aim · CLICK attack · RIGHT-CLICK heavy · CLICK ▼ to execute · F sword/bow · SHIFT block · C crouch · SPACE dodge · V warband</div>
+  <!-- one-time, just-in-time onboarding hint (populated by game.js) -->
+  <div id="onboard">
+    <button class="ob-x" id="ob-x" aria-label="Dismiss">×</button>
+    <div class="ob-title" id="ob-title"></div>
+    <div class="ob-body" id="ob-body"></div>
+    <div class="ob-foot">
+      <button class="ob-got" id="ob-got">Got it</button>
+      <button class="ob-skip" id="ob-skip">Skip all hints</button>
+    </div>
+  </div>
 </div>
 
 <div id="damage-flash"></div>

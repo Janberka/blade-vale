@@ -3733,6 +3733,7 @@ function enterMap() {
   if (document.exitPointerLock) document.exitPointerLock(); // map roams with WASD; no aim needed
   pointerLocked = false;
   updateHUD();
+  obMapStart(); // first-time-on-the-map onboarding hint (shown once)
 }
 
 // nearest living band of a DIFFERENT faction within `radius` — drives the inter-host war
@@ -4783,6 +4784,7 @@ function beginBattle() {
   player.alive = true; player.hp = player.maxHp; player.stamina = player.maxStam;
   showWaveBanner('Clash!', 'Hold the line! · command live: 1–9/G pick · H hold · T charge · R regroup · B free · Z/X pace');
   if (canvas.requestPointerLock) canvas.requestPointerLock();
+  obBattleStart(); // first-battle onboarding: aim/attack/block/dodge (reliable fallback; windup poll may pre-empt)
 }
 function openCommandDeck() { // mid-battle: cursor freed (pointer-lock lost) -> tactical command
   if (mode !== 'battle' || commandPanelOpen) return;
@@ -5102,6 +5104,7 @@ function showMuster() {
   if (document.exitPointerLock) document.exitPointerLock(); // free the cursor for the UI
   pointerLocked = false;
   musterOverlay.classList.remove('hidden');
+  obMuster(); // first-victory onboarding: spend XP to recruit, then march
 }
 document.getElementById('next-wave-btn').addEventListener('click', () => {
   musterOpen = false;
@@ -5138,6 +5141,7 @@ function openEncounter(band) {
     encHailBtn.textContent = 'Say Hi';
   }
   encOverlay.classList.remove('hidden');
+  obEncounter(ally); // first-parley onboarding: Attack vs Propose Pact vs Say Hi (neutral bands only)
 }
 function openSiege(cap) {
   encounter = { kind: 'capital', cap };
@@ -5265,6 +5269,88 @@ function showCmdToast(text) {
   cmdToastEl.style.opacity = '1';
   cmdToastTimer = 1.2;
 }
+// ---------- Just-in-time onboarding (one-time contextual hints) ----------
+// A new player lands in a dozen systems with zero guidance. These hints are triggered
+// by game state, each shown ONCE (flagged in localStorage), fully dismissable, and
+// skippable wholesale. They never block input — the card floats over the HUD and only
+// its own buttons are clickable. Mobile shows touch-flavoured key labels.
+const ONBOARD = (() => {
+  const KEY = 'bv-onboard-';        // per-hint flag, e.g. bv-onboard-map
+  const SKIP_KEY = 'bv-onboard-skip'; // user opted out of all hints
+  const el = document.getElementById('onboard');
+  const elTitle = document.getElementById('ob-title');
+  const elBody = document.getElementById('ob-body');
+  let active = null;       // id currently displayed (so we only flag it once it's been seen)
+  let hideT = 0;           // auto-dismiss countdown (seconds); 0 = sticky
+  function ls(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  function set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+  function seen(id) { return !!ls(KEY + id); }
+  function skipped() { return !!ls(SKIP_KEY); }
+  function flag(id) { if (id) set(KEY + id, '1'); }
+  function hide() { if (!el) return; el.classList.remove('show'); flag(active); active = null; hideT = 0; }
+  // show a hint once. ttl>0 auto-dismisses after that many seconds (still flagged as seen).
+  function show(id, title, body, ttl = 0) {
+    if (!el || skipped() || seen(id)) return false;
+    if (active === id) return false;
+    active = id; hideT = ttl;
+    elTitle.textContent = title;
+    elBody.innerHTML = body;
+    el.classList.add('show');
+    return true;
+  }
+  // counts down any auto-dismiss; called from the main loop with real dt
+  function tick(dt) { if (hideT > 0) { hideT -= dt; if (hideT <= 0) hide(); } }
+  function skipAll() { set(SKIP_KEY, '1'); hide(); }
+  function reset() { // BV.resetOnboarding(): clear every flag so hints re-trigger
+    try {
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const k = localStorage.key(i);
+        if (k && (k === SKIP_KEY || k.indexOf(KEY) === 0)) localStorage.removeItem(k);
+      }
+    } catch (e) {}
+    hide();
+    return 'onboarding reset';
+  }
+  if (el) {
+    const x = document.getElementById('ob-x'), got = document.getElementById('ob-got'), skip = document.getElementById('ob-skip');
+    if (x) x.addEventListener('click', hide);
+    if (got) got.addEventListener('click', hide);
+    if (skip) skip.addEventListener('click', skipAll);
+  }
+  // touch-aware key phrasing: tap-buttons on a phone, keys on desktop
+  const k = (key, touch) => (typeof TOUCH !== 'undefined' && TOUCH) ? touch : key;
+  return { show, hide, tick, skipAll, reset, seen, skipped, k };
+})();
+// the four core-path hints, keyed by game state. Each fires once.
+function obMapStart() { // first time roaming the overworld (Drifter start)
+  ONBOARD.show('map',
+    'You ride the Vale',
+    `<b>${ONBOARD.k('WASD', 'Drag the left stick')}</b> to roam. Ride into an enemy band to start a fight.<br>` +
+    `Your goal: <b>raise your band</b> — beat weak packs, then recruit fresh swords at the muster after each win.`);
+}
+function obEncounter(ally) { // first parley with a band you meet
+  if (ally) return; // teach the core choice on a neutral band, not an allied greet
+  ONBOARD.show('encounter',
+    'Banners Meet',
+    `<b>Attack</b> to fight them now · <b>Propose Pact</b> to seek an alliance (they march to your call) · <b>Say Hi</b> to part in peace.<br>` +
+    `Hunt the small packs first — they break easy and pay XP.`);
+}
+function obBattleStart() { // first real battle — the combat controls
+  ONBOARD.show('battle',
+    'Into the Clash',
+    `<b>${ONBOARD.k('MOUSE', 'Look')}</b> to aim · <b>${ONBOARD.k('CLICK', 'ATK')}</b> to strike · ` +
+    `<b>${ONBOARD.k('SHIFT', 'BLOCK')}</b> to guard · <b>${ONBOARD.k('SPACE', 'DODGE')}</b> to roll clear.<br>` +
+    `Block or dodge the moment an enemy winds up a swing.`, 8);
+}
+function obMuster() { // first victory / muster screen — recruiting
+  ONBOARD.show('muster',
+    'Muster the Band',
+    `Victory earns <b>XP</b>. Spend it here with the <b>＋</b> buttons to recruit more fighters — a bigger band wins harder fights.<br>` +
+    `Then <b>March</b> back out to the Vale.`);
+}
+BV.resetOnboarding = ONBOARD.reset;
+BV.onboard = ONBOARD; // expose for tests/debug
+
 function showCombo(n) {
   if (n < 2) { comboEl.style.opacity = '0'; return; }
   comboEl.textContent = n + 'x COMBO';
@@ -5439,6 +5525,13 @@ function loop(now) {
       updateEnemies(gdt);
       updateProjectiles(gdt);
       fieldBatch();      // top up each side from its reserve — continuous reinforcement
+      // first-battle combat hint, timed to a real threat: pop it the instant a nearby
+      // enemy winds up a swing (same one-time 'battle' id as the begin-battle fallback)
+      if (!ONBOARD.seen('battle') && !ONBOARD.skipped()) {
+        for (const e of enemies) {
+          if (e.alive && e.state === 'windup' && e.pos.distanceTo(player.pos) < 7) { obBattleStart(); break; }
+        }
+      }
       checkBattleEnd();
       if (coopRole === 'host') coopHostTick(gdt); // broadcast the arena to any ally who joined
     } else if (mode === 'coopguest') {
@@ -5456,6 +5549,7 @@ function loop(now) {
       bannerTimer -= dt;
       if (bannerTimer <= 0) { waveBanner.style.opacity = '0'; waveSub.style.opacity = '0'; }
     }
+    ONBOARD.tick(dt); // count down any auto-dismissing onboarding hint
     // real-time field command: fade the order toast, and let the selection rings clear on their own
     if (cmdToastTimer > 0) { cmdToastTimer -= dt; if (cmdToastTimer <= 0 && cmdToastEl) cmdToastEl.style.opacity = '0'; }
     if (selIdle > 0 && mode === 'battle' && !commandPanelOpen) { selIdle -= dt; if (selIdle <= 0) clearSelection(); }

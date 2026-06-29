@@ -11,6 +11,37 @@
 
   var net = { online: false, profile: null, base: BASE };
 
+  // shared-world (multiplayer) toggle. ?mp turns it on and STICKS (so a bookmarked base URL keeps
+  // the tester in the shared world); ?solo or ?mp=0 turns it back off (for the dev's own play).
+  var SHARED = false;
+  try {
+    var s = location.search;
+    if (/[?&]solo(=|&|$)/.test(s) || /[?&]mp=0(&|$)/.test(s)) { localStorage.removeItem('bv-mp'); SHARED = false; }
+    else if (/[?&]mp(=|&|$)/.test(s)) { localStorage.setItem('bv-mp', '1'); SHARED = true; }
+    else SHARED = localStorage.getItem('bv-mp') === '1';
+  } catch (e) {}
+
+  // Player identity → server account. Single-player keeps 'local' (existing progress untouched).
+  // Multiplayer needs a DISTINCT token per person, else everyone collapses into one account and
+  // nobody sees anybody. Priority: ?p=<name> (readable, assignable) → a name set earlier on this
+  // device → a per-device random id when in shared mode → 'local'.
+  var PLAYER_TOKEN = (function () {
+    try {
+      var m = /[?&]p=([^&#]+)/.exec(location.search);
+      if (m) { var name = (decodeURIComponent(m[1]) || '').slice(0, 32) || 'local'; localStorage.setItem('bv-token', name); return name; }
+      var explicit = localStorage.getItem('bv-token');
+      if (explicit) return explicit;
+      if (SHARED) {
+        var k = localStorage.getItem('bv-mp-token');
+        if (!k) { k = 'p-' + Math.random().toString(36).slice(2, 10); localStorage.setItem('bv-mp-token', k); }
+        return k;
+      }
+      return 'local';
+    } catch (e) { return 'local'; }
+  })();
+  net.token = PLAYER_TOKEN;
+  net.sharedWorld = SHARED;
+
   function withTimeout(promise, ms) {
     return Promise.race([
       promise,
@@ -19,7 +50,7 @@
   }
   function jfetch(path, opts) {
     opts = opts || {};
-    opts.headers = Object.assign({ 'Content-Type': 'application/json', 'X-Player-Token': 'local' }, opts.headers || {});
+    opts.headers = Object.assign({ 'Content-Type': 'application/json', 'X-Player-Token': PLAYER_TOKEN }, opts.headers || {});
     return withTimeout(fetch(BASE + path, opts), TIMEOUT).then(function (r) {
       if (!r.ok) throw new Error('http ' + r.status);
       return r.json();
@@ -56,10 +87,6 @@
 
   // ----- the always-on living world (Step 4) + positional armies & multiplayer presence (refinements) -----
   function lastSeenTick() { try { return parseInt(localStorage.getItem('bv-lastseen-tick') || '0', 10) || 0; } catch (e) { return 0; } }
-  // shared-world (multiplayer) toggle: ?mp in the URL, or localStorage 'bv-mp'
-  var SHARED = false;
-  try { SHARED = /[?&]mp(=|&|$)/.test(location.search) || localStorage.getItem('bv-mp') === '1'; } catch (e) {}
-  net.sharedWorld = SHARED;
   function worldHeaders() { return SHARED ? { 'X-World': 'shared' } : {}; }
 
   net.world = null;

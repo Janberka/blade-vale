@@ -2966,6 +2966,18 @@ function areFactionEnemies(a, b) {
   const s = stanceLocal(a, b);
   return (typeof WorldSim !== 'undefined' && WorldSim.areEnemies) ? WorldSim.areEnemies(s) : (s === 'war' || s === 'hostile');
 }
+// The ambient swarm skirmishes far more readily than the macro war: any two realms NOT bound by an
+// alliance or a non-aggression pact raid each other's borders. This keeps the overworld alive with
+// battles even when the diplomacy has drifted into a tense, all-neutral peace (a long-running world
+// erodes its opening wars toward neutral) — while alliances and pacts still stay the blades. The
+// authoritative server warlords keep using the strict at-war check (areFactionEnemies); this looser
+// rule governs only the flavor swarm and where bands choose to march.
+function areAmbientRivals(a, b) {
+  const an = factionName(a), bn = factionName(b);
+  if (!an || !bn || an === bn) return false;
+  const s = stanceLocal(a, b);
+  return s !== 'alliance' && s !== 'nonaggression'; // neutral / hostile / war → constant border raids
+}
 function setRelations(list) {
   if (!_wsOK()) return;
   worldRelations = new Map();
@@ -3064,10 +3076,35 @@ function terrainColorAt(x, z, out) {
   // (political colour is no longer baked here — the living territory overlay paints it dynamically)
   return out;
 }
+// CONTINUOUS biome colour — the smooth cousin of terrainColorAt/biomeAt. biomeAt classifies with hard
+// thresholds, so its ground colour STEPS at every band edge (visible seams where biomes meet). Here we
+// evaluate the same fields ONCE and blend: temperature interpolates across band stops (dry & wet anchor
+// colours), moisture cross-fades dry↔wet, and elevation eases in shoreline sand, highland rock and snow.
+// Result: grass melts into desert, forest into taiga, land into coast — no banding. (biomeAt still drives
+// the discrete scatter; only the painted ground uses this.)
+const _tc2 = new THREE.Color(), _tc3 = new THREE.Color(), _tc4 = new THREE.Color();
+const _BAND_T   = [0.10, 0.29, 0.48, 0.68, 0.88];          // temperature stops: frozen → cold → temperate → warm → hot
+const _BAND_DRY = [0xdde7f0, 0xdde7f0, 0x6f9e54, 0x9a9c58, 0xc9a266]; // tundra, tundra, grass,  savanna, desert
+const _BAND_WET = [0xdde7f0, 0x47675a, 0x3f6b34, 0x3f6b34, 0x9a9c58]; // tundra, taiga,  forest, forest,  savanna
+function groundColorBlended(x, z, out) {
+  const e = elevationAt(x, z);
+  if (e < SEA_LEVEL) { return out.setHex(0x123a5e).lerp(_tcB.setHex(0x2f86b4), clamp(e / SEA_LEVEL, 0, 1)); } // sea depth
+  const t = tempAt(x, z), m = moistureAt(x, z);
+  let seg = 0; while (seg < _BAND_T.length - 2 && t > _BAND_T[seg + 1]) seg++;          // find the temperature band
+  const f = clamp((t - _BAND_T[seg]) / (_BAND_T[seg + 1] - _BAND_T[seg]), 0, 1);
+  const dry = _tc2.setHex(_BAND_DRY[seg]).lerp(_tcB.setHex(_BAND_DRY[seg + 1]), f);
+  const wet = _tc3.setHex(_BAND_WET[seg]).lerp(_tc4.setHex(_BAND_WET[seg + 1]), f);
+  const mw = clamp((m - 0.40) / 0.16, 0, 1); out.copy(dry).lerp(wet, mw * mw * (3 - 2 * mw)); // moisture cross-fade
+  const beach = clamp((e - SEA_LEVEL) / 0.05, 0, 1);          // 0 at the waterline → 1 a little inland
+  if (beach < 1) out.lerp(_tcB.setHex(0xddd2a0), (1 - beach) * 0.85);                   // sandy coastal strip, eased in
+  const rock = clamp((e - 0.66) / 0.12, 0, 1); if (rock > 0) out.lerp(_tcB.setHex(0x8c8c86), rock * 0.7);  // bare highland stone
+  const snow = clamp((e - 0.78) / 0.10, 0, 1); if (snow > 0) out.lerp(_tcB.setHex(0xeef3f7), snow * 0.9);  // snow-capped peaks
+  return out.multiplyScalar(clamp(0.80 + (e - SEA_LEVEL) * 0.4, 0.7, 1.0));             // gentle relief shading
+}
 // Display elevation for the strategic map: turn the (gameplay-only) elevation field into
 // real vertical relief so mountains tower and valleys sink. Water dips into a seabed basin
 // beneath its tint; land eases upward, with peaks getting an extra exponential lift.
-const MAP_RELIEF = 26;
+const MAP_RELIEF = 15;     // overworld vertical exaggeration — gentler than before so the honeycomb reads calm, not jagged
 function mapElevY(x, z) {
   const e = elevationAt(x, z);
   if (e < SEA_LEVEL) return -0.6 - (SEA_LEVEL - e) * 2.0;              // seabed basin under the water tint
@@ -3081,8 +3118,7 @@ function mapElevY(x, z) {
 // square chunks around the player and dispose once left behind, so the world extends forever and is
 // generated the moment you discover it. Everything a chunk builds is a pure function of
 // (chunkX, chunkZ, worldSeed), so a place looks identical each time you return within a region.
-const CHUNK = 60;          // world units per chunk side
-const CHUNK_SEG = 16;      // relief subdivisions per chunk (matches the old sheet's vertex density)
+const CHUNK = 60;          // world units per chunk side (each holds ~240 hex tiles)
 let VIEW = 2;              // chunks streamed out from the player's chunk; GROWS with the vista (see below)
 
 // ---------- The vista: the more of the world you ride, the farther your scouts see ----------
@@ -3103,6 +3139,45 @@ try { mapMiles = +localStorage.getItem('bv-map-miles') || 0; } catch (e) { /* pr
 let mapVista = mapMiles / (mapMiles + VISTA.k); // 0..1 derived survey reach
 let _mileSaveT = 0;       // throttles persistence of the running total
 const vlerp = (pair) => pair[0] + (pair[1] - pair[0]) * mapVista;
+
+// ---------- Hex lattice: the overworld is a honeycomb, not a pixel grid ----------
+// Terrain and the political overlay both live on ONE global hex lattice (pointy-top, odd-r
+// offset). A cell is addressed by integer (q, r); its world centre is a pure function of (q, r),
+// independent of chunks, so cells tile seamlessly across chunk seams. Each cell belongs to exactly
+// the chunk that contains its centre — a clean partition with no gaps and no double-paint.
+const HEX_R = 2.4;                       // hexagon circumradius (centre→corner), world units
+const HEX_W = Math.sqrt(3) * HEX_R;      // column spacing (centre→centre across a row)  ~4.16
+const HEX_H = 1.5 * HEX_R;               // row spacing (centre→centre between rows)     3.60
+const HEX_FLOOR = -14;                   // hex prisms drop to this y so cliffs never show a gap
+function hexKey(q, r) { return q + ',' + r; }
+function hexCenterX(q, r) { return (q + 0.5 * (r & 1)) * HEX_W; } // odd rows shift right by half a column
+function hexCenterZ(r) { return r * HEX_H; }
+// nearest cell to a world point (brute-checks the 3 candidate rows — exact enough for picks/snaps)
+function worldToHex(x, z) {
+  const ar = z / HEX_H; let best = [0, 0], bd = Infinity;
+  for (let dr = -1; dr <= 1; dr++) {
+    const r = Math.round(ar) + dr, off = 0.5 * (r & 1), q = Math.round(x / HEX_W - off);
+    const dx = (q + off) * HEX_W - x, dz = r * HEX_H - z, d = dx * dx + dz * dz;
+    if (d < bd) { bd = d; best = [q, r]; }
+  }
+  return best;
+}
+// every cell whose centre falls inside chunk (cx,cz): returns [q, r, worldX, worldZ]
+function hexCellsInChunk(cx, cz) {
+  const out = [];
+  const rLo = Math.floor(cz * CHUNK / HEX_H) - 1, rHi = Math.ceil((cz + 1) * CHUNK / HEX_H) + 1;
+  for (let r = rLo; r <= rHi; r++) {
+    const zc = r * HEX_H; if (Math.floor(zc / CHUNK) !== cz) continue;
+    const off = 0.5 * (r & 1);
+    const qLo = Math.floor(cx * CHUNK / HEX_W - off) - 1, qHi = Math.ceil((cx + 1) * CHUNK / HEX_W - off) + 1;
+    for (let q = qLo; q <= qHi; q++) {
+      const xc = (q + off) * HEX_W; if (Math.floor(xc / CHUNK) !== cx) continue;
+      out.push([q, r, xc, zc]);
+    }
+  }
+  return out;
+}
+
 const mapChunks = new Map();   // "cx,cz" -> { group, holds:[settlement holds] }
 const settlements = [];        // every currently-loaded village/town/city (duck-typed like a capital)
 const heldOwners = new Map();  // siteKey -> owner faction name: remembers conquests near you this region
@@ -3164,15 +3239,15 @@ function makeSettlementHold(s) {
 }
 
 // ---------- Per-chunk decoration: trees + rocks, deterministic from the chunk seed ----------
-function buildScatter(group, cx, cz) {
+const SCATTER_DENSITY = 0.28;                     // thin the trees/rocks so tiles read clean, not crowded
+function buildScatter(group, cx, cz, cells) {
   const rng = _mulberry32(_chunkHash(cx, cz) ^ 0x5EED);
-  const x0 = cx * CHUNK, z0 = cz * CHUNK, trees = [], rocks = [];
-  for (let gx = 3; gx < CHUNK; gx += 6.5) for (let gz = 3; gz < CHUNK; gz += 6.5) {
-    const jx = x0 + gx + (rng() * 4 - 2), jz = z0 + gz + (rng() * 4 - 2);
+  const trees = [], rocks = [];
+  for (const [, , jx, jz] of cells) {              // at most one feature per hex tile, on its centre
     if (isWater(jx, jz)) continue;
-    const b = biomeAt(jx, jz), roll = rng();
-    if (roll < b.treeChance) trees.push([jx, jz, b.tree]);
-    else if (roll < b.treeChance + b.rockChance) rocks.push([jx, jz]);
+    const b = biomeAt(jx, jz), roll = rng(), tc = b.treeChance * SCATTER_DENSITY, rc = b.rockChance * SCATTER_DENSITY;
+    if (roll < tc) trees.push([jx, jz, b.tree]);
+    else if (roll < tc + rc) rocks.push([jx, jz]);
   }
   const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), v = new THREE.Vector3(), s = new THREE.Vector3(), col = new THREE.Color();
   if (trees.length) {
@@ -3201,29 +3276,81 @@ function buildScatter(group, cx, cz) {
   }
 }
 
+// ---------- Hex-prism relief: a real per-chunk mesh so each tile has surface detail ----------
+// NOT instanced — an InstancedMesh can only fly ONE colour per tile, which read as flat blocks.
+// Instead each chunk is a single merged BufferGeometry of hex prisms whose every vertex is coloured
+// by sampling the terrain AT THAT VERTEX'S world position (`tileColorAt`). So a tile top shows a
+// gradient and — because neighbouring tiles share corner/edge-midpoint XZ and the sampler is
+// position-deterministic — biomes BLEND across tile + chunk seams instead of butting hard.
+// The template is a custom pointy-top prism with a SUBDIVIDED top (centre + 6 corners + 6 edge
+// midpoints → a 12-spoke fan) for finer surface detail; the edge midpoints sit ON each shared edge so
+// transitions stay seamless along edges too. No bottom cap (never seen). Tops drop to HEX_FLOOR.
+function _hexTemplate() {
+  return cachedGeo('hexTemplateSub', () => {
+    const R = HEX_R, top = 0.5, bot = -0.5, pos = [], idx = [], cor = [];
+    for (let k = 0; k < 6; k++) { const a = k * Math.PI / 3; cor.push([R * Math.sin(a), R * Math.cos(a)]); }
+    pos.push(0, top, 0);                                                            // 0: centre
+    for (let k = 0; k < 6; k++) pos.push(cor[k][0], top, cor[k][1]);                // 1..6: top corners
+    for (let k = 0; k < 6; k++) { const a = cor[k], b = cor[(k + 1) % 6]; pos.push((a[0] + b[0]) / 2, top, (a[1] + b[1]) / 2); } // 7..12: edge midpoints
+    for (let k = 0; k < 6; k++) pos.push(cor[k][0], bot, cor[k][1]);                // 13..18: bottom corners
+    const ring = []; for (let k = 0; k < 6; k++) { ring.push(1 + k); ring.push(7 + k); } // CCW boundary: c0,e0,c1,e1,...
+    for (let j = 0; j < 12; j++) idx.push(0, ring[j], ring[(j + 1) % 12]);          // top fan (normals up)
+    for (let k = 0; k < 6; k++) { const ct = 1 + k, ct1 = 1 + (k + 1) % 6, cb = 13 + k, cb1 = 13 + (k + 1) % 6; idx.push(ct, cb, ct1, ct1, cb, cb1); } // sides (outward)
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+    g.setIndex(idx);
+    return g;
+  });
+}
+// realistic ground colour at a point: continuous biome blend + relief + snow/coast, then a
+// position-deterministic value-noise jitter so even one biome reads as weathered, varied ground.
+function tileColorAt(x, z, out) {
+  groundColorBlended(x, z, out);
+  const jit = 0.86 + _vnoise(x * 0.23, z * 0.23, worldSeed() + 99) * 0.22 + _vnoise(x * 0.6, z * 0.6, worldSeed() + 131) * 0.08;
+  return out.multiplyScalar(jit);
+}
+function buildChunkTerrainHex(group, cells) {
+  const tmpl = _hexTemplate(), tPos = tmpl.attributes.position.array, tIdx = tmpl.index.array;
+  const tvc = tmpl.attributes.position.count, tic = tIdx.length, N = cells.length;
+  const positions = new Float32Array(N * tvc * 3), colors = new Float32Array(N * tvc * 3);
+  const base = new Float32Array(N * tvc * 3), indices = new Uint32Array(N * tic);
+  const topIdx = []; for (let v = 0; v < tvc; v++) if (tPos[v * 3 + 1] > 0.49) topIdx.push(v); // top-face verts carry politics
+  const items = new Array(N);
+  for (let i = 0; i < N; i++) {
+    const q = cells[i][0], r = cells[i][1], xc = cells[i][2], zc = cells[i][3];
+    const topY = mapElevY(xc, zc), scaleY = topY - HEX_FLOOR, midY = (topY + HEX_FLOOR) / 2, vb = i * tvc;
+    for (let v = 0; v < tvc; v++) {
+      const ty = tPos[v * 3 + 1], px = tPos[v * 3] + xc, pz = tPos[v * 3 + 2] + zc, py = ty * scaleY + midY, o = (vb + v) * 3;
+      positions[o] = px; positions[o + 1] = py; positions[o + 2] = pz;
+      tileColorAt(px, pz, _terrCol);
+      const shade = 0.7 + (ty + 0.5) * 0.3;             // top face bright, cliff base dim — a soft vertical gradient
+      base[o] = colors[o] = _terrCol.r * shade;
+      base[o + 1] = colors[o + 1] = _terrCol.g * shade;
+      base[o + 2] = colors[o + 2] = _terrCol.b * shade;
+    }
+    for (let k = 0; k < tic; k++) indices[i * tic + k] = vb + tIdx[k];
+    items[i] = { cell: terrCells.get(hexKey(q, r)), vb };
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geo.setIndex(new THREE.BufferAttribute(indices, 1));
+  geo.computeVertexNormals();
+  const mesh = new THREE.Mesh(geo, new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: true, shininess: 3 }));
+  mesh.receiveShadow = true; mesh.castShadow = false;
+  group.add(mesh);
+  return { colorAttr: geo.attributes.color, base, items, tvc, topIdx };
+}
+
 // ---------- Chunk streaming ----------
 function buildChunk(cx, cz) {
   const key = cx + ',' + cz;
   if (mapChunks.has(key)) return;
   const group = new THREE.Group();
-  const col = new THREE.Color();
-  // relief sheet — world coords baked into the vertices so the chunk group itself stays at the origin
-  const tgeo = new THREE.PlaneGeometry(CHUNK, CHUNK, CHUNK_SEG, CHUNK_SEG);
-  tgeo.rotateX(-Math.PI / 2);
-  const ox = (cx + 0.5) * CHUNK, oz = (cz + 0.5) * CHUNK;
-  const pos = tgeo.attributes.position, cArr = new Float32Array(pos.count * 3);
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i) + ox, z = pos.getZ(i) + oz;
-    pos.setX(i, x); pos.setZ(i, z); pos.setY(i, mapElevY(x, z));
-    terrainColorAt(x, z, col);
-    cArr[i * 3] = col.r; cArr[i * 3 + 1] = col.g; cArr[i * 3 + 2] = col.b;
-  }
-  tgeo.computeVertexNormals();
-  tgeo.setAttribute('color', new THREE.BufferAttribute(cArr, 3));
-  const sheet = new THREE.Mesh(tgeo, new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 3 }));
-  sheet.receiveShadow = true; group.add(sheet);
-  buildScatter(group, cx, cz);
-  const terr = buildChunkTerritory(group, cx, cz); // living-territory overlay for this chunk
+  const cells = hexCellsInChunk(cx, cz);            // the honeycomb tiles whose centres live in this chunk
+  initTerritoryCells(cells);                         // seed this chunk's territory cells first (gen-0 = the political map)
+  const terr = buildChunkTerrainHex(group, cells);  // hex-prism relief; the tiles themselves fly the political colours
+  buildScatter(group, cx, cz, cells);
   // settlements discovered in this chunk
   const holds = [];
   for (const s of settlementSites(cx, cz)) {
@@ -3234,16 +3361,14 @@ function buildChunk(cx, cz) {
   }
   mapTerrain.add(group);
   mapChunks.set(key, { group, holds, terr });
-  initTerritoryCells(cx, cz);                       // seed this chunk's cells (gen-0 = the political map)
-  paintChunkTerritory(mapChunks.get(key));          // show it immediately, before the first generation
+  paintChunkTerritory(mapChunks.get(key));           // show it immediately, before the first generation
 }
 function disposeChunk(key) {
   const c = mapChunks.get(key); if (!c) return;
   mapTerrain.remove(c.group); disposeGroup(c.group); // disposeGroup frees the overlay material + its texture too
   for (const h of c.holds) { const i = settlements.indexOf(h); if (i >= 0) settlements.splice(i, 1); }
   const ci = key.indexOf(','), kx = +key.slice(0, ci), kz = +key.slice(ci + 1); // drop this chunk's cells (bound the Map)
-  const gx0 = kx * GENV, gz0 = kz * GENV;
-  for (let i = 0; i < GENV; i++) for (let j = 0; j < GENV; j++) terrCells.delete(_cellKey(gx0 + i, gz0 + j));
+  for (const [q, r] of hexCellsInChunk(kx, kz)) terrCells.delete(hexKey(q, r));
   mapChunks.delete(key);
 }
 function clearChunks() { for (const key of Array.from(mapChunks.keys())) disposeChunk(key); }
@@ -3265,12 +3390,10 @@ function updateChunks(force) {
 // holds and hosts that already exist — so fronts ripple, conquests recolour outward, and borders
 // breathe (Game-of-Life over the war map). Purely a client-side visualisation: server-authoritative
 // capital ownership still wins; the cells are merely seeded by it.
-const TERR_CELL = 3;                         // world units per territory cell
-const GENV = (CHUNK / TERR_CELL) | 0;        // cells per chunk side (20)
 const TERR_GEN_T = 0.5;                       // seconds per generation (the "step" cadence)
-const TERR_OPACITY = 0.72;                    // overlay strength over the terrain
 const TERR_HYST = 0.04;                       // a challenger must beat the incumbent's influence by this to flip a cell
 const TERR_GROW = 0.4;                        // how fast a cell's strength chases its target each gen (the visible "fade")
+const POLITICAL_TINT = 0.32;                  // max faction-colour wash over a tile's terrain (0 = pure terrain, 1 = solid politics)
 // Each hold/host projects a faction influence that falls off linearly with distance. A cell flies the
 // banner of the strongest influence over it — a weighted Voronoi that REBUILDS every generation, so as
 // hosts roam and capitals are conquered the fronts genuinely move (capitals are wide stationary anchors;
@@ -3280,9 +3403,9 @@ const SET_W = 0.6, SET_R = 30;               // town/city: a local anchor
 const BAND_W = 0.8, BAND_R = 16;             // a roaming host: a moving bulge of its colours that dents nearby fronts
 const PLR_W = 0.85, PLR_R = 16;              // the player's own banner carves a little realm wherever it rides
 const CONTEST_R = 6;                         // a living clash knocks the ground grey within this
-const terrCells = new Map();                  // "gx,gz" -> { gx, gz, o:faction|null, s:0..1, f:flash, w:water, bf/bi/sf/si/ct:per-gen scratch }
+const terrCells = new Map();                  // "q,r" -> { q, r, x, z, o:faction|null, s:0..1, f:flash, w:water, bf/bi/sf/si/ct:per-gen scratch }
 let terrGen = 0, terrGenT = 0;
-function _cellKey(gx, gz) { return gx + ',' + gz; }
+const _terrM4 = new THREE.Matrix4(), _terrQ = new THREE.Quaternion(), _terrV = new THREE.Vector3(), _terrS = new THREE.Vector3(), _terrCol = new THREE.Color();
 // gen-0 owner: the heartland Voronoi, or the nearest loaded frontier hold, or wilderness
 function _ownerAtInit(x, z) {
   if (Math.hypot(x, z) < HEARTLAND_R) { const n = nationAt(x, z); return n ? n.owner : null; }
@@ -3290,20 +3413,18 @@ function _ownerAtInit(x, z) {
   for (const h of settlements) { const dx = h.x - x, dz = h.z - z, d = dx * dx + dz * dz; if (d < bd) { bd = d; best = h; } }
   return best ? best.owner : null;
 }
-function _ensureCell(gx, gz) {
-  const k = _cellKey(gx, gz);
+function _ensureCell(q, r, xc, zc) {
+  const k = hexKey(q, r);
   let c = terrCells.get(k);
   if (c) return c;
-  const x = (gx + 0.5) * TERR_CELL, z = (gz + 0.5) * TERR_CELL;
-  const water = isWater(x, z);
-  const owner = water ? null : _ownerAtInit(x, z);
-  c = { gx, gz, o: owner, s: owner ? 0.6 : 0, f: 0, w: water, bf: null, bi: 0, sf: null, si: 0, ct: 0 };
+  const water = isWater(xc, zc);
+  const owner = water ? null : _ownerAtInit(xc, zc);
+  c = { q, r, x: xc, z: zc, o: owner, s: owner ? 0.6 : 0, f: 0, w: water, bf: null, bi: 0, sf: null, si: 0, ct: 0 };
   terrCells.set(k, c);
   return c;
 }
-function initTerritoryCells(cx, cz) {
-  const gx0 = cx * GENV, gz0 = cz * GENV;
-  for (let i = 0; i < GENV; i++) for (let j = 0; j < GENV; j++) _ensureCell(gx0 + i, gz0 + j);
+function initTerritoryCells(cells) {
+  for (let i = 0; i < cells.length; i++) _ensureCell(cells[i][0], cells[i][1], cells[i][2], cells[i][3]);
 }
 // one generation: rebuild the faction influence field from the live holds/hosts, then let each cell
 // flow toward whoever now dominates it. Because the hosts move and capitals change hands, the field
@@ -3311,21 +3432,24 @@ function initTerritoryCells(cx, cz) {
 function stepTerritory() {
   terrGen++;
   for (const c of terrCells.values()) { c.bf = null; c.bi = 0; c.sf = null; c.si = 0; c.ct = 0; } // reset the field
-  // stamp a source's influence onto the loaded cells in its reach, tracking the top-2 distinct factions per cell
+  // stamp a source's influence onto the loaded hex cells in its reach, tracking the top-2 distinct factions per cell
   const stamp = (sx, sz, fac, W, R) => {
     if (!fac) return;
     const invR = 1 / R;
-    const gx0 = Math.floor((sx - R) / TERR_CELL), gx1 = Math.floor((sx + R) / TERR_CELL);
-    const gz0 = Math.floor((sz - R) / TERR_CELL), gz1 = Math.floor((sz + R) / TERR_CELL);
-    for (let gx = gx0; gx <= gx1; gx++) for (let gz = gz0; gz <= gz1; gz++) {
-      const c = terrCells.get(_cellKey(gx, gz)); if (!c || c.w) continue;
-      const d = Math.hypot((gx + 0.5) * TERR_CELL - sx, (gz + 0.5) * TERR_CELL - sz);
-      if (d >= R) continue;
-      const inf = W * (1 - d * invR); if (inf <= 0) continue;
-      if (c.bf === fac) { if (inf > c.bi) c.bi = inf; }
-      else if (inf > c.bi) { c.sf = c.bf; c.si = c.bi; c.bf = fac; c.bi = inf; }
-      else if (c.sf === fac) { if (inf > c.si) c.si = inf; }
-      else if (inf > c.si) { c.sf = fac; c.si = inf; }
+    const rLo = Math.floor((sz - R) / HEX_H) - 1, rHi = Math.ceil((sz + R) / HEX_H) + 1;
+    for (let r = rLo; r <= rHi; r++) {
+      const off = 0.5 * (r & 1);
+      const qLo = Math.floor((sx - R) / HEX_W - off) - 1, qHi = Math.ceil((sx + R) / HEX_W - off) + 1;
+      for (let q = qLo; q <= qHi; q++) {
+        const c = terrCells.get(hexKey(q, r)); if (!c || c.w) continue;
+        const d = Math.hypot(c.x - sx, c.z - sz);
+        if (d >= R) continue;
+        const inf = W * (1 - d * invR); if (inf <= 0) continue;
+        if (c.bf === fac) { if (inf > c.bi) c.bi = inf; }
+        else if (inf > c.bi) { c.sf = c.bf; c.si = c.bi; c.bf = fac; c.bi = inf; }
+        else if (c.sf === fac) { if (inf > c.si) c.si = inf; }
+        else if (inf > c.si) { c.sf = fac; c.si = inf; }
+      }
     }
   };
   for (const n of nations) stamp(n.x, n.z, n.owner, CAP_W, CAP_R);
@@ -3333,12 +3457,15 @@ function stepTerritory() {
   for (const b of parties) if (b.alive) stamp(b.pos.x, b.pos.z, b.faction, BAND_W, BAND_R);
   stamp(player.pos.x, player.pos.z, PLAYER_REALM, PLR_W, PLR_R);
   for (const bt of mapBattles) if (!bt.done) {        // a living clash knocks the ground grey around it
-    const gx0 = Math.floor((bt.cx - CONTEST_R) / TERR_CELL), gx1 = Math.floor((bt.cx + CONTEST_R) / TERR_CELL);
-    const gz0 = Math.floor((bt.cz - CONTEST_R) / TERR_CELL), gz1 = Math.floor((bt.cz + CONTEST_R) / TERR_CELL);
-    for (let gx = gx0; gx <= gx1; gx++) for (let gz = gz0; gz <= gz1; gz++) {
-      const c = terrCells.get(_cellKey(gx, gz)); if (!c) continue;
-      const d = Math.hypot((gx + 0.5) * TERR_CELL - bt.cx, (gz + 0.5) * TERR_CELL - bt.cz);
-      if (d < CONTEST_R) c.ct = Math.max(c.ct, 1 - d / CONTEST_R);
+    const rLo = Math.floor((bt.cz - CONTEST_R) / HEX_H) - 1, rHi = Math.ceil((bt.cz + CONTEST_R) / HEX_H) + 1;
+    for (let r = rLo; r <= rHi; r++) {
+      const off = 0.5 * (r & 1);
+      const qLo = Math.floor((bt.cx - CONTEST_R) / HEX_W - off) - 1, qHi = Math.ceil((bt.cx + CONTEST_R) / HEX_W - off) + 1;
+      for (let q = qLo; q <= qHi; q++) {
+        const c = terrCells.get(hexKey(q, r)); if (!c) continue;
+        const d = Math.hypot(c.x - bt.cx, c.z - bt.cz);
+        if (d < CONTEST_R) c.ct = Math.max(c.ct, 1 - d / CONTEST_R);
+      }
     }
   }
   for (const c of terrCells.values()) {               // resolve each cell + ease its strength toward the new truth
@@ -3358,46 +3485,30 @@ function stepTerritory() {
   }
   for (const rec of mapChunks.values()) if (rec.terr) paintChunkTerritory(rec);
 }
-// build a chunk's overlay: a crisp NearestFilter cell texture draped on the relief, just above it
-function buildChunkTerritory(group, cx, cz) {
-  const data = new Uint8Array(GENV * GENV * 4);
-  const tex = new THREE.DataTexture(data, GENV, GENV, THREE.RGBAFormat);
-  tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestFilter;
-  tex.colorSpace = THREE.SRGBColorSpace; // texels hold exact sRGB nation colours regardless of colour management
-  tex.generateMipmaps = false; tex.needsUpdate = true;
-  const geo = new THREE.PlaneGeometry(CHUNK, CHUNK, GENV, GENV);
-  geo.rotateX(-Math.PI / 2);
-  const ox = (cx + 0.5) * CHUNK, oz = (cz + 0.5) * CHUNK, pos = geo.attributes.position;
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i) + ox, z = pos.getZ(i) + oz;
-    pos.setX(i, x); pos.setZ(i, z); pos.setY(i, mapElevY(x, z) + 0.35); // ride just above the terrain sheet
-  }
-  const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: TERR_OPACITY, depthWrite: false }));
-  mesh.renderOrder = 2;
-  group.add(mesh);
-  return { tex, data, cx, cz, mesh };
-}
+// lay the SUBTLE faction politics over the tile's realistic terrain — only the top-face vertices are
+// tinted (cliff sides stay pure terrain), re-derived from the stored base each generation so a tile
+// reverts cleanly when it falls to wilderness. Terrain is the star; politics is a faint hue.
 function paintChunkTerritory(rec) {
   const t = rec.terr; if (!t) return;
-  const gx0 = t.cx * GENV, gz0 = t.cz * GENV, data = t.data;
-  for (let j = 0; j < GENV; j++) for (let i = 0; i < GENV; i++) {
-    const c = terrCells.get(_cellKey(gx0 + i, gz0 + j));
-    const o = ((GENV - 1 - j) * GENV + i) * 4;           // flip the texel row: after the plane's rotateX, V runs opposite world +Z
-    if (c && !c.w && c.ct > 0.12) {                       // a raging clash → a pale contested scar over the land
-      data[o] = 205; data[o + 1] = 205; data[o + 2] = 205; data[o + 3] = (clamp(0.25 + c.ct * 0.55, 0, 1) * 255) | 0; continue;
+  const items = t.items, base = t.base, arr = t.colorAttr.array, topIdx = t.topIdx, M = topIdx.length;
+  for (let i = 0; i < items.length; i++) {
+    const c = items[i].cell, vb = items[i].vb;
+    let grey = false, gk = 0, tint = false, fr = 0, fg = 0, fb = 0, k = 0;
+    if (c && !c.w && c.ct > 0.12) { grey = true; gk = 0.5 * c.ct; }                 // a raging clash → wash toward grey
+    else if (c && !c.w && c.o && c.s >= 0.08) {                                     // owned land takes a faint realm hue
+      fr = ((c.o.color >> 16) & 255) / 255; fg = ((c.o.color >> 8) & 255) / 255; fb = (c.o.color & 255) / 255;
+      if (c.f > 0.02) { const tw = c.f * 0.45; fr += (1 - fr) * tw; fg += (1 - fg) * tw; fb += (1 - fb) * tw; } // flash a fresh flip
+      k = POLITICAL_TINT * (0.45 + 0.55 * c.s); tint = true;
     }
-    if (!c || c.w || !c.o) {                              // water / wilderness → let the terrain show through
-      const a = (c && !c.w && c.f > 0.05) ? (c.f * 70) | 0 : 0; // a brief grey ghost where land just fell
-      data[o] = 150; data[o + 1] = 150; data[o + 2] = 150; data[o + 3] = a; continue;
+    for (let m = 0; m < M; m++) {
+      const o = (vb + topIdx[m]) * 3;
+      let r = base[o], g = base[o + 1], b = base[o + 2];
+      if (grey) { r += (0.78 - r) * gk; g += (0.78 - g) * gk; b += (0.78 - b) * gk; }
+      else if (tint) { r += (fr - r) * k; g += (fg - g) * k; b += (fb - b) * k; }
+      arr[o] = r; arr[o + 1] = g; arr[o + 2] = b;
     }
-    let r = (c.o.color >> 16) & 255, g = (c.o.color >> 8) & 255, b = c.o.color & 255;
-    if (c.f > 0.02) { const tw = c.f * 0.5; r += (255 - r) * tw; g += (255 - g) * tw; b += (255 - b) * tw; } // flash a flip bright
-    const rr = terrCells.get(_cellKey(gx0 + i + 1, gz0 + j)), uu = terrCells.get(_cellKey(gx0 + i, gz0 + j + 1));
-    const k = ((rr && rr.o !== c.o) || (uu && uu.o !== c.o)) ? 0.4 : 1; // darken the moving border
-    data[o] = (r * k) | 0; data[o + 1] = (g * k) | 0; data[o + 2] = (b * k) | 0;
-    data[o + 3] = (clamp(0.4 + c.s * 0.6, 0, 1) * 255) | 0;
   }
-  t.tex.needsUpdate = true;
+  t.colorAttr.needsUpdate = true;
 }
 
 // ---------- Strategic map: persistent capitals + streamed chunks ----------
@@ -3645,7 +3756,7 @@ function spawnPointNearPlayer(minR, maxR) {
 function spawnBand(size, speed, awayFromPlayer, nation) {
   nation = nation || nations[(Math.random() * nations.length) | 0];
   const def = nation.def;
-  const [x, z] = spawnPointNearPlayer(awayFromPlayer ? 55 : 16, 150);
+  const [x, z] = spawnPointNearPlayer(awayFromPlayer ? 55 : 16, awayFromPlayer ? 150 : 105);
   const g = makePartyToken(size, def);
   g.position.set(x, mapElevY(x, z), z);
   scene.add(g);
@@ -3657,11 +3768,14 @@ function spawnBand(size, speed, awayFromPlayer, nation) {
   parties.push(band);
   setBandLabel(band); // banner now shows the warlord's name + their strength
 }
-// how many bands the region should hold — the map should always feel crowded
-function targetPopulation() { return 24 + mapLevel * 3; }
+// how many bands the region should hold — the map should always feel crowded with war
+function targetPopulation() { return 34 + mapLevel * 3; }
 function spawnMapParties() {
-  // every nation fields hosts and packs from its own territory; spread evenly
-  const total = targetPopulation();
+  // every nation fields hosts and packs from its own territory; spread evenly. Fill only up to the
+  // region's target, counting any authoritative server warlords already placed — the ambient swarm
+  // and the server's persistent hosts share ONE crowd budget, so the map is busy without exploding.
+  const have = parties.filter(p => p.alive).length;
+  const total = Math.max(0, targetPopulation() - have);
   for (let i = 0; i < total; i++) {
     const nation = nations[i % nations.length];
     const host = Math.random() < 0.4;
@@ -3689,7 +3803,7 @@ function enterMap() {
   player.obj.scale.y = 1; player.obj.rotation.set(0, 0, 0);
   cameraAngle = 0; // top-down map: W = up the screen (toward -Z), D = right
   mapSpawnT = 6;
-  if (advanceRegion || !parties.some(p => p.alive)) { advanceRegion = false; clearParties(); mapLevel++; placeCapitals(); if (isServerMap()) syncPartiesFromServer(); else spawnMapParties(); }
+  if (advanceRegion || !parties.some(p => p.alive)) { advanceRegion = false; clearParties(); mapLevel++; placeCapitals(); if (isServerMap()) addServerArmies(); spawnMapParties(); } // server's named hosts first, then top up the ambient swarm
   applyServerWorldOnce(); // mirror the server's living world (capital owners) + show what changed while away
   // strategic worldmap dressing: biome terrain in, battle set-dressing out, neutral sky
   buildMapTerrain();
@@ -3721,11 +3835,13 @@ function enterMap() {
   obMapStart(); // first-time-on-the-map onboarding hint (shown once)
 }
 
-// nearest living band of a DIFFERENT faction within `radius` — drives the inter-host war
+// nearest living band of a DIFFERENT, non-allied faction within `radius` — drives the inter-host war.
+// Uses the looser ambient-rivalry test so hosts actively converge into border skirmishes (keeping the
+// map full of fights) rather than only when the macro diplomacy is at open war.
 function nearestRival(band, radius) {
   let best = null, bestD = radius * radius;
   for (const o of parties) {
-    if (!o.alive || o === band || !areFactionEnemies(o.faction, band.faction)) continue; // only at-war hosts are rivals
+    if (!o.alive || o === band || !areAmbientRivals(o.faction, band.faction)) continue; // any non-allied host is a target
     const dx = o.pos.x - band.pos.x, dz = o.pos.z - band.pos.z, d2 = dx * dx + dz * dz;
     if (d2 < bestD) { bestD = d2; best = o; }
   }
@@ -4135,13 +4251,15 @@ function updateMap(dt) {
     if (dx * dx + dz * dz < reach * reach && cap.parleyCd <= 0 && -(player.vel.x * dx + player.vel.z * dz) > 1) { openSiege(cap); return; }
   }
 
-  // rival hosts that collide LOCK INTO a living battle (or reinforce one already raging)
-  for (let i = 0; !serverDriven && i < parties.length; i++) {
+  // rival hosts that collide LOCK INTO a living battle (or reinforce one already raging). This runs
+  // online too — the ambient swarm is what fills the map with on-screen battles. Server warlords
+  // (serverId) sit out these LOCAL clashes (the server owns their truth; ride into one to fight it).
+  for (let i = 0; i < parties.length; i++) {
     const p = parties[i];
-    if (!p.alive || p.clashCd > 0) continue; // locked bands carry a huge clashCd — they never initiate
+    if (!p.alive || p.serverId || p.clashCd > 0) continue; // locked bands carry a huge clashCd — they never initiate
     for (let j = i + 1; j < parties.length; j++) {
       const q = parties[j];
-      if (!q.alive || !areFactionEnemies(q.faction, p.faction)) continue; // allies & truces don't clash
+      if (!q.alive || q.serverId || !areAmbientRivals(q.faction, p.faction)) continue; // allies, pacts & server hosts don't clash here
       const dx = p.pos.x - q.pos.x, dz = p.pos.z - q.pos.z;
       if (dx * dx + dz * dz >= 3.6 * 3.6) continue;
       if (q.inBattle) joinSide(q.inBattle, p); // p (free) reinforces q's ongoing clash
@@ -4167,7 +4285,7 @@ function updateMap(dt) {
   // wars and your hunts thin the bands, fresh hosts march in to replace them
   aliveParties = parties.length;
   mapSpawnT -= dt;
-  if (!serverDriven && mapSpawnT <= 0) {
+  if (mapSpawnT <= 0) { // trickle fresh ambient hosts in (online too) so the map never empties
     mapSpawnT = 2.2;
     let add = Math.min(3, targetPopulation() - aliveParties);
     while (add-- > 0) { reinforceMap(); aliveParties++; }
@@ -5997,7 +6115,7 @@ BV.territory = () => {
   return { gen: terrGen, cells: terrCells.size, owned, unclaimed, water };
 };
 BV.territorySnapshot = BV.territory;
-BV.terrAt = (x, z) => { const c = terrCells.get(_cellKey(Math.floor(x / TERR_CELL), Math.floor(z / TERR_CELL))); return c ? (c.w ? 'water' : (c.o ? c.o.name : 'unclaimed')) : 'unloaded'; };
+BV.terrAt = (x, z) => { const [q, r] = worldToHex(x, z); const c = terrCells.get(hexKey(q, r)); return c ? (c.w ? 'water' : (c.o ? c.o.name : 'unclaimed')) : 'unloaded'; };
 BV.allyOrders = () => { const o = {}; for (const a of allies) if (a.alive) o[a.order] = (o[a.order] || 0) + 1; return o; };
 BV.allyStats = () => { const g = {}; for (const a of allies) if (a.alive) { const k = defKey(a.def) + ':' + a.order; (g[k] = g[k] || { n: 0, x: 0, z: 0 }); g[k].n++; g[k].x += a.pos.x; g[k].z += a.pos.z; } const o = {}; for (const k in g) o[k] = { n: g[k].n, avgX: Math.round(g[k].x / g[k].n), avgZ: Math.round(g[k].z / g[k].n) }; return o; };
 BV.plan = { selectType, deploySelected, beginBattle, selCount: () => selected.size,
@@ -6233,10 +6351,12 @@ function serverArmyToBand(a) {
     level: mapLevel, leader, quality: 1.05, serverId: a.id };
   parties.push(band); setBandLabel(band);
 }
-function syncPartiesFromServer() {
-  clearParties();
+// the authoritative named warlords, APPENDED onto the ambient swarm (no clear) — the server's
+// persistent hosts and the client's living-world bands coexist so the map stays crowded + alive.
+function addServerArmies() {
   for (const a of window.net.world.armies) serverArmyToBand(a);
 }
+function syncPartiesFromServer() { clearParties(); addServerArmies(); }
 let otherPlayerTokens = [];
 function clearOtherPlayers() { for (const t of otherPlayerTokens) { scene.remove(t); disposeGroup(t); } otherPlayerTokens.length = 0; }
 function makeOtherPlayerToken(name, size) {

@@ -202,12 +202,14 @@ function nationOwnerMap(worldId) {
 // generate-on-navigate: for every not-yet-generated chunk within radiusChunks of (x,z), compute its
 // settlements via the shared kernel and INSERT them idempotently. Marks each chunk in the ledger so
 // re-navigating the same ground never duplicates. Most chunks yield 0 holds (cheap ledger row only).
-const insHold = db.prepare(`INSERT OR IGNORE INTO holds(world_id, cx, cz, idx, name, tier, x, z, owner_name, garrison, generated_tick)
-  VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
-const insRegion = db.prepare('INSERT OR IGNORE INTO hold_regions(world_id, cx, cz, generated_tick) VALUES (?,?,?,?)');
-const haveRegion = db.prepare('SELECT 1 FROM hold_regions WHERE world_id=? AND cx=? AND cz=?');
 const CHUNK = WorldSim.CHUNK;
 function ensureRegion(worldId, x, z, radiusChunks) {
+  // prepared lazily (better-sqlite3 caches by SQL) so requiring this module before migrate() is safe —
+  // index.js requires ./tick before it runs migrate(), and these statements touch Step-9 tables (007)
+  const insHold = db.prepare(`INSERT OR IGNORE INTO holds(world_id, cx, cz, idx, name, tier, x, z, owner_name, garrison, generated_tick)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
+  const insRegion = db.prepare('INSERT OR IGNORE INTO hold_regions(world_id, cx, cz, generated_tick) VALUES (?,?,?,?)');
+  const haveRegion = db.prepare('SELECT 1 FROM hold_regions WHERE world_id=? AND cx=? AND cz=?');
   const R = radiusChunks == null ? HOLD_GEN_RADIUS : radiusChunks | 0;
   const ws = worldSeedFor(worldId), caps = capsFor(worldId), ownerOf = nationOwnerMap(worldId);
   const tick = db.prepare('SELECT sim_tick FROM worlds WHERE id=?').get(worldId).sim_tick;

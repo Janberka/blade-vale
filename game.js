@@ -3322,7 +3322,11 @@ function buildScatter(group, cx, cz, cells) {
 // position-deterministic — biomes BLEND across tile + chunk seams instead of butting hard.
 // The template is a custom pointy-top prism with a SUBDIVIDED top (centre + 6 corners + 6 edge
 // midpoints → a 12-spoke fan) for finer surface detail; the edge midpoints sit ON each shared edge so
-// transitions stay seamless along edges too. No bottom cap (never seen). Tops drop to HEX_FLOOR.
+// transitions stay seamless along edges too. No bottom cap (never seen).
+// Tops are NOT flat: every top vertex rides mapElevY at ITS OWN world XZ, so tiles contour to the
+// terrain (no plateau staircase on slopes). Because mapElevY is a pure function of position and
+// neighbours share corner/edge-mid XZ, every shared boundary point gets the same height → seamless
+// slopes across tile + chunk seams. The bottom ring drops flat to HEX_FLOOR for the skirt walls.
 function _hexTemplate() {
   return cachedGeo('hexTemplateSub', () => {
     const R = HEX_R, top = 0.5, bot = -0.5, pos = [], idx = [], cor = [];
@@ -3356,9 +3360,11 @@ function buildChunkTerrainHex(group, cells) {
   const items = new Array(N);
   for (let i = 0; i < N; i++) {
     const q = cells[i][0], r = cells[i][1], xc = cells[i][2], zc = cells[i][3];
-    const topY = mapElevY(xc, zc), scaleY = topY - HEX_FLOOR, midY = (topY + HEX_FLOOR) / 2, vb = i * tvc;
+    const vb = i * tvc;
     for (let v = 0; v < tvc; v++) {
-      const ty = tPos[v * 3 + 1], px = tPos[v * 3] + xc, pz = tPos[v * 3 + 2] + zc, py = ty * scaleY + midY, o = (vb + v) * 3;
+      const ty = tPos[v * 3 + 1], px = tPos[v * 3] + xc, pz = tPos[v * 3 + 2] + zc;
+      const py = (ty > 0.49) ? mapElevY(px, pz) : HEX_FLOOR;  // top verts ride the terrain per-vertex (no flat plateaus); bottom ring sits on the skirt floor
+      const o = (vb + v) * 3;
       positions[o] = px; positions[o + 1] = py; positions[o + 2] = pz;
       tileColorAt(px, pz, _terrCol);
       const shade = 0.7 + (ty + 0.5) * 0.3;             // top face bright, cliff base dim — a soft vertical gradient

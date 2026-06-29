@@ -56,6 +56,32 @@ function seedWorld(worldId) {
   db.prepare('UPDATE worlds SET last_tick_at=? WHERE id=? AND last_tick_at=0').run(Math.floor(Date.now() / 1000), worldId);
 }
 
+// A fallen banner can RISE AGAIN. If too few powers remain (a floor), or now and then just because
+// the world turns, a long-dormant nation foments a homeland rebellion: it reclaims its ancestral
+// capital (never one the human player holds) and musters a fresh host — so the vale cycles through
+// rise and fall instead of grinding down to a lone victor. (The "successor states" piece the
+// diplomacy module earmarked.)
+const REBIRTH_FLOOR = 3;     // never let the count of living nations fall below this
+const REBIRTH_DELAY = 12;    // a nation must lie fallen this many ticks before it can return
+const REBIRTH_CHANCE = 0.05; // per-tick chance a dormant banner returns even when the world is healthy
+function maybeRebirth(worldId, tick) {
+  const living = db.prepare("SELECT count(*) n FROM faction_state WHERE world_id=? AND alive=1 AND faction!=?").get(worldId, D.PLAYER).n;
+  const fallen = db.prepare("SELECT faction, collapsed_tick FROM faction_state WHERE world_id=? AND alive=0 AND collapsed_tick IS NOT NULL ORDER BY collapsed_tick ASC").all(worldId)
+    .filter(r => NATIONS.indexOf(r.faction) >= 0 && (tick - r.collapsed_tick) >= REBIRTH_DELAY);
+  if (!fallen.length) return;
+  if (living >= REBIRTH_FLOOR && Math.random() >= REBIRTH_CHANCE) return; // healthy world: only the rare return
+  const F = fallen[0].faction, idx = NATIONS.indexOf(F);                  // the longest-dormant banner rises first
+  const cap = db.prepare('SELECT id, def_name, owner_name, garrison FROM capitals WHERE world_id=? AND idx=?').get(worldId, idx);
+  const seize = cap && cap.owner_name !== D.PLAYER;                       // never wrest a hold from the human player
+  const lostFrom = seize ? cap.owner_name : null;
+  if (seize) db.prepare('UPDATE capitals SET owner_name=?, garrison=? WHERE id=?').run(F, Math.max(8, Math.round(cap.garrison * 0.6)), cap.id);
+  spawnWarlord(worldId, F, tick);   // a reborn host musters in the homeland (spawnWarlord seats it near capPos(idx))
+  db.prepare('UPDATE faction_state SET alive=1, collapsed_tick=NULL WHERE world_id=? AND faction=?').run(worldId, F);
+  ev(worldId, tick, 'nation_rose', F + ' rises again — a rebellion ' +
+    (seize ? 'restores its banner at ' + cap.def_name + (lostFrom && lostFrom !== F ? ', wrested from ' + lostFrom : '')
+           : 'rallies a host in the homeland'));
+}
+
 function band(w) { return { size: w.size, quality: 1.05, leader: { skills: JSON.parse(w.skills_json || '{}'), renown: w.renown } }; }
 function doClash(worldId, tick, a, b) {
   const r = WorldSim.resolveClash(band(a), band(b), Math.random);
@@ -130,6 +156,8 @@ function runTick(worldId, tick) {
   // 4. diplomacy: drift relations + posture, then record any nation that has fallen
   D.tickDiplomacy(worldId, tick);
   D.handleCollapse(worldId, tick);
+  // 4a. successor states: a fallen banner can rise again so the world never grinds to a lone power
+  maybeRebirth(worldId, tick);
   // 4b. destiny: read the whole population + the macro state diplomacy just refreshed, and advance
   // each character's fated arc + the world "age" (chronicle-only; self-gated to a slow cadence)
   Destiny.tickDestiny(worldId, tick);
@@ -199,7 +227,7 @@ function getPresence(worldId, exceptAccount) {
 }
 
 module.exports = {
-  advanceWorld, seedWorld, markActive, isActive, tickInactiveWorlds, forceTicks,
+  advanceWorld, seedWorld, runTicks, markActive, isActive, tickInactiveWorlds, forceTicks,
   getArmies, getCapitals, defeatArmy, updatePresence, getPresence, capPos,
   TICK_SECONDS, MAX_CATCHUP_TICKS, ACTIVE_TTL, MAP_HALF
 };

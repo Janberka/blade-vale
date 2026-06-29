@@ -2814,9 +2814,10 @@ function updateCamera(dt) {
 function updateMapCamera(dt) {
   const k = clamp(dt * 4, 0, 1);
   const gy = mapElevY(player.pos.x, player.pos.z); // ride the relief so the cam clears hills and peaks
+  // the vista zooms the eye-in-the-sky out as the world is explored — smoothed by the same lerp
   camBase.x = lerp(camBase.x, player.pos.x, k);
-  camBase.y = lerp(camBase.y, gy + 46, k);
-  camBase.z = lerp(camBase.z, player.pos.z + 20, k); // slight south offset = tilt, not pure top-down
+  camBase.y = lerp(camBase.y, gy + vlerp(VISTA.camLift), k);
+  camBase.z = lerp(camBase.z, player.pos.z + vlerp(VISTA.camBack), k); // south offset = tilt, not pure top-down
   camera.position.copy(camBase);
   camera.lookAt(player.pos.x, gy, player.pos.z);
 }
@@ -3076,7 +3077,26 @@ function mapElevY(x, z) {
 // (chunkX, chunkZ, worldSeed), so a place looks identical each time you return within a region.
 const CHUNK = 60;          // world units per chunk side
 const CHUNK_SEG = 16;      // relief subdivisions per chunk (matches the old sheet's vertex density)
-const VIEW = 2;            // chunks loaded out from the player's chunk (5×5 = 25 ⇒ ~300×300 window)
+let VIEW = 2;              // chunks streamed out from the player's chunk; GROWS with the vista (see below)
+
+// ---------- The vista: the more of the world you ride, the farther your scouts see ----------
+// Riding the map accrues survey reach. As it climbs the camera lifts and pulls back, the haze is
+// pushed to the horizon, and more terrain streams in — so a seasoned commander surveys the land
+// while a newcomer rides hemmed-in and blind. A saturating curve means it never quite stops
+// ("far and farther") but the early gains are the most felt. Persists across regions and sessions.
+const VISTA = {
+  k: 750,            // half-reach distance: vista = 0.5 once this many world-units have been ridden
+  fogNear: [108, 205],   // [base → widest]  haze onset
+  fogFar:  [225, 470],   // [base → widest]  full white-out (kept inside the streamed terrain)
+  camLift: [46, 88],     // [base → widest]  camera height above the relief — the dominant "see far" lever
+  camBack: [20, 40],     // [base → widest]  southward pullback (keeps the tilt as it zooms out)
+  view:    [2, 3],       // [base → widest]  chunk-stream radius (whole steps; capped at 3 to stay phone-friendly)
+};
+let mapMiles = 0;         // total world-units ridden across the overworld (persisted, never reset)
+try { mapMiles = +localStorage.getItem('bv-map-miles') || 0; } catch (e) { /* private mode */ }
+let mapVista = mapMiles / (mapMiles + VISTA.k); // 0..1 derived survey reach
+let _mileSaveT = 0;       // throttles persistence of the running total
+const vlerp = (pair) => pair[0] + (pair[1] - pair[0]) * mapVista;
 const mapChunks = new Map();   // "cx,cz" -> { group, holds:[settlement holds] }
 const settlements = [];        // every currently-loaded village/town/city (duck-typed like a capital)
 const heldOwners = new Map();  // siteKey -> owner faction name: remembers conquests near you this region
@@ -4013,6 +4033,26 @@ function updateActiveCall(dt) {
 }
 addEventListener('keydown', (e) => { if (e.code === 'KeyG' && mode === 'map' && !encounter) { e.preventDefault(); raiseCall(); } });
 
+// Fold the distance just ridden into the running survey reach, then push fog / stream-radius to match.
+// (The camera lift+pullback is read from mapVista in updateMapCamera so the zoom-out stays smoothed.)
+function applyVista(moved, dt) {
+  if (moved > 0) {
+    mapMiles += moved;
+    mapVista = mapMiles / (mapMiles + VISTA.k);
+    _mileSaveT += dt;
+    if (_mileSaveT > 5) { _mileSaveT = 0; try { localStorage.setItem('bv-map-miles', String(Math.round(mapMiles))); } catch (e) {} }
+  }
+  scene.fog.near = vlerp(VISTA.fogNear);
+  scene.fog.far = vlerp(VISTA.fogFar);
+  const wantView = Math.round(vlerp(VISTA.view));
+  if (wantView !== VIEW) {
+    const grew = wantView > VIEW;
+    VIEW = wantView;
+    updateChunks(true); // re-stream at the new radius right away
+    if (grew) showCmdToast('The land opens before you — your scouts range farther.');
+  }
+}
+
 function updateMap(dt) {
   if (encounter) return; // a parley/siege prompt is open — the whole map holds until you choose
   const serverDriven = isServerMap(); // when online, the server owns the macro war (clashes/conquests)
@@ -4034,6 +4074,8 @@ function updateMap(dt) {
     player.mapToken.position.y = mapElevY(player.pos.x, player.pos.z);
     player.mapToken.rotation.y = player.facing;
   }
+  // tally the ground actually covered → grow the vista (haze, zoom, stream-radius all follow)
+  applyVista(Math.hypot(npx - opx, npz - opz), dt);
   updateChunks(); // stream fresh terrain + settlements in as the player crosses chunk lines
   terrGenT += dt; // advance the living territory in discrete generations so it reads as "stepping"
   for (let g = 0; terrGenT >= TERR_GEN_T && g < 4; g++) { terrGenT -= TERR_GEN_T; stepTerritory(); }
@@ -5719,6 +5761,12 @@ BV.advanceMap = (secs, dt = 0.05) => { // deterministic overworld stepping (off-
   const n = Math.round(secs / dt);
   for (let i = 0; i < n && mode === 'map' && !encounter; i++) { frameNo++; updateMap(dt); }
   return { mode, parties: parties.filter(p => p.alive).length, battles: mapBattles.length };
+};
+// vista inspection / forcing — peek the survey reach, or set total miles to preview the far view
+BV.vista = (miles) => {
+  if (typeof miles === 'number') { mapMiles = miles; mapVista = mapMiles / (mapMiles + VISTA.k); applyVista(0, 0); }
+  return { miles: Math.round(mapMiles), vista: +mapVista.toFixed(3), view: VIEW,
+    fog: [Math.round(scene.fog.near), Math.round(scene.fog.far)], camLift: +vlerp(VISTA.camLift).toFixed(1) };
 };
 // living-battle inspection + a forced 1v? clash for timing calibration tests
 BV.mapBattles = () => mapBattles.map(b => ({ a: b.sideA.faction.name, b: b.sideB.faction.name,

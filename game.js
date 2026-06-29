@@ -2836,6 +2836,11 @@ const FIELD_CAP = 50;     // combatants PER SIDE on the field at once (≤100 bo
 const parties = [];       // roaming enemy bands on the map
 let mapLevel = 0;         // rises each time you clear the map — bands get bigger
 let universeSeed = 1;     // identifies THIS game universe — rerolled on refresh; mixes into worldSeed so terrain/capitals/diplomacy all differ run-to-run
+// Shared multiplayer: one fixed terrain seed so every player sees the SAME map + capitals, but each
+// is dealt a distinct station (seed ^ token hash) and spawns near their home realm — distinct kingdoms.
+const SHARED_WORLD_SEED = 0x51A3F00D;
+let mpHomeIdx = null;     // in shared mode, the realm whose lands this player begins in (drives spawn)
+let mpSpawnJitter = 0;    // per-player deterministic offset so same-realm players don't stack
 let mapSpawnT = 0;        // timer for trickling fresh bands onto the map
 let playerReserve = [], enemyReserve = []; // defs waiting to march into the battle
 let battleParty = null;   // the map band currently being fought
@@ -3706,7 +3711,14 @@ function enterMap() {
   setBattleDressing(false);
   if (ground) ground.material.color.setHex(0x6f9e54);
   scene.fog.color.setHex(0x9fc6e8); scene.background.setHex(0x9fc6e8);
-  const [plx, plz] = nearestLand(0, 0); player.pos.set(plx, 0, plz); // never start at sea
+  // shared world: begin in your home realm's lands (per-player offset so kingdoms start spread out);
+  // solo: the map centre as before
+  let spawnX = 0, spawnZ = 0;
+  if (mpHomeIdx != null && nations[mpHomeIdx]) {
+    const cap = nations[mpHomeIdx], ang = (mpSpawnJitter % 360) * Math.PI / 180, r = 9 + (mpSpawnJitter % 8);
+    spawnX = cap.x + Math.cos(ang) * r; spawnZ = cap.z + Math.sin(ang) * r;
+  }
+  const [plx, plz] = nearestLand(spawnX, spawnZ); player.pos.set(plx, 0, plz); // never start at sea
   updateChunks(true); // re-centre the streamed world on the actual spawn tile
   // the player rides the map as a banner party, like the rival hosts — not the walking hero
   if (player.mapToken) { scene.remove(player.mapToken); disposeGroup(player.mapToken); }
@@ -6058,6 +6070,7 @@ function stationDisplayName(s) {
   const home = NATIONS[s.homeIdx].name;
   if (s.holdings > 0) return `${s.title} of ${home}`;
   if (s.pactIdx.length) return `${s.title} in service of ${NATIONS[s.pactIdx[0]].name}`;
+  if (typeof window !== 'undefined' && window.net && window.net.sharedWorld) return `${s.title} of ${home}`; // distinct realm per player
   return s.title;
 }
 
@@ -6149,6 +6162,20 @@ function startStationGame(s) {
 // forceKey pins the station — the default plain load deals the humble 'drifter' (map mode, no
 // opening fight); the "New Universe" reroll & seed box deal random dramatic stations.
 function bootUniverse(seed, forceKey) {
+  if (typeof window !== 'undefined' && window.net && window.net.sharedWorld) {
+    // SHARED WORLD: terrain + capitals come from one fixed seed (identical for everyone), but each
+    // player is dealt their OWN station from (sharedSeed ^ token hash) and spawns in their home realm.
+    universeSeed = SHARED_WORLD_SEED;
+    const tok = String(window.net.token || 'p');
+    let h = 2166136261 >>> 0;
+    for (let i = 0; i < tok.length; i++) h = Math.imul(h ^ tok.charCodeAt(i), 16777619) >>> 0;
+    mpSpawnJitter = h >>> 0;
+    const st = rollStation((SHARED_WORLD_SEED ^ h) >>> 0, 'drifter'); // gentle start, distinct realm per player
+    mpHomeIdx = st.homeIdx;
+    startStationGame(st);
+    return;
+  }
+  mpHomeIdx = null;
   if (seed == null) seed = (Math.random() * 0xffffffff) >>> 0;
   universeSeed = seed >>> 0;
   startStationGame(rollStation(universeSeed, forceKey));
@@ -6177,6 +6204,11 @@ function buildStationPanel() {
       '<button id="sp-go" style="padding:4px 8px;border:0;border-radius:6px;cursor:pointer;background:#3a3050;color:#e8def8;font-weight:700">Go</button>' +
     '</div>';
   document.body.appendChild(p);
+  if (typeof window !== 'undefined' && window.net && window.net.sharedWorld) {
+    // the shared world is fixed — rerolling/seed-pinning don't apply, so hide them to avoid confusion
+    const rr = p.querySelector('#sp-reroll'); if (rr) rr.style.display = 'none';
+    const seedInp = p.querySelector('#sp-seed'); const seedRow = seedInp && seedInp.closest('div'); if (seedRow) seedRow.style.display = 'none';
+  }
   if (TOUCH) { // on phones this panel would cover the left thumb — start collapsed to a chip, tap to expand
     p.classList.add('collapsed');
     const tog = document.createElement('button');

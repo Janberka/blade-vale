@@ -6129,6 +6129,13 @@ function buildStationPanel() {
       '<button id="sp-go" style="padding:4px 8px;border:0;border-radius:6px;cursor:pointer;background:#3a3050;color:#e8def8;font-weight:700">Go</button>' +
     '</div>';
   document.body.appendChild(p);
+  if (TOUCH) { // on phones this panel would cover the left thumb — start collapsed to a chip, tap to expand
+    p.classList.add('collapsed');
+    const tog = document.createElement('button');
+    tog.id = 'sp-toggle'; tog.textContent = '⟳'; tog.title = 'Universe / seed';
+    tog.addEventListener('click', () => p.classList.toggle('collapsed'));
+    p.insertBefore(tog, p.firstChild);
+  }
   p.querySelector('#sp-reroll').addEventListener('click', () => { try { if (typeof location !== 'undefined') location.hash = ''; } catch (e) {} bootUniverse(); }); // unpin → next refresh is fresh too
   const go = () => { const v = parseInt(p.querySelector('#sp-seed').value, 10); if (isNaN(v)) return; try { if (typeof location !== 'undefined') location.hash = 'u=' + (v >>> 0); } catch (e) {} bootUniverse(v >>> 0); }; // pin: this exact universe reloads on refresh
   p.querySelector('#sp-go').addEventListener('click', go);

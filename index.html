@@ -228,17 +228,29 @@
     border-radius: 50%; border: 2px solid rgba(255,207,91,.5); background: rgba(20,14,10,.5); color: #ffe2a8;
     font-size: 13px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; text-shadow: 0 1px 2px #000; }
   .tbtn:active, .tbtn.on { background: rgba(255,180,80,.6); color: #1a1208; }
-  #tb-attack { width: 96px; height: 96px; right: 24px;  bottom: 40px;  font-size: 17px; }
-  #tb-heavy  { width: 66px; height: 66px; right: 128px; bottom: 52px;  border-color: rgba(255,120,80,.6);  color: #ffc7a8; }
-  #tb-block  { width: 66px; height: 66px; right: 112px; bottom: 138px; border-color: rgba(125,255,154,.55); color: #c8ffd6; }
-  #tb-dodge  { width: 62px; height: 62px; right: 30px;  bottom: 148px; border-color: rgba(120,210,255,.6);  color: #cfeaff; }
-  #tb-weapon { width: 52px; height: 52px; right: 200px; bottom: 100px; font-size: 11px; }
-  #tb-cmd    { width: 54px; height: 54px; right: 36px;  bottom: 220px; border-color: rgba(125,200,255,.55); color: #cfe0ff; }
+  #tb-attack { width: 96px; height: 96px; right: 22px;  bottom: 40px;  font-size: 17px; }
+  #tb-heavy  { width: 66px; height: 66px; right: 112px; bottom: 178px; border-color: rgba(255,120,80,.6);  color: #ffc7a8; }
+  #tb-block  { width: 66px; height: 66px; right: 120px; bottom: 100px; border-color: rgba(125,255,154,.55); color: #c8ffd6; }
+  #tb-dodge  { width: 62px; height: 62px; right: 30px;  bottom: 154px; border-color: rgba(120,210,255,.6);  color: #cfeaff; }
+  #tb-weapon { width: 52px; height: 52px; right: 96px;  bottom: 250px; font-size: 11px; }
+  #tb-cmd    { width: 54px; height: 54px; right: 30px;  bottom: 248px; border-color: rgba(125,200,255,.55); color: #cfe0ff; }
   /* map-mode kingdom actions — stacked pills, right side */
   #tmap .tbtn { border-radius: 12px; width: 116px; height: 48px; right: 22px; font-size: 12px; }
   #tb-rally   { bottom: 178px; }
   #tb-beacon  { bottom: 122px; border-color: rgba(125,200,255,.55); color: #cfe0ff; }
   #tb-warband { bottom: 66px;  border-color: rgba(214,163,255,.5);  color: #e6d3ff; }
+  /* the station/reroll panel lives bottom-left on desktop — on touch that's the thumb zone,
+     so dock it top-left and let it collapse to a small chip out of the way */
+  body.touch #station-panel { left: 8px !important; top: 104px !important; bottom: auto !important; width: 216px !important; }
+  body.touch #station-panel #sp-toggle { position: absolute; top: 8px; right: 8px; width: 34px; height: 30px;
+    border-radius: 8px; border: 1px solid #ffd34d; background: rgba(255,211,77,.15); color: #ffe089; font-size: 15px; cursor: pointer; line-height: 1; }
+  body.touch #station-panel.collapsed { width: auto !important; max-width: 62vw; padding: 7px 46px 7px 12px !important; }
+  body.touch #station-panel.collapsed #sp-reroll,
+  body.touch #station-panel.collapsed #sp-blurb,
+  body.touch #station-panel.collapsed #sp-stats,
+  body.touch #station-panel.collapsed #sp-stand,
+  body.touch #station-panel.collapsed #sp-fight,
+  body.touch #station-panel.collapsed > div:last-child { display: none !important; }
 </style>
 </head>
 <body>

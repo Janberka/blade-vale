@@ -3765,7 +3765,7 @@ function sgBuildCastle(P) {
   for (const gi of gates) sgBanner(P, verts[gi].lx, verts[gi].lz);       // a banner over each gate
 }
 function sgFindKeep(P) {
-  const { seat, spec } = P; let best = { lx: 0, lz: 0, y: seat(0, 0) }; const Rin = spec.R * 0.36;
+  const { seat, spec } = P; let best = { lx: 0, lz: 0, y: seat(0, 0) }; const Rin = spec.R * 0.2; // keep near the centre so it sits well inside the snug curtain
   for (let k = 0; k < 8; k++) { const a = k / 8 * TAU, lx = Math.cos(a) * Rin, lz = Math.sin(a) * Rin, y = seat(lx, lz); if (y > best.y) best = { lx, lz, y }; }
   return best;
 }
@@ -3775,7 +3775,7 @@ function sgFindKeep(P) {
 // disjoint, parallel wall runs. Always a single simple closed loop (star-shaped about the keep).
 function sgCurtainMarch(P, keep, DROP, NW) {
   const { seat, spec, T, r } = P;
-  const platY = keep.y - DROP, minR = spec.R * 0.5, maxR = spec.R * 1.0, jit = (r() - 0.5) * 0.25;
+  const platY = keep.y - DROP, minR = spec.R * 0.42, maxR = spec.R * 0.62, jit = (r() - 0.5) * 0.25; // a snug curtain hugging the keep+bailey, not a vast ring out at the footprint edge
   const rad = new Array(NW), ang = new Array(NW);
   for (let k = 0; k < NW; k++) {
     const a = k / NW * TAU + jit; ang[k] = a; let rd = minR;
@@ -3786,7 +3786,7 @@ function sgCurtainMarch(P, keep, DROP, NW) {
   // so the wall is a clean closed ring that bulges/contracts gently with the ground — never spikes.
   let base = rad.reduce((s, v) => s + v, 0) / NW;
   if (T.relief < 0.8) base = (minR + maxR) / 2;                          // true plain → a clean circle
-  for (let k = 0; k < NW; k++) rad[k] = clamp(base * 0.6 + rad[k] * 0.4, base * 0.82, base * 1.18);
+  for (let k = 0; k < NW; k++) rad[k] = clamp(base * 0.6 + rad[k] * 0.4, base * 0.88, base * 1.12);
   if (T.cls === 'RIDGE') for (let k = 0; k < NW; k++) rad[k] = clamp(rad[k] * (1 + 0.3 * Math.abs(Math.cos(ang[k] - T.spineAz))), base * 0.8, base * 1.5); // a gentle oval along the crest, not a thin lozenge
   const med = new Array(NW);                                             // 2-pass smooth (median then mean) for a smooth, closed perimeter
   for (let k = 0; k < NW; k++) { const a = rad[(k - 1 + NW) % NW], b = rad[k], c = rad[(k + 1) % NW]; med[k] = Math.max(Math.min(a, b), Math.min(Math.max(a, b), c)); }
@@ -3819,14 +3819,15 @@ function sgBuildCurtain(P, verts, gates) {
   for (const gi of gates) { gateTower.add(gi); gateTower.add((gi + 1) % N); }
   for (let i = 0; i < N; i++) {
     const A = verts[i], B = verts[(i + 1) % N];
-    const mx = (A.lx + B.lx) / 2, mz = (A.lz + B.lz) / 2, ang = Math.atan2(B.lz - A.lz, B.lx - A.lx), len = Math.hypot(B.lx - A.lx, B.lz - A.lz) + thick * 1.8;
+    const mx = (A.lx + B.lx) / 2, mz = (A.lz + B.lz) / 2, ang = Math.atan2(-(B.lz - A.lz), B.lx - A.lx), len = Math.hypot(B.lx - A.lx, B.lz - A.lz) + thick * 1.8; // yaw must be atan2(-dz,dx): THREE's Y-rotation maps +X to (cos,−sin) — so each bay lies ALONG its edge (no reflected, gapped walls)
     const lo = Math.min(A.y, B.y), hi = Math.max(A.y, B.y), top = hi + wallH, bot = lo - 0.8;
-    if (isGate(i)) {                                                     // a giant gateway: stone arch over tall double doors
-      sgBox(S, mx, top + 0.2, mz, len, 0.85, thick * 1.6, ang, stoneDk);
-      const doorH = wallH + 1.3, doorW = len * 0.62;
-      sgBox(S, mx, lo + doorH / 2, mz, doorW, doorH, 0.42, ang, wood);
-      sgBox(S, mx, lo + doorH * 0.34, mz, doorW * 1.03, 0.17, 0.5, ang, stoneDk); // iron bands
-      sgBox(S, mx, lo + doorH * 0.72, mz, doorW * 1.03, 0.17, 0.5, ang, stoneDk);
+    if (isGate(i)) {                                                     // a giant gateway: a stone arch over tall timber double doors
+      const doorH = wallH + 1.6, doorW = len * 0.8, doorRGB = sgRgb(pal.wood, 0.72);
+      sgBox(S, mx, top + 0.25, mz, len + thick, 0.95, thick * 1.7, ang, stoneDk);  // arch/lintel spanning the opening
+      sgBox(S, mx, lo + doorH / 2, mz, doorW, doorH, 0.45, ang, doorRGB);          // the double doors
+      sgBox(S, mx, lo + doorH * 0.30, mz, doorW * 1.03, 0.18, 0.55, ang, stoneDk); // iron bands
+      sgBox(S, mx, lo + doorH * 0.70, mz, doorW * 1.03, 0.18, 0.55, ang, stoneDk);
+      sgBox(S, mx, lo + doorH / 2, mz, 0.12, doorH * 0.9, 0.6, ang, stoneDk);      // seam between the two leaves
       continue;
     }
     sgBox(S, mx, (top + bot) / 2, mz, len, top - bot, thick, ang, stone);

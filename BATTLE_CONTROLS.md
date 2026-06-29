@@ -27,10 +27,14 @@ There are two moments, both using the same controls:
 
 - **Battle Plan (pre-battle):** after you pick a fight, the field is staged and frozen. Lay out
   your squads, give orders, then press **Begin Battle**. Orders here *position* troops instantly.
-- **Mid-battle command:** press **Esc** during the fight to open the deck. Time slows to a
-  tactical crawl (~0.18×) while you issue orders; troops **start marching** to new orders (they do
-  not teleport). Press **Enter / Resume / Esc** to return to the fight. The collapsed deck shows a
-  **⚔ COMMAND** tab on the screen edge.
+- **Mid-battle command (real time):** you **command while you fight** — no pause, no slow. Keep
+  playing (mouse-look, move, swing) and tap a hotkey to order your squads live: pick a squad with
+  **1–9 / G**, then **H** hold · **T** charge · **B** free · **R** regroup, and **Z / X** for pace. A
+  short toast confirms each order and the troops **start marching** to it (they don't teleport).
+- **The command deck (optional):** for cursor work — drawing hold-zones, box-selecting, fine
+  positioning — press **Esc** to open the overhead deck. It frees the cursor (and slows time to a
+  tactical ~0.18× while open) and shows a **⚔ COMMAND** tab on the screen edge; **Enter / Resume /
+  Esc** returns you to the fight. You no longer *need* it for everyday orders.
 
 ---
 
@@ -60,10 +64,10 @@ With a squad selected, act anywhere on the ground:
 
 Each squad card has order buttons and a pace toggle:
 
-- **Charge** — seek and destroy the enemy host.
-- **Hold** — stand and defend the squad's *current* ground (also key **H**).
-- **Regroup** — fall back and re-form on the player (also key **R**).
-- **Free** — fight at will; drift back toward the player when there's no foe (also key **F**).
+- **Charge** — seek and destroy the enemy host (live key **T**; **A** in the deck).
+- **Hold** — stand and defend the squad's *current* ground (key **H**).
+- **Regroup** — fall back and re-form on the player (key **R**).
+- **Free** — fight at will; drift back toward the player when there's no foe (live key **B**; **F** in the deck).
 - **🐢 March / ⚡ Rush** — the pace toggle (keys **Z** / **X**).
 
 (Hold Zone and "march here & hold" are set by the map gestures above, not buttons. The card's
@@ -176,20 +180,33 @@ next step and needs two-device testing.)*
 | **Left drag — box** | band-select soldiers | **hold that zone** (rectangle) |
 | **Click card / 1–9** | select that squad | select that squad |
 
-### Keyboard
+### Keyboard — command live (while fighting, full speed)
 | Key | Action |
 |---|---|
 | **1–9** | select squad 1–9 |
 | **G** | select all soldiers |
-| **A** | Charge |
 | **H** | Hold (current ground) |
+| **T** | Charge |
+| **B** | Free (fight at will) |
 | **R** | Regroup on the player |
-| **F** | Free |
-| **Z** | March pace |
-| **X** | Rush pace |
+| **Z** / **X** | March / Rush pace |
+
+*(Charge is **T** and Free is **B** here because **A** is strafe and **F** swaps your weapon during
+the fight. Selecting a squad rings it; with nothing selected, an order applies to your whole army,
+and the selection rings fade after a couple of seconds.)*
+
+### Keyboard — Plan / command deck (cursor open)
+| Key | Action |
+|---|---|
+| **1–9 / G** | select squad / all |
+| **A** *(or **T**)* | Charge |
+| **H** | Hold (current ground) |
+| **R** | Regroup |
+| **F** *(or **B**)* | Free |
+| **Z** / **X** | March / Rush pace |
 | **N** | new squad (Plan only) |
 | **Enter** | Begin Battle / Resume |
-| **Esc** | open command (mid-battle) / resume |
+| **Esc** | open command deck (mid-battle) / resume |
 
 ### Keyboard (overworld map)
 | Key | Action |
@@ -257,7 +274,8 @@ where `order` ∈ `attack | hold | zone | regroup | free`, `recipe` is the remem
   hero deck the normal flow seeds).
 - `BV.plan.{ newGroup, assignToGroup, splitIntoGroups, selectGroup(i), orderG(i,preset),
   zoneG(i,rect), paceG(i,pace), deploySelected(vec3), beginBattle, openCommandDeck, resumeBattle,
-  groups(), selCount(), commandPanelOpen() }`.
+  groups(), selCount(), commandPanelOpen(), battleKey(code), battleOrder(preset), battlePace(pace),
+  selLabel() }` — the `battle*` hooks drive the real-time field-command layer (no deck, no slow).
 - `BV.advance(secs)` — step the battle deterministically (no rendering) for timing checks.
 - `BV.advanceMap(secs)` — step the overworld (living battles, marches, calls) deterministically.
 - `BV.startClash(a,b)` → duration · `BV.mapBattles()` — living-battle timing/inspection.

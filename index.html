@@ -145,6 +145,12 @@
     border: 1px solid rgba(255,211,77,.28); background: rgba(255,211,77,.08); color: #ffe6a3; }
   .gc-pace button:hover { background: rgba(255,211,77,.2); }
   .gc-pace button.on { background: #ffd34d; color: #0a0f18; font-weight: 700; border-color: #ffd34d; }
+  .gc-head .gc-count.over { color: #ff8a8a; opacity: 1; font-weight: 700; }
+  .gc-lead { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 12px; }
+  .gc-lead .gc-lead-star { color: #ffd34d; }
+  .gc-lead .gc-lead-sel { flex: 1; background: rgba(0,0,0,.35); color: #e7eefc; border: 1px solid rgba(255,255,255,.18);
+    border-radius: 6px; padding: 4px 6px; font-size: 12px; cursor: pointer; }
+  .gc-lead .gc-lead-none { flex: 1; opacity: .5; font-style: italic; }
   #cd-hint { flex: 0 0 auto; font-size: 11px; opacity: .55; line-height: 1.5; }
   #cd-tab { display: none; position: absolute; left: -36px; top: 50%; transform: translateY(-50%) rotate(180deg);
     writing-mode: vertical-rl; padding: 12px 7px; border-radius: 8px 0 0 8px; cursor: pointer;
@@ -178,6 +184,10 @@
   .cs-stat { font-size: 12px; color: #9adcff; margin-top: 7px; opacity: .9; }
   .cs-destiny { font-size: 12px; color: #ffcf5b; margin-top: 6px; letter-spacing: .3px; }
   .cs-empty { opacity: .6; padding: 20px; }
+  .cs-section { width: 100%; text-align: left; font-size: 13px; letter-spacing: 1.5px; text-transform: uppercase;
+    color: #ffd34d; opacity: .85; margin: 14px 0 4px; border-bottom: 1px solid rgba(255,211,77,.25); padding-bottom: 4px; }
+  .cs-card.champ { border-color: rgba(255,211,77,.5); box-shadow: 0 0 14px -6px rgba(255,211,77,.7); }
+  .cs-leads { font-size: 12px; color: #9aff6b; margin-top: 6px; }
 
   /* ===== While you were away (living-world digest) ===== */
   #whileaway { z-index: 12; background: radial-gradient(ellipse at center, rgba(14,18,28,.985), rgba(5,7,11,.995)); }
@@ -215,7 +225,7 @@
   <div id="wave-sub"></div>
   <div id="combo"></div>
   <div id="rally-banner" style="position:fixed; top:74px; left:50%; transform:translateX(-50%); display:none; padding:8px 18px; background:rgba(20,10,30,.80); border:1px solid #ffd34d; border-radius:10px; color:#ffe089; font-weight:700; letter-spacing:.4px; text-align:center; z-index:30; box-shadow:0 4px 18px rgba(0,0,0,.5); pointer-events:none; max-width:70vw"></div>
-  <div id="controls-hint">MAP: WASD roam · ride into a band to parley/pact · ride into a clash to join · ride into a stronghold to siege · <b>G</b> call to arms / crusade · take every capital to win &nbsp;|&nbsp; BATTLE: MOUSE aim · CLICK attack · F sword/bow · SHIFT block · C crouch · SPACE dodge · V warband</div>
+  <div id="controls-hint">MAP: WASD roam · ride into a band to parley/pact · ride into a clash to join · ride into a stronghold to siege · <b>G</b> call to arms / crusade · take every capital to win &nbsp;|&nbsp; BATTLE: MOUSE aim · CLICK attack · RIGHT-CLICK heavy · CLICK ▼ to execute · F sword/bow · SHIFT block · C crouch · SPACE dodge · V warband</div>
 </div>
 
 <div id="damage-flash"></div>
@@ -302,6 +312,6 @@
 <script src="sim/world-sim.js?v=2"></script>
 <script src="client-net.js?v=1"></script>
 <script src="net-battle.js?v=1"></script>
-<script src="game.js?v=12"></script>
+<script src="game.js?v=13"></script>
 </body>
 </html>

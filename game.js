@@ -96,6 +96,12 @@ const FEEL = {
   hitShake: 0.22, hitStop: 0.05, killShake: 0.35, killStop: 0.09,
   fovPunchHit: 1.6, fovPunchKill: 4.5, kickHit: 0.16, kickKill: 0.5,
   camKickDecay: 11, fovDecay: 7, trailLife: 0.14,
+  // weighty offense (RMB heavy): wide cleave, big radial knockback, group stagger
+  heavyDmg: 48, heavyDur: 0.78, heavyRange: 4.6, heavyArc: -0.15, heavyKnock: 14, heavyStamina: 24,
+  heavyPoiseDmg: 60, lightPoiseDmg: 20, poiseBase: 20, poiseFromHp: 0.3, // maxPoise = base + hp*fromHp
+  staggerDur: 1.5, poiseRegen: 22,
+  // finisher / execution on a staggered or near-dead foe
+  finisherHpFrac: 0.2, finisherStop: 0.24,
 };
 const AUDIO = { master: 0.55, swingVol: 0.32, hitVol: 0.7, clangVol: 0.6, killVol: 0.95,
                 footVol: 0.18, bowVol: 0.5, maxDist: 30, maxVoices: 14 };
@@ -615,6 +621,9 @@ const POSES = {
   strikeL:    { shRx: -0.60, shRz:  1.00, elR: -0.35, shLx: -0.35, shLz:  0.40, elL: -0.60, leanX: 0.28,  twistY:  0.60, wristX: 0.90 },
   windupOver: { shRx: -2.75, shRz:  0.20, elR: -1.30, shLx: -1.30, shLz:  0.45, elL: -1.10, leanX: -0.22, twistY:  0.10, wristX: 0.30 },
   strikeOver: { shRx: -0.35, shRz:  0.05, elR: -0.55, shLx: -0.25, shLz:  0.40, elL: -0.60, leanX: 0.50,  twistY: -0.05, wristX: 1.60 },
+  // heavy: a big two-hand overhead — deep wind-up coil, then a full-body downward cleave
+  windupHeavy:{ shRx: -3.05, shRz:  0.05, elR: -0.95, shLx: -2.20, shLz:  0.30, elL: -0.95, leanX: -0.40, twistY:  0.05, wristX: 0.10 },
+  strikeHeavy:{ shRx:  0.05, shRz:  0.00, elR: -0.30, shLx:  0.00, shLz:  0.30, elL: -0.35, leanX: 0.70,  twistY:  0.00, wristX: 1.95 },
   hurt:       { shRx: -0.30, shRz:  0.55, elR: -1.00, shLx: -0.50, shLz:  0.60, elL: -1.20, leanX: -0.28, twistY:  0.15, wristX: 0 },
   block:      { shRx: -1.15, shRz: -0.45, elR: -1.30, shLx: -1.15, shLz:  0.50, elL: -1.45, leanX: -0.08, twistY: -0.20, wristX: 0.55 },
   // archery: bow arm (left) extended at the target, string hand drawn to the cheek
@@ -624,9 +633,10 @@ const POSES = {
 
 // Attack moves: which guards to snap between. Combos cycle through them.
 const MOVES = {
-  slashR: { windup: 'windupR',    strike: 'strikeR',    overhead: false },
-  slashL: { windup: 'windupL',    strike: 'strikeL',    overhead: false },
-  chop:   { windup: 'windupOver', strike: 'strikeOver', overhead: true },
+  slashR: { windup: 'windupR',     strike: 'strikeR',     overhead: false },
+  slashL: { windup: 'windupL',     strike: 'strikeL',     overhead: false },
+  chop:   { windup: 'windupOver',  strike: 'strikeOver',  overhead: true },
+  heavy:  { windup: 'windupHeavy', strike: 'strikeHeavy', overhead: true },
 };
 const PLAYER_COMBO = ['slashR', 'slashL', 'chop'];
 
@@ -955,6 +965,7 @@ const player = {
   // attack
   attacking: false, attackT: 0, attackDur: 0.46, attackPhase: 0, move: 'slashR',
   atkScale: 1, aimTarget: null, hitDone: false, combo: 0, comboTimer: 0, queued: false, cooldown: 0,
+  heavy: false, // RMB committed heavy swing (wide cleave + knockback)
   // dodge
   rolling: false, rollT: 0, rollDur: 0.45, rollDir: new THREE.Vector3(), iFrames: false,
   // block
@@ -989,7 +1000,7 @@ function initPlayer() {
   player.attacking = false; player.rolling = false; player.combo = 0;
   player.comboTimer = 0; player.queued = false; player.cooldown = 0;
   player.hurtFlash = 0; player.iFrames = false; player.atkScale = 1;
-  player.walkPhase = 0; player.lastStepIdx = 0;
+  player.walkPhase = 0; player.lastStepIdx = 0; player.heavy = false;
   player.aimTarget = null;
   player.crouching = false; player.crouchT = 0;
   player.weapon = 'sword'; player.shooting = false; player.shotReleased = false;
@@ -1113,6 +1124,7 @@ function spawnEnemy(type, x, z, hero, char = null) {
     timer: 0, cd: rand(0, def.cd), hitDone: false, move: def.moves[0],
     walkPhase: Math.random() * 6,
     flash: 0, alive: true, deadT: 0,
+    poise: 0, maxPoise: 0, staggered: false, // set below once heroTrait is known
   };
   if (hero) {
     e.isHero = true;
@@ -1130,6 +1142,9 @@ function spawnEnemy(type, x, z, hero, char = null) {
     label.position.y = 3.6 * def.scale + 0.7;
     h.group.add(label);
   }
+  // juggernauts never stagger; everyone else's stagger threshold scales with their bulk
+  e.maxPoise = (e.heroTrait === 'juggernaut') ? Infinity : Math.round(FEEL.poiseBase + def.hp * FEEL.poiseFromHp);
+  e.poise = e.maxPoise;
   setPose(e.anim, 'guard', 0.3);
   h.group.position.copy(e.pos);
   enemies.push(e);
@@ -1196,6 +1211,28 @@ const SKILL_SCALE = 60, SKILL_CAP = 100;
 function effSkill(raw) { return SKILL_CAP * (1 - Math.exp(-Math.max(0, raw) / SKILL_SCALE)); }
 const RANKS = [['Recruit', 0], ['Veteran', 40], ['Sergeant', 120], ['Captain', 300], ['Commander', 700]];
 function rankFor(renown) { let r = RANKS[0][0]; for (const e of RANKS) if (renown >= e[1]) r = e[0]; return r; }
+// ----- champions: a soldier who earns their standing becomes a champion who can lead a squad -----
+const CHAMPION_RANK_IDX = 2;                 // Sergeant — the first rank that may take command
+function rankIdx(rank) { for (let i = 0; i < RANKS.length; i++) if (RANKS[i][0] === rank) return i; return 0; }
+function isChampion(c) { return !!c && rankIdx(c.rank) >= CHAMPION_RANK_IDX; }
+// the retinue a champion may command, by rank — Sergeant 6 · Captain 12 · Commander the whole host
+function commandCap(c) { const i = rankIdx(c && c.rank); return i >= 4 ? 999 : i >= 3 ? 12 : i >= 2 ? 6 : 0; }
+function capLabel(cap) { return cap >= 999 ? 'the host' : cap; }
+// the buff a led squad shares — scales with the leader's command skill and renown. Modest by design.
+function leadAura(c) {
+  if (!isChampion(c)) return null;
+  const L = effSkill(c.skills.lead), r = Math.min(1, c.renown / 700);
+  return { dmgMul: 1 + (0.06 + 0.0010 * L) * (0.5 + 0.5 * r),   // ~+6%..+16% damage at the cap
+           hpMul:  1 + (0.05 + 0.0008 * L) * (0.5 + 0.5 * r),   // ~+5%..+13% grit
+           cohesion: 0.25 + 0.005 * L };                        // rout-resist (reserved for the morale layer)
+}
+// resolve a leader's persistent character by id — your hero or any warband soldier
+function leaderCharById(id) {
+  if (id == null) return null;
+  if (playerChar && playerChar.id === id) return playerChar;
+  for (const c of warbandRoster) if (c.id === id) return c;
+  return null;
+}
 const ALLY_DEF_BY_CLASS = { sword: ALLY_DEF, long: ALLY_LONGSWORD, archer: ALLY_ARCHER, thrower: ALLY_THROWER };
 function classKeyOf(arch) { return (arch === 'long' || arch === 'archer' || arch === 'thrower') ? arch : 'sword'; }
 
@@ -1296,7 +1333,9 @@ function beginBattleCareers() {
   for (const c of warbandRoster) { c.localKills = c.localStrike = c.localGuard = 0; c.fielded = false; c.fallen = false; }
   if (playerChar) { playerChar.localKills = playerChar.localStrike = playerChar.localGuard = 0; }
 }
+let battlePromotions = [];                   // names that crossed into champion rank this battle (muster banner)
 function foldChar(c, won) {
+  const wasChampion = isChampion(c);
   c.skills.strike += c.localStrike + 0.10;   // +0.10 just for surviving the press
   c.skills.guard += c.localGuard + 0.10;
   c.kills += c.localKills;
@@ -1305,9 +1344,21 @@ function foldChar(c, won) {
   if (won) c.battlesWon++;
   c.localKills = c.localStrike = c.localGuard = 0; c.fielded = false;
   recomputeChar(c);
+  if (!wasChampion && isChampion(c)) battlePromotions.push(c.name); // a new champion is born
 }
 // fold the battle's deeds into every survivor, drop the fallen, re-derive the warband counts
 function applyBattleGrowth(won) {
+  battlePromotions = [];
+  // leaders earn command XP for the squad they led — folded BEFORE survivors so the new lead/renown counts
+  for (const g of planGroups) {
+    if (g.leaderId == null) continue;
+    const lc = leaderCharById(g.leaderId);
+    if (!lc || lc.fallen) continue;
+    const led = allies.filter(a => a.alive && a.group === g.id).length;
+    lc.battlesLed++;
+    lc.skills.lead += 0.4 + 0.05 * led;       // leading a bigger retinue trains command faster
+    if (won) lc.renown += 3 + 0.5 * led;      // a victory under your banner pays extra renown
+  }
   const survivors = [], seen = new Set();
   for (const a of allies) if (a.alive && a.char && a.char !== playerChar && !a.char.borrowed) { foldChar(a.char, won); survivors.push(a.char); seen.add(a.char); }
   for (const item of playerReserve) if (item && item.char && !item.char.borrowed && !seen.has(item.char)) { survivors.push(item.char); seen.add(item.char); } // never fielded → no growth, but they live (borrowed allies go home)
@@ -1467,7 +1518,11 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyF') toggleWeapon();
 });
 addEventListener('keyup', (e) => { keys[e.code] = false; });
-canvas.addEventListener('mousedown', (e) => { if (!(mode === 'plan' || commandPanelOpen) && e.button === 0) requestAttack(); });
+canvas.addEventListener('mousedown', (e) => {
+  if (mode === 'plan' || commandPanelOpen) return;
+  if (e.button === 0) requestAttack();        // left: light combo / finisher
+  else if (e.button === 2) requestHeavyAttack(); // right: committed heavy cleave
+});
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
 function toggleWeapon() {
@@ -1476,11 +1531,79 @@ function toggleWeapon() {
   setPlayerWeaponVisual();
 }
 function requestAttack() {
-  if (!gameRunning || !player.alive || player.rolling) return;
+  if (!gameRunning || !player.alive || player.rolling || player.heavy) return;
   if (player.weapon === 'bow') { startBowShot(); return; }
   if (player.attacking) { player.queued = true; return; }
   if (player.cooldown > 0) return;
+  const fin = finisherTarget();        // a reeling / near-dead foe in front → execute instead of a normal swing
+  if (fin) { doFinisher(fin); return; }
   startAttack();
+}
+function requestHeavyAttack() {
+  if (!gameRunning || !player.alive || player.rolling || player.attacking || player.heavy) return;
+  if (player.weapon !== 'sword' || player.cooldown > 0) return;
+  if (player.stamina < FEEL.heavyStamina) return; // a heavy is a real commitment
+  startHeavyAttack();
+}
+function startHeavyAttack() {
+  player.heavy = true; player.attacking = true; player.attackT = 0; player.attackPhase = 0;
+  player.hitDone = false; player.queued = false;
+  player.stamina = Math.max(0, player.stamina - FEEL.heavyStamina);
+  player.atkScale = 1; // heavy uses its own duration — keep the telegraph readable, no fatigue stretch
+  player.move = 'heavy';
+  player.aimTarget = null; // heavy steers toward the nearest cluster centre, but mainly faces the aim
+  player.combo = 0; player.comboTimer = 0; hideCombo();
+}
+// finisher: a staggered or near-dead foe is open to a one-shot execution
+function isFinisherEligible(e) {
+  return e && e.alive && (e.staggered || e.hp / e.maxHp < FEEL.finisherHpFrac);
+}
+function finisherTarget() {
+  if (player.weapon !== 'sword') return null;
+  const fdir = new THREE.Vector3(Math.sin(player.facing), 0, Math.cos(player.facing));
+  let best = null, bd = Infinity;
+  for (const e of enemies) {
+    if (!isFinisherEligible(e)) continue;
+    tmpV.subVectors(e.pos, player.pos); tmpV.y = 0;
+    const d = tmpV.length();
+    if (d > PLAYER_ATK_RANGE + 0.7 + (e.def.scale - 1)) continue;
+    if (d > 0.001) tmpV.normalize();
+    if (fdir.dot(tmpV) < 0.2) continue; // roughly in front
+    if (d < bd) { bd = d; best = e; }
+  }
+  return best;
+}
+function doFinisher(e) {
+  if (!e.alive) return;
+  player.facing = Math.atan2(e.pos.x - player.pos.x, e.pos.z - player.pos.z);
+  setPose(player.anim, 'strikeHeavy', 0.05);
+  spawnTrail(player, 1.7, 0xff7a4a);
+  spawnSlashArc(player.pos, player.facing, MOVES.heavy, 1.4, 0xff7a4a);
+  spawnPopup(e.obj.position.clone().setY(2.4), 'EXECUTE', '#ff5a3c');
+  spawnSparks(e.obj.position.clone().setY(1.6), 0xff5a3c, 22); // gore burst
+  addHitstop(FEEL.finisherStop); // a heavy, satisfying freeze beyond the normal kill
+  player.cooldown = 0.16;
+  killEnemy(e, true, player); // score + counts + the kill's own crunch/shake/zoom
+  player.combo = (player.comboTimer > 0 ? player.combo + 1 : 1); player.comboTimer = 1.4; showCombo(player.combo);
+}
+// a pulsing chevron hovers over the nearest executable foe in front of you
+let finisherMarker = null;
+function updateFinisherMarker() {
+  if (!finisherMarker) {
+    const c = document.createElement('canvas'); c.width = 128; c.height = 128;
+    const ctx = c.getContext('2d');
+    ctx.font = 'bold 96px Trebuchet MS, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.lineWidth = 9; ctx.strokeStyle = '#000'; ctx.strokeText('▼', 64, 70);
+    ctx.fillStyle = '#ff5a3c'; ctx.fillText('▼', 64, 70);
+    finisherMarker = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthTest: false }));
+    finisherMarker.scale.set(1.3, 1.3, 1); finisherMarker.renderOrder = 999;
+    scene.add(finisherMarker); finisherMarker.visible = false;
+  }
+  const e = (player.alive && player.weapon === 'sword') ? finisherTarget() : null;
+  if (e) {
+    finisherMarker.visible = true;
+    finisherMarker.position.set(e.obj.position.x, 3.0 * (e.def.scale || 1) + 0.9 + Math.sin(rtNow * 6) * 0.15, e.obj.position.z);
+  } else finisherMarker.visible = false;
 }
 // nearest enemy in the forward aim cone (else a point straight ahead) for the bow
 function playerBowTarget() {
@@ -1576,9 +1699,33 @@ function playerHitCheck() {
   }
 }
 
+// heavy: a wide, slow cleave that hits the whole front cluster, shoves them outward
+// radially, and drains a big chunk of poise (one good heavy staggers a knot of grunts).
+function heavyHitCheck() {
+  const dmg = FEEL.heavyDmg + player.combo * 4 + (player.char ? player.char.dmgBonus : 0);
+  const fdir = new THREE.Vector3(Math.sin(player.facing), 0, Math.cos(player.facing));
+  let hits = 0;
+  for (const e of enemies) {
+    if (!e.alive) continue;
+    tmpV.subVectors(e.pos, player.pos); tmpV.y = 0;
+    const dist = tmpV.length();
+    if (dist > FEEL.heavyRange + (e.def.scale - 1)) continue;
+    const radial = tmpV.clone();
+    if (radial.lengthSq() > 1e-6) radial.normalize(); else radial.copy(fdir);
+    if (fdir.dot(radial) < FEEL.heavyArc) continue; // wide ~200° frontal arc
+    damageEnemy(e, dmg, radial, true, player, true); // heavy=true → big radial knock + poise break
+    hits++;
+  }
+  if (hits) { // one big camera burst for the whole cleave (per-enemy juice is suppressed when heavy)
+    addShake(FEEL.killShake); addHitstop(0.07);
+    addKick(fdir, FEEL.kickKill); addFovPunch(FEEL.fovPunchHit * 1.6);
+    spawnSparks(player.pos.clone().setY(0.25), 0xc9b79a, 16); // dust ring kicked up at the feet
+  }
+}
+
 // byPlayer gates the screen juice (shake/hit-stop/damage numbers) so the dozens of
 // ally-vs-enemy clashes in a battle don't constantly rattle the camera.
-function damageEnemy(e, dmg, fromDir, byPlayer, attacker) {
+function damageEnemy(e, dmg, fromDir, byPlayer, attacker, heavy) {
   if (!e.alive) return;
   e.hp -= dmg;
   e.flash = 0.12;
@@ -1586,12 +1733,20 @@ function damageEnemy(e, dmg, fromDir, byPlayer, attacker) {
   // interrupting an attack must not skip the cooldown — otherwise a struck
   // enemy counterattacks 0.18s later, faster than its own attack cycle
   if (e.heroTrait === 'juggernaut') {
-    e.vel.addScaledVector(fromDir, 1.2); // barely moves, never staggers
+    e.vel.addScaledVector(fromDir, heavy ? 2.2 : 1.2); // barely moves, never staggers (infinite poise)
   } else {
     e.cd = Math.max(e.cd, (e.state === 'windup' || e.state === 'recover') ? e.def.cd * 0.6 : 0.4);
-    e.state = 'hurt'; e.timer = 0.18;
-    setPose(e.anim, 'hurt', 0.06);
-    e.vel.addScaledVector(fromDir, 6); // knockback
+    e.vel.addScaledVector(fromDir, heavy ? FEEL.heavyKnock : 6); // heavy sends them flying
+    // poise: damage chips it; once broken, the foe reels in a long, finisher-open stagger
+    e.poise -= heavy ? FEEL.heavyPoiseDmg : FEEL.lightPoiseDmg;
+    if (e.poise <= 0) {
+      e.poise = e.maxPoise;
+      e.staggered = true; e.state = 'hurt'; e.timer = FEEL.staggerDur;
+      setPose(e.anim, 'hurt', 0.05);
+    } else if (!e.staggered) { // ordinary flinch — never cut an active stagger short
+      e.state = 'hurt'; e.timer = 0.18;
+      setPose(e.anim, 'hurt', 0.06);
+    }
   }
   const hp = e.obj.position.clone(); hp.y = 2;
   const armored = e.heroTrait === 'juggernaut' || e.isHero;
@@ -1599,10 +1754,12 @@ function damageEnemy(e, dmg, fromDir, byPlayer, attacker) {
   spawnSparks(hp, 0xffe08a, byPlayer ? 11 : 5);
   if (byPlayer) {
     spawnSparks(hp, 0xc9b79a, 4); // dust kick on contact
-    spawnPopup(hp, String(dmg), '#ffe08a');
-    const w = clamp(dmg / 42, 0.5, 1.6); // bigger combo hits land heavier
-    addShake(FEEL.hitShake * w); addHitstop(FEEL.hitStop * w);
-    addKick(fromDir, FEEL.kickHit * w); addFovPunch(FEEL.fovPunchHit * w);
+    spawnPopup(hp, String(dmg), heavy ? '#ffd27a' : '#ffe08a');
+    if (!heavy) { // light hits punch the camera per-blow; the heavy fires one burst in heavyHitCheck
+      const w = clamp(dmg / 42, 0.5, 1.6); // bigger combo hits land heavier
+      addShake(FEEL.hitShake * w); addHitstop(FEEL.hitStop * w);
+      addKick(fromDir, FEEL.kickHit * w); addFovPunch(FEEL.fovPunchHit * w);
+    }
   }
   if (e.hp <= 0) killEnemy(e, byPlayer, attacker);
 }
@@ -1650,6 +1807,8 @@ function killAlly(a, killer) {
   if (killer && killer.char) { killer.char.localKills++; killer.char.localStrike += 0.40;
     if (a.char) battleKillFeed.push({ killer: killer.char.name, victim: a.char.name, hero: false }); }
   a.bar.visible = false;
+  // a fallen champion robs their squad of its aura — the loss is felt the next frame (applyLeadershipAuras)
+  if (a.char && planGroups.some(g => g.leaderId === a.char.id)) showWaveBanner(a.char.name + ' has fallen!', 'Their squad wavers — the leader is lost.');
   selected.delete(a); a.group = null; // drop the fallen from any selection/squad
   spawnSparks(a.obj.position.clone().setY(2), 0x9adcff, 14);
   if (!(a.char && a.char.borrowed)) waveLosses++; // a fallen comrade docks your XP (a borrowed ally's blood is on their own ledger)
@@ -1872,7 +2031,7 @@ function fighterStrike(f) {
     if (d > reach + ((t.def ? t.def.scale : 1) - 1)) continue;
     if (d > 0.001) to.normalize();
     if (fdir.dot(to) < 0.2) continue;
-    damageCombatant(t, f.def.dmg, f);
+    damageCombatant(t, f.aura ? Math.round(f.def.dmg * f.aura.dmgMul) : f.def.dmg, f);
   }
   if (f.team === 'enemy') { // enemy swings near the player rumble the camera even on a miss
     const pd = f.pos.distanceTo(player.pos);
@@ -1894,12 +2053,14 @@ function stepFighter(f, dt) {
   }
   f.cd -= dt;
   f.moving = false;
+  // poise recovers while not reeling — so accumulated chip-stagger needs sustained pressure
+  if (!f.staggered && f.poise < f.maxPoise) f.poise = Math.min(f.maxPoise, f.poise + FEEL.poiseRegen * dt);
   const atkRange = f.def.range + f.def.scale * 0.4;
   const isPlayerPack = f.team === 'enemy' && tgt === player;
 
   if (f.state === 'hurt') {
     f.timer -= dt;
-    if (f.timer <= 0) f.state = 'chase';
+    if (f.timer <= 0) { f.state = 'chase'; f.staggered = false; }
   } else if (f.state === 'windup') {
     if (hasTgt) f.facing = angleLerp(f.facing, desiredFacing, dt * 3);
     f.timer -= dt;
@@ -2146,7 +2307,29 @@ function updateEnemies(dt) {
     stepFighter(e, dt);
   }
 }
+// resolve each squad's living leader and stamp its aura onto the squad. Runs per frame so a leader's
+// death drops the buff the same instant; HP grit is steeled once, the first frame a soldier is led.
+function applyLeadershipAuras() {
+  for (const a of allies) if (a.alive) a.aura = null;
+  for (const g of planGroups) {
+    g.leaderAlive = false;
+    if (g.leaderId == null) continue;
+    let leaderChar = null;
+    if (playerChar && g.leaderId === playerChar.id) { if (player.alive) leaderChar = playerChar; }
+    else { const body = allies.find(a => a.alive && a.char && a.char.id === g.leaderId); if (body) leaderChar = body.char; }
+    if (!leaderChar) continue;                 // leader fell / not on the field → squad fights unbuffed
+    g.leaderAlive = true;
+    const aura = leadAura(leaderChar);
+    if (!aura) continue;
+    for (const a of allies) {
+      if (!a.alive || a.group !== g.id) continue;
+      a.aura = aura;
+      if (!a.auraHpApplied) { a.maxHp = Math.round(a.maxHp * aura.hpMul); a.hp = Math.round(a.hp * aura.hpMul); a.auraHpApplied = true; }
+    }
+  }
+}
 function updateAllies(dt) {
+  applyLeadershipAuras();
   for (let i = allies.length - 1; i >= 0; i--) {
     const a = allies[i];
     if (!a.alive) {
@@ -2275,6 +2458,30 @@ function updatePlayer(dt) {
       }
       if (k >= 1) { player.shooting = false; player.cooldown = 0.12; }
       restLegs(p, dt, true);
+    } else if (player.heavy) {
+      // committed heavy: long wind-up telegraph → a wide cleave that fans the crowd out
+      player.attackT += dt;
+      const k = player.attackT / FEEL.heavyDur;
+      if (player.attackPhase === 0) { setPose(player.anim, 'windupHeavy', 0.12); player.attackPhase = 1; }
+      if (player.attackPhase === 1 && k >= 0.5) {
+        setPose(player.anim, 'strikeHeavy', 0.07);
+        spawnSlashArc(player.pos, player.facing, MOVES.heavy, 1.7, 0xffd27a); // big golden arc
+        spawnTrail(player, 1.7, 0xffd27a);
+        addShake(0.16); SFX.swing();
+        player.attackPhase = 2;
+      }
+      if (player.attackPhase === 2 && k >= 0.82) { setPose(player.anim, 'guard', 0.30); player.attackPhase = 3; }
+      // a big committed lunge as the blade comes down
+      if (k > 0.5 && k < 0.66) player.vel.addScaledVector(new THREE.Vector3(Math.sin(player.facing), 0, Math.cos(player.facing)), player.speed * 3 * dt * 6);
+      // wide cleave fires once, just after the telegraph
+      if (!player.hitDone && k > 0.54 && k < 0.74) { heavyHitCheck(); player.hitDone = true; }
+      if (k >= 1) { player.heavy = false; player.attacking = false; player.cooldown = 0.2; }
+      // steer during the wind-up only: face the mouse aim, else the nearest cluster
+      if (k < 0.5) {
+        if (locked) player.facing = angleLerp(player.facing, aimYaw, dt * 8);
+        else { const th = nearestEnemy(9); if (th) player.facing = angleLerp(player.facing, Math.atan2(th.pos.x - player.pos.x, th.pos.z - player.pos.z), dt * 6); }
+      }
+      restLegs(p, dt, true);
     } else if (player.attacking && (keys['ShiftLeft'] || keys['ShiftRight'])) {
       // block-cancel: bail out of the swing into a raised guard immediately
       player.attacking = false; player.queued = false; player.cooldown = 0.05;
@@ -2402,6 +2609,7 @@ function updatePlayer(dt) {
   // hurt tint
   setTint(player.parts, player.hurtFlash > 0 ? 0x992222 : null);
 
+  updateFinisherMarker();
   updateHUD();
 }
 
@@ -3976,7 +4184,7 @@ function updateGroupRing(a) {
 }
 // ----- group CRUD -----
 function newGroup() {
-  const g = { id: ++planGroupCounter, name: 'Group ' + planGroupCounter, color: GROUP_COLORS[(planGroupCounter - 1) % GROUP_COLORS.length], order: 'free', pace: 'march', anchor: null, zone: null, zoneMesh: null, holdMarker: null, recipe: { sword: 0, long: 0, archer: 0, thrower: 0 }, lastPreset: null };
+  const g = { id: ++planGroupCounter, name: 'Group ' + planGroupCounter, color: GROUP_COLORS[(planGroupCounter - 1) % GROUP_COLORS.length], order: 'free', pace: 'march', anchor: null, zone: null, zoneMesh: null, holdMarker: null, recipe: { sword: 0, long: 0, archer: 0, thrower: 0 }, lastPreset: null, leaderId: null };
   planGroups.push(g); activeGroupId = g.id;
   renderDeck();
   return g;
@@ -4082,6 +4290,13 @@ function rebindGroupsToPool() {
   }
   for (const g of planGroups) {
     const members = allies.filter(a => a.alive && a.group === g.id);
+    // re-seat the squad's leader on the fresh muster: keep them if they still stand in the ranks,
+    // else promote the most renowned champion present (the player leads from anywhere, so keep that)
+    const playerLeads = playerChar && g.leaderId === playerChar.id;
+    if (!playerLeads && (g.leaderId == null || !members.some(a => a.char && a.char.id === g.leaderId))) {
+      const champs = members.filter(a => a.char && isChampion(a.char)).sort((a, b) => b.char.renown - a.char.renown);
+      g.leaderId = champs.length ? champs[0].char.id : null;
+    }
     if (!members.length) { disposeZoneOverlay(g); disposeHoldMarker(g); continue; }
     for (const a of members) a.pace = g.pace || 'march';
     if (g.order === 'zone' && g.zone) { assignZone(members, g.zone, true); updateZoneOverlay(g); }
@@ -4093,10 +4308,14 @@ function rebindGroupsToPool() {
 }
 // ----- roster pool + composition (field bodies only; over-allocation impossible) -----
 function countPool(key) { let n = 0; for (const a of allies) if (a.alive && a.group == null && defKey(a.def) === key) n++; return n; }
+function groupSize(g) { let n = 0; for (const a of allies) if (a.alive && a.group === g.id) n++; return n; }
+// a led squad can hold only as many as its champion commands; a leaderless squad is unbounded
+function groupCap(g) { const lc = leaderCharById(g.leaderId); return lc ? commandCap(lc) : Infinity; }
 function assignToGroup(g, key, delta) {
   if (delta > 0) {
+    const room = groupCap(g) - groupSize(g);              // a champion only commands so many
     let added = 0;
-    for (const a of allies) { if (added >= delta) break; if (a.alive && a.group == null && defKey(a.def) === key) { a.group = g.id; a.pace = g.pace || 'march'; if (g.order && g.order !== 'free' && g.order !== 'zone') applyPresetToMembers([a], g.order, null); updateGroupRing(a); added++; } }
+    for (const a of allies) { if (added >= delta || added >= room) break; if (a.alive && a.group == null && defKey(a.def) === key) { a.group = g.id; a.pace = g.pace || 'march'; if (g.order && g.order !== 'free' && g.order !== 'zone') applyPresetToMembers([a], g.order, null); updateGroupRing(a); added++; } }
   } else {
     const members = allies.filter(a => a.alive && a.group === g.id && defKey(a.def) === key);
     for (let i = members.length - 1, rem = 0; i >= 0 && rem < -delta; i--, rem++) { members[i].group = null; members[i].zone = null; members[i].homeSlot = null; updateGroupRing(members[i]); }
@@ -4108,7 +4327,8 @@ function assignToGroup(g, key, delta) {
 function addSelectionToGroup() { // legacy convenience: drop the current selection into the active group
   if (!selected.size) return;
   const g = planGroups.find(x => x.id === activeGroupId) || newGroup();
-  for (const a of selected) { a.group = g.id; a.pace = g.pace || 'march'; if (g.order && g.order !== 'free' && g.order !== 'zone') applyPresetToMembers([a], g.order, null); updateGroupRing(a); }
+  let room = groupCap(g) - groupSize(g);               // respect the leader's command cap
+  for (const a of selected) { if (room <= 0) break; a.group = g.id; a.pace = g.pace || 'march'; if (g.order && g.order !== 'free' && g.order !== 'zone') applyPresetToMembers([a], g.order, null); updateGroupRing(a); room--; }
   if (g.order === 'zone' && g.zone) assignZone(allies.filter(a => a.alive && a.group === g.id), g.zone, mode === 'plan');
   refreshGroupRecipe(g);
   renderDeck();
@@ -4188,6 +4408,22 @@ function orderGroup(g, preset) {
 function setGroupPace(g, pace) {
   g.pace = pace;
   for (const a of allies) if (a.alive && a.group === g.id) a.pace = pace;
+  renderDeck();
+}
+// ----- leadership: a champion takes command of a squad (and can only command so many) -----
+function setGroupLeader(g, charId) {
+  g.leaderId = charId != null ? +charId : null;
+  const lc = leaderCharById(g.leaderId);
+  // a champion can only command so many — in the plan, shed the greenest over the new cap
+  if (lc && mode === 'plan') {
+    const cap = commandCap(lc);
+    const members = allies.filter(a => a.alive && a.group === g.id);
+    if (members.length > cap) {
+      members.sort((a, b) => (a.char ? a.char.renown : 0) - (b.char ? b.char.renown : 0)); // greenest leave first
+      for (let i = 0; i < members.length - cap; i++) { const a = members[i]; a.group = null; a.zone = null; a.homeSlot = null; updateGroupRing(a); }
+      refreshGroupRecipe(g);
+    }
+  }
   renderDeck();
 }
 function commandPace(pace) {
@@ -4280,12 +4516,34 @@ function renderDeck() {
     const card = document.createElement('div');
     card.className = 'group-card' + (g.id === activeGroupId ? ' active' : '');
     card.style.setProperty('--gc', hex);
+    const cap = groupCap(g);
+    const led = cap !== Infinity;
+    const overCap = led && members.length > cap;
+    const countTxt = led ? (members.length + '/' + capLabel(cap)) : String(members.length);
     const head = document.createElement('div'); head.className = 'gc-head';
-    head.innerHTML = `<span class="gc-dot" style="background:${hex}"></span><span class="gc-name">${g.name}</span><span class="gc-count">${members.length}</span><span class="gc-status">${ORDER_LABEL[g.order] || ''}</span>`;
+    head.innerHTML = `<span class="gc-dot" style="background:${hex}"></span><span class="gc-name">${g.name}</span><span class="gc-count${overCap ? ' over' : ''}">${countTxt}</span><span class="gc-status">${ORDER_LABEL[g.order] || ''}</span>`;
     head.addEventListener('click', () => selectGroup(g));
     const del = document.createElement('span'); del.className = 'gc-del'; del.textContent = '×'; del.title = 'disband';
     del.addEventListener('click', (e) => { e.stopPropagation(); deleteGroup(g); });
     head.appendChild(del); card.appendChild(head);
+    // leader row: which champion commands this squad (the player can lead any squad personally)
+    const champsHere = members.filter(a => a.char && isChampion(a.char));
+    const playerEligible = playerChar && (isChampion(playerChar) || g.leaderId === playerChar.id);
+    const lead = document.createElement('div'); lead.className = 'gc-lead';
+    if (champsHere.length || playerEligible) {
+      const star = document.createElement('span'); star.className = 'gc-lead-star'; star.textContent = '★'; lead.appendChild(star);
+      const sel = document.createElement('select'); sel.className = 'gc-lead-sel';
+      sel.innerHTML = '<option value="">— no leader —</option>' +
+        (playerEligible ? `<option value="${playerChar.id}">${playerChar.name} (you) · cap ${capLabel(commandCap(playerChar))}</option>` : '') +
+        champsHere.map(a => `<option value="${a.char.id}">${a.char.name} · ${a.char.rank} (cap ${capLabel(commandCap(a.char))})</option>`).join('');
+      sel.value = g.leaderId != null ? String(g.leaderId) : '';
+      sel.addEventListener('click', (e) => e.stopPropagation());
+      sel.addEventListener('change', (e) => { e.stopPropagation(); setGroupLeader(g, e.target.value ? +e.target.value : null); });
+      lead.appendChild(sel);
+    } else {
+      lead.innerHTML = '<span class="gc-lead-none">No champion yet — a Sergeant can lead</span>';
+    }
+    card.appendChild(lead);
     const rows = document.createElement('div'); rows.className = 'gc-rows';
     for (const key of CLASS_KEYS) {
       const cnt = members.filter(a => defKey(a.def) === key).length;
@@ -4295,7 +4553,7 @@ function renderDeck() {
       row.appendChild(name);
       row.appendChild(makeStepBtn('−', cnt <= 0, () => assignToGroup(g, key, -1)));
       row.appendChild(val);
-      row.appendChild(makeStepBtn('+', countPool(key) <= 0, () => assignToGroup(g, key, 1)));
+      row.appendChild(makeStepBtn('+', countPool(key) <= 0 || members.length >= cap, () => assignToGroup(g, key, 1)));
       rows.appendChild(row);
     }
     card.appendChild(rows);
@@ -4505,6 +4763,9 @@ function winBattle() {
   // survivors carry their growing careers forward; the fielded fallen are gone for good.
   // (folds skill/renown into every survivor, drops the dead, re-derives warbandComp, saves)
   applyBattleGrowth(true);
+  // a soldier who crossed into champion rank this battle can now lead a squad of their own
+  if (battlePromotions.length) showWaveBanner(battlePromotions[0] + ' is now a Champion!',
+    (battlePromotions.length > 1 ? battlePromotions.length + ' soldiers rose to lead' : 'They can lead a squad — assign them in the Command Deck'));
   if (battleParty) {
     lastBattle = { size: battleParty.size, raider: battleParty.raider }; // bounty is scaled to the host you broke
     if (battleParty.serverId && typeof window !== 'undefined' && window.net) window.net.reportArmyDefeat(battleParty.serverId); // you broke this server host in person
@@ -5293,7 +5554,9 @@ BV.plan = { selectType, deploySelected, beginBattle, selCount: () => selected.si
   zoneG: (i, rect) => { const g = planGroups[i]; if (g) setGroupZone(g, rect); },     // {minX,maxX,minZ,maxZ}
   paceG: (i, pace) => { const g = planGroups[i]; if (g) setGroupPace(g, pace); },      // 'march' | 'rush'
   groups: () => planGroups.map(g => ({ name: g.name, order: g.order, pace: g.pace, zone: g.zone, n: allies.filter(a => a.alive && a.group === g.id).length,
+    leaderId: g.leaderId, cap: g.leaderId != null ? commandCap(leaderCharById(g.leaderId)) : 0,
     comp: CLASS_KEYS.map(k => k + ':' + allies.filter(a => a.alive && a.group === g.id && defKey(a.def) === k).length).filter(s => !s.endsWith(':0')).join(' ') })),
+  setLeader: (i, charId) => { const g = planGroups[i]; if (g) setGroupLeader(g, charId); return g ? g.leaderId : null; },
   commandPanelOpen: () => commandPanelOpen };
 BV.siege = (i) => { const c = nations[i]; if (c) openSiege(c); };
 BV.advance = (secs, dt = 0.016) => { // deterministic battle stepping for headless timing tests
@@ -5363,6 +5626,13 @@ BV.audio = {
 BV.feel = () => ({ trauma: +trauma.toFixed(3), hitstop: +hitstop.toFixed(3),
   camKick: +camKick.length().toFixed(3), fovPunch: +fovPunch.toFixed(3), fov: +camera.fov.toFixed(2),
   trails: trails.length });
+// Phase 2 — weighty offense / poise / finishers
+BV.heavyAttack = () => { requestHeavyAttack(); return { heavy: player.heavy, stamina: Math.round(player.stamina) }; };
+BV.poise = (e) => e ? ({ poise: +Number(e.poise).toFixed(1), max: e.maxPoise, staggered: !!e.staggered, hpFrac: +(e.hp / e.maxHp).toFixed(2) }) : null;
+BV.stagger = (e) => { if (!e || !e.alive) return false; e.staggered = true; e.state = 'hurt'; e.timer = FEEL.staggerDur; setPose(e.anim, 'hurt', 0.05); return true; };
+BV.staggerCount = () => enemies.filter(e => e.alive && e.staggered).length;
+BV.finisher = (e) => doFinisher(e || finisherTarget());
+BV.finisherEligible = () => enemies.filter(isFinisherEligible).length;
 
 // ---------- Charsheet: inspect any soldier's career (press V) ----------
 // shared titles so client + server render the destiny engine's labels identically (WorldSim is global)
@@ -5373,13 +5643,17 @@ function csSkill(label, raw) {
   const pct = Math.round(effSkill(raw));
   return '<div class="cs-skill"><span>' + label + '</span><div class="cs-bar"><i style="width:' + pct + '%"></i></div><b>' + pct + '</b></div>';
 }
-function csCard(c, isYou) {
-  return '<div class="cs-card' + (isYou ? ' you' : '') + '">' +
-    '<div class="cs-name">' + c.name + (isYou ? ' <em>(you)</em>' : '') + ' <span class="cs-rank">' + c.rank + '</span></div>' +
+function csCard(c, isYou, leadLabel) {
+  const champ = isChampion(c);
+  return '<div class="cs-card' + (isYou ? ' you' : '') + (champ ? ' champ' : '') + '">' +
+    '<div class="cs-name">' + (champ ? '★ ' : '') + c.name + (isYou ? ' <em>(you)</em>' : '') + ' <span class="cs-rank">' + c.rank + '</span></div>' +
     '<div class="cs-meta">' + classKeyOf(c.archetype) + ' · Renown ' + Math.round(c.renown) + ' · ' + c.kills + ' kills · ' +
-      c.battles + ' battles' + (c.battlesWon ? ' (' + c.battlesWon + ' won)' : '') + '</div>' +
+      c.battles + ' battles' + (c.battlesWon ? ' (' + c.battlesWon + ' won)' : '') + (c.battlesLed ? ' · ' + c.battlesLed + ' led' : '') + '</div>' +
     csSkill('Strike', c.skills.strike) + csSkill('Guard', c.skills.guard) +
-    '<div class="cs-stat">+' + c.dmgBonus + ' dmg · +' + c.hpBonus + ' HP · guard ×' + c.guardEff.toFixed(2) + '</div>' +
+    (champ ? csSkill('Lead', c.skills.lead) : '') +
+    '<div class="cs-stat">+' + c.dmgBonus + ' dmg · +' + c.hpBonus + ' HP · guard ×' + c.guardEff.toFixed(2) +
+      (champ ? ' · commands ' + capLabel(commandCap(c)) : '') + '</div>' +
+    (leadLabel ? '<div class="cs-leads">⚑ Leading ' + leadLabel + '</div>' : '') +
     (c.destiny && c.destiny !== 'wanderer' ? '<div class="cs-destiny">✦ Destiny: ' + wsDestinyTitle(c.destiny) + '</div>' : '') +
   '</div>';
 }
@@ -5388,8 +5662,16 @@ function renderCharsheet() {
   if (!playerChar) loadCareers();
   const body = document.getElementById('cs-body');
   const roster = warbandRoster.slice().sort((a, b) => b.renown - a.renown);
-  body.innerHTML = (playerChar ? csCard(playerChar, true) : '') +
-    (roster.length ? roster.map(c => csCard(c, false)).join('') : '<div class="cs-empty">No warband mustered yet — recruit, then march.</div>');
+  // which squad (if any) each champion currently leads — shown on their card
+  const leadOf = {};
+  for (const g of planGroups) if (g.leaderId != null) leadOf[g.leaderId] = g.name;
+  const champs = roster.filter(isChampion);
+  const rankfile = roster.filter(c => !isChampion(c));
+  let html = playerChar ? csCard(playerChar, true, leadOf[playerChar.id]) : '';
+  if (champs.length) html += '<div class="cs-section">Champions</div>' + champs.map(c => csCard(c, false, leadOf[c.id])).join('');
+  if (rankfile.length) html += (champs.length ? '<div class="cs-section">Warband</div>' : '') + rankfile.map(c => csCard(c, false, leadOf[c.id])).join('');
+  if (!roster.length) html += '<div class="cs-empty">No warband mustered yet — recruit, then march.</div>';
+  body.innerHTML = html;
 }
 function toggleCharsheet(force) {
   if (!charsheetOverlay) return;
@@ -5407,6 +5689,17 @@ BV.careers = () => ({ player: playerChar && serChar(playerChar), warband: warban
 BV.fieldNames = () => ({ allies: allies.filter(a => a.alive).map(a => a.char && a.char.name), enemies: enemies.filter(en => en.alive).map(en => en.char && en.char.name) });
 BV.killFeed = () => battleKillFeed.slice();
 BV.toggleCharsheet = toggleCharsheet;
+// champions & squad leadership inspection
+BV.champions = () => warbandRoster.concat(playerChar ? [playerChar] : []).filter(isChampion)
+  .map(c => ({ id: c.id, name: c.name, rank: c.rank, you: c === playerChar, renown: Math.round(c.renown),
+    lead: Math.round(effSkill(c.skills.lead)), battlesLed: c.battlesLed, cap: commandCap(c) }))
+  .sort((a, b) => b.renown - a.renown);
+BV.setLeader = (gi, charId) => { const g = planGroups[gi]; if (g) setGroupLeader(g, charId); return g ? g.leaderId : null; };
+BV.commandCap = (charId) => { const c = leaderCharById(charId); return c ? commandCap(c) : 0; };
+BV.groupAura = (gi) => { const g = planGroups[gi]; if (!g) return null;
+  const lc = leaderCharById(g.leaderId);
+  return { leaderId: g.leaderId, leaderAlive: !!g.leaderAlive, cap: lc ? commandCap(lc) : 0,
+    n: allies.filter(a => a.alive && a.group === g.id).length, aura: lc ? leadAura(lc) : null }; };
 
 // ---------- Living world: reflect the server's always-on world on login ----------
 // The backend wars on while you're away; on login we mirror its capital ownership onto this

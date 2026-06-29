@@ -90,6 +90,101 @@ function addHitstop(t) { hitstop = Math.max(hitstop, t); }
 const BV = { freeze: false };
 window.BV = BV;
 
+// ---------- Combat feel tuning (single surface for all the juice) ----------
+const FEEL = {
+  // impact: shake/hit-stop scale with hit weight (damage+combo); kicks punch the camera
+  hitShake: 0.22, hitStop: 0.05, killShake: 0.35, killStop: 0.09,
+  fovPunchHit: 1.6, fovPunchKill: 4.5, kickHit: 0.16, kickKill: 0.5,
+  camKickDecay: 11, fovDecay: 7, trailLife: 0.14,
+};
+const AUDIO = { master: 0.55, swingVol: 0.32, hitVol: 0.7, clangVol: 0.6, killVol: 0.95,
+                footVol: 0.18, bowVol: 0.5, maxDist: 30, maxVoices: 14 };
+
+// Directional camera kick + FOV punch — decay in updateCamera (real dt, so a kill
+// still snaps even while hit-stop crawls gameplay). Reset to base when settled.
+const CAM_BASE_FOV = 55;
+const camKick = new THREE.Vector3();
+const _killDir = new THREE.Vector3();
+let fovPunch = 0;
+function addKick(dir, amount) { camKick.addScaledVector(dir, amount); }
+function addFovPunch(amount) { fovPunch = Math.min(fovPunch + amount, 12); }
+
+// ---------- SFX: fully synthesized WebAudio (no asset files) ----------
+// One context + a shared noise buffer; every helper is a short procedural one-shot.
+// No-ops until init() runs on a user gesture (browsers require one) and no-ops
+// headlessly (ctx stays null) — so BV.advance draws no extra RNG and stays deterministic.
+const SFX = {
+  ctx: null, master: null, noise: null, muted: false, _voices: 0, _voiceFrame: -1,
+  init() {
+    if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    try {
+      const ctx = new AC();
+      const master = ctx.createGain();
+      master.gain.value = AUDIO.master; master.connect(ctx.destination);
+      const buf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate); // 1s white noise, reused
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      this.ctx = ctx; this.master = master; this.noise = buf;
+    } catch (e) { /* audio unavailable — stay silent, never throw into the game loop */ }
+  },
+  // per-frame voice cap so a 40-fighter clash can't storm the mixer
+  _budget() {
+    if (frameNo !== this._voiceFrame) { this._voiceFrame = frameNo; this._voices = 0; }
+    if (this._voices >= AUDIO.maxVoices) return false;
+    this._voices++; return true;
+  },
+  // gate + distance-attenuate toward the player (no worldPos → full volume, e.g. the player)
+  _ready(vol, worldPos) {
+    if (!this.ctx || this.muted) return 0;
+    let g = vol;
+    if (worldPos) g *= clamp(1 - Math.hypot(worldPos.x - player.pos.x, worldPos.z - player.pos.z) / AUDIO.maxDist, 0, 1);
+    if (g < 0.01 || !this._budget()) return 0;
+    return g;
+  },
+  _env(node, g, attack, dur) {
+    const t = this.ctx.currentTime, gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(g, t + attack);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    node.connect(gain); gain.connect(this.master);
+  },
+  _tone(type, f0, f1, attack, dur, g, detune = 0) {
+    const t = this.ctx.currentTime, o = this.ctx.createOscillator();
+    o.type = type; o.detune.value = detune; o.frequency.setValueAtTime(f0, t);
+    if (f1 !== f0) o.frequency.exponentialRampToValueAtTime(Math.max(1, f1), t + dur);
+    this._env(o, g, attack, dur); o.start(t); o.stop(t + dur + 0.02);
+  },
+  _noise(type, f0, f1, Q, attack, dur, g) {
+    const t = this.ctx.currentTime, s = this.ctx.createBufferSource(), bq = this.ctx.createBiquadFilter();
+    s.buffer = this.noise; bq.type = type; bq.Q.value = Q; bq.frequency.setValueAtTime(f0, t);
+    if (f1 !== f0) bq.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t + dur);
+    s.connect(bq); this._env(bq, g, attack, dur); s.start(t); s.stop(t + dur + 0.02);
+  },
+  swing(p) { const g = this._ready(AUDIO.swingVol, p); if (g) this._noise('bandpass', 1800, 500, 0.9, 0.008, 0.18, g); },
+  clang(p, heavy) {
+    const g = this._ready(AUDIO.clangVol * (heavy ? 1.3 : 1), p); if (!g) return;
+    const b = heavy ? 520 : 700;
+    this._tone('square', b, b * 0.96, 0.002, 0.22, g * 0.5);
+    this._tone('triangle', b * 1.5, b * 1.4, 0.002, 0.18, g * 0.4, 8);
+    this._tone('square', b * 2.01, b * 1.9, 0.002, 0.14, g * 0.25, -6);
+    this._noise('bandpass', 4200, 2600, 3, 0.001, 0.09, g * 0.5);
+  },
+  hit(p, armored) {
+    const g = this._ready(AUDIO.hitVol, p); if (!g) return;
+    if (armored) { this._tone('triangle', 320, 150, 0.002, 0.12, g * 0.6); this._noise('bandpass', 2600, 900, 2, 0.001, 0.1, g * 0.5); }
+    else { this._tone('sine', 180, 70, 0.003, 0.16, g * 0.9); this._noise('lowpass', 900, 300, 0.8, 0.001, 0.09, g * 0.5); }
+  },
+  kill(p) {
+    const g = this._ready(AUDIO.killVol, p); if (!g) return;
+    this._tone('sine', 150, 45, 0.004, 0.3, g);
+    this._noise('lowpass', 1400, 200, 0.7, 0.001, 0.22, g * 0.7);
+  },
+  foot(p) { const g = this._ready(AUDIO.footVol, p); if (g) this._noise('lowpass', 380, 120, 0.6, 0.001, 0.08, g); },
+  bow(p) { const g = this._ready(AUDIO.bowVol, p); if (!g) return; this._noise('bandpass', 2400, 700, 1.2, 0.001, 0.12, g * 0.6); this._tone('triangle', 600, 180, 0.002, 0.1, g * 0.4); },
+};
+
 // Geometry cache: identical shapes share one GPU buffer instead of allocating
 // per character/effect. Cached resources are flagged so disposeGroup skips them.
 const geoCache = new Map();
@@ -682,6 +777,58 @@ function updateArcs(dt) {
   }
 }
 
+// ---------- Blade trail FX (pooled ribbon that follows the real sword tip) ----------
+// A short triangle strip between the blade's root and tip, sampled over the strike
+// window. Pooled (mesh+geometry+material reused) so a fast combo allocates nothing.
+const trails = [];
+const trailPool = [];
+const TRAIL_SEGS = 10; // ribbon quads → (SEGS+1) root/tip sample pairs
+const _trailTip = new THREE.Vector3(), _trailRoot = new THREE.Vector3();
+function spawnTrail(fighter, tipY, color = 0xfff2c8) {
+  let tr = trailPool.pop();
+  if (!tr) {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array((TRAIL_SEGS + 1) * 2 * 3), 3));
+    const idx = [];
+    for (let i = 0; i < TRAIL_SEGS; i++) { const a = i * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+    geo.setIndex(idx);
+    const m = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false });
+    const mesh = new THREE.Mesh(geo, m); mesh.frustumCulled = false;
+    tr = { mesh, mat: m, geo, pts: [] };
+  }
+  tr.mat.color.setHex(color); tr.fighter = fighter; tr.tipY = tipY;
+  tr.life = FEEL.trailLife; tr.pts.length = 0; tr.mesh.visible = true;
+  scene.add(tr.mesh); trails.push(tr);
+}
+function updateTrails(dt) {
+  for (let i = trails.length - 1; i >= 0; i--) {
+    const tr = trails[i];
+    tr.life -= dt;
+    const sw = tr.fighter && tr.fighter.parts && tr.fighter.parts.sword;
+    if (tr.life > 0 && sw && sw.visible) {
+      sw.updateWorldMatrix(true, false); // sample fresh, not last frame's matrix
+      _trailRoot.set(0, 0.25, 0); sw.localToWorld(_trailRoot);
+      _trailTip.set(0, tr.tipY, 0); sw.localToWorld(_trailTip);
+      tr.pts.push(_trailRoot.x, _trailRoot.y, _trailRoot.z, _trailTip.x, _trailTip.y, _trailTip.z);
+      while (tr.pts.length > (TRAIL_SEGS + 1) * 6) tr.pts.splice(0, 6); // keep the newest samples
+    }
+    const have = tr.pts.length / 6;
+    const pos = tr.geo.attributes.position.array;
+    for (let s = 0; s <= TRAIL_SEGS; s++) {
+      let idx = have - 1 - (TRAIL_SEGS - s); // newest sample aligns to the end of the strip
+      idx = clamp(idx, 0, Math.max(0, have - 1));
+      const o = idx * 6, b = s * 6;
+      for (let j = 0; j < 6; j++) pos[b + j] = tr.pts[o + j] || 0;
+    }
+    tr.geo.attributes.position.needsUpdate = true;
+    tr.mat.opacity = (have >= 2 ? 0.75 : 0) * clamp(tr.life / FEEL.trailLife, 0, 1);
+    if (tr.life <= 0) {
+      scene.remove(tr.mesh); tr.mesh.visible = false; tr.fighter = null;
+      trailPool.push(tr); trails.splice(i, 1);
+    }
+  }
+}
+
 // ---------- Projectiles (arrows + thrown rocks) ----------
 const projectiles = [];
 function spawnProjectile(shooter, target, R) {
@@ -816,7 +963,7 @@ const player = {
   // weapon: 'sword' (melee) or 'bow' (ranged) — toggled with F
   weapon: 'sword', shooting: false, shootT: 0, shootDur: 0.5, shotReleased: false,
   hurtFlash: 0,
-  walkPhase: 0,
+  walkPhase: 0, lastStepIdx: 0,
   alive: true,
 };
 const PLAYER_BOW_DMG = 30;
@@ -841,6 +988,7 @@ function initPlayer() {
   player.attacking = false; player.rolling = false; player.combo = 0;
   player.comboTimer = 0; player.queued = false; player.cooldown = 0;
   player.hurtFlash = 0; player.iFrames = false; player.atkScale = 1;
+  player.walkPhase = 0; player.lastStepIdx = 0;
   player.aimTarget = null;
   player.crouching = false; player.crouchT = 0;
   player.weapon = 'sword'; player.shooting = false; player.shotReleased = false;
@@ -1295,6 +1443,7 @@ let pointerLocked = false;
 
 // third-person mouse look: pointer lock on the canvas, mouse steers the camera
 canvas.addEventListener('click', () => {
+  SFX.init(); // browsers gate WebAudio behind a user gesture — this is the reliable one
   // don't re-grab the cursor while the mid-battle command deck is open (it would vanish mid-order)
   if (gameRunning && !commandPanelOpen && !pointerLocked && canvas.requestPointerLock) canvas.requestPointerLock();
 });
@@ -1311,6 +1460,7 @@ addEventListener('mousemove', (e) => {
 
 addEventListener('keydown', (e) => {
   keys[e.code] = true;
+  SFX.init(); // unlock audio on first keypress too (covers keyboard-first players)
   if (mode === 'plan' || commandPanelOpen) { handlePlanKey(e); return; } // commanding: keys order troops, not the fighter
   if (e.code === 'Space') { e.preventDefault(); requestDodge(); }
   if (e.code === 'KeyF') toggleWeapon();
@@ -1443,8 +1593,16 @@ function damageEnemy(e, dmg, fromDir, byPlayer, attacker) {
     e.vel.addScaledVector(fromDir, 6); // knockback
   }
   const hp = e.obj.position.clone(); hp.y = 2;
-  spawnSparks(hp, 0xffe08a, byPlayer ? 8 : 5);
-  if (byPlayer) { spawnPopup(hp, String(dmg), '#ffe08a'); addShake(0.22); addHitstop(0.05); }
+  const armored = e.heroTrait === 'juggernaut' || e.isHero;
+  SFX.hit(hp, armored); // distance-gated: the player's blow is loud, distant clashes faint
+  spawnSparks(hp, 0xffe08a, byPlayer ? 11 : 5);
+  if (byPlayer) {
+    spawnSparks(hp, 0xc9b79a, 4); // dust kick on contact
+    spawnPopup(hp, String(dmg), '#ffe08a');
+    const w = clamp(dmg / 42, 0.5, 1.6); // bigger combo hits land heavier
+    addShake(FEEL.hitShake * w); addHitstop(FEEL.hitStop * w);
+    addKick(fromDir, FEEL.kickHit * w); addFovPunch(FEEL.fovPunchHit * w);
+  }
   if (e.hp <= 0) killEnemy(e, byPlayer, attacker);
 }
 
@@ -1456,13 +1614,18 @@ function killEnemy(e, byPlayer, killer) {
   addScore(e.def.score + (byPlayer ? player.combo * 10 : 0));
   enemiesRemaining--;
   spawnSparks(e.obj.position.clone().setY(2), 0xff6b6b, 14);
-  if (byPlayer) { addShake(0.35); addHitstop(0.09); } // your kills hit hardest
+  if (byPlayer) { // your kills hit hardest: a punchy crunch + camera snap
+    addShake(FEEL.killShake); addHitstop(FEEL.killStop); addFovPunch(FEEL.fovPunchKill);
+    _killDir.set(e.obj.position.x - player.pos.x, 0, e.obj.position.z - player.pos.z);
+    if (_killDir.lengthSq() > 1e-6) addKick(_killDir.normalize(), FEEL.kickKill);
+    SFX.kill(e.obj.position);
+  }
   waveKills++; // every felled foe is worth XP at the muster
   if (e.isHero) {
     // a champion falls: the field feels it, and the bounty is rich
     waveHeroKills++;
     showWaveBanner(e.heroName + ' has fallen', 'Word spreads of your deed — a rich bounty in XP.');
-    addShake(0.5); addHitstop(0.12);
+    addShake(0.5); addHitstop(0.12); addFovPunch(FEEL.fovPunchKill * 1.5);
   }
   updateEnemyCount();
 }
@@ -1534,7 +1697,7 @@ function damagePlayer(dmg, fromPos, pierceGuard) {
         spawnSparks(clangPos, 0xcfe8ff, 10);
         spawnPopup(player.obj.position.clone().setY(2.2), 'BLOCKED', '#9adcff');
         player.vel.addScaledVector(tmpV.negate(), 3); // shove, no damage
-        addShake(0.28); addHitstop(0.04); // steel-on-steel clang
+        addShake(0.28); addHitstop(0.04); SFX.clang(clangPos); // steel-on-steel clang
         updateHUD();
         return;
       }
@@ -1544,7 +1707,7 @@ function damagePlayer(dmg, fromPos, pierceGuard) {
       spawnSparks(clangPos, 0xffaa66, 12);
       spawnPopup(player.obj.position.clone().setY(2.2), 'GUARD BREAK', '#ffb066');
       player.vel.addScaledVector(tmpV.negate(), 5);
-      addShake(0.55);
+      addShake(0.55); SFX.clang(clangPos, true); // heavy clang as the guard caves
     }
   }
   player.hp -= dmg;
@@ -1690,12 +1853,13 @@ function fighterStrike(f) {
   if (R && !f.meleeMode) {
     // loose the arrow / hurl the rock at the assigned target
     setPose(f.anim, R.kind === 'arrow' ? 'looseBow' : 'strikeOver', 0.08);
-    if (f.target && f.target.alive) spawnProjectile(f, f.target, R);
+    if (f.target && f.target.alive) { spawnProjectile(f, f.target, R); SFX.bow(f.pos); }
     return;
   }
   const mv = MOVES[f.move];
   setPose(f.anim, mv.strike, 0.08);
   spawnSlashArc(f.pos, f.facing, mv, f.def.scale, f.team === 'ally' ? 0xcfe8ff : 0xffb09a);
+  SFX.swing(f.pos); // distance-gated whoosh from the surrounding melee
   const fdir = new THREE.Vector3(Math.sin(f.facing), 0, Math.cos(f.facing));
   const reach = f.def.range + f.def.scale * 0.6;
   // cleave: hit every opposing combatant in the frontal arc
@@ -2105,7 +2269,7 @@ function updatePlayer(dt) {
         setPose(player.anim, 'looseBow', 0.06);
         spawnProjectile({ pos: player.pos, def: { scale: 1, dmg: PLAYER_BOW_DMG + (player.char ? player.char.dmgBonus : 0) }, team: 'ally', char: player.char },
           playerBowTarget(), PLAYER_BOW_RANGED);
-        addShake(0.06);
+        addShake(0.06); SFX.bow();
         player.shotReleased = true;
       }
       if (k >= 1) { player.shooting = false; player.cooldown = 0.12; }
@@ -2126,7 +2290,8 @@ function updatePlayer(dt) {
       if (player.attackPhase === 1 && k >= 0.38) {
         setPose(player.anim, mv.strike, 0.085);
         spawnSlashArc(player.pos, player.facing, mv, 1, 0xfff2c8);
-        addShake(0.09); // swing whoosh
+        spawnTrail(player, 1.7, 0xfff2c8); // bright ribbon whips off the blade
+        addShake(0.09); SFX.swing(); // swing whoosh
         player.attackPhase = 2;
       }
       if (player.attackPhase === 2 && k >= 0.74) {
@@ -2204,7 +2369,12 @@ function updatePlayer(dt) {
   player.pos.addScaledVector(player.vel, dt);
   confine(player.pos);
   player.obj.position.copy(player.pos);
-  if (walking) player.obj.position.y = Math.abs(Math.cos(player.walkPhase)) * 0.06;
+  if (walking) {
+    player.obj.position.y = Math.abs(Math.cos(player.walkPhase)) * 0.06;
+    // a footfall every half walk-cycle (one per foot)
+    const stepIdx = Math.round(player.walkPhase / Math.PI);
+    if (stepIdx !== player.lastStepIdx) { player.lastStepIdx = stepIdx; SFX.foot(); }
+  }
   player.obj.rotation.y = player.facing;
   player.crouchT = lerp(player.crouchT, player.crouching ? 1 : 0, clamp(dt * 12, 0, 1));
 
@@ -2307,6 +2477,21 @@ function updateCamera(dt) {
     camera.position.y += Math.cos(t * 1.31) * sh * 0.4;
     camera.position.z += Math.sin(t * 1.73) * sh * 0.35;
     camera.rotation.z += Math.sin(t * 1.13) * sh * 0.035;
+  }
+  // directional kick: a transient world-space shove that decays fast (recoil on impact)
+  if (camKick.lengthSq() > 1e-6) {
+    camera.position.add(camKick);
+    camKick.multiplyScalar(clamp(1 - dt * FEEL.camKickDecay, 0, 1));
+    if (camKick.lengthSq() < 1e-5) camKick.set(0, 0, 0);
+  }
+  // FOV punch: a quick zoom-in that snaps the weight of a heavy blow / kill
+  if (fovPunch > 0.001) {
+    fovPunch *= clamp(1 - dt * FEEL.fovDecay, 0, 1);
+    if (fovPunch < 0.02) fovPunch = 0;
+    camera.fov = CAM_BASE_FOV - fovPunch;
+    camera.updateProjectionMatrix();
+  } else if (camera.fov !== CAM_BASE_FOV) {
+    camera.fov = CAM_BASE_FOV; camera.updateProjectionMatrix();
   }
 }
 // strategic overview: a high, steeply-tilted camera looking down on the warband token
@@ -4818,6 +5003,7 @@ function loop(now) {
 
     updateSparks(gdt);
     updateArcs(gdt);
+    updateTrails(gdt);
     updatePopups(gdt);
     if (mode === 'map') updateMapCamera(dt);
     else if (mode === 'plan' || commandPanelOpen) updatePlanCamera(dt);
@@ -5166,6 +5352,16 @@ BV.fieldBatch = fieldBatch;
 BV.killFielded = () => { for (const e of enemies) if (e.alive) killEnemy(e, true); checkBattleEnd(); };
 BV.dmg = { damagePlayer, damageEnemy, damageCombatant };
 BV.spawnProjectile = spawnProjectile;
+// Phase 1 — impact & sound verification
+BV.audio = {
+  mute: () => { SFX.muted = true; }, unmute: () => { SFX.muted = false; },
+  init: () => SFX.init(),
+  play: (name, worldPos) => { SFX.init(); if (SFX[name]) SFX[name](worldPos); },
+  state: () => ({ ctx: !!SFX.ctx, running: SFX.ctx ? SFX.ctx.state : 'none', muted: SFX.muted, voices: SFX._voices, master: AUDIO.master }),
+};
+BV.feel = () => ({ trauma: +trauma.toFixed(3), hitstop: +hitstop.toFixed(3),
+  camKick: +camKick.length().toFixed(3), fovPunch: +fovPunch.toFixed(3), fov: +camera.fov.toFixed(2),
+  trails: trails.length });
 
 // ---------- Charsheet: inspect any soldier's career (press V) ----------
 // shared titles so client + server render the destiny engine's labels identically (WorldSim is global)

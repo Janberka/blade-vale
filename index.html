@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
 <title>Blade Vale — Low Poly Hack &amp; Slash</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -40,6 +40,8 @@
   }
 
   #combo { position: absolute; left: 50%; bottom: 90px; transform: translateX(-50%); font-size: 26px; font-weight: bold; color: #ffcf5b; text-shadow: 0 2px 6px #000; opacity: 0; transition: opacity .2s; }
+  /* a quiet ticker confirming a real-time field order — sits above the combo, edged green like the selection ring */
+  #cmd-toast { position: absolute; left: 50%; bottom: 128px; transform: translateX(-50%); font-size: 15px; font-weight: 600; letter-spacing: .3px; color: #cfe9ff; background: rgba(12,18,30,.72); border: 1px solid rgba(125,255,154,.55); border-radius: 999px; padding: 4px 14px; text-shadow: 0 1px 3px #000; white-space: nowrap; opacity: 0; transition: opacity .18s ease; pointer-events: none; z-index: 6; }
 
   #controls-hint {
     position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%);
@@ -202,6 +204,41 @@
   .wa-prophecy { font-size: 14px; font-style: italic; color: #cbb6e8; text-align: center; margin-bottom: 8px; }
   .wa-fates { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-bottom: 12px; }
   .wa-fate { font-size: 11px; color: #d6a3ff; border: 1px solid rgba(214,163,255,.35); border-radius: 12px; padding: 2px 9px; background: rgba(214,163,255,.08); }
+
+  /* ===== Mobile touch controls ===== */
+  #game { touch-action: none; }                       /* play area never scrolls/zooms */
+  body.touch #controls-hint { display: none; }        /* keyboard hint is noise on a phone */
+  body.touch .desktop-keys { display: none; }
+  .touch-keys { display: none; }
+  body.touch .touch-keys { display: block; }
+  #touch { position: fixed; inset: 0; z-index: 7; pointer-events: none; }
+  #touch.hidden { display: none; }
+  #touch * { touch-action: none; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+  /* floating movement stick (left thumb) — visible in both map and battle */
+  #tj { position: absolute; left: 40px; bottom: 48px; width: 132px; height: 132px; border-radius: 50%;
+    border: 2px solid rgba(255,255,255,.20); background: rgba(10,16,26,.30); pointer-events: none; opacity: .55; transition: opacity .15s; }
+  #touch.dragging #tj { opacity: .9; }
+  #tj-knob { position: absolute; left: 50%; top: 50%; width: 58px; height: 58px; margin: -29px 0 0 -29px;
+    border-radius: 50%; background: rgba(255,207,91,.45); border: 2px solid rgba(255,226,168,.85); box-shadow: 0 2px 10px rgba(0,0,0,.5); }
+  /* button clusters — only the relevant one shows per mode */
+  #tbtns, #tmap { position: absolute; inset: 0; pointer-events: none; }
+  #touch:not(.battlemode) #tbtns { display: none; }
+  #touch:not(.mapmode) #tmap { display: none; }
+  .tbtn { position: absolute; pointer-events: auto; display: flex; align-items: center; justify-content: center;
+    border-radius: 50%; border: 2px solid rgba(255,207,91,.5); background: rgba(20,14,10,.5); color: #ffe2a8;
+    font-size: 13px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; text-shadow: 0 1px 2px #000; }
+  .tbtn:active, .tbtn.on { background: rgba(255,180,80,.6); color: #1a1208; }
+  #tb-attack { width: 96px; height: 96px; right: 24px;  bottom: 40px;  font-size: 17px; }
+  #tb-heavy  { width: 66px; height: 66px; right: 128px; bottom: 52px;  border-color: rgba(255,120,80,.6);  color: #ffc7a8; }
+  #tb-block  { width: 66px; height: 66px; right: 112px; bottom: 138px; border-color: rgba(125,255,154,.55); color: #c8ffd6; }
+  #tb-dodge  { width: 62px; height: 62px; right: 30px;  bottom: 148px; border-color: rgba(120,210,255,.6);  color: #cfeaff; }
+  #tb-weapon { width: 52px; height: 52px; right: 200px; bottom: 100px; font-size: 11px; }
+  #tb-cmd    { width: 54px; height: 54px; right: 36px;  bottom: 220px; border-color: rgba(125,200,255,.55); color: #cfe0ff; }
+  /* map-mode kingdom actions — stacked pills, right side */
+  #tmap .tbtn { border-radius: 12px; width: 116px; height: 48px; right: 22px; font-size: 12px; }
+  #tb-rally   { bottom: 178px; }
+  #tb-beacon  { bottom: 122px; border-color: rgba(125,200,255,.55); color: #cfe0ff; }
+  #tb-warband { bottom: 66px;  border-color: rgba(214,163,255,.5);  color: #e6d3ff; }
 </style>
 </head>
 <body>
@@ -224,18 +261,42 @@
   <div id="wave-banner"></div>
   <div id="wave-sub"></div>
   <div id="combo"></div>
+  <div id="cmd-toast"></div>
   <div id="rally-banner" style="position:fixed; top:74px; left:50%; transform:translateX(-50%); display:none; padding:8px 18px; background:rgba(20,10,30,.80); border:1px solid #ffd34d; border-radius:10px; color:#ffe089; font-weight:700; letter-spacing:.4px; text-align:center; z-index:30; box-shadow:0 4px 18px rgba(0,0,0,.5); pointer-events:none; max-width:70vw"></div>
   <div id="controls-hint">MAP: WASD roam · ride into a band to parley/pact · ride into a clash to join · ride into a stronghold to siege · <b>G</b> call to arms / crusade · take every capital to win &nbsp;|&nbsp; BATTLE: MOUSE aim · CLICK attack · RIGHT-CLICK heavy · CLICK ▼ to execute · F sword/bow · SHIFT block · C crouch · SPACE dodge · V warband</div>
 </div>
 
 <div id="damage-flash"></div>
 
+<!-- ===== Mobile touch controls (shown only on touch devices, per mode) ===== -->
+<div id="touch" class="hidden">
+  <div id="tj"><div id="tj-knob"></div></div>
+  <div id="tbtns">
+    <button id="tb-attack" class="tbtn">ATK</button>
+    <button id="tb-heavy"  class="tbtn">HVY</button>
+    <button id="tb-block"  class="tbtn">BLOCK</button>
+    <button id="tb-dodge"  class="tbtn">DODGE</button>
+    <button id="tb-weapon" class="tbtn">SWAP</button>
+    <button id="tb-cmd"    class="tbtn">CMD</button>
+  </div>
+  <div id="tmap">
+    <button id="tb-rally"   class="tbtn">⚑ Rally</button>
+    <button id="tb-beacon"  class="tbtn">Beacon</button>
+    <button id="tb-warband" class="tbtn">Warband</button>
+  </div>
+</div>
+
 <div id="start" class="overlay">
   <h1>Blade Vale</h1>
   <p>Roam the vale with your warband. Enemy bands wander the map — pick your fights, flee the ones you can't win, and clash in pitched battles where reinforcements march in wave after wave. Win, recruit, and march on.</p>
-  <div class="keys">
+  <div class="keys desktop-keys">
     <div><b>WASD</b> — Move &nbsp;&nbsp; <b>Mouse</b> — Aim &nbsp;&nbsp; <b>Left-Click</b> — Attack / shoot &nbsp;&nbsp; <b>F</b> — Swap sword ↔ bow</div>
     <div><b>Hold Shift</b> — Block &nbsp;&nbsp; <b>Hold C</b> — Crouch (duck arrows, sneak) &nbsp;&nbsp; <b>Space</b> — Dodge-roll &nbsp;&nbsp; <b>Esc</b> — Release mouse</div>
+  </div>
+  <div class="keys touch-keys">
+    <div><b>Left thumb</b> — Move / roam &nbsp;&nbsp; <b>Drag right side</b> — Look around</div>
+    <div><b>ATK</b> attack · <b>HVY</b> heavy · hold <b>BLOCK</b> · <b>DODGE</b> roll · <b>SWAP</b> sword↔bow · <b>CMD</b> command squads</div>
+    <div style="opacity:.8">Map: roam into a band to parley, a clash to join, a stronghold to siege · <b>Rally</b> = call to arms</div>
   </div>
   <div id="warband-picker">
     <div class="wp-title">Your warband <span id="wp-total">4</span> <span style="opacity:.7">·</span> <span id="wp-xp" style="color:#9adcff">XP 10</span></div>
@@ -312,6 +373,6 @@
 <script src="sim/world-sim.js?v=2"></script>
 <script src="client-net.js?v=1"></script>
 <script src="net-battle.js?v=1"></script>
-<script src="game.js?v=13"></script>
+<script src="game.js?v=15"></script>
 </body>
 </html>

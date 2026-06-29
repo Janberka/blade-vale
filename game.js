@@ -1492,6 +1492,9 @@ const keys = {};
 let cameraAngle = Math.PI; // mouse-look yaw; the camera orbits the character
 let cameraDist = 7.5, cameraHeight = 4;
 let pointerLocked = false;
+// touch-driven analog movement (mobile); feeds inputDir() alongside WASD
+const TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0 || /[?&]touch=1/.test(location.search);
+let touchMove = { f: 0, s: 0, active: false };
 
 // third-person mouse look: pointer lock on the canvas, mouse steers the camera
 canvas.addEventListener('click', () => {
@@ -1514,6 +1517,7 @@ addEventListener('keydown', (e) => {
   keys[e.code] = true;
   SFX.init(); // unlock audio on first keypress too (covers keyboard-first players)
   if (mode === 'plan' || commandPanelOpen) { handlePlanKey(e); return; } // commanding: keys order troops, not the fighter
+  if (mode === 'battle' && gameRunning && handleBattleOrderKey(e)) return; // real-time squad orders WHILE you fight (no deck, no slow)
   if (e.code === 'Space') { e.preventDefault(); requestDodge(); }
   if (e.code === 'KeyF') toggleWeapon();
 });
@@ -1524,6 +1528,108 @@ canvas.addEventListener('mousedown', (e) => {
   else if (e.button === 2) requestHeavyAttack(); // right: committed heavy cleave
 });
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+// ---------- Touch controls (mobile) ----------
+// Left thumb = a floating analog stick (drives inputDir, so it works in map roam AND battle).
+// Right side of the canvas = drag-to-look (replaces pointer-lock, which mobile lacks).
+// On-screen buttons map to the same requestAttack/requestDodge/etc. the keyboard fires.
+if (TOUCH) {
+  document.body.classList.add('touch');
+  const touchRoot = document.getElementById('touch');
+  const tj = document.getElementById('tj'), tjKnob = document.getElementById('tj-knob');
+  const TJ_R = 60; // stick radius in px
+  let moveId = null, lookId = null;
+  let tjAnchor = { x: 0, y: 0 }, lookLast = { x: 0, y: 0 };
+
+  function controllable() {
+    const inMap = mode === 'map' && !encounter;
+    const inBattle = mode === 'battle' && gameRunning && !commandPanelOpen && !encounter;
+    return { inMap, inBattle, any: inMap || inBattle };
+  }
+  function classify(t) {
+    const c = controllable();
+    if (!c.any) return null;
+    if (c.inBattle && t.clientX > innerWidth * 0.5) return 'look'; // right half steers the camera
+    return 'move'; // left thumb (and all of map mode) moves the avatar
+  }
+  function setStick(x, y) {
+    let dx = x - tjAnchor.x, dy = y - tjAnchor.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const cl = Math.min(len, TJ_R);
+    tjKnob.style.transform = `translate(${(dx / len) * cl}px, ${(dy / len) * cl}px)`;
+    const mag = cl / TJ_R, m = mag < 0.16 ? 0 : mag; // small deadzone
+    touchMove.s = (dx / len) * m;   // right = strafe right (D)
+    touchMove.f = -(dy / len) * m;  // up    = forward (W)
+    touchMove.active = m > 0;
+  }
+  function showStick(x, y) {
+    tjAnchor = { x, y };
+    tj.style.left = (x - 66) + 'px'; tj.style.top = (y - 66) + 'px'; tj.style.bottom = 'auto';
+    touchRoot.classList.add('dragging');
+  }
+  function hideStick() {
+    tj.style.left = ''; tj.style.top = ''; tj.style.bottom = '';
+    tjKnob.style.transform = ''; touchRoot.classList.remove('dragging');
+    touchMove.f = touchMove.s = 0; touchMove.active = false;
+  }
+
+  canvas.addEventListener('touchstart', (e) => {
+    let used = false;
+    for (const t of e.changedTouches) {
+      const role = classify(t);
+      if (role === 'move' && moveId === null) { moveId = t.identifier; showStick(t.clientX, t.clientY); setStick(t.clientX, t.clientY); used = true; }
+      else if (role === 'look' && lookId === null) { lookId = t.identifier; lookLast = { x: t.clientX, y: t.clientY }; used = true; }
+    }
+    if (used) { e.preventDefault(); SFX.init(); }
+  }, { passive: false });
+  addEventListener('touchmove', (e) => {
+    if (moveId === null && lookId === null) return; // not steering -> let menus scroll
+    for (const t of e.changedTouches) {
+      if (t.identifier === moveId) setStick(t.clientX, t.clientY);
+      else if (t.identifier === lookId) {
+        cameraAngle -= (t.clientX - lookLast.x) * 0.005;
+        cameraHeight = clamp(cameraHeight + (t.clientY - lookLast.y) * 0.03, 2.2, 10);
+        lookLast = { x: t.clientX, y: t.clientY };
+      }
+    }
+    e.preventDefault();
+  }, { passive: false });
+  function endTouch(e) {
+    for (const t of e.changedTouches) {
+      if (t.identifier === moveId) { moveId = null; hideStick(); }
+      else if (t.identifier === lookId) lookId = null;
+    }
+  }
+  addEventListener('touchend', endTouch);
+  addEventListener('touchcancel', endTouch);
+
+  // a button fires on press (low latency); block is a hold; click keeps it usable on desktop too
+  function bindBtn(id, onDown, onUp) {
+    const el = document.getElementById(id); if (!el) return;
+    el.addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); el.classList.add('on'); SFX.init(); onDown && onDown(); }, { passive: false });
+    const up = (e) => { if (e) { e.preventDefault(); e.stopPropagation(); } el.classList.remove('on'); onUp && onUp(); };
+    el.addEventListener('touchend', up); el.addEventListener('touchcancel', up);
+  }
+  bindBtn('tb-attack', requestAttack);
+  bindBtn('tb-heavy', requestHeavyAttack);
+  bindBtn('tb-dodge', requestDodge);
+  bindBtn('tb-block', () => { keys['ShiftLeft'] = true; }, () => { keys['ShiftLeft'] = false; });
+  bindBtn('tb-weapon', toggleWeapon);
+  bindBtn('tb-cmd', () => { if (mode === 'battle' && !commandPanelOpen) openCommandDeck(); });
+  bindBtn('tb-rally', () => { if (mode === 'map' && !encounter) raiseCall(); });
+  bindBtn('tb-beacon', () => { if (mode === 'map' && !encounter) openBeaconPanel(); });
+  bindBtn('tb-warband', () => toggleCharsheet());
+
+  // show the right control set for the current mode; called each frame from the loop
+  window.updateTouchHud = function () {
+    if (!touchRoot) return;
+    const c = controllable();
+    touchRoot.classList.toggle('hidden', !c.any);
+    touchRoot.classList.toggle('mapmode', c.inMap);
+    touchRoot.classList.toggle('battlemode', c.inBattle);
+    if (!c.any && moveId !== null) { moveId = null; hideStick(); } // dropped into a menu mid-drag
+  };
+}
 
 function toggleWeapon() {
   if (!gameRunning || !player.alive || player.attacking || player.shooting || player.rolling) return;
@@ -1672,6 +1778,7 @@ function inputDir() {
   if (keys['KeyS']) f -= 1;
   if (keys['KeyD']) s += 1;
   if (keys['KeyA']) s -= 1;
+  if (touchMove.active) { f += touchMove.f; s += touchMove.s; } // mobile stick
   const v = new THREE.Vector3();
   if (!f && !s) return v;
   const yaw = cameraAngle + Math.PI; // look direction
@@ -4620,7 +4727,7 @@ function beginBattle() {
   mode = 'battle'; gameRunning = true; commandPanelOpen = false; timeScale = 1;
   player.pos.set(0, 0, 0); player.vel.set(0, 0, 0); player.obj.position.set(0, 0, 0);
   player.alive = true; player.hp = player.maxHp; player.stamina = player.maxStam;
-  showWaveBanner('Clash!', 'Hold the line! · press Esc to command your squads');
+  showWaveBanner('Clash!', 'Hold the line! · command live: 1–9/G pick · H hold · T charge · R regroup · B free · Z/X pace');
   if (canvas.requestPointerLock) canvas.requestPointerLock();
 }
 function openCommandDeck() { // mid-battle: cursor freed (pointer-lock lost) -> tactical command
@@ -4701,8 +4808,8 @@ function handlePlanKey(e) {
   if (e.code === 'Enter') { mode === 'plan' ? beginBattle() : resumeBattle(); return; }
   if (e.code === 'Escape') { if (commandPanelOpen) resumeBattle(); return; }
   if (e.code === 'KeyH') return commandSelection('hold');     // Hold position
-  if (e.code === 'KeyA') return commandSelection('attack');   // Charge
-  if (e.code === 'KeyF') return commandSelection('free');     // Free / at will
+  if (e.code === 'KeyA' || e.code === 'KeyT') return commandSelection('attack');   // Charge (T mirrors the in-fight key)
+  if (e.code === 'KeyF' || e.code === 'KeyB') return commandSelection('free');     // Free / at will (B mirrors the in-fight key)
   if (e.code === 'KeyR') return commandSelection('regroup');  // Regroup on the player
   if (e.code === 'KeyZ') return commandPace('march');         // March (slow, hold the line)
   if (e.code === 'KeyX') return commandPace('rush');          // Rush (charge at full speed)
@@ -4710,6 +4817,30 @@ function handlePlanKey(e) {
   if (e.code === 'KeyN' && mode === 'plan') return void newGroup();
   const m = e.code.match(/^Digit([1-9])$/);
   if (m) { const g = planGroups[(+m[1]) - 1]; if (g) selectGroup(g); }
+}
+// ---- real-time field command: order squads WITHOUT leaving the fight (no deck, no time-slow) ----
+// A is strafe and F/V are taken mid-fight, so charge=T and free=B are remapped; the rest keep their
+// deck mnemonics. Pressing an order with nothing picked first selects the whole army, so a single tap
+// ("T") sends everyone. setAllySelected already rings the troops; selIdle fades the rings afterward.
+let selIdle = 0; // seconds until the field-selection rings auto-clear
+function ensureSelection() { if (!selected.size) selectType('all'); }
+function fieldSelLabel() {
+  const live = allies.filter(a => a.alive).length;
+  if (live && selected.size >= live) return 'All';
+  const g = planGroups.find(x => x.id === activeGroupId);
+  if (g && selected.size && [...selected].every(a => a.group === g.id)) return g.name;
+  return selected.size + ' picked';
+}
+function handleBattleOrderKey(e) {
+  const c = e.code;
+  if (c === 'KeyG') { selectType('all'); selIdle = 2.5; showCmdToast('All — selected'); return true; }
+  const m = c.match(/^Digit([1-9])$/);
+  if (m) { const g = planGroups[(+m[1]) - 1]; if (g) { selectGroup(g); selIdle = 2.5; showCmdToast(g.name + ' — selected'); } return true; }
+  const ORDERS = { KeyH: ['hold', 'Hold'], KeyT: ['attack', 'Charge'], KeyB: ['free', 'At will'], KeyR: ['regroup', 'Regroup'] };
+  if (ORDERS[c]) { ensureSelection(); commandSelection(ORDERS[c][0]); selIdle = 2.5; showCmdToast(fieldSelLabel() + ' — ' + ORDERS[c][1]); return true; }
+  if (c === 'KeyZ') { ensureSelection(); commandPace('march'); selIdle = 2.5; showCmdToast(fieldSelLabel() + ' — March'); return true; }
+  if (c === 'KeyX') { ensureSelection(); commandPace('rush'); selIdle = 2.5; showCmdToast(fieldSelLabel() + ' — Rush'); return true; }
+  return false;
 }
 function wireCmdDeck() {
   const deck = document.getElementById('cmd-deck'); if (!deck) return;
@@ -5072,6 +5203,14 @@ function showWaveBanner(text, sub = '') {
   waveSub.textContent = sub; waveSub.style.opacity = sub ? '1' : '0';
   bannerTimer = sub ? 4.5 : 2.2; // give the story time to be read
 }
+let cmdToastTimer = 0; // a quiet ticker confirming a live field order (distinct from the big wave banner)
+const cmdToastEl = document.getElementById('cmd-toast');
+function showCmdToast(text) {
+  if (!cmdToastEl) return;
+  cmdToastEl.textContent = '▸ ' + text;
+  cmdToastEl.style.opacity = '1';
+  cmdToastTimer = 1.2;
+}
 function showCombo(n) {
   if (n < 2) { comboEl.style.opacity = '0'; return; }
   comboEl.textContent = n + 'x COMBO';
@@ -5208,6 +5347,7 @@ function loop(now) {
   last = now;
   rtNow = now / 1000;
   frameNo++;
+  if (TOUCH) updateTouchHud(); // show/hide the right touch control set for the current mode
 
   // menu idles at ~20fps: no reason to cook the phone before the fight starts
   if (!gameRunning && !startOverlay.classList.contains('hidden') && frameNo % 3) {
@@ -5262,6 +5402,9 @@ function loop(now) {
       bannerTimer -= dt;
       if (bannerTimer <= 0) { waveBanner.style.opacity = '0'; waveSub.style.opacity = '0'; }
     }
+    // real-time field command: fade the order toast, and let the selection rings clear on their own
+    if (cmdToastTimer > 0) { cmdToastTimer -= dt; if (cmdToastTimer <= 0 && cmdToastEl) cmdToastEl.style.opacity = '0'; }
+    if (selIdle > 0 && mode === 'battle' && !commandPanelOpen) { selIdle -= dt; if (selIdle <= 0) clearSelection(); }
 
     updateSparks(gdt);
     updateArcs(gdt);
@@ -5557,7 +5700,11 @@ BV.plan = { selectType, deploySelected, beginBattle, selCount: () => selected.si
     leaderId: g.leaderId, cap: g.leaderId != null ? commandCap(leaderCharById(g.leaderId)) : 0,
     comp: CLASS_KEYS.map(k => k + ':' + allies.filter(a => a.alive && a.group === g.id && defKey(a.def) === k).length).filter(s => !s.endsWith(':0')).join(' ') })),
   setLeader: (i, charId) => { const g = planGroups[i]; if (g) setGroupLeader(g, charId); return g ? g.leaderId : null; },
-  commandPanelOpen: () => commandPanelOpen };
+  commandPanelOpen: () => commandPanelOpen,
+  battleKey: (code) => handleBattleOrderKey({ code }),                       // simulate a live order keypress
+  battleOrder: (preset) => { ensureSelection(); commandSelection(preset); }, // 'hold'|'attack'|'free'|'regroup'
+  battlePace: (pace) => { ensureSelection(); commandPace(pace); },           // 'march'|'rush'
+  selLabel: () => fieldSelLabel() };
 BV.siege = (i) => { const c = nations[i]; if (c) openSiege(c); };
 BV.advance = (secs, dt = 0.016) => { // deterministic battle stepping for headless timing tests
   const n = Math.round(secs / dt);

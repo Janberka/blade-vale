@@ -182,18 +182,28 @@
   }
 
   function sidePanel() {
-    var ps = (world && world.players) || [];
-    document.getElementById('pcount').textContent = ps.length ? '· ' + ps.length : '';
+    // every inhabitant of the living world is a "player" — human banners AND the server-driven NPC
+    // warlords (each a persistent named character). List them all; humans first, marked with ☆.
+    var humans = (world && world.players) || [];
+    var npcs = (world && world.armies) || [];
+    document.getElementById('pcount').textContent = (humans.length + npcs.length) ? '· ' + (humans.length + npcs.length) +
+      (humans.length ? ' (' + humans.length + ' human)' : '') : '';
     var ph = document.getElementById('players');
-    if (!ps.length) ph.innerHTML = '<div class="empty">no players online — open a tester link with ?mp</div>';
-    else ph.innerHTML = ps.map(function (p, i) {
+    var rows = humans.map(function (p, i) {
       var col = colorFor(p.account_id, i);
       return '<div class="prow"><span class="dot" style="background:' + col + '"></span>' +
-        '<div><div class="pname">' + esc(p.name) + '</div>' +
-        '<div class="pmeta">' + esc(p.faction || '') + '</div></div>' +
+        '<div><div class="pname">☆ ' + esc(p.name) + '</div>' +
+        '<div class="pmeta">' + esc(p.faction || 'Your Banner') + ' · human</div></div>' +
         '<div class="pright">' + (p.size | 0) + ' men · ' + Math.round(p.renown || 0) + ' renown<br>' +
         '(' + Math.round(p.x) + ', ' + Math.round(p.z) + ')</div></div>';
-    }).join('');
+    }).concat(npcs.map(function (a) {
+      return '<div class="prow"><span class="dot" style="background:' + hashColor(a.faction) + '"></span>' +
+        '<div><div class="pname">' + esc(a.name) + '</div>' +
+        '<div class="pmeta">' + esc(a.faction || '') + (a.intent ? ' · ' + esc(a.intent) : '') + '</div></div>' +
+        '<div class="pright">' + (a.size | 0) + ' men · ' + Math.round(a.renown || 0) + ' renown<br>' +
+        '(' + Math.round(a.x) + ', ' + Math.round(a.z) + ')</div></div>';
+    }));
+    ph.innerHTML = rows.length ? rows.join('') : '<div class="empty">the world is empty — start the server / reseed</div>';
     var caps = (world && world.capitals) || [];
     document.getElementById('caps').innerHTML = caps.length ? caps.map(function (c) {
       return '<div class="crow"><span class="csq" style="background:' + hashColor(c.owner_name || c.def_name) + '"></span>' +

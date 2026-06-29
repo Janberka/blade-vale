@@ -2553,8 +2553,7 @@ function terrainColorAt(x, z, out) {
   out.setHex(biomeAt(x, z).ground);
   out.multiplyScalar(clamp(0.80 + (e - SEA_LEVEL) * 0.4, 0.7, 1.0));   // gentle relief shading (never over-bright)
   if (e > 0.78) out.lerp(_tcB.setHex(0xeef3f7), clamp((e - 0.78) / 0.16, 0, 0.85)); // snowline whitens the peaks
-  const n = nationAt(x, z);
-  if (n) out.lerp(_tcB.setHex(n.def.color), 0.13);                     // political wash
+  // (political colour is no longer baked here — the living territory overlay paints it dynamically)
   return out;
 }
 // Display elevation for the strategic map: turn the (gameplay-only) elevation field into
@@ -2713,6 +2712,7 @@ function buildChunk(cx, cz) {
   const sheet = new THREE.Mesh(tgeo, new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 3 }));
   sheet.receiveShadow = true; group.add(sheet);
   buildScatter(group, cx, cz);
+  const terr = buildChunkTerritory(group, cx, cz); // living-territory overlay for this chunk
   // settlements discovered in this chunk
   const holds = [];
   for (const s of settlementSites(cx, cz)) {
@@ -2722,12 +2722,17 @@ function buildChunk(cx, cz) {
     holds.push(hold); settlements.push(hold);
   }
   mapTerrain.add(group);
-  mapChunks.set(key, { group, holds });
+  mapChunks.set(key, { group, holds, terr });
+  initTerritoryCells(cx, cz);                       // seed this chunk's cells (gen-0 = the political map)
+  paintChunkTerritory(mapChunks.get(key));          // show it immediately, before the first generation
 }
 function disposeChunk(key) {
   const c = mapChunks.get(key); if (!c) return;
-  mapTerrain.remove(c.group); disposeGroup(c.group);
+  mapTerrain.remove(c.group); disposeGroup(c.group); // disposeGroup frees the overlay material + its texture too
   for (const h of c.holds) { const i = settlements.indexOf(h); if (i >= 0) settlements.splice(i, 1); }
+  const ci = key.indexOf(','), kx = +key.slice(0, ci), kz = +key.slice(ci + 1); // drop this chunk's cells (bound the Map)
+  const gx0 = kx * GENV, gz0 = kz * GENV;
+  for (let i = 0; i < GENV; i++) for (let j = 0; j < GENV; j++) terrCells.delete(_cellKey(gx0 + i, gz0 + j));
   mapChunks.delete(key);
 }
 function clearChunks() { for (const key of Array.from(mapChunks.keys())) disposeChunk(key); }
@@ -2743,11 +2748,152 @@ function updateChunks(force) {
   }
 }
 
+// ---------- Living territory: a cellular automaton draped over the streamed map ----------
+// The political map is no longer a frozen Voronoi wash. Each chunk carries a grid of territory
+// cells; every generation control spreads from strong cells into their neighbours — seeded by the
+// holds and hosts that already exist — so fronts ripple, conquests recolour outward, and borders
+// breathe (Game-of-Life over the war map). Purely a client-side visualisation: server-authoritative
+// capital ownership still wins; the cells are merely seeded by it.
+const TERR_CELL = 3;                         // world units per territory cell
+const GENV = (CHUNK / TERR_CELL) | 0;        // cells per chunk side (20)
+const TERR_GEN_T = 0.5;                       // seconds per generation (the "step" cadence)
+const TERR_OPACITY = 0.72;                    // overlay strength over the terrain
+const TERR_HYST = 0.04;                       // a challenger must beat the incumbent's influence by this to flip a cell
+const TERR_GROW = 0.4;                        // how fast a cell's strength chases its target each gen (the visible "fade")
+// Each hold/host projects a faction influence that falls off linearly with distance. A cell flies the
+// banner of the strongest influence over it — a weighted Voronoi that REBUILDS every generation, so as
+// hosts roam and capitals are conquered the fronts genuinely move (capitals are wide stationary anchors;
+// hosts are narrow moving sources that drag bulges into enemy land).
+const CAP_W = 1.0, CAP_R = 66;               // capital: strong, reaches across its realm
+const SET_W = 0.6, SET_R = 30;               // town/city: a local anchor
+const BAND_W = 0.8, BAND_R = 16;             // a roaming host: a moving bulge of its colours that dents nearby fronts
+const PLR_W = 0.85, PLR_R = 16;              // the player's own banner carves a little realm wherever it rides
+const CONTEST_R = 6;                         // a living clash knocks the ground grey within this
+const terrCells = new Map();                  // "gx,gz" -> { gx, gz, o:faction|null, s:0..1, f:flash, w:water, bf/bi/sf/si/ct:per-gen scratch }
+let terrGen = 0, terrGenT = 0;
+const _terrCol = new THREE.Color(), _terrColB = new THREE.Color();
+function _cellKey(gx, gz) { return gx + ',' + gz; }
+// gen-0 owner: the heartland Voronoi, or the nearest loaded frontier hold, or wilderness
+function _ownerAtInit(x, z) {
+  if (Math.hypot(x, z) < HEARTLAND_R) { const n = nationAt(x, z); return n ? n.owner : null; }
+  let best = null, bd = (CHUNK * 0.9) * (CHUNK * 0.9);
+  for (const h of settlements) { const dx = h.x - x, dz = h.z - z, d = dx * dx + dz * dz; if (d < bd) { bd = d; best = h; } }
+  return best ? best.owner : null;
+}
+function _ensureCell(gx, gz) {
+  const k = _cellKey(gx, gz);
+  let c = terrCells.get(k);
+  if (c) return c;
+  const x = (gx + 0.5) * TERR_CELL, z = (gz + 0.5) * TERR_CELL;
+  const water = isWater(x, z);
+  const owner = water ? null : _ownerAtInit(x, z);
+  c = { gx, gz, o: owner, s: owner ? 0.6 : 0, f: 0, w: water, bf: null, bi: 0, sf: null, si: 0, ct: 0 };
+  terrCells.set(k, c);
+  return c;
+}
+function initTerritoryCells(cx, cz) {
+  const gx0 = cx * GENV, gz0 = cz * GENV;
+  for (let i = 0; i < GENV; i++) for (let j = 0; j < GENV; j++) _ensureCell(gx0 + i, gz0 + j);
+}
+// one generation: rebuild the faction influence field from the live holds/hosts, then let each cell
+// flow toward whoever now dominates it. Because the hosts move and capitals change hands, the field
+// (and therefore every border) shifts generation to generation.
+function stepTerritory() {
+  terrGen++;
+  for (const c of terrCells.values()) { c.bf = null; c.bi = 0; c.sf = null; c.si = 0; c.ct = 0; } // reset the field
+  // stamp a source's influence onto the loaded cells in its reach, tracking the top-2 distinct factions per cell
+  const stamp = (sx, sz, fac, W, R) => {
+    if (!fac) return;
+    const invR = 1 / R;
+    const gx0 = Math.floor((sx - R) / TERR_CELL), gx1 = Math.floor((sx + R) / TERR_CELL);
+    const gz0 = Math.floor((sz - R) / TERR_CELL), gz1 = Math.floor((sz + R) / TERR_CELL);
+    for (let gx = gx0; gx <= gx1; gx++) for (let gz = gz0; gz <= gz1; gz++) {
+      const c = terrCells.get(_cellKey(gx, gz)); if (!c || c.w) continue;
+      const d = Math.hypot((gx + 0.5) * TERR_CELL - sx, (gz + 0.5) * TERR_CELL - sz);
+      if (d >= R) continue;
+      const inf = W * (1 - d * invR); if (inf <= 0) continue;
+      if (c.bf === fac) { if (inf > c.bi) c.bi = inf; }
+      else if (inf > c.bi) { c.sf = c.bf; c.si = c.bi; c.bf = fac; c.bi = inf; }
+      else if (c.sf === fac) { if (inf > c.si) c.si = inf; }
+      else if (inf > c.si) { c.sf = fac; c.si = inf; }
+    }
+  };
+  for (const n of nations) stamp(n.x, n.z, n.owner, CAP_W, CAP_R);
+  for (const h of settlements) stamp(h.x, h.z, h.owner, SET_W, SET_R);
+  for (const b of parties) if (b.alive) stamp(b.pos.x, b.pos.z, b.faction, BAND_W, BAND_R);
+  stamp(player.pos.x, player.pos.z, PLAYER_REALM, PLR_W, PLR_R);
+  for (const bt of mapBattles) if (!bt.done) {        // a living clash knocks the ground grey around it
+    const gx0 = Math.floor((bt.cx - CONTEST_R) / TERR_CELL), gx1 = Math.floor((bt.cx + CONTEST_R) / TERR_CELL);
+    const gz0 = Math.floor((bt.cz - CONTEST_R) / TERR_CELL), gz1 = Math.floor((bt.cz + CONTEST_R) / TERR_CELL);
+    for (let gx = gx0; gx <= gx1; gx++) for (let gz = gz0; gz <= gz1; gz++) {
+      const c = terrCells.get(_cellKey(gx, gz)); if (!c) continue;
+      const d = Math.hypot((gx + 0.5) * TERR_CELL - bt.cx, (gz + 0.5) * TERR_CELL - bt.cz);
+      if (d < CONTEST_R) c.ct = Math.max(c.ct, 1 - d / CONTEST_R);
+    }
+  }
+  for (const c of terrCells.values()) {               // resolve each cell + ease its strength toward the new truth
+    if (c.w) { c.o = null; c.s = 0; c.f = 0; continue; }
+    let owner = c.o;
+    const incInf = (c.bf === c.o) ? c.bi : (c.sf === c.o ? c.si : 0);
+    if (c.bf && c.bf !== c.o && c.bi > incInf + TERR_HYST) owner = c.bf; // a stronger banner takes the cell
+    if (!c.bf || c.bi <= 0.02) owner = null;            // no hold reaches here → open wilderness
+    const ownInf = (c.bf === owner) ? c.bi : (c.sf === owner ? c.si : 0);
+    const rivalInf = (c.bf === owner) ? c.si : c.bi;    // dominance over the next-strongest faction
+    const target = owner ? clamp(0.4 + (ownInf - rivalInf) * 1.3, 0.4, 1) : 0; // deep land is bold, contested seams faint
+    let s = c.s + (target - c.s) * TERR_GROW;
+    if (c.ct > 0) s = Math.min(s, (1 - c.ct) * 0.45);   // a raging clash bleeds the ground toward grey
+    if (s < 0.08) { owner = null; s = 0; }              // pressed below nothing → falls to wilderness/grey
+    c.f = (owner && owner !== c.o) ? 1 : c.f * 0.55;    // brighten a fresh flip, then fade
+    c.o = owner; c.s = clamp(s, 0, 1);
+  }
+  for (const rec of mapChunks.values()) if (rec.terr) paintChunkTerritory(rec);
+}
+// build a chunk's overlay: a crisp NearestFilter cell texture draped on the relief, just above it
+function buildChunkTerritory(group, cx, cz) {
+  const data = new Uint8Array(GENV * GENV * 4);
+  const tex = new THREE.DataTexture(data, GENV, GENV, THREE.RGBAFormat);
+  tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestFilter;
+  tex.generateMipmaps = false; tex.needsUpdate = true;
+  const geo = new THREE.PlaneGeometry(CHUNK, CHUNK, GENV, GENV);
+  geo.rotateX(-Math.PI / 2);
+  const ox = (cx + 0.5) * CHUNK, oz = (cz + 0.5) * CHUNK, pos = geo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i) + ox, z = pos.getZ(i) + oz;
+    pos.setX(i, x); pos.setZ(i, z); pos.setY(i, mapElevY(x, z) + 0.35); // ride just above the terrain sheet
+  }
+  const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: TERR_OPACITY, depthWrite: false }));
+  mesh.renderOrder = 2;
+  group.add(mesh);
+  return { tex, data, cx, cz, mesh };
+}
+function paintChunkTerritory(rec) {
+  const t = rec.terr; if (!t) return;
+  const gx0 = t.cx * GENV, gz0 = t.cz * GENV, data = t.data;
+  for (let j = 0; j < GENV; j++) for (let i = 0; i < GENV; i++) {
+    const c = terrCells.get(_cellKey(gx0 + i, gz0 + j)), o = (j * GENV + i) * 4;
+    if (c && !c.w && c.ct > 0.12) {                       // a raging clash → a pale contested scar over the land
+      data[o] = 205; data[o + 1] = 205; data[o + 2] = 205; data[o + 3] = (clamp(0.25 + c.ct * 0.55, 0, 1) * 255) | 0; continue;
+    }
+    if (!c || c.w || !c.o) {                              // water / wilderness → let the terrain show through
+      const a = (c && !c.w && c.f > 0.05) ? (c.f * 70) | 0 : 0; // a brief grey ghost where land just fell
+      data[o] = 150; data[o + 1] = 150; data[o + 2] = 150; data[o + 3] = a; continue;
+    }
+    _terrCol.setHex(c.o.color);
+    if (c.f > 0.02) _terrCol.lerp(_terrColB.setHex(0xffffff), c.f * 0.5); // flash a flip bright
+    const r = terrCells.get(_cellKey(gx0 + i + 1, gz0 + j)), u = terrCells.get(_cellKey(gx0 + i, gz0 + j + 1));
+    const k = ((r && r.o !== c.o) || (u && u.o !== c.o)) ? 0.4 : 1; // darken the moving border
+    data[o] = (_terrCol.r * 255 * k) | 0; data[o + 1] = (_terrCol.g * 255 * k) | 0; data[o + 2] = (_terrCol.b * 255 * k) | 0;
+    data[o + 3] = (clamp(0.4 + c.s * 0.6, 0, 1) * 255) | 0;
+  }
+  t.tex.needsUpdate = true;
+}
+
 // ---------- Strategic map: persistent capitals + streamed chunks ----------
 function buildMapTerrain() {
   if (mapTerrain && mapTerrainLevel !== mapLevel) {  // a fresh region — tear the whole world down
     scene.remove(mapTerrain); disposeGroup(mapTerrain); mapTerrain = null;
     mapChunks.clear(); settlements.length = 0; heldOwners.clear(); _lastPlayerChunk = '';
+    terrCells.clear(); terrGen = 0; terrGenT = 0; // a fresh region starts its territory anew
   }
   if (!mapTerrain) {
     mapTerrain = new THREE.Group(); scene.add(mapTerrain);
@@ -2971,9 +3117,9 @@ function setBandLabel(band) {
   label.position.y = (small ? 2.6 : 3.6) + 0.6;
   g.add(label); g.userData.label = label;
 }
-// escalating threat: warbands grow with the region cleared AND total battles fought,
-// so the host keeps getting stronger the longer the campaign runs
-function warbandSize() { return Math.round(rand(10, 26) + (mapLevel + wave * 0.6) * 7); }
+// escalating threat: warbands grow with the region cleared, total battles fought, AND how deep into
+// the frontier you've pushed — hosts mustered far from home are bigger and meaner
+function warbandSize() { return Math.round(rand(10, 26) + (mapLevel + wave * 0.6) * 7 + Math.floor(Math.hypot(player.pos.x, player.pos.z) / FRONTIER_STEP) * 6); }
 // a band musters from its nation's homeland (on land, inside its borders)
 // a land tile in a ring around the player — the war musters wherever you've roamed to, not back home
 function spawnPointNearPlayer(minR, maxR) {
@@ -3108,11 +3254,16 @@ function resolveBandClash(a, b) {
   if (b.size <= 0) { if (b.leader) spawnPopup(b.pos.clone().setY(3.2), b.leader.name + "'s host is broken", '#ff9b6b'); killBand(b); } else setBandLabel(b);
 }
 
-// nearest hold NOT already flying this nation's colors — a host's march objective
+// nearest hold NOT already flying this nation's colors — a host's march objective (capital or settlement)
 function nearestEnemyCapital(faction, x, z, radius) {
   let best = null, bd = radius * radius;
   for (const cap of nations) {
     if (!areFactionEnemies(faction, cap.owner)) continue; // march only on a hold you're at war/hostile with
+    const dx = cap.x - x, dz = cap.z - z, d = dx * dx + dz * dz;
+    if (d < bd) { bd = d; best = cap; }
+  }
+  for (const cap of settlements) {                        // hosts raid villages and towns, not just capitals
+    if (!areFactionEnemies(faction, cap.owner)) continue;
     const dx = cap.x - x, dz = cap.z - z, d = dx * dx + dz * dz;
     if (d < bd) { bd = d; best = cap; }
   }
@@ -3121,6 +3272,7 @@ function nearestEnemyCapital(faction, x, z, radius) {
 // a host storms a rival hold: the garrison bleeds it, but the banner changes hands
 function conquerByBand(cap, band) {
   cap.owner = band.faction; recolorCapital(cap);
+  if (cap.key) heldOwners.set(cap.key, factionName(cap.owner)); // a settlement's new banner outlasts streaming
   band.size = Math.max(2, band.size - Math.round(cap.garrison * 0.45));
   if (band.leader) { band.leader.renown += 12 + 0.3 * cap.garrison; band.leader.skills.lead += 1; recomputeChar(band.leader); } // taking a hold makes a name
   setBandLabel(band);
@@ -3381,6 +3533,8 @@ function updateMap(dt) {
     player.mapToken.rotation.y = player.facing;
   }
   updateChunks(); // stream fresh terrain + settlements in as the player crosses chunk lines
+  terrGenT += dt; // advance the living territory in discrete generations so it reads as "stepping"
+  for (let g = 0; terrGenT >= TERR_GEN_T && g < 4; g++) { terrGenT -= TERR_GEN_T; stepTerritory(); }
 
   let aliveParties = 0;
   for (const band of parties) {
@@ -3429,12 +3583,14 @@ function updateMap(dt) {
     if (d < 3.4 && band.parleyCd <= 0 && -(player.vel.x * to.x + player.vel.z * to.z) > 1) { openEncounter(band); return; }
   }
 
-  // ride up to a stronghold to lay siege (or leave); also age the hold's timers
-  for (const cap of nations) {
+  const holds = settlements.length ? nations.concat(settlements) : nations; // every hold near you this frame
+  // ride up to any hold — capital, city, town or village — to lay siege (or leave); also age its timers
+  for (const cap of holds) {
     if (cap.parleyCd > 0) cap.parleyCd -= dt;
     if (cap.conquerCd > 0) cap.conquerCd -= dt;
     const dx = player.pos.x - cap.x, dz = player.pos.z - cap.z;
-    if (dx * dx + dz * dz < 4.6 * 4.6 && cap.parleyCd <= 0 && -(player.vel.x * dx + player.vel.z * dz) > 1) { openSiege(cap); return; }
+    const reach = cap.tier === 'city' ? 5.0 : cap.tier === 'town' ? 4.2 : cap.tier === 'village' ? 3.4 : 4.6;
+    if (dx * dx + dz * dz < reach * reach && cap.parleyCd <= 0 && -(player.vel.x * dx + player.vel.z * dz) > 1) { openSiege(cap); return; }
   }
 
   // rival hosts that collide LOCK INTO a living battle (or reinforce one already raging)
@@ -3456,7 +3612,7 @@ function updateMap(dt) {
   for (const band of parties) {
     if (serverDriven) break;
     if (!band.alive || band.inBattle) continue;
-    for (const cap of nations) {
+    for (const cap of holds) {
       if (cap.conquerCd > 0 || !areFactionEnemies(band.faction, cap.owner)) continue; // only storm enemy holds
       const dx = band.pos.x - cap.x, dz = band.pos.z - cap.z;
       if (dx * dx + dz * dz < 3.6 * 3.6 && band.size >= cap.garrison * 0.5) { conquerByBand(cap, band); break; }
@@ -4174,10 +4330,12 @@ function winBattle() {
   if (siegeCapital) { // the garrison broke — the hold is yours
     const cap = siegeCapital; siegeCapital = null;
     cap.owner = PLAYER_REALM; recolorCapital(cap);
-    if (typeof window !== 'undefined' && window.net) window.net.reportCapital(nations.indexOf(cap), PLAYER_REALM.name, 'You took ' + cap.def.name); // your conquest persists in the living world
+    const ni = nations.indexOf(cap); // a settlement isn't in `nations` (ni < 0) — it lives in the streamed world
+    if (ni >= 0 && typeof window !== 'undefined' && window.net) window.net.reportCapital(ni, PLAYER_REALM.name, 'You took ' + cap.def.name); // your conquest persists in the living world
+    if (cap.key) heldOwners.set(cap.key, PLAYER_REALM.name); // remember the flip so streaming back doesn't undo it
     cap.garrison = Math.round(garrisonSize() * 0.5); cap.parleyCd = 3;
     lastBattle.captured = cap.def.name;
-    if (nations.every(n => n.owner === PLAYER_REALM)) lastBattle.conqueredAll = true;
+    if (ni >= 0 && nations.every(n => n.owner === PLAYER_REALM)) lastBattle.conqueredAll = true;
   }
   showMuster();
 }
@@ -4352,10 +4510,11 @@ function openSiege(cap) {
   encounter = { kind: 'capital', cap };
   player.vel.set(0, 0, 0);
   const yours = cap.owner === PLAYER_REALM;
-  encTitle.textContent = yours ? 'Your Stronghold' : 'A Stronghold';
+  const tier = cap.tier ? cap.tier[0].toUpperCase() + cap.tier.slice(1) : 'Stronghold';
+  encTitle.textContent = yours ? 'Your ' + tier : 'A ' + tier;
   encInfo.innerHTML = yours
     ? `${swatch(cap.owner.color)}<b>${cap.def.name}</b> flies your banner. The garrison salutes you.`
-    : `${swatch(cap.owner.color)}<b>${cap.def.name}</b>, a ${cap.owner.name} hold — garrison <b>${cap.garrison}</b>. Storm the walls?`;
+    : `${swatch(cap.owner.color)}<b>${cap.def.name}</b>, a ${cap.owner.name} ${cap.tier || 'hold'} — garrison <b>${cap.garrison}</b>. ${cap.tier === 'village' ? 'Raid it?' : 'Storm the walls?'}`;
   encAttackBtn.textContent = 'Lay Siege'; encHailBtn.textContent = 'Leave';
   encAttackBtn.style.display = yours ? 'none' : '';
   encAllyBtn.style.display = 'none';
@@ -4925,6 +5084,18 @@ BV.diplomacy = () => ({
 });
 BV.parties = parties; // live band array — debug/verification (read positions, force a clash)
 BV.nations = () => nations.map(n => ({ name: n.def.name, owner: n.owner.name, garrison: n.garrison, x: Math.round(n.x), z: Math.round(n.z) }));
+// living-territory inspection: prove the world is evolving (gen rises, faction cell-counts shift)
+BV.territory = () => {
+  const owned = {}; let unclaimed = 0, water = 0;
+  for (const c of terrCells.values()) {
+    if (c.w) { water++; continue; }
+    if (!c.o) { unclaimed++; continue; }
+    owned[c.o.name] = (owned[c.o.name] || 0) + 1;
+  }
+  return { gen: terrGen, cells: terrCells.size, owned, unclaimed, water };
+};
+BV.territorySnapshot = BV.territory;
+BV.terrAt = (x, z) => { const c = terrCells.get(_cellKey(Math.floor(x / TERR_CELL), Math.floor(z / TERR_CELL))); return c ? (c.w ? 'water' : (c.o ? c.o.name : 'unclaimed')) : 'unloaded'; };
 BV.allyOrders = () => { const o = {}; for (const a of allies) if (a.alive) o[a.order] = (o[a.order] || 0) + 1; return o; };
 BV.allyStats = () => { const g = {}; for (const a of allies) if (a.alive) { const k = defKey(a.def) + ':' + a.order; (g[k] = g[k] || { n: 0, x: 0, z: 0 }); g[k].n++; g[k].x += a.pos.x; g[k].z += a.pos.z; } const o = {}; for (const k in g) o[k] = { n: g[k].n, avgX: Math.round(g[k].x / g[k].n), avgZ: Math.round(g[k].z / g[k].n) }; return o; };
 BV.plan = { selectType, deploySelected, beginBattle, selCount: () => selected.size,
@@ -5220,9 +5391,8 @@ function seedStationRelations(s) {
       else if (other === rivalName) opinion = -80;                        // the war you wake up in
       else opinion = -10;                                                 // wary strangers
     } else {
-      const ni = NATIONS.findIndex(n => n.name === a), nj = NATIONS.findIndex(n => n.name === b);
-      const dd = Math.abs(ni - nj); opinion = (dd === 1 || dd === NATIONS.length - 1) ? -25 : 5;
-      if ((a === rivalName && pactNames.has(b)) || (b === rivalName && pactNames.has(a))) opinion = -50; // rival leans on your friends
+      opinion = WorldSim.initialOpinion(a, b);                              // themed opening standing between the AI powers
+      if ((a === rivalName && pactNames.has(b)) || (b === rivalName && pactNames.has(a))) opinion = Math.min(opinion, -50); // your rival also leans on your sworn friends
     }
     const c = WorldSim.canonPair(a, b);
     out.push({ a: c.a, b: c.b, opinion, stance: WorldSim.stanceFromOpinion(opinion, null) });

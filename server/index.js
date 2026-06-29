@@ -141,6 +141,9 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && p === '/api/v1/world/presence') { // a player's banner heartbeat
       const b = await readBody(req);
       tick.updatePresence(viewWorldId, acct.id, b);
+      // shared world: the server owns the whole map — generate (idempotently) the frontier holds
+      // around this navigating player so factions have ground to contest. (Solo stays client-local.)
+      if (viewWorldId !== world.id && b && b.x != null) tick.ensureRegion(viewWorldId, +b.x || 0, +b.z || 0);
       return send(res, 200, { ok: true });
     }
 
@@ -156,6 +159,15 @@ const server = http.createServer(async (req, res) => {
       db.prepare('UPDATE capitals SET owner_name=? WHERE world_id=? AND idx=?').run(String(b.owner || ''), viewWorldId, b.idx | 0);
       db.prepare('INSERT INTO world_events(world_id, tick, type, summary) VALUES (?,?,?,?)').run(viewWorldId, st, 'capital_taken', String(b.summary || 'A hold changed hands'));
       return send(res, 200, { ok: true });
+    }
+
+    // server-owned frontier settlements: who currently holds each generated village/town/city.
+    // Optional x/z/r bound the result to a box around a point (the client passes its view centre);
+    // omit them for every hold in the world.
+    if (req.method === 'GET' && p === '/api/v1/holds') {
+      const q = url.searchParams, hasBox = q.has('x') && q.has('z');
+      const holds = hasBox ? tick.getHolds(viewWorldId, +q.get('x') || 0, +q.get('z') || 0, +q.get('r') || 150) : tick.getHolds(viewWorldId);
+      return send(res, 200, { holds });
     }
 
     // ----- town management: player holdings (server-backed economy) -----

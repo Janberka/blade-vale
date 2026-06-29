@@ -108,6 +108,13 @@
       .then(function (h) { net.online = true; net.holdings = (h && h.holdings) || []; return net.holdings; })
       .catch(function () { return null; });
   };
+  // server-owned frontier settlements near a point (shared world): who currently holds each
+  net.loadHolds = function (x, z, r) {
+    var qs = (x != null && z != null) ? ('?x=' + Math.round(x) + '&z=' + Math.round(z) + (r != null ? '&r=' + Math.round(r) : '')) : '';
+    return jfetch('/holds' + qs, { method: 'GET', headers: worldHeaders() })
+      .then(function (res) { net.online = true; return (res && res.holds) || []; })
+      .catch(function () { return null; });
+  };
   net.buildHold = function (holdKey, building) {
     return jfetch('/holdings/build', { method: 'POST', headers: worldHeaders(), body: JSON.stringify({ holdKey: holdKey, building: building }) }).catch(function () { return null; });
   };

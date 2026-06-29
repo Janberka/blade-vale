@@ -6252,12 +6252,29 @@ function renderOtherPlayers() {
   for (const p of ps) { const g = makeOtherPlayerToken(p.name, p.size); const px = clamp(p.x, -MAP_HALF + 1, MAP_HALF - 1), pz = clamp(p.z, -MAP_HALF + 1, MAP_HALF - 1); g.position.set(px, mapElevY(px, pz), pz); scene.add(g); otherPlayerTokens.push(g); }
 }
 let presenceT = 0;
+// the shared world's settlements are server-authoritative: reflect who currently holds each
+// (factions contest the frontier server-side) onto the holds we've streamed in, recoloring banners
+// that changed hands. heldOwners is also seeded so settlements streaming in next show the right owner.
+let _holdsTick = 0;
+function applyServerHolds(holds) {
+  if (!holds || !holds.length) return;
+  const byKey = new Map();
+  for (const h of holds) { heldOwners.set(h.holdKey, h.owner); byKey.set(h.holdKey, h.owner); }
+  for (const cap of settlements) {
+    const own = cap.key && byKey.get(cap.key); if (!own) continue;
+    const f = factionByName(own) || FREE;
+    if (f !== cap.owner) { cap.owner = f; recolorCapital(cap); }
+  }
+}
 function sendPresenceMaybe(dt) {
   if (!(window.net && window.net.online)) return;
   presenceT -= dt; if (presenceT > 0) return;
   presenceT = 1.5;
   window.net.sendPresence({ name: playerChar ? playerChar.name : 'A Wanderer', faction: PLAYER_REALM.name, x: player.pos.x, z: player.pos.z, size: warbandTotal(), renown: playerChar ? playerChar.renown : 0 });
-  if (window.net.sharedWorld) window.net.loadWorld().then(() => { if (mode === 'map') renderOtherPlayers(); }); // refresh rivals in MP
+  if (window.net.sharedWorld) {
+    window.net.loadWorld().then(() => { if (mode === 'map') renderOtherPlayers(); }); // refresh rivals in MP
+    if ((++_holdsTick % 3) === 0 && window.net.loadHolds) window.net.loadHolds(player.pos.x, player.pos.z, 160).then(applyServerHolds); // ~every 4.5s: reflect frontier contests
+  }
 }
 BV.serverBands = () => parties.filter(p => p.alive && p.serverId).map(p => ({ name: p.leader && p.leader.name, faction: p.faction.name, size: p.size, serverId: p.serverId }));
 BV.otherPlayers = () => otherPlayerTokens.length;

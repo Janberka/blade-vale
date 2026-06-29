@@ -412,6 +412,10 @@ function runTick(worldId, tick) {
       ev(worldId, tick, 'hold_lost', a.faction + ' wrested ' + cap.row.def_name + ' from your banner');
     }
   }
+  // 3b. factions contest the WHOLE map: armies storm nearby generated frontier holds, not just the
+  //     five capitals (clashing armies sit it out this tick). Holds exist only where players have
+  //     navigated (ensureRegion on presence), so this is bounded to the explored frontier.
+  contestHolds(worldId, tick, armies, relMap, clashed);
   // 3c. player towns produce + grow (offline catch-up safe — see tickHoldings)
   tickHoldings(worldId, tick);
   // 4. diplomacy: drift relations + posture, then record any nation that has fallen
@@ -491,6 +495,7 @@ module.exports = {
   advanceWorld, seedWorld, runTicks, markActive, isActive, tickInactiveWorlds, forceTicks,
   getArmies, getCapitals, defeatArmy, updatePresence, getPresence, capPos,
   getHoldings, claimHolding, buildHolding, assignJobs, levyHolding, TOWN,
+  ensureRegion, getHolds,
   TICK_SECONDS, MAX_CATCHUP_TICKS, ACTIVE_TTL, MAP_HALF
 };
 

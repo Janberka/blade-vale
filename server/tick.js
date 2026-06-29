@@ -20,6 +20,16 @@ const ARMY_SPEED = 6;           // map units per tick
 const CLASH_RANGE = 9;
 const CAP_RANGE = 8;
 
+// ---------- The whole-world settlement layer (Step 9) ----------
+// The shared multiplayer world's terrain seed is fixed so EVERY player (and this server) sees the
+// same map + holds. It MUST equal the client's worldSeed() with universeSeed=SHARED_WORLD_SEED and
+// mapLevel=0, so the holds the server generates line up with what a solo/MP client would draw.
+const SHARED_WORLD_SEED = 0x51A3F00D;
+const SHARED_TERRAIN_SEED = ((0 * 1000 + 7) ^ (SHARED_WORLD_SEED * 2654435761)) >>> 0; // === 2275024391
+const HOLD_GEN_RADIUS = 4;      // chunks generated around a navigating player (a touch past the client's VIEW=2..3)
+const HOLD_CONTEST_RANGE = 10;  // an army within this of a hold can storm it (a hair past CAP_RANGE)
+const HOLD_SCAN_RADIUS = 30;    // only holds within this of an army are considered for contest (bounds the work)
+
 // ---------- Town economy (player holdings) ----------
 // Per-tick = per TICK_SECONDS (20s). Tunable. The client mirrors COSTS + a few of these for its
 // readout (kept in sync by hand — small surface). Production is applied every tick by tickHoldings,
@@ -169,6 +179,105 @@ function nearestRival(armies, a, relMap) {
   }
   return best ? { o: best, d2: bd } : null;
 }
+// ---------- Whole-world settlement generation + persistence + contest ----------
+// A world's terrain seed: the shared world's is FIXED to match the client (so its holds line up
+// with what a player draws); solo worlds derive one deterministically from their own row seed.
+const _seedCache = new Map();
+function worldSeedFor(worldId) {
+  if (_seedCache.has(worldId)) return _seedCache.get(worldId);
+  const w = db.prepare('SELECT seed, kind FROM worlds WHERE id=?').get(worldId);
+  const ws = (w && w.kind === 'shared') ? SHARED_TERRAIN_SEED : (((((w ? w.seed : 0) | 0) * 1000 + 7) ^ 0x9E3779B9) >>> 0);
+  _seedCache.set(worldId, ws); return ws;
+}
+// the heartland Voronoi runs over the server's capital positions; ownership maps a capital's
+// FOUNDING nation → its CURRENT owner, so a conquered capital pulls its hinterland holds with it.
+function capsFor(worldId) {
+  const out = []; for (let i = 0; i < NATIONS.length; i++) { const p = capPos(i); out.push({ name: NATIONS[i], x: p.x, z: p.z }); }
+  return out;
+}
+function nationOwnerMap(worldId) {
+  const m = {}; for (const c of db.prepare('SELECT idx, owner_name FROM capitals WHERE world_id=?').all(worldId)) m[NATIONS[c.idx]] = c.owner_name;
+  return n => m[n] || n;
+}
+// generate-on-navigate: for every not-yet-generated chunk within radiusChunks of (x,z), compute its
+// settlements via the shared kernel and INSERT them idempotently. Marks each chunk in the ledger so
+// re-navigating the same ground never duplicates. Most chunks yield 0 holds (cheap ledger row only).
+const insHold = db.prepare(`INSERT OR IGNORE INTO holds(world_id, cx, cz, idx, name, tier, x, z, owner_name, garrison, generated_tick)
+  VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
+const insRegion = db.prepare('INSERT OR IGNORE INTO hold_regions(world_id, cx, cz, generated_tick) VALUES (?,?,?,?)');
+const haveRegion = db.prepare('SELECT 1 FROM hold_regions WHERE world_id=? AND cx=? AND cz=?');
+const CHUNK = WorldSim.CHUNK;
+function ensureRegion(worldId, x, z, radiusChunks) {
+  const R = radiusChunks == null ? HOLD_GEN_RADIUS : radiusChunks | 0;
+  const ws = worldSeedFor(worldId), caps = capsFor(worldId), ownerOf = nationOwnerMap(worldId);
+  const tick = db.prepare('SELECT sim_tick FROM worlds WHERE id=?').get(worldId).sim_tick;
+  const pcx = Math.floor(x / CHUNK), pcz = Math.floor(z / CHUNK);
+  let gen = 0, holds = 0;
+  db.transaction(() => {
+    for (let cx = pcx - R; cx <= pcx + R; cx++) for (let cz = pcz - R; cz <= pcz + R; cz++) {
+      if (haveRegion.get(worldId, cx, cz)) continue;                 // already generated this ground
+      insRegion.run(worldId, cx, cz, tick); gen++;
+      for (const s of WorldSim.settlementSites(cx, cz, ws)) {
+        const owner = WorldSim.settlementOwner(s, ws, caps, ownerOf);
+        insHold.run(worldId, cx, cz, s.idx, WorldSim.settlementName(s, ws), s.tier, s.x, s.z, owner, WorldSim.settlementGarrison(s, ws, 0), tick);
+        holds++;
+      }
+    }
+  })();
+  return { chunksGenerated: gen, holdsCreated: holds };
+}
+function holdKeyOf(h) { return h.cx + ',' + h.cz + ',' + h.idx; }
+// holds near a point (for /world serving + the contest scan). Bounded by a coordinate box.
+function nearbyHolds(worldId, x, z, radius) {
+  const r = radius == null ? 0 : radius;
+  if (!r) return db.prepare('SELECT * FROM holds WHERE world_id=?').all(worldId);
+  return db.prepare('SELECT * FROM holds WHERE world_id=? AND x BETWEEN ? AND ? AND z BETWEEN ? AND ?')
+    .all(worldId, x - r, x + r, z - r, z + r);
+}
+// shape the client consumes for a server-owned settlement (siteKey = the holdings key)
+function holdWorldView(h) {
+  return { holdKey: holdKeyOf(h), cx: h.cx, cz: h.cz, idx: h.idx, name: h.name, tier: h.tier, x: h.x, z: h.z, owner: h.owner_name, garrison: h.garrison };
+}
+function getHolds(worldId, x, z, radius) { return nearbyHolds(worldId, x, z, radius).map(holdWorldView); }
+
+// ---- Factions contest the WHOLE map: armies storm nearby generated holds, not just capitals ----
+// Bounded: each army only scans holds within HOLD_SCAN_RADIUS. A strong-enough enemy host on a hold
+// flips its owner_name (and any mirrored economy row), emits an event, and feeds recomputePower via
+// diplomacy's relation shock — so the war spreads across the frontier instead of orbiting 5 capitals.
+function contestHolds(worldId, tick, armies, relMap, busy) {
+  const sel = db.prepare('SELECT * FROM holds WHERE world_id=? AND x BETWEEN ? AND ? AND z BETWEEN ? AND ?');
+  const flip = db.prepare('UPDATE holds SET owner_name=?, garrison=? WHERE id=?');
+  const taken = new Set();    // one hold can't be taken twice in a tick
+  for (const a of armies) {
+    if (busy && busy.has(a.id)) continue;
+    const cand = sel.all(worldId, a.x - HOLD_SCAN_RADIUS, a.x + HOLD_SCAN_RADIUS, a.z - HOLD_SCAN_RADIUS, a.z + HOLD_SCAN_RADIUS);
+    let best = null, bd = HOLD_CONTEST_RANGE * HOLD_CONTEST_RANGE;
+    for (const h of cand) {
+      if (taken.has(h.id) || h.owner_name === a.faction) continue;     // already ours / already flipped this tick
+      if (h.owner_name === PLAYER) continue;                           // never auto-seize the human player's hold offline (capitals path handles that with watchtower defense)
+      const stance = relMap ? D.stanceBetween(relMap, a.faction, factionRealm(h.owner_name)) : 'hostile';
+      if (relMap && !WorldSim.areEnemies(stance) && !isNeutralHold(h.owner_name)) continue; // only storm enemies (Free/petty holds are fair game for any power)
+      const d = (h.x - a.x) * (h.x - a.x) + (h.z - a.z) * (h.z - a.z);
+      if (d < bd) { bd = d; best = h; }
+    }
+    if (!best) continue;
+    if (a.size < best.garrison * 0.5) continue;                       // must outweigh the defenders
+    const loser = best.owner_name;
+    taken.add(best.id);
+    flip.run(a.faction, Math.max(2, Math.round(best.garrison * 0.6)), best.id);          // a garrison is installed
+    db.prepare('UPDATE warlords SET renown=renown+4, size=? WHERE id=?').run(Math.max(2, a.size - Math.round(best.garrison * 0.3)), a.id);
+    // keep the economy satellite coherent if this hold has a holdings row
+    db.prepare('UPDATE holdings SET owner_name=?, updated_at=unixepoch() WHERE world_id=? AND hold_key=?').run(a.faction, worldId, holdKeyOf(best));
+    ev(worldId, tick, 'hold_taken', a.faction + ' took ' + best.name + ' under ' + a.name + (loser ? ' from ' + loser : ''));
+    if (loser && loser !== a.faction && NATIONS.indexOf(loser) >= 0) D.bumpRelation(worldId, loser, a.faction, -Math.round(D.CONQUEST_SHOCK * 0.4), tick); // smaller shock than a capital
+  }
+}
+const NEUTRAL_HOLDS = new Set([WorldSim.FREE_NAME].concat(WorldSim.PETTY_NAMES));
+function isNeutralHold(name) { return NEUTRAL_HOLDS.has(name); }
+// map a hold owner string to a diplomacy "faction" for the stance lookup: a real nation keeps its
+// name; Free/petty/unknown owners collapse to a neutral sentinel (no relation row, treated hostile-ish).
+function factionRealm(name) { return NATIONS.indexOf(name) >= 0 ? name : (name === PLAYER ? PLAYER : ' neutral'); }
+
 // player towns produce food/wood + grow population, every owned hold, every tick. Inside the
 // runTicks transaction, so the away-gap catch-up accrues production with no special-casing.
 function tickHoldings(worldId, tick) {

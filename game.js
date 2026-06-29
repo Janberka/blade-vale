@@ -3115,11 +3115,13 @@ function _mulberry32(a) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
-function _chunkHash(cx, cz) { return (Math.imul(cx | 0, 73856093) ^ Math.imul(cz | 0, 19349663) ^ Math.imul(worldSeed(), 83492791)) >>> 0; }
+// the settlement layer is the shared kernel's now (sim/world-sim.js): the server generates,
+// persists, and contests the SAME holds, so these are thin (worldSeed-binding) wrappers.
+function _chunkHash(cx, cz) { return WorldSim.chunkHash(cx, cz, worldSeed()); }
 
 // the campaign gets deadlier the farther you roam: home stays gentle, the frontier is brutal
-const FRONTIER_STEP = 240;
-function frontierLevel(x, z) { return mapLevel + Math.floor(Math.hypot(x, z) / FRONTIER_STEP); }
+const FRONTIER_STEP = WorldSim.FRONTIER_STEP;
+function frontierLevel(x, z) { return WorldSim.frontierLevel(x, z, mapLevel); }
 
 // ---------- Frontier politics: free cities + petty realms beyond the five powers' heartland ----------
 const FREE = { name: 'Free City', color: 0x9aa0a6, free: true };  // unaligned, neutral grey
@@ -3137,37 +3139,19 @@ function factionByName(nm) {
 }
 function nearCapital(x, z, d) { for (const n of nations) if (Math.hypot(n.x - x, n.z - z) < d) return true; return false; }
 
-// deterministic settlement sites within a chunk (most chunks hold 0–1; a few hold 2)
-function settlementSites(cx, cz) {
-  const rng = _mulberry32(_chunkHash(cx, cz) ^ 0x51A7);
-  const n = rng() < 0.42 ? 0 : (rng() < 0.80 ? 1 : 2);
-  const out = [];
-  for (let i = 0; i < n; i++) {
-    const x = (cx + 0.20 + rng() * 0.60) * CHUNK;   // kept off the chunk edges so neighbours don't collide
-    const z = (cz + 0.20 + rng() * 0.60) * CHUNK;
-    const tr = rng();
-    const tier = tr < 0.70 ? 'village' : tr < 0.92 ? 'town' : 'city';
-    out.push({ x, z, tier, idx: i, cx, cz });
-  }
-  return out;
-}
-function siteKey(s) { return s.cx + ',' + s.cz + ',' + s.idx; }
-const _NAME_A = ['Ash', 'Brook', 'Crag', 'Dun', 'Elder', 'Fen', 'Grim', 'Holt', 'Kel', 'Mar', 'Oak', 'Pell', 'Raven', 'Stone', 'Thorn', 'Vale', 'Wic', 'Yarl', 'Bram', 'Glen'];
-const _NAME_B = ['bury', 'combe', 'dale', 'ford', 'garth', 'hollow', 'mere', 'reach', 'stead', 'ton', 'wick', 'wold', 'holm', 'crest', 'gate', 'moor', 'fell', 'bridge'];
-function settlementName(s) {
-  const r = _mulberry32(_chunkHash(s.cx, s.cz) ^ (Math.imul(s.idx + 1, 2654435761) >>> 0));
-  return _NAME_A[(r() * _NAME_A.length) | 0] + _NAME_B[(r() * _NAME_B.length) | 0];
-}
+// deterministic settlement sites within a chunk (most chunks hold 0–1; a few hold 2) — shared kernel
+function settlementSites(cx, cz) { return WorldSim.settlementSites(cx, cz, worldSeed()); }
+function siteKey(s) { return WorldSim.siteKey(s); }
+function settlementName(s) { return WorldSim.settlementName(s, worldSeed()); }
+// the kernel's heartland Voronoi runs over this region's capital positions; it returns the nearest
+// capital's FOUNDING-nation name, which we map to that nation's CURRENT owner object (conquests show).
 function settlementOwner(s) {
-  if (Math.hypot(s.x, s.z) < HEARTLAND_R) { const n = nationAt(s.x, s.z); return n ? n.owner : FREE; } // heartland → its nation
-  const r = _mulberry32(_chunkHash(s.cx, s.cz) ^ (Math.imul(s.idx + 7, 40503) >>> 0));
-  return r() < 0.55 ? FREE : PETTY[(r() * PETTY.length) | 0];   // frontier → free cities + petty realms
+  const owner = WorldSim.settlementOwner(s, worldSeed(),
+    nations.map(n => ({ name: n.def.name, x: n.x, z: n.z })),
+    nm => { const n = nations.find(c => c.def.name === nm); return n ? n.owner.name : nm; });
+  return factionByName(owner) || FREE;
 }
-const TIER_GARRISON = { village: [4, 9], town: [10, 18], city: [20, 34] };
-function settlementGarrison(s) {
-  const g = TIER_GARRISON[s.tier], scale = s.tier === 'city' ? 6 : s.tier === 'town' ? 3 : 1.4;
-  return Math.round(rand(g[0], g[1]) + frontierLevel(s.x, s.z) * scale);   // distant holds bristle with men
-}
+function settlementGarrison(s) { return WorldSim.settlementGarrison(s, worldSeed(), mapLevel); }
 function makeSettlementHold(s) {
   const key = siteKey(s);
   const restored = heldOwners.get(key);

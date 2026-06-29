@@ -792,7 +792,8 @@ function spawnTrail(fighter, tipY, color = 0xfff2c8) {
     const idx = [];
     for (let i = 0; i < TRAIL_SEGS; i++) { const a = i * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
     geo.setIndex(idx);
-    const m = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false });
+    const m = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, side: THREE.DoubleSide,
+      depthWrite: false, blending: THREE.AdditiveBlending }); // glows as a light streak, not a flat decal
     const mesh = new THREE.Mesh(geo, m); mesh.frustumCulled = false;
     tr = { mesh, mat: m, geo, pts: [] };
   }

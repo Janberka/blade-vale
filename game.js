@@ -3822,11 +3822,22 @@ function roadBuildEdges(nodes) {
     edges.push({ a: nodes[lo], b: nodes[hi], tier: _edgeTier(nodes[lo], nodes[hi]), key: nodes[lo].key + '~' + nodes[hi].key });
   };
   for (let i = 0; i < N; i++) for (const j of near[i]) link(i, j);
+  // tiny foot-paths: short dead-end trails spurring off the humbler holds into the countryside — the
+  // "paths all around" between the proper roads. Seeded per node so they're stable run-to-run.
+  for (let i = 0; i < N; i++) {
+    const a = nodes[i]; if (a.rank > 1) continue;     // villages & towns sprout trails; cities/capitals stay groomed
+    const rng = WorldSim.mulberry32((Math.imul(Math.round(a.x) | 0, 374761393) ^ Math.imul(Math.round(a.z) | 0, 668265263) ^ (worldSeed() >>> 0)) >>> 0);
+    if (rng() >= 0.55) continue;
+    const ang = rng() * Math.PI * 2, len = 16 + rng() * 18, ex = a.x + Math.cos(ang) * len, ez = a.z + Math.sin(ang) * len;
+    if (isWater(ex, ez)) continue;
+    const end = { x: ex, z: ez, rank: -1, key: 'spur:' + a.key };
+    edges.push({ a, b: end, tier: 'path', key: a.key + '~' + end.key });
+  }
   return edges;
 }
 // cost of placing a road sample at (x,z) between neighbours a,c — penalise water, rough ground, and kinks
 function _roadSegCost(x, z, a, c) {
-  let cost = landRoughAt(x, z) * 2.4;
+  let cost = landRoughAt(x, z) * 3.0;
   if (isWater(x, z)) cost += 40;
   const mx = (a.x + c.x) * 0.5, mz = (a.z + c.z) * 0.5;
   cost += Math.hypot(x - mx, z - mz) * 0.05;            // hug the line between neighbours → smoothness
@@ -3852,7 +3863,7 @@ function roadRoute(edge) {
       const a = pts[i - 1], c = pts[i + 1], m = pts[i];
       const lx = -(c.z - a.z), lz = (c.x - a.x), ll = Math.hypot(lx, lz) || 1, nx = lx / ll, nz = lz / ll;
       let best = m, bc = _roadSegCost(m.x, m.z, a, c);
-      for (const o of [-6, -3, 3, 6]) {
+      for (const o of [-9, -6, -3, 3, 6, 9]) {
         const cx = m.x + nx * o, cz = m.z + nz * o, cc = _roadSegCost(cx, cz, a, c);
         if (cc < bc) { bc = cc; best = { x: cx, z: cz }; }
       }
@@ -3882,6 +3893,8 @@ function roadRebuild(pcx, pcz) {
     const mx = (e.a.x + e.b.x) * 0.5, mz = (e.a.z + e.b.z) * 0.5;
     if (Math.hypot(mx - cxw, mz - czw) > renderR + Math.hypot(e.a.x - e.b.x, e.a.z - e.b.z) * 0.5) continue;
     const T = ROAD_TIER[e.tier], hw = T.w * 0.5, pts = roadRoute(e);
+    let wet = 0; for (let w = 0; w < pts.length; w++) if (isWater(pts[w].x, pts[w].z)) wet++;
+    if (wet / pts.length > 0.18) continue;             // no bridges yet — the land won't carry this road across open water
     rc.setHex(T.col);
     drawn++;
     // ribbon: a quad per polyline segment, two verts per joint offset along the segment normal, draped on the relief

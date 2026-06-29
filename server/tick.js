@@ -310,6 +310,12 @@ function holdRow(worldId, holdKey) { return db.prepare('SELECT * FROM holdings W
 function claimHolding(worldId, tick, body) {
   const v = validate.clampHold(body);
   if (!v.ok) return v;
+  // Flip the AUTHORITATIVE map-ownership row (holds) to the player too — not just the economy
+  // satellite below. Without this the ~4.5s /holds poll (applyServerHolds on the client) reverts a
+  // freshly conquered settlement to its old NPC owner, so the player can never start ruling it.
+  // Capitals ("cap:<idx>") live in the `capitals` table and flip via reportCapital, not here.
+  const m = /^(-?\d+),(-?\d+),(\d+)$/.exec(v.holdKey);
+  if (m) db.prepare('UPDATE holds SET owner_name=? WHERE world_id=? AND cx=? AND cz=? AND idx=?').run(PLAYER, worldId, +m[1], +m[2], +m[3]);
   const existing = holdRow(worldId, v.holdKey);
   if (existing) {
     if (existing.owner_name !== PLAYER) db.prepare('UPDATE holdings SET owner_name=?, last_econ_tick=?, updated_at=unixepoch() WHERE id=?').run(PLAYER, tick, existing.id);

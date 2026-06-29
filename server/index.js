@@ -131,7 +131,7 @@ const server = http.createServer(async (req, res) => {
       const simTick = db.prepare('SELECT sim_tick FROM worlds WHERE id=?').get(wid).sim_tick;
       return send(res, 200, {
         worldId: wid, shared: wid !== world.id, account: acct.id, simTick,
-        capitals: tick.getCapitals(wid), armies, warlords,
+        capitals: tick.getCapitals(wid), armies, warlords, holdings: tick.getHoldings(wid),
         players: tick.getPresence(wid, acct.id), events,
         relations: diplomacy.relationsForApi(wid), factionState: diplomacy.factionStateForApi(wid),
         destiny: destiny.destinyForApi(wid)
@@ -156,6 +156,27 @@ const server = http.createServer(async (req, res) => {
       db.prepare('UPDATE capitals SET owner_name=? WHERE world_id=? AND idx=?').run(String(b.owner || ''), viewWorldId, b.idx | 0);
       db.prepare('INSERT INTO world_events(world_id, tick, type, summary) VALUES (?,?,?,?)').run(viewWorldId, st, 'capital_taken', String(b.summary || 'A hold changed hands'));
       return send(res, 200, { ok: true });
+    }
+
+    // ----- town management: player holdings (server-backed economy) -----
+    if (req.method === 'GET' && p === '/api/v1/holdings') {
+      const wid = viewWorldId;
+      if (!tick.isActive(wid)) tick.advanceWorld(wid); // current as of the away-gap catch-up
+      return send(res, 200, { holdings: tick.getHoldings(wid) });
+    }
+    if (req.method === 'POST' && p === '/api/v1/holdings/claim') {
+      const b = await readBody(req);
+      const st = db.prepare('SELECT sim_tick FROM worlds WHERE id=?').get(viewWorldId).sim_tick;
+      return send(res, 200, tick.claimHolding(viewWorldId, st, b));
+    }
+    if (req.method === 'POST' && p === '/api/v1/holdings/build') {
+      return send(res, 200, tick.buildHolding(viewWorldId, await readBody(req)));
+    }
+    if (req.method === 'POST' && p === '/api/v1/holdings/assign') {
+      return send(res, 200, tick.assignJobs(viewWorldId, await readBody(req)));
+    }
+    if (req.method === 'POST' && p === '/api/v1/holdings/levy') {
+      return send(res, 200, tick.levyHolding(viewWorldId, await readBody(req)));
     }
 
     if (req.method === 'POST' && p === '/api/v1/_advance') { // dev/test: force N world ticks immediately

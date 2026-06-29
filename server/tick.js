@@ -8,6 +8,7 @@ const { db } = require('./db');
 const WorldSim = require('../sim/world-sim.js');
 const D = require('./diplomacy');
 const Destiny = require('./destiny');
+const validate = require('./validate');
 
 const TICK_SECONDS = 20;
 const MAX_CATCHUP_TICKS = 300;
@@ -18,6 +19,58 @@ const CAP_RADIUS = 48;          // capitals sit on a pentagon of this radius (sa
 const ARMY_SPEED = 6;           // map units per tick
 const CLASH_RANGE = 9;
 const CAP_RANGE = 8;
+
+// ---------- Town economy (player holdings) ----------
+// Per-tick = per TICK_SECONDS (20s). Tunable. The client mirrors COSTS + a few of these for its
+// readout (kept in sync by hand — small surface). Production is applied every tick by tickHoldings,
+// so offline catch-up (runTick x N in one transaction) accrues it correctly with no extra math.
+const PLAYER = 'Your Banner';
+const TOWN = {
+  START_POP:    { village: 6, town: 12, city: 22, capital: 30 },
+  START_FOOD: 20, START_WOOD: 20,
+  POP_CAP_BASE: { village: 8, town: 16, city: 28, capital: 40 },
+  HOUSES_POP_CAP: 6,            // +pop cap per houses level
+  FARM_FOOD_PER_WORKER: 0.5,   // * farm level, per assigned worker, per tick
+  LUMBER_WOOD_PER_WORKER: 0.4, // * lumber level
+  FOOD_UPKEEP_PER_POP: 0.12,
+  POP_GROWTH_RATE: 0.04,       // toward cap when food surplus
+  POP_STARVE_RATE: 0.06,       // shrink when food deficit
+  WORKERS_PER_LEVEL: 4,        // a building absorbs this many workers per level
+  MAX_LEVEL: 3,
+  // upgrade cost [wood, food] indexed by CURRENT level (0->1, 1->2, 2->3)
+  COSTS: {
+    farm:       [[15, 0], [40, 0], [90, 0]],
+    lumber:     [[10, 0], [35, 0], [80, 0]],
+    watchtower: [[30, 10], [70, 20], [140, 40]],
+    houses:     [[20, 0], [50, 0], [110, 0]],
+  },
+  WATCHTOWER_GARRISON_PER_LVL: 8, // each tower level adds to a player hold's effective garrison
+  LEVY_POP_THRESHOLD: 4,          // population above this is leviable into recruit XP
+  LEVY_XP_PER_POP: 1.0,
+};
+function emptyBuildings() { return { farm: 0, lumber: 0, watchtower: 0, houses: 0 }; }
+function popCapOf(tier, b) { return (TOWN.POP_CAP_BASE[tier] || TOWN.POP_CAP_BASE.village) + (b.houses || 0) * TOWN.HOUSES_POP_CAP; }
+function watchtowerBonus(b) { return (b.watchtower || 0) * TOWN.WATCHTOWER_GARRISON_PER_LVL; }
+// the shape the client consumes (panel + projection). Production rates are per-tick.
+function holdView(h) {
+  const b = JSON.parse(h.buildings_json || '{}'), j = JSON.parse(h.jobs_json || '{}');
+  const farmW = Math.min(j.farm | 0, (b.farm | 0) * TOWN.WORKERS_PER_LEVEL);
+  const lumberW = Math.min(j.lumber | 0, (b.lumber | 0) * TOWN.WORKERS_PER_LEVEL);
+  const foodRate = farmW * TOWN.FARM_FOOD_PER_WORKER * (b.farm || 0) - h.population * TOWN.FOOD_UPKEEP_PER_POP;
+  const woodRate = lumberW * TOWN.LUMBER_WOOD_PER_WORKER * (b.lumber || 0);
+  return {
+    holdKey: h.hold_key, ownerName: h.owner_name, defName: h.def_name, tier: h.tier, x: h.x, z: h.z,
+    food: h.food, wood: h.wood, population: h.population, popCap: popCapOf(h.tier, b),
+    buildings: b, jobs: j, production: { food: +foodRate.toFixed(3), wood: +woodRate.toFixed(3) },
+    watchtowerBonus: watchtowerBonus(b), foundedTick: h.founded_tick, lastEconTick: h.last_econ_tick
+  };
+}
+// trim {farm, lumber} so farm+lumber <= cap, keeping idle = the remainder (lumber yields first)
+function fitJobs(farm, lumber, cap) {
+  farm = Math.max(0, Math.min(farm | 0, cap));
+  lumber = Math.max(0, Math.min(lumber | 0, cap - farm));
+  return { farm, lumber, idle: Math.max(0, cap - farm - lumber) };
+}
 
 const NATIONS = ['Aurelia', 'Khorvane', 'Sahir', 'Wendmark', 'Maridor'];
 // each power's heartland bearing (radians), matching the client's NATIONS[].home: the rising
@@ -116,6 +169,94 @@ function nearestRival(armies, a, relMap) {
   }
   return best ? { o: best, d2: bd } : null;
 }
+// player towns produce food/wood + grow population, every owned hold, every tick. Inside the
+// runTicks transaction, so the away-gap catch-up accrues production with no special-casing.
+function tickHoldings(worldId, tick) {
+  const holds = db.prepare('SELECT * FROM holdings WHERE world_id=? AND owner_name=?').all(worldId, PLAYER);
+  if (!holds.length) return;
+  const upd = db.prepare('UPDATE holdings SET food=?, wood=?, population=?, last_econ_tick=?, updated_at=unixepoch() WHERE id=?');
+  for (const h of holds) {
+    const b = JSON.parse(h.buildings_json || '{}'), j = JSON.parse(h.jobs_json || '{}');
+    const farmW = Math.min(j.farm | 0, (b.farm | 0) * TOWN.WORKERS_PER_LEVEL);
+    const lumberW = Math.min(j.lumber | 0, (b.lumber | 0) * TOWN.WORKERS_PER_LEVEL);
+    let food = h.food + farmW * TOWN.FARM_FOOD_PER_WORKER * (b.farm || 0);
+    let wood = h.wood + lumberW * TOWN.LUMBER_WOOD_PER_WORKER * (b.lumber || 0);
+    food -= h.population * TOWN.FOOD_UPKEEP_PER_POP;
+    let pop = h.population;
+    const cap = popCapOf(h.tier, b);
+    if (food >= 0 && pop < cap) pop += (cap - pop) * TOWN.POP_GROWTH_RATE;   // surplus -> growth toward cap
+    else if (food < 0) { pop = Math.max(1, pop - pop * TOWN.POP_STARVE_RATE); food = 0; } // deficit -> shrink, floor at 0
+    upd.run(Math.max(0, food), Math.max(0, wood), pop, tick, h.id);
+  }
+}
+// ----- holdings: claim / build / assign / levy (server-authoritative; called by index.js endpoints) -----
+function getHoldings(worldId) {
+  return db.prepare('SELECT * FROM holdings WHERE world_id=? AND owner_name=? ORDER BY id').all(worldId, PLAYER).map(holdView);
+}
+function holdRow(worldId, holdKey) { return db.prepare('SELECT * FROM holdings WHERE world_id=? AND hold_key=?').get(worldId, holdKey); }
+// the player took (or re-entered) a hold — create its economy row, or flip it back to the player if
+// an NPC had retaken it (buildings/stock survive the interregnum, so the investment isn't lost).
+function claimHolding(worldId, tick, body) {
+  const v = validate.clampHold(body);
+  if (!v.ok) return v;
+  const existing = holdRow(worldId, v.holdKey);
+  if (existing) {
+    if (existing.owner_name !== PLAYER) db.prepare('UPDATE holdings SET owner_name=?, last_econ_tick=?, updated_at=unixepoch() WHERE id=?').run(PLAYER, tick, existing.id);
+    return { ok: true, holding: holdView(holdRow(worldId, v.holdKey)) };
+  }
+  const pop = TOWN.START_POP[v.tier] || TOWN.START_POP.village;
+  db.prepare(`INSERT INTO holdings(world_id, hold_key, owner_name, def_name, tier, x, z, food, wood, population, buildings_json, jobs_json, founded_tick, last_econ_tick)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    worldId, v.holdKey, PLAYER, v.defName, v.tier, v.x, v.z, TOWN.START_FOOD, TOWN.START_WOOD, pop,
+    JSON.stringify(emptyBuildings()), JSON.stringify({ farm: 0, lumber: 0, idle: Math.round(pop) }), tick, tick);
+  return { ok: true, holding: holdView(holdRow(worldId, v.holdKey)) };
+}
+function buildHolding(worldId, body) {
+  if (!validate.holdKeyOk(body && body.holdKey)) return { ok: false, reason: 'bad hold key' };
+  const building = String((body && body.building) || '');
+  if (!TOWN.COSTS[building]) return { ok: false, reason: 'unknown building' };
+  const row = holdRow(worldId, body.holdKey);
+  if (!row || row.owner_name !== PLAYER) return { ok: false, reason: 'not your holding' };
+  const b = Object.assign(emptyBuildings(), JSON.parse(row.buildings_json || '{}'));
+  const lvl = b[building] | 0;
+  if (lvl >= TOWN.MAX_LEVEL) return { ok: false, reason: 'at max level' };
+  const cost = TOWN.COSTS[building][lvl];            // server recomputes — never trusts the client
+  if (row.wood < cost[0]) return { ok: false, reason: 'need wood' };
+  if (row.food < cost[1]) return { ok: false, reason: 'need food' };
+  b[building] = lvl + 1;
+  db.prepare('UPDATE holdings SET wood=?, food=?, buildings_json=?, updated_at=unixepoch() WHERE id=?')
+    .run(row.wood - cost[0], row.food - cost[1], JSON.stringify(b), row.id);
+  return { ok: true, holding: holdView(holdRow(worldId, body.holdKey)) };
+}
+function assignJobs(worldId, body) {
+  if (!validate.holdKeyOk(body && body.holdKey)) return { ok: false, reason: 'bad hold key' };
+  const row = holdRow(worldId, body.holdKey);
+  if (!row || row.owner_name !== PLAYER) return { ok: false, reason: 'not your holding' };
+  const b = Object.assign(emptyBuildings(), JSON.parse(row.buildings_json || '{}'));
+  const inJobs = (body && body.jobs) || {};
+  let farm = Math.min(inJobs.farm | 0, (b.farm | 0) * TOWN.WORKERS_PER_LEVEL);   // can't work a building past its level
+  let lumber = Math.min(inJobs.lumber | 0, (b.lumber | 0) * TOWN.WORKERS_PER_LEVEL);
+  const jobs = fitJobs(farm, lumber, Math.floor(row.population));
+  db.prepare('UPDATE holdings SET jobs_json=?, updated_at=unixepoch() WHERE id=?').run(JSON.stringify(jobs), row.id);
+  return { ok: true, holding: holdView(holdRow(worldId, body.holdKey)) };
+}
+// muster a levy: surplus population (above a threshold) becomes recruit XP, and is removed from the
+// town. Server-authoritative so it can't be farmed — regrowth rate-limits how often it pays out.
+function levyHolding(worldId, body) {
+  if (!validate.holdKeyOk(body && body.holdKey)) return { ok: false, reason: 'bad hold key' };
+  const row = holdRow(worldId, body.holdKey);
+  if (!row || row.owner_name !== PLAYER) return { ok: false, reason: 'not your holding' };
+  const leviable = Math.floor(row.population - TOWN.LEVY_POP_THRESHOLD);
+  if (leviable <= 0) return { ok: false, reason: 'no surplus to levy' };
+  const xp = Math.round(leviable * TOWN.LEVY_XP_PER_POP);
+  const newPop = row.population - leviable;
+  const b = Object.assign(emptyBuildings(), JSON.parse(row.buildings_json || '{}'));
+  const j = JSON.parse(row.jobs_json || '{}');
+  const jobs = fitJobs(Math.min(j.farm | 0, (b.farm | 0) * TOWN.WORKERS_PER_LEVEL), Math.min(j.lumber | 0, (b.lumber | 0) * TOWN.WORKERS_PER_LEVEL), Math.floor(newPop));
+  db.prepare('UPDATE holdings SET population=?, jobs_json=?, updated_at=unixepoch() WHERE id=?').run(newPop, JSON.stringify(jobs), row.id);
+  return { ok: true, xp, holding: holdView(holdRow(worldId, body.holdKey)) };
+}
+
 function runTick(worldId, tick) {
   const armies = db.prepare("SELECT * FROM warlords WHERE world_id=? AND status='alive'").all(worldId);
   if (armies.length < 2) { seedWorld(worldId); return; }
@@ -141,18 +282,27 @@ function runTick(worldId, tick) {
     if (!WorldSim.areEnemies(D.stanceBetween(relMap, a.faction, b.faction)) || clashed.has(a.id) || clashed.has(b.id)) continue; // allies & truces don't fight
     if ((a.x - b.x) * (a.x - b.x) + (a.z - b.z) * (a.z - b.z) <= CLASH_RANGE * CLASH_RANGE) { clashed.add(a.id); clashed.add(b.id); doClash(worldId, tick, a, b); }
   }
-  // 3. conquests: an army on an enemy hold, strong enough, takes it
+  // 3. conquests: an army on an enemy hold, strong enough, takes it. A player hold's watchtowers
+  //    stiffen its effective garrison, so a developed capital genuinely resists offline reconquest.
   for (const a of db.prepare("SELECT * FROM warlords WHERE world_id=? AND status='alive'").all(worldId)) {
     if (clashed.has(a.id)) continue;
     const cap = nearestEnemyCap(worldId, a.faction, a.x, a.z, relMap);
-    if (cap && cap.d2 <= CAP_RANGE * CAP_RANGE && a.size >= cap.row.garrison * 0.5) {
-      const loser = cap.row.owner_name;
-      db.prepare('UPDATE capitals SET owner_name=? WHERE id=?').run(a.faction, cap.row.id);
-      db.prepare('UPDATE warlords SET renown=renown+10, size=? WHERE id=?').run(Math.max(2, a.size - Math.round(cap.row.garrison * 0.4)), a.id);
-      ev(worldId, tick, 'capital_taken', a.faction + ' seized ' + cap.row.def_name + ' under ' + a.name);
-      D.bumpRelation(worldId, loser, a.faction, -D.CONQUEST_SHOCK, tick); // the wronged nation seethes (may tip into war)
+    if (!cap || cap.d2 > CAP_RANGE * CAP_RANGE) continue;
+    const loser = cap.row.owner_name;
+    let effGarr = cap.row.garrison, hold = null;
+    if (loser === PLAYER) { hold = holdRow(worldId, 'cap:' + cap.row.idx); if (hold) effGarr += watchtowerBonus(JSON.parse(hold.buildings_json || '{}')); }
+    if (a.size < effGarr * 0.5) continue;
+    db.prepare('UPDATE capitals SET owner_name=? WHERE id=?').run(a.faction, cap.row.id);
+    db.prepare('UPDATE warlords SET renown=renown+10, size=? WHERE id=?').run(Math.max(2, a.size - Math.round(effGarr * 0.4)), a.id);
+    ev(worldId, tick, 'capital_taken', a.faction + ' seized ' + cap.row.def_name + ' under ' + a.name);
+    D.bumpRelation(worldId, loser, a.faction, -D.CONQUEST_SHOCK, tick); // the wronged nation seethes (may tip into war)
+    if (hold) { // the player just lost a developed hold: stop crediting it, but freeze its buildings/stock for retaking
+      db.prepare('UPDATE holdings SET owner_name=?, updated_at=unixepoch() WHERE id=?').run(a.faction, hold.id);
+      ev(worldId, tick, 'hold_lost', a.faction + ' wrested ' + cap.row.def_name + ' from your banner');
     }
   }
+  // 3c. player towns produce + grow (offline catch-up safe — see tickHoldings)
+  tickHoldings(worldId, tick);
   // 4. diplomacy: drift relations + posture, then record any nation that has fallen
   D.tickDiplomacy(worldId, tick);
   D.handleCollapse(worldId, tick);
@@ -229,6 +379,7 @@ function getPresence(worldId, exceptAccount) {
 module.exports = {
   advanceWorld, seedWorld, runTicks, markActive, isActive, tickInactiveWorlds, forceTicks,
   getArmies, getCapitals, defeatArmy, updatePresence, getPresence, capPos,
+  getHoldings, claimHolding, buildHolding, assignJobs, levyHolding, TOWN,
   TICK_SECONDS, MAX_CATCHUP_TICKS, ACTIVE_TTL, MAP_HALF
 };
 

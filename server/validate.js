@@ -34,4 +34,17 @@ function clampChar(c) {
     notability: num(c.notability, 1, 0, 3) | 0
   };
 }
-module.exports = { clampChar, num };
+// ----- town holdings -----
+// hold_key is the client siteKey "cx,cz,idx" (cx/cz may be negative, idx >= 0) or "cap:<idx>".
+const HOLD_KEY_RE = /^(-?\d+,-?\d+,\d+|cap:\d+)$/;
+const HOLD_TIERS = ['village', 'town', 'city', 'capital'];
+function holdKeyOk(k) { return HOLD_KEY_RE.test(String(k || '')); }
+function clampHold(b) {
+  b = b || {};
+  const holdKey = String(b.holdKey || '');
+  if (!holdKeyOk(holdKey)) return { ok: false, reason: 'bad hold key' };
+  let tier = String(b.tier || 'village');
+  if (HOLD_TIERS.indexOf(tier) < 0) tier = 'village';
+  return { ok: true, holdKey, defName: String(b.defName || 'Holding').slice(0, 48), tier, x: num(b.x, 0, -1e5, 1e5), z: num(b.z, 0, -1e5, 1e5) };
+}
+module.exports = { clampChar, num, clampHold, holdKeyOk };

@@ -90,13 +90,32 @@
   function worldHeaders() { return SHARED ? { 'X-World': 'shared' } : {}; }
 
   net.world = null;
+  net.holdings = []; // the player's developed towns (last server view) — mirrored from /world and /holdings
   net.loadWorld = function (since) {
     return jfetch('/world?since=' + (since != null ? since : lastSeenTick()), { method: 'GET', headers: worldHeaders() })
-      .then(function (w) { net.online = true; net.world = w; return w; })
+      .then(function (w) { net.online = true; net.world = w; if (w && w.holdings) net.holdings = w.holdings; return w; })
       .catch(function () { return null; });
   };
   net.reportCapital = function (idx, owner, summary) {
     return jfetch('/world/capital', { method: 'POST', headers: worldHeaders(), body: JSON.stringify({ idx: idx, owner: owner, summary: summary }) }).catch(function () { return null; });
+  };
+  // ----- town management: develop the holds you own (server-backed economy) -----
+  net.reportHold = function (holdKey, defName, tier, x, z) { // claim a conquered hold's economy row (idempotent)
+    return jfetch('/holdings/claim', { method: 'POST', headers: worldHeaders(), body: JSON.stringify({ holdKey: holdKey, defName: defName, tier: tier, x: x, z: z }) }).catch(function () { return null; });
+  };
+  net.loadHoldings = function () {
+    return jfetch('/holdings', { method: 'GET', headers: worldHeaders() })
+      .then(function (h) { net.online = true; net.holdings = (h && h.holdings) || []; return net.holdings; })
+      .catch(function () { return null; });
+  };
+  net.buildHold = function (holdKey, building) {
+    return jfetch('/holdings/build', { method: 'POST', headers: worldHeaders(), body: JSON.stringify({ holdKey: holdKey, building: building }) }).catch(function () { return null; });
+  };
+  net.assignHold = function (holdKey, jobs) {
+    return jfetch('/holdings/assign', { method: 'POST', headers: worldHeaders(), body: JSON.stringify({ holdKey: holdKey, jobs: jobs }) }).catch(function () { return null; });
+  };
+  net.levyHold = function (holdKey) {
+    return jfetch('/holdings/levy', { method: 'POST', headers: worldHeaders(), body: JSON.stringify({ holdKey: holdKey }) }).catch(function () { return null; });
   };
   net.sendPresence = function (info) { // the player's banner heartbeat (multiplayer)
     return jfetch('/world/presence', { method: 'POST', headers: worldHeaders(), body: JSON.stringify(info) }).catch(function () { return null; });

@@ -227,6 +227,24 @@
   .wa-fates { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-bottom: 12px; }
   .wa-fate { font-size: 11px; color: #d6a3ff; border: 1px solid rgba(214,163,255,.35); border-radius: 12px; padding: 2px 9px; background: rgba(214,163,255,.08); }
 
+  /* ===== Town management (develop a hold you own) ===== */
+  #town { z-index: 11; background: radial-gradient(ellipse at center, rgba(14,20,16,.985), rgba(5,8,6,.995)); }
+  #town h1 { font-size: 36px; }
+  #town-body { width: 100%; max-width: 470px; max-height: 64vh; overflow-y: auto; text-align: left; padding: 4px 6px; pointer-events: auto; }
+  .town-read { display: flex; flex-wrap: wrap; gap: 8px 18px; justify-content: center; font-size: 15px; margin-bottom: 6px; }
+  .town-read b { color: #ffe089; }
+  .town-read em { font-style: normal; font-size: 12px; opacity: .6; }
+  .town-brow { display: flex; align-items: center; gap: 12px; margin: 7px 0; }
+  .town-blabel { flex: 1; font-size: 14px; line-height: 1.45; }
+  .town-blabel b { color: #ffe2a8; }
+  .town-blabel em { font-style: normal; opacity: .55; font-size: 12px; }
+  .town-blabel small { opacity: .55; font-size: 11px; }
+  .town-bcost { font-size: 13px; opacity: .9; white-space: nowrap; }
+  .town-bbtn { cursor: pointer; border: 1px solid #ffcf5b; background: rgba(255,180,80,.14); color: #ffe2a8;
+    border-radius: 6px; padding: 8px 16px; font-size: 13px; font-weight: 700; letter-spacing: 1px; white-space: nowrap; }
+  .town-bbtn:hover { background: rgba(255,180,80,.3); }
+  .town-bbtn.off { opacity: .4; cursor: default; }
+
   /* ===== Mobile touch controls ===== */
   #game { touch-action: none; }                       /* play area never scrolls/zooms */
   body.touch #controls-hint { display: none; }        /* keyboard hint is noise on a phone */
@@ -258,6 +276,7 @@
   #tb-cmd    { width: 54px; height: 54px; right: 30px;  bottom: 248px; border-color: rgba(125,200,255,.55); color: #cfe0ff; }
   /* map-mode kingdom actions — stacked pills, right side */
   #tmap .tbtn { border-radius: 12px; width: 116px; height: 48px; right: 22px; font-size: 12px; }
+  #tb-town    { bottom: 234px; border-color: rgba(125,255,154,.5);  color: #c8ffd6; }
   #tb-rally   { bottom: 178px; }
   #tb-beacon  { bottom: 122px; border-color: rgba(125,200,255,.55); color: #cfe0ff; }
   #tb-warband { bottom: 66px;  border-color: rgba(214,163,255,.5);  color: #e6d3ff; }
@@ -324,6 +343,7 @@
     <button id="tb-cmd"    class="tbtn">CMD</button>
   </div>
   <div id="tmap">
+    <button id="tb-town"    class="tbtn">⚒ Town</button>
     <button id="tb-rally"   class="tbtn">⚑ Rally</button>
     <button id="tb-beacon"  class="tbtn">Beacon</button>
     <button id="tb-warband" class="tbtn">Warband</button>
@@ -413,10 +433,17 @@
   <button class="btn" id="cs-close">Close</button>
 </div>
 
+<div id="town" class="overlay hidden">
+  <h1>Manage Holding</h1>
+  <p id="town-sub" style="opacity:.75;font-size:14px">Develop your town to strengthen your realm.</p>
+  <div id="town-body"></div>
+  <button class="btn" id="town-close">Leave</button>
+</div>
+
 <script src="vendor/three.min.js?v=r128"></script>
 <script src="sim/world-sim.js?v=2"></script>
-<script src="client-net.js?v=2"></script>
+<script src="client-net.js?v=3"></script>
 <script src="net-battle.js?v=1"></script>
-<script src="game.js?v=16"></script>
+<script src="game.js?v=17"></script>
 </body>
 </html>

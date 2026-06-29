@@ -1619,6 +1619,7 @@ if (TOUCH) {
   bindBtn('tb-rally', () => { if (mode === 'map' && !encounter) raiseCall(); });
   bindBtn('tb-beacon', () => { if (mode === 'map' && !encounter) openBeaconPanel(); });
   bindBtn('tb-warband', () => toggleCharsheet());
+  bindBtn('tb-town', () => { if (mode === 'map' && !encounter) { const h = nearestOwnedHold(); if (h) enterTown(h); } });
 
   // show the right control set for the current mode; called each frame from the loop
   window.updateTouchHud = function () {
@@ -4172,7 +4173,7 @@ function updateMap(dt) {
     for (const cap of holds) {
       if (cap.conquerCd > 0 || !areFactionEnemies(band.faction, cap.owner)) continue; // only storm enemy holds
       const dx = band.pos.x - cap.x, dz = band.pos.z - cap.z;
-      if (dx * dx + dz * dz < 3.6 * 3.6 && band.size >= cap.garrison * 0.5) { conquerByBand(cap, band); break; }
+      if (dx * dx + dz * dz < 3.6 * 3.6 && band.size >= effGarrison(cap) * 0.5) { conquerByBand(cap, band); break; } // your watchtowers stiffen the defense
     }
   }
   // sweep out the fallen so the map and counts stay clean
@@ -4968,6 +4969,10 @@ function winBattle() {
     const ni = nations.indexOf(cap); // a settlement isn't in `nations` (ni < 0) — it lives in the streamed world
     if (ni >= 0 && typeof window !== 'undefined' && window.net) window.net.reportCapital(ni, PLAYER_REALM.name, 'You took ' + cap.def.name); // your conquest persists in the living world
     if (cap.key) heldOwners.set(cap.key, PLAYER_REALM.name); // remember the flip so streaming back doesn't undo it
+    if (typeof window !== 'undefined' && window.net) { // open this hold's town-economy row on the server (settlements + capitals)
+      const hk = cap.key || (ni >= 0 ? 'cap:' + ni : null);
+      if (hk) window.net.reportHold(hk, cap.def.name, cap.tier || 'capital', Math.round(cap.x), Math.round(cap.z));
+    }
     cap.garrison = Math.round(garrisonSize() * 0.5); cap.parleyCd = 3;
     lastBattle.captured = cap.def.name;
     if (ni >= 0 && nations.every(n => n.owner === PLAYER_REALM)) lastBattle.conqueredAll = true;
@@ -5150,10 +5155,11 @@ function openSiege(cap) {
   const tier = cap.tier ? cap.tier[0].toUpperCase() + cap.tier.slice(1) : 'Stronghold';
   encTitle.textContent = yours ? 'Your ' + tier : 'A ' + tier;
   encInfo.innerHTML = yours
-    ? `${swatch(cap.owner.color)}<b>${cap.def.name}</b> flies your banner. The garrison salutes you.`
+    ? `${swatch(cap.owner.color)}<b>${cap.def.name}</b> flies your banner. Develop your holding — raise farms, lumber camps, and watchtowers.`
     : `${swatch(cap.owner.color)}<b>${cap.def.name}</b>, a ${cap.owner.name} ${cap.tier || 'hold'} — garrison <b>${cap.garrison}</b>. ${cap.tier === 'village' ? 'Raid it?' : 'Storm the walls?'}`;
-  encAttackBtn.textContent = 'Lay Siege'; encHailBtn.textContent = 'Leave';
-  encAttackBtn.style.display = yours ? 'none' : '';
+  encAttackBtn.textContent = yours ? 'Manage ⚒' : 'Lay Siege';
+  encAttackBtn.dataset.manage = yours ? '1' : '';
+  encAttackBtn.style.display = ''; encHailBtn.textContent = 'Leave';
   encAllyBtn.style.display = 'none';
   encOverlay.classList.remove('hidden');
 }
@@ -5201,9 +5207,10 @@ function startSiege(cap) {
   showWaveBanner('Siege of ' + cap.def.name, 'Break the ' + cap.owner.name + ' garrison — ' + cap.garrison + ' strong behind the walls!');
 }
 encAttackBtn.addEventListener('click', () => {
-  const e = encounter; closeEncounter(); if (!e) return;
+  const e = encounter, manage = encAttackBtn.dataset.manage === '1'; closeEncounter(); if (!e) return;
   if (e.kind === 'band') { if (e.band && e.band.alive) enterBattle(e.band); }
   else if (e.kind === 'joinbattle') { if (e.bt && !e.bt.done) startJoinBattle(e); }
+  else if (manage && e.cap) enterTown(e.cap); // your own hold: open the management overlay
   else startSiege(e.cap);
 });
 encHailBtn.addEventListener('click', () => {
@@ -5226,6 +5233,177 @@ encAllyBtn.addEventListener('click', () => {
     showWaveBanner('Pact Declined', fac.name + ' will not yet swear to your banner. Win more renown, then ask again.');
   }
 });
+
+// ---------- Town management: develop a hold you own (server-backed living economy) ----------
+// v1 is a management OVERLAY reached from the "your hold" prompt (Manage ⚒). Phase 2 will turn
+// enterTown() into a walkable mode='town' scene with this panel demoted to a HUD. The economy is
+// server-authoritative (server/tick.js): every action round-trips and we re-render the returned row.
+const TOWN = { // mirrors server/tick.js TOWN — cost/level/cap surface only (keep in sync by hand)
+  MAX_LEVEL: 3, WORKERS_PER_LEVEL: 4, TICK_SECONDS: 20,
+  WATCHTOWER_GARRISON_PER_LVL: 8, HOUSES_POP_CAP: 6, LEVY_POP_THRESHOLD: 4,
+  START_POP: { village: 6, town: 12, city: 22, capital: 30 }, START_FOOD: 20, START_WOOD: 20,
+  POP_CAP_BASE: { village: 8, town: 16, city: 28, capital: 40 },
+  COSTS: { farm: [[15, 0], [40, 0], [90, 0]], lumber: [[10, 0], [35, 0], [80, 0]], watchtower: [[30, 10], [70, 20], [140, 40]], houses: [[20, 0], [50, 0], [110, 0]] }
+};
+const TOWN_BUILDINGS = [
+  { key: 'farm', name: 'Farm', hint: 'Assign farmers → food (feeds the town).' },
+  { key: 'lumber', name: 'Lumber Camp', hint: 'Assign lumberjacks → wood (builds everything).' },
+  { key: 'watchtower', name: 'Watchtower', hint: '+8 effective garrison per level — resists reconquest.' },
+  { key: 'houses', name: 'Houses', hint: '+6 population cap per level.' },
+];
+const townOverlay = document.getElementById('town');
+const townTitle = townOverlay ? townOverlay.querySelector('h1') : null;
+const townSub = document.getElementById('town-sub');
+const townBody = document.getElementById('town-body');
+let townHold = null;     // the hold object whose panel is open
+let townView = null;     // last server-authoritative holding view (or a local synth offline)
+let townViewAt = 0;      // ms timestamp of that view (for the live projection)
+let townProjTimer = 0, twFoodEl = null, twWoodEl = null;
+if (townOverlay) { const tc = document.getElementById('town-close'); if (tc) tc.addEventListener('click', closeTown); }
+
+// a hold's stable server key: settlements use their siteKey; capitals use "cap:<index in nations>"
+function holdKeyOf(cap) { if (!cap) return null; if (cap.key) return cap.key; const ni = nations.indexOf(cap); return ni >= 0 ? 'cap:' + ni : null; }
+// effective garrison: a player hold's watchtowers add to the size an attacker must beat
+function townWatchBonus(cap) {
+  if (!cap || cap.owner !== PLAYER_REALM) return 0;
+  const key = holdKeyOf(cap); if (!key) return 0;
+  const h = ((typeof window !== 'undefined' && window.net && window.net.holdings) || []).find(x => x.holdKey === key);
+  return h ? (h.watchtowerBonus || 0) : 0;
+}
+function effGarrison(cap) { return (cap.garrison || 0) + townWatchBonus(cap); }
+function nearestOwnedHold() {
+  let best = null, bd = 1e18;
+  for (const cap of nations.concat(settlements)) {
+    if (cap.owner !== PLAYER_REALM) continue;
+    const dx = cap.x - player.pos.x, dz = cap.z - player.pos.z, d = dx * dx + dz * dz;
+    if (d < bd) { bd = d; best = cap; }
+  }
+  return best;
+}
+function synthHold(cap, key) { // offline / pre-load fallback so the panel still opens
+  const tier = cap.tier || 'capital', pop = TOWN.START_POP[tier] || 6;
+  return { holdKey: key, defName: cap.def.name, tier, food: TOWN.START_FOOD, wood: TOWN.START_WOOD,
+    population: pop, popCap: TOWN.POP_CAP_BASE[tier] || 8, buildings: { farm: 0, lumber: 0, watchtower: 0, houses: 0 },
+    jobs: { farm: 0, lumber: 0, idle: pop }, production: { food: 0, wood: 0 }, watchtowerBonus: 0 };
+}
+function enterTown(cap) {
+  if (!cap || !townOverlay) return;
+  townHold = cap; townView = null;
+  const key = holdKeyOf(cap);
+  obTown();
+  if (typeof window !== 'undefined' && window.net && key) {
+    window.net.reportHold(key, cap.def.name, cap.tier || 'capital', Math.round(cap.x), Math.round(cap.z))
+      .then(() => window.net.loadHoldings())
+      .then(() => { townView = ((window.net.holdings) || []).find(h => h.holdKey === key) || null; renderTownPanel(cap, key); });
+  } else {
+    renderTownPanel(cap, key); // offline: local defaults (writes no-op gracefully)
+  }
+}
+function closeTown() { stopTownProjection(); if (townOverlay) townOverlay.classList.add('hidden'); townHold = null; }
+function fmtRate(r) { return (r >= 0 ? '+' : '') + r.toFixed(1); }
+function townSection(text) { const d = document.createElement('div'); d.className = 'cs-section'; d.textContent = text; return d; }
+function townStep(txt, disabled, onClick) {
+  const b = document.createElement('button'); b.textContent = txt;
+  if (disabled) { b.disabled = true; b.style.opacity = '.35'; } else b.addEventListener('click', onClick);
+  return b;
+}
+function renderTownPanel(cap, key) {
+  if (!townOverlay) return;
+  const h = townView || synthHold(cap, key);
+  townView = h; townViewAt = Date.now();
+  if (townTitle) townTitle.textContent = h.defName || (cap.def && cap.def.name) || 'Holding';
+  if (townSub) townSub.textContent = (h.tier ? h.tier[0].toUpperCase() + h.tier.slice(1) : 'Holding') + ' — develop it to strengthen your realm.';
+  const body = townBody; if (!body) return; body.innerHTML = '';
+
+  // resource readout (food/wood project live toward the next harvest; see updateTownProjection)
+  const read = document.createElement('div'); read.className = 'town-read';
+  read.innerHTML =
+    `<span>🌾 Food <b id="tw-food">${Math.floor(h.food)}</b> <em>${fmtRate(h.production.food)}/t</em></span>` +
+    `<span>🪵 Wood <b id="tw-wood">${Math.floor(h.wood)}</b> <em>${fmtRate(h.production.wood)}/t</em></span>` +
+    `<span>👥 Folk <b>${Math.floor(h.population)}</b>/${h.popCap}</span>` +
+    `<span>🛡 Garrison <b>${(cap.garrison || 0) + (h.watchtowerBonus || 0)}</b>${h.watchtowerBonus ? ` <em>(+${h.watchtowerBonus})</em>` : ''}</span>`;
+  body.appendChild(read);
+  twFoodEl = read.querySelector('#tw-food'); twWoodEl = read.querySelector('#tw-wood');
+
+  // build / upgrade
+  body.appendChild(townSection('Build'));
+  for (const def of TOWN_BUILDINGS) {
+    const lvl = h.buildings[def.key] | 0, maxed = lvl >= TOWN.MAX_LEVEL;
+    const cost = maxed ? null : TOWN.COSTS[def.key][lvl];
+    const afford = !!cost && h.wood >= cost[0] && h.food >= cost[1];
+    const row = document.createElement('div'); row.className = 'town-brow';
+    const label = document.createElement('div'); label.className = 'town-blabel';
+    label.innerHTML = `<b>${def.name}</b> <em>Lv ${lvl}/${TOWN.MAX_LEVEL}</em><br><small>${def.hint}</small>`;
+    const costEl = document.createElement('div'); costEl.className = 'town-bcost';
+    costEl.innerHTML = maxed ? '<span style="color:#9aff6b">MAX</span>' : `🪵${cost[0]}${cost[1] ? ` 🌾${cost[1]}` : ''}`;
+    const btn = document.createElement('button'); btn.className = 'town-bbtn'; btn.textContent = lvl ? 'Upgrade' : 'Build';
+    if (maxed || !afford) { btn.disabled = true; btn.classList.add('off'); } else btn.addEventListener('click', () => doTownBuild(cap, key, def.key));
+    row.appendChild(label); row.appendChild(costEl); row.appendChild(btn);
+    body.appendChild(row);
+  }
+
+  // assign folk to jobs
+  body.appendChild(townSection('Assign folk'));
+  const pop = Math.floor(h.population), assigned = (h.jobs.farm | 0) + (h.jobs.lumber | 0);
+  body.appendChild(townJobRow('Farmers', 'farm', h, cap, key, pop, assigned));
+  body.appendChild(townJobRow('Lumberjacks', 'lumber', h, cap, key, pop, assigned));
+  const idleRow = document.createElement('div'); idleRow.className = 'wp-row';
+  idleRow.innerHTML = `<span>Idle folk</span><b>${Math.max(0, pop - assigned)}</b>`;
+  body.appendChild(idleRow);
+
+  // levy surplus population into recruit XP
+  const leviable = Math.max(0, Math.floor(h.population - TOWN.LEVY_POP_THRESHOLD));
+  const levyWrap = document.createElement('div'); levyWrap.style.marginTop = '14px';
+  const levyBtn = document.createElement('button'); levyBtn.className = 'btn'; levyBtn.style.fontSize = '14px'; levyBtn.style.padding = '10px 24px';
+  levyBtn.textContent = leviable > 0 ? `Levy ${leviable} folk → recruit XP` : 'No surplus to levy';
+  if (leviable <= 0) { levyBtn.disabled = true; levyBtn.style.opacity = '.4'; levyBtn.style.cursor = 'default'; } else levyBtn.addEventListener('click', () => doTownLevy(cap, key));
+  levyWrap.appendChild(levyBtn);
+  body.appendChild(levyWrap);
+
+  townOverlay.classList.remove('hidden');
+  startTownProjection();
+}
+function townJobRow(label, jobKey, h, cap, key, pop, assigned) {
+  const row = document.createElement('div'); row.className = 'wp-row';
+  const cur = h.jobs[jobKey] | 0, buildLvl = h.buildings[jobKey] | 0, jobCap = buildLvl * TOWN.WORKERS_PER_LEVEL;
+  const span = document.createElement('span'); span.textContent = buildLvl ? label : label + ' (build first)';
+  row.appendChild(span);
+  row.appendChild(townStep('−', cur <= 0, () => doTownAssign(cap, key, jobKey, cur - 1, h)));
+  const val = document.createElement('b'); val.textContent = cur; row.appendChild(val);
+  row.appendChild(townStep('+', cur >= jobCap || assigned >= pop, () => doTownAssign(cap, key, jobKey, cur + 1, h)));
+  return row;
+}
+function applyHoldResult(cap, key, r) {
+  if (r && r.ok && r.holding) { townView = r.holding; renderTownPanel(cap, key); return true; }
+  return false;
+}
+function doTownBuild(cap, key, building) { if (window.net) window.net.buildHold(key, building).then(r => applyHoldResult(cap, key, r)); }
+function doTownAssign(cap, key, jobKey, val, h) {
+  const jobs = { farm: h.jobs.farm | 0, lumber: h.jobs.lumber | 0 }; jobs[jobKey] = Math.max(0, val);
+  if (window.net) window.net.assignHold(key, jobs).then(r => applyHoldResult(cap, key, r));
+}
+function doTownLevy(cap, key) {
+  if (!window.net) return;
+  window.net.levyHold(key).then(r => {
+    if (r && r.ok) {
+      xp += r.xp | 0; if (r.holding) townView = r.holding; renderTownPanel(cap, key);
+      showWaveBanner('Levy Raised', '+' + (r.xp | 0) + ' recruit XP from ' + (townView.defName || 'your town'));
+    }
+  });
+}
+function startTownProjection() { stopTownProjection(); townProjTimer = setInterval(updateTownProjection, 1000); }
+function stopTownProjection() { if (townProjTimer) { clearInterval(townProjTimer); townProjTimer = 0; } }
+function updateTownProjection() { // project stock forward by whole elapsed ticks (server tick is frozen mid-session)
+  if (!townView || !twFoodEl || !twWoodEl) return;
+  const ticks = Math.floor((Date.now() - townViewAt) / 1000 / TOWN.TICK_SECONDS);
+  if (ticks <= 0) return;
+  twFoodEl.textContent = Math.floor(Math.max(0, townView.food + townView.production.food * ticks));
+  twWoodEl.textContent = Math.floor(Math.max(0, townView.wood + townView.production.wood * ticks));
+}
+function obTown() {
+  ONBOARD.show('town', 'Your Holding',
+    'This hold is yours. Build <b>farms</b> for food, <b>lumber camps</b> for wood, and <b>watchtowers</b> to defend it. Put folk to work, and <b>levy</b> the surplus as recruits — a thriving town strengthens your whole realm.');
+}
 
 // ---------- HUD ----------
 const hud = document.getElementById('hud');
@@ -5897,6 +6075,13 @@ BV.alliedBandsNear = (radius = 1e9) => parties.filter(p => p.alive && isAllyFact
   Math.hypot(p.pos.x - player.pos.x, p.pos.z - player.pos.z) <= radius).length;
 BV.raiseCall = raiseCall;
 BV.tp = (x, z) => { player.pos.set(x, 0, z); player.vel.set(0, 0, 0); if (player.mapToken) player.mapToken.position.copy(player.pos); return [Math.round(x), Math.round(z)]; };
+// ---- town management test hooks ----
+BV.town = () => ((typeof window !== 'undefined' && window.net && window.net.holdings) || []);
+BV.enterTown = (key) => { const c = nations.concat(settlements).find(x => holdKeyOf(x) === key); if (c) { enterTown(c); return 'opened ' + key; } return 'no loaded hold ' + key; };
+BV.buildAt = (key, building) => (window.net ? window.net.buildHold(key, building) : null);
+BV.assignAt = (key, jobs) => (window.net ? window.net.assignHold(key, jobs) : null);
+BV.levyAt = (key) => (window.net ? window.net.levyHold(key) : null);
+BV.effGarrison = (cap) => effGarrison(cap);
 BV.activeCall = () => activeCall && { kind: activeCall.kind, t: +activeCall.t.toFixed(1), radius: activeCall.radius,
   answering: gatherAlliedReinforcements(activeCall.x, activeCall.z, activeCall.radius).length, hold: activeCall.cap && activeCall.cap.def.name };
 BV.coopState = () => ({ banners: battleAllyBanners, reinforced: battleReinforced, coopMult: +coopMult.toFixed(3),
@@ -6034,6 +6219,10 @@ function applyServerWorldOnce() {
   if (w.capitals) for (const sc of w.capitals) {
     const cap = nations.find(c => c.def && c.def.name === sc.def_name);
     if (cap) { const own = nationByName(sc.owner_name); if (own && own !== cap.owner) { cap.owner = own; recolorCapital(cap); } }
+  }
+  // a settlement you developed (on this or another device) flies your banner when you stream back
+  if (w.holdings) for (const h of w.holdings) {
+    if (h.ownerName === PLAYER_REALM.name && /^-?\d/.test(h.holdKey)) heldOwners.set(h.holdKey, PLAYER_REALM.name);
   }
   if (w.relations) setRelations(w.relations); // mirror the server's authoritative faction relations
   showWhileAway(w);

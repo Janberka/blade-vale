@@ -2771,7 +2771,6 @@ const PLR_W = 0.85, PLR_R = 16;              // the player's own banner carves a
 const CONTEST_R = 6;                         // a living clash knocks the ground grey within this
 const terrCells = new Map();                  // "gx,gz" -> { gx, gz, o:faction|null, s:0..1, f:flash, w:water, bf/bi/sf/si/ct:per-gen scratch }
 let terrGen = 0, terrGenT = 0;
-const _terrCol = new THREE.Color(), _terrColB = new THREE.Color();
 function _cellKey(gx, gz) { return gx + ',' + gz; }
 // gen-0 owner: the heartland Voronoi, or the nearest loaded frontier hold, or wilderness
 function _ownerAtInit(x, z) {
@@ -2853,6 +2852,7 @@ function buildChunkTerritory(group, cx, cz) {
   const data = new Uint8Array(GENV * GENV * 4);
   const tex = new THREE.DataTexture(data, GENV, GENV, THREE.RGBAFormat);
   tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestFilter;
+  tex.colorSpace = THREE.SRGBColorSpace; // texels hold exact sRGB nation colours regardless of colour management
   tex.generateMipmaps = false; tex.needsUpdate = true;
   const geo = new THREE.PlaneGeometry(CHUNK, CHUNK, GENV, GENV);
   geo.rotateX(-Math.PI / 2);
@@ -2870,7 +2870,8 @@ function paintChunkTerritory(rec) {
   const t = rec.terr; if (!t) return;
   const gx0 = t.cx * GENV, gz0 = t.cz * GENV, data = t.data;
   for (let j = 0; j < GENV; j++) for (let i = 0; i < GENV; i++) {
-    const c = terrCells.get(_cellKey(gx0 + i, gz0 + j)), o = (j * GENV + i) * 4;
+    const c = terrCells.get(_cellKey(gx0 + i, gz0 + j));
+    const o = ((GENV - 1 - j) * GENV + i) * 4;           // flip the texel row: after the plane's rotateX, V runs opposite world +Z
     if (c && !c.w && c.ct > 0.12) {                       // a raging clash → a pale contested scar over the land
       data[o] = 205; data[o + 1] = 205; data[o + 2] = 205; data[o + 3] = (clamp(0.25 + c.ct * 0.55, 0, 1) * 255) | 0; continue;
     }
@@ -2878,11 +2879,11 @@ function paintChunkTerritory(rec) {
       const a = (c && !c.w && c.f > 0.05) ? (c.f * 70) | 0 : 0; // a brief grey ghost where land just fell
       data[o] = 150; data[o + 1] = 150; data[o + 2] = 150; data[o + 3] = a; continue;
     }
-    _terrCol.setHex(c.o.color);
-    if (c.f > 0.02) _terrCol.lerp(_terrColB.setHex(0xffffff), c.f * 0.5); // flash a flip bright
-    const r = terrCells.get(_cellKey(gx0 + i + 1, gz0 + j)), u = terrCells.get(_cellKey(gx0 + i, gz0 + j + 1));
-    const k = ((r && r.o !== c.o) || (u && u.o !== c.o)) ? 0.4 : 1; // darken the moving border
-    data[o] = (_terrCol.r * 255 * k) | 0; data[o + 1] = (_terrCol.g * 255 * k) | 0; data[o + 2] = (_terrCol.b * 255 * k) | 0;
+    let r = (c.o.color >> 16) & 255, g = (c.o.color >> 8) & 255, b = c.o.color & 255;
+    if (c.f > 0.02) { const tw = c.f * 0.5; r += (255 - r) * tw; g += (255 - g) * tw; b += (255 - b) * tw; } // flash a flip bright
+    const rr = terrCells.get(_cellKey(gx0 + i + 1, gz0 + j)), uu = terrCells.get(_cellKey(gx0 + i, gz0 + j + 1));
+    const k = ((rr && rr.o !== c.o) || (uu && uu.o !== c.o)) ? 0.4 : 1; // darken the moving border
+    data[o] = (r * k) | 0; data[o + 1] = (g * k) | 0; data[o + 2] = (b * k) | 0;
     data[o + 3] = (clamp(0.4 + c.s * 0.6, 0, 1) * 255) | 0;
   }
   t.tex.needsUpdate = true;

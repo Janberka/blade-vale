@@ -3664,12 +3664,280 @@ function paintChunkTerritory(rec) {
   t.colorAttr.needsUpdate = true;
 }
 
+// ============================================================================
+// ---------- Roads: a terrain-aware network knitting the settlements together ----------
+// A deterministic graph over the settlement lattice (capitals + cities + towns + villages):
+//   • trunk roads (MAJOR) link cities & capitals across the realm,
+//   • town roads (MEDIUM) and village lanes (SMALL) mesh the local holds,
+//   • tiny foot-PATHs spur off into the countryside.
+// Every edge is ROUTED, not drawn straight: a seeded S-curve plus a few relaxation passes that
+// pull the polyline off water and around steep ground, so roads bend through valleys and skirt
+// peaks. The whole in-view network bakes into ONE ribbon mesh draped on the relief (mapElevY).
+// Roads also drive movement feel: roadInfoAt() + landRoughAt() let parties march fast & rested on
+// a road and slow & tired through the mountains, and bias enemy hosts toward the roads.
+// Pure function of (worldSeed, settlement lattice) — no Math.random, so it matches run-to-run.
+// ============================================================================
+const ROAD = {
+  nodeChunkR: 6,        // gather settlement nodes within ±this many chunks (≈±360u) — a margin wider than the view so edges near the view never flicker
+  renderChunkR: 5,      // only route + draw edges with an endpoint/midpoint within ±this (≈±300u) of the player
+  kNearest: 3,          // each node links to its K nearest neighbours (symmetric union)
+  trunkK: 2,            // cities/capitals additionally link to their nearest big neighbours → a city-to-city trunk net
+  segStep: 8,           // polyline sample spacing, world units
+  relaxPasses: 3,       // terrain-following relaxation iterations per edge
+  fall: 2.6,            // how far (u) the road's movement benefit fades past its edge
+};
+// per-tier look + width; tier is set by the humbler of the two endpoints (a road is only as grand as its lesser town)
+const ROAD_TIER = {
+  major:  { w: 2.3, lift: 0.18, col: 0x6f5d3f, str: 1.00 }, // packed-earth highway between cities & capitals
+  medium: { w: 1.5, lift: 0.16, col: 0x7c6a47, str: 0.82 }, // town road
+  small:  { w: 0.95, lift: 0.15, col: 0x8a784f, str: 0.62 }, // village lane
+  path:   { w: 0.5,  lift: 0.14, col: 0x9a8a63, str: 0.40 }, // a tiny foot-track
+};
+// movement feel — terrain slows & tires, roads speed & rest
+const MOVE = {
+  roadSpeed: 0.62,      // a full road is +62% march speed
+  roughSlow: 0.60,      // full mountain is −60% before fatigue
+  roadGrade: 0.85,      // a road through rough ground tames this fraction of the penalty
+  drainBase: 2.0,       // party stamina %/s while marching open flat ground
+  roughDrain: 3.6,      // rough ground multiplies the drain by up to (1+this)
+  roadRelief: 0.90,     // a full road removes this fraction of the drain
+  regen: 9,             // %/s recovered while resting
+  fatigueAt: 35,        // below this stamina, the column starts to flag
+  fatigueSlow: 0.45,    // exhausted (0%) march is this much slower
+};
+let partyStamina = 100;          // the warband's marching condition on the overworld (separate from combat player.stamina)
+let roadMesh = null;             // the single merged ribbon for the loaded region
+let roadGrid = null;             // Map "gx,gz" -> [segment] spatial hash for O(1) roadInfoAt queries
+const ROAD_GRID = 14;            // spatial-hash cell size (u)
+const roadRouteCache = new Map();// edgeKey -> routed polyline [{x,z}], region-scoped (kept across chunk crossings)
+const roadSiteCache = new Map(); // "cx,cz" -> settlementSites(cx,cz), region-scoped (skips re-running the city land-snap)
+let _roadChunk = '';             // player chunk the current network was built for
+let _roadStats = { nodes: 0, edges: 0, drawn: 0, segs: 0 };
+
+// ruggedness at a point: 0 = easy lowland, 1 = steep mountain. Height (foothills→peaks) OR slope, plus a
+// mild penalty for deep woods so hosts favour open ground & roads over diving into the forest.
+function landRoughAt(x, z) {
+  const e = elevationAt(x, z);
+  if (e < SEA_LEVEL) return 1;
+  const hi = clamp((e - 0.50) / 0.34, 0, 1);                 // 0 at lowland, 1 by full-mountain height (~0.84)
+  const d = 3.2;                                             // central-difference slope
+  const ex = elevationAt(x + d, z) - elevationAt(x - d, z);
+  const ez = elevationAt(x, z + d) - elevationAt(x, z - d);
+  const slope = clamp(Math.hypot(ex, ez) / (2 * d) * 70, 0, 1);
+  let rough = Math.max(hi, slope * 0.92);
+  const b = biomeAt(x, z);
+  if (b === B.FOREST || b === B.TAIGA) rough = Math.max(rough, 0.22); // woods drag a little
+  return clamp(rough, 0, 1);
+}
+// nearest road influence at a point: { factor 0..1, dx, dz } where (dx,dz) is the road's tangent there.
+const _riOut = { factor: 0, dx: 0, dz: 0 };
+function roadInfoAt(x, z) {
+  _riOut.factor = 0; _riOut.dx = 0; _riOut.dz = 0;
+  if (!roadGrid) return _riOut;
+  const gx = Math.floor(x / ROAD_GRID), gz = Math.floor(z / ROAD_GRID);
+  let bestF = 0, btx = 0, btz = 0;
+  for (let ax = -1; ax <= 1; ax++) for (let az = -1; az <= 1; az++) {
+    const bucket = roadGrid.get((gx + ax) + ',' + (gz + az)); if (!bucket) continue;
+    for (let i = 0; i < bucket.length; i++) {
+      const s = bucket[i];
+      const vx = s.x2 - s.x1, vz = s.z2 - s.z1, L2 = vx * vx + vz * vz || 1;
+      let t = ((x - s.x1) * vx + (z - s.z1) * vz) / L2; t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const cx = s.x1 + vx * t, cz = s.z1 + vz * t, d = Math.hypot(x - cx, z - cz);
+      const core = s.w * 0.5;
+      const f = s.str * (d <= core ? 1 : clamp(1 - (d - core) / ROAD.fall, 0, 1));
+      if (f > bestF) { bestF = f; const il = 1 / Math.sqrt(L2); btx = vx * il; btz = vz * il; }
+    }
+  }
+  _riOut.factor = bestF; _riOut.dx = btx; _riOut.dz = btz;
+  return _riOut;
+}
+function roadFactorAt(x, z) { return roadInfoAt(x, z).factor; }
+// the march-speed multiplier at a point given its road factor & ruggedness (1 = open-ground baseline)
+function terrainSpeedMul(road, rough, fatigued) {
+  const effRough = rough * (1 - road * MOVE.roadGrade);
+  let m = (1 + road * MOVE.roadSpeed) * (1 - effRough * MOVE.roughSlow);
+  if (fatigued) { const f = clamp(1 - partyStamina / MOVE.fatigueAt, 0, 1); m *= 1 - f * MOVE.fatigueSlow; }
+  return clamp(m, 0.3, 1.8);
+}
+// steer a desired heading toward roads & away from rough ground, while still chasing the goal. Returns [dx,dz].
+const _steerOut = [0, 0];
+function roadSteer(px, pz, desx, desz) {
+  const goal = Math.atan2(desx, desz);
+  let bx = desx, bz = desz, best = -1e9;
+  for (let k = -3; k <= 3; k++) {
+    const ang = goal + k * 0.32, cx = Math.sin(ang), cz = Math.cos(ang);
+    const look = 11, sx = px + cx * look, sz = pz + cz * look;
+    if (isWater(sx, sz)) continue;
+    const align = cx * desx + cz * desz;                       // progress toward the goal (−1..1)
+    const score = align * 1.0 - landRoughAt(sx, sz) * 0.7 + roadFactorAt(sx, sz) * 0.95;
+    if (score > best) { best = score; bx = cx; bz = cz; }
+  }
+  _steerOut[0] = bx; _steerOut[1] = bz; return _steerOut;
+}
+
+// ---- the road network: nodes → edges → routed polylines → one ribbon mesh ----
+function _roadSites(cx, cz) {
+  const k = cx + ',' + cz; let s = roadSiteCache.get(k);
+  if (!s) { s = settlementSites(cx, cz); roadSiteCache.set(k, s); }
+  return s;
+}
+// gather every settlement + capital node within ±nodeChunkR chunks of the player's chunk
+function roadGatherNodes(pcx, pcz) {
+  const nodes = [];
+  for (const n of nations) if (!isWater(n.x, n.z)) nodes.push({ x: n.x, z: n.z, rank: 3, key: 'cap:' + n.def.name });
+  const R = ROAD.nodeChunkR;
+  for (let cx = pcx - R; cx <= pcx + R; cx++) for (let cz = pcz - R; cz <= pcz + R; cz++) {
+    for (const s of _roadSites(cx, cz)) {
+      if (isWater(s.x, s.z)) continue;
+      const rank = s.tier === 'city' ? 2 : s.tier === 'town' ? 1 : 0;
+      nodes.push({ x: s.x, z: s.z, rank, key: siteKey(s) });
+    }
+  }
+  return nodes;
+}
+function _edgeTier(a, b) {
+  const lo = Math.min(a.rank, b.rank), hi = Math.max(a.rank, b.rank);
+  if (lo >= 2) return 'major';                 // city/capital ↔ city/capital
+  if (hi >= 2 && lo >= 1) return 'medium';     // city ↔ town
+  if (lo >= 1) return 'medium';                // town ↔ town/city
+  if (hi >= 1) return 'small';                 // town/city ↔ village
+  return 'small';                              // village ↔ village
+}
+// symmetric K-nearest + a city/capital trunk overlay → the edge list (deduped)
+function roadBuildEdges(nodes) {
+  const N = nodes.length, near = [];
+  for (let i = 0; i < N; i++) {
+    const a = nodes[i], ds = [];
+    for (let j = 0; j < N; j++) if (j !== i) { const dx = nodes[j].x - a.x, dz = nodes[j].z - a.z; ds.push([dx * dx + dz * dz, j]); }
+    ds.sort((p, q) => p[0] - q[0]);
+    const list = [];
+    for (let m = 0; m < Math.min(ROAD.kNearest, ds.length); m++) list.push(ds[m][1]);
+    if (a.rank >= 2) { let added = 0; for (let m = 0; m < ds.length && added < ROAD.trunkK; m++) { const j = ds[m][1]; if (nodes[j].rank >= 2) { if (list.indexOf(j) < 0) list.push(j); added++; } } }
+    near.push(list);
+  }
+  const seen = new Set(), edges = [];
+  const link = (i, j) => {
+    const lo = Math.min(i, j), hi = Math.max(i, j), ek = lo + '|' + hi;
+    if (seen.has(ek)) return; seen.add(ek);
+    edges.push({ a: nodes[lo], b: nodes[hi], tier: _edgeTier(nodes[lo], nodes[hi]), key: nodes[lo].key + '~' + nodes[hi].key });
+  };
+  for (let i = 0; i < N; i++) for (const j of near[i]) link(i, j);
+  return edges;
+}
+// cost of placing a road sample at (x,z) between neighbours a,c — penalise water, rough ground, and kinks
+function _roadSegCost(x, z, a, c) {
+  let cost = landRoughAt(x, z) * 2.4;
+  if (isWater(x, z)) cost += 40;
+  const mx = (a.x + c.x) * 0.5, mz = (a.z + c.z) * 0.5;
+  cost += Math.hypot(x - mx, z - mz) * 0.05;            // hug the line between neighbours → smoothness
+  return cost;
+}
+// route one edge into a natural curved polyline (seeded S-curve + terrain relaxation), cached per region
+function roadRoute(edge) {
+  const cached = roadRouteCache.get(edge.key); if (cached) return cached;
+  const ax = edge.a.x, az = edge.a.z, bx = edge.b.x, bz = edge.b.z;
+  const dx = bx - ax, dz = bz - az, len = Math.hypot(dx, dz) || 1;
+  const n = Math.max(2, Math.round(len / ROAD.segStep));
+  const ux = dx / len, uz = dz / len, perpx = -uz, perpz = ux;
+  const rng = WorldSim.mulberry32((WorldSim.chunkHash(Math.round(ax), Math.round(az), worldSeed()) ^ Math.round(bx * 13 + bz * 7)) >>> 0);
+  const amp = Math.min(len * 0.16, 20), ph1 = rng() * 6.283, ph2 = rng() * 6.283, f1 = 1 + rng() * 1.4, f2 = 2 + rng() * 2.2;
+  const pts = [];
+  for (let i = 0; i <= n; i++) {
+    const t = i / n, env = Math.sin(Math.PI * t);
+    const off = env * amp * (0.6 * Math.sin(ph1 + f1 * Math.PI * t) + 0.4 * Math.sin(ph2 + f2 * Math.PI * t));
+    pts.push({ x: ax + dx * t + perpx * off, z: az + dz * t + perpz * off });
+  }
+  for (let pass = 0; pass < ROAD.relaxPasses; pass++) {
+    for (let i = 1; i < n; i++) {
+      const a = pts[i - 1], c = pts[i + 1], m = pts[i];
+      const lx = -(c.z - a.z), lz = (c.x - a.x), ll = Math.hypot(lx, lz) || 1, nx = lx / ll, nz = lz / ll;
+      let best = m, bc = _roadSegCost(m.x, m.z, a, c);
+      for (const o of [-6, -3, 3, 6]) {
+        const cx = m.x + nx * o, cz = m.z + nz * o, cc = _roadSegCost(cx, cz, a, c);
+        if (cc < bc) { bc = cc; best = { x: cx, z: cz }; }
+      }
+      pts[i] = best;
+    }
+  }
+  roadRouteCache.set(edge.key, pts);
+  return pts;
+}
+function _roadGridAdd(seg) {
+  const minx = Math.min(seg.x1, seg.x2), maxx = Math.max(seg.x1, seg.x2);
+  const minz = Math.min(seg.z1, seg.z2), maxz = Math.max(seg.z1, seg.z2);
+  for (let gx = Math.floor(minx / ROAD_GRID); gx <= Math.floor(maxx / ROAD_GRID); gx++)
+    for (let gz = Math.floor(minz / ROAD_GRID); gz <= Math.floor(maxz / ROAD_GRID); gz++) {
+      const k = gx + ',' + gz; let b = roadGrid.get(k); if (!b) roadGrid.set(k, b = []); b.push(seg);
+    }
+}
+// (re)build the whole in-view network: nodes → edges → routed ribbons → one merged mesh + the query grid
+function roadRebuild(pcx, pcz) {
+  const nodes = roadGatherNodes(pcx, pcz);
+  const edges = roadBuildEdges(nodes);
+  roadGrid = new Map();
+  const pos = [], col = [], rc = new THREE.Color();
+  const cxw = (pcx + 0.5) * CHUNK, czw = (pcz + 0.5) * CHUNK, renderR = (ROAD.renderChunkR + 0.5) * CHUNK;
+  let drawn = 0, segs = 0;
+  for (const e of edges) {
+    const mx = (e.a.x + e.b.x) * 0.5, mz = (e.a.z + e.b.z) * 0.5;
+    if (Math.hypot(mx - cxw, mz - czw) > renderR + Math.hypot(e.a.x - e.b.x, e.a.z - e.b.z) * 0.5) continue;
+    const T = ROAD_TIER[e.tier], hw = T.w * 0.5, pts = roadRoute(e);
+    rc.setHex(T.col);
+    drawn++;
+    // ribbon: a quad per polyline segment, two verts per joint offset along the segment normal, draped on the relief
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p = pts[i], q = pts[i + 1];
+      const dx = q.x - p.x, dz = q.z - p.z, dl = Math.hypot(dx, dz) || 1, nx = -dz / dl, nz = dx / dl;
+      const jit = 0.86 + _vnoise(p.x * 0.3, p.z * 0.3, worldSeed() + 51) * 0.22;        // worn, uneven dirt tone
+      const r = rc.r * jit, g = rc.g * jit, b = rc.b * jit;
+      const pl = mapElevY(p.x, p.z) + T.lift, ql = mapElevY(q.x, q.z) + T.lift;
+      const ax1 = p.x + nx * hw, az1 = p.z + nz * hw, ax2 = p.x - nx * hw, az2 = p.z - nz * hw;
+      const bx1 = q.x + nx * hw, bz1 = q.z + nz * hw, bx2 = q.x - nx * hw, bz2 = q.z - nz * hw;
+      pos.push(ax1, pl, az1, ax2, pl, az2, bx1, ql, bz1,   ax2, pl, az2, bx2, ql, bz2, bx1, ql, bz1);
+      for (let v = 0; v < 6; v++) col.push(r, g, b);
+      _roadGridAdd({ x1: p.x, z1: p.z, x2: q.x, z2: q.z, w: T.w, str: T.str });
+      segs++;
+    }
+  }
+  if (roadMesh) { if (mapTerrain) mapTerrain.remove(roadMesh); disposeGroup(roadMesh); roadMesh = null; }
+  if (pos.length && mapTerrain) {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(col), 3));
+    geo.computeVertexNormals();
+    roadMesh = new THREE.Mesh(geo, roadMat());
+    roadMesh.receiveShadow = true; roadMesh.renderOrder = 1;
+    mapTerrain.add(roadMesh);
+  }
+  _roadStats = { nodes: nodes.length, edges: edges.length, drawn, segs };
+}
+let _ROAD_MAT = null;
+function roadMat() {
+  if (!_ROAD_MAT) { _ROAD_MAT = new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: true, shininess: 2, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }); _ROAD_MAT.userData.cached = true; _ROAD_MAT.userData.noTint = true; }
+  return _ROAD_MAT;
+}
+// rebuild the network only when the player crosses into a new chunk (cheap, routes are cached)
+function ensureRoads(force) {
+  if (!mapTerrain) return;
+  const pcx = Math.floor(player.pos.x / CHUNK), pcz = Math.floor(player.pos.z / CHUNK), pk = pcx + ',' + pcz;
+  if (!force && pk === _roadChunk) return;
+  _roadChunk = pk;
+  roadRebuild(pcx, pcz);
+}
+// a fresh region wipes the network (terrain teardown disposes the mesh) — clear caches so it regenerates
+function roadResetRegion() {
+  roadMesh = null; roadGrid = null; _roadChunk = '';
+  roadRouteCache.clear(); roadSiteCache.clear();
+  partyStamina = 100;
+}
+
 // ---------- Strategic map: persistent capitals + streamed chunks ----------
 function buildMapTerrain() {
   if (mapTerrain && mapTerrainLevel !== mapLevel) {  // a fresh region — tear the whole world down
     scene.remove(mapTerrain); disposeGroup(mapTerrain); mapTerrain = null;
     mapChunks.clear(); settlements.length = 0; heldOwners.clear(); _lastPlayerChunk = '';
     terrCells.clear(); terrGen = 0; terrGenT = 0; // a fresh region starts its territory anew
+    roadResetRegion();                            // the road network belongs to this region — drop it
   }
   if (!mapTerrain) {
     mapTerrain = new THREE.Group(); scene.add(mapTerrain);
@@ -3678,6 +3946,7 @@ function buildMapTerrain() {
   }
   mapTerrain.visible = true;
   updateChunks(true);
+  ensureRoads(true);   // knit the roads across the freshly streamed region
 }
 // ============================================================================
 // Terrain-aware procedural settlements (villages, towns, castles, capitals).
@@ -4351,6 +4620,7 @@ function stepDetachmentTo(det, tx, tz, stopR, sp, dt) {
   if (d <= stopR) return false;
   const mvx = dx / d, mvz = dz / d;
   det.facing = angleLerp(det.facing, Math.atan2(mvx, mvz), dt * 10);
+  sp *= terrainSpeedMul(roadFactorAt(det.pos.x, det.pos.z), landRoughAt(det.pos.x, det.pos.z), false); // own columns march fast on roads, slow through the hills
   const [nx, nz] = landStep(det.pos.x, det.pos.z, mvx * sp * dt, mvz * sp * dt);
   det.pos.x = nx; det.pos.z = nz;
   return true;
@@ -4908,10 +5178,22 @@ function updateMap(dt) {
   }
   player.vel.multiplyScalar(Math.pow(0.0001, dt));
   const opx = player.pos.x, opz = player.pos.z;
-  const [npx, npz] = landStep(opx, opz, player.vel.x * dt, player.vel.z * dt);
+  // roads speed the march & rest the column; mountains slow it & drain its stamina (a graded road tames the climb)
+  const pRoad = roadInfoAt(opx, opz), pRough = landRoughAt(opx, opz);
+  const pSpeed = terrainSpeedMul(pRoad.factor, pRough, true);
+  const [npx, npz] = landStep(opx, opz, player.vel.x * dt * pSpeed, player.vel.z * dt * pSpeed);
   player.pos.x = npx; player.pos.z = npz; player.pos.y = 0;
   if (npx === opx) player.vel.x = 0; // bumped the coast — kill that component
   if (npz === opz) player.vel.z = 0;
+  // party stamina: marching tires the column (fast through rough country, almost free on a road); resting restores it
+  const pMoved = Math.hypot(npx - opx, npz - opz);
+  if (pMoved > 0.01 * pSpeed) {
+    const effRough = pRough * (1 - pRoad.factor * MOVE.roadGrade);
+    const drain = MOVE.drainBase * (1 + effRough * MOVE.roughDrain) * (1 - pRoad.factor * MOVE.roadRelief);
+    partyStamina = clamp(partyStamina - drain * dt, 0, 100);
+  } else {
+    partyStamina = clamp(partyStamina + MOVE.regen * dt * (pRoad.factor > 0.5 ? 1.4 : 1), 0, 100);
+  }
   if (player.mapToken) {
     player.mapToken.position.copy(player.pos);
     player.mapToken.position.y = mapElevY(player.pos.x, player.pos.z);
@@ -4919,8 +5201,9 @@ function updateMap(dt) {
     animateColumn(player.mapToken, roaming && dir.lengthSq() > 0, dt); // the lead column marches as you ride
   }
   // tally the ground actually covered → grow the vista (haze, zoom, stream-radius all follow)
-  applyVista(Math.hypot(npx - opx, npz - opz), dt);
+  applyVista(pMoved, dt);
   updateChunks(); // stream fresh terrain + settlements in as the player crosses chunk lines
+  ensureRoads();  // re-knit the road network when the player crosses into a new chunk (routes are cached, so this is cheap)
   terrGenT += dt; // advance the living territory in discrete generations so it reads as "stepping"
   for (let g = 0; terrGenT >= TERR_GEN_T && g < 4; g++) { terrGenT -= TERR_GEN_T; stepTerritory(); }
 
@@ -4961,7 +5244,12 @@ function updateMap(dt) {
       if (band.wanderT <= 0) { band.wanderDir += rand(-1.2, 1.2); band.wanderT = rand(1.5, 4); }
       mvx = Math.sin(band.wanderDir); mvz = Math.cos(band.wanderDir);
     }
-    const sp = band.speed || 5;
+    let sp = band.speed || 5;
+    if (mvx !== 0 || mvz !== 0) {
+      // hosts keep to the roads and skirt the mountains rather than ploughing through the wilds (server hosts keep the server's path)
+      if (!band.serverId) { const s = roadSteer(band.pos.x, band.pos.z, mvx, mvz); mvx = s[0]; mvz = s[1]; }
+      sp *= terrainSpeedMul(roadFactorAt(band.pos.x, band.pos.z), landRoughAt(band.pos.x, band.pos.z), false);
+    }
     const [bnx, bnz] = landStep(band.pos.x, band.pos.z, mvx * sp * dt, mvz * sp * dt);
     if (bnx === band.pos.x && bnz === band.pos.z) { band.wanderDir = rand(0, Math.PI * 2); band.wanderT = rand(0.6, 1.5); } // shore-blocked → turn
     band.pos.x = bnx; band.pos.z = bnz;
@@ -5039,6 +5327,11 @@ function updateMap(dt) {
   if (aliveParties === 0 && !serverDriven) enterMap(); // somehow emptied → next, bigger region
   sendPresenceMaybe(dt); // multiplayer: heartbeat your banner + refresh rivals
   enemyCountEl.textContent = 'Army ' + armyTotal() + (detachments.length ? ' (with you ' + warbandTotal() + ', ' + detachments.length + ' detached)' : '') + ' · Foes nearby: ' + aliveParties;
+  if (partyStamEl) {                                   // the column's marching condition (drains in the hills, rests on the roads)
+    const st = Math.round(partyStamina);
+    partyStamEl.textContent = (roadFactorAt(player.pos.x, player.pos.z) > 0.45 ? '🛣 ' : '') + 'March ' + st + '%' + (st < MOVE.fatigueAt ? ' — weary' : '');
+    partyStamEl.style.color = st < 20 ? '#ff7a5a' : st < MOVE.fatigueAt ? '#ffcf6a' : '#bfe0a8';
+  }
 }
 
 // --- build an enemy band roster (a flat list of defs), scaled to its size ---
@@ -6510,6 +6803,7 @@ const hpFill = document.getElementById('hp-fill');
 const stamFill = document.getElementById('stam-fill');
 const scoreEl = document.getElementById('score');
 const enemyCountEl = document.getElementById('enemy-count');
+const partyStamEl = document.getElementById('party-stamina');
 const waveBanner = document.getElementById('wave-banner');
 const comboEl = document.getElementById('combo');
 const damageFlash = document.getElementById('damage-flash');
@@ -6530,7 +6824,7 @@ function updateHUD() {
   }
 }
 function addScore(n) { score += n; scoreEl.textContent = score.toLocaleString(); }
-function updateEnemyCount() { enemyCountEl.textContent = 'Enemies: ' + Math.max(0, enemiesRemaining); }
+function updateEnemyCount() { enemyCountEl.textContent = 'Enemies: ' + Math.max(0, enemiesRemaining); if (partyStamEl) partyStamEl.textContent = ''; }
 let bannerTimer = 0;
 const waveSub = document.getElementById('wave-sub');
 function showWaveBanner(text, sub = '') {
@@ -7133,6 +7427,11 @@ BV.cityAudit = (radius = 700) => {
 };
 BV._land = (x, z, f = 28, s = 220) => bestLandSpot(x, z, f, s);          // debug: solid-land search
 BV._ls = (x, z, f = 28) => +landScore(x, z, f).toFixed(3);              // debug: land fraction of a footprint
+// roads: prove the network generated, connects the holds, and shapes the march
+BV.roads = () => ({ ..._roadStats, chunk: _roadChunk, gridCells: roadGrid ? roadGrid.size : 0, mesh: !!roadMesh, partyStamina: Math.round(partyStamina) });
+BV.roadAt = (x, z) => { const r = roadInfoAt(x, z), rough = landRoughAt(x, z); return { factor: +r.factor.toFixed(3), tangent: [+r.dx.toFixed(2), +r.dz.toFixed(2)], rough: +rough.toFixed(3), speedMul: +terrainSpeedMul(r.factor, rough, false).toFixed(3), water: isWater(x, z) }; };
+BV.partyStamina = (set) => { if (typeof set === 'number') partyStamina = clamp(set, 0, 100); return Math.round(partyStamina); };
+BV.roadDebug = (on) => { if (roadMesh) roadMesh.material.userData.dbg = !!on; if (roadMesh) roadMesh.position.y = on ? 1.2 : 0; return !!roadMesh; }; // lift the ribbons for a clear screenshot
 BV._mode = () => mode;
 BV.plan = { selectType, deploySelected, beginBattle, selCount: () => selected.size,
   newGroup, assignToGroup, splitIntoGroups, orderGroup, openCommandDeck, resumeBattle, countPool,

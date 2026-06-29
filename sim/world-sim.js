@@ -347,10 +347,84 @@
     return { charUpdates: charUpdates, world: { age: a.age, prophecy: prophecyLine(a.age, top), momentum: a.momentum, changed: a.changed }, events: events };
   }
 
+  // ============================================================================
+  // Settlement kernel (Step 9). The overworld streams in CHUNK-sized squares; the
+  // villages/towns/cities in each chunk are a pure function of (cx, cz, worldSeed).
+  // This used to live ONLY in the client (game.js) — moved here so the server can
+  // generate, persist, and contest the SAME settlements the solo client draws.
+  // Determinism is by SHARING this code, not re-deriving it. No DOM, no Math.random.
+  // ============================================================================
+  var CHUNK = 60;                 // world units per chunk side (matches game.js CHUNK)
+  var MAP_HALF = 90;              // overworld half-size (matches game.js MAP_HALF)
+  var HEARTLAND_R = MAP_HALF * 1.6; // within this of origin the five named powers rule; beyond it, the frontier
+  var FRONTIER_STEP = 240;        // every this-many units from origin, holds get one band deadlier
+  var FREE_NAME = 'Free City';
+  var PETTY_NAMES = ['Greymark', 'Ravenfell', 'Thornhold', 'Duskvar', 'Stormwatch', 'Ashreach', 'Hollowmere', 'Karran'];
+  var NAME_A = ['Ash', 'Brook', 'Crag', 'Dun', 'Elder', 'Fen', 'Grim', 'Holt', 'Kel', 'Mar', 'Oak', 'Pell', 'Raven', 'Stone', 'Thorn', 'Vale', 'Wic', 'Yarl', 'Bram', 'Glen'];
+  var NAME_B = ['bury', 'combe', 'dale', 'ford', 'garth', 'hollow', 'mere', 'reach', 'stead', 'ton', 'wick', 'wold', 'holm', 'crest', 'gate', 'moor', 'fell', 'bridge'];
+  var TIER_GARRISON = { village: [4, 9], town: [10, 18], city: [20, 34] };
+
+  // mix (cx, cz, worldSeed) into one 32-bit chunk hash — the seed for everything a chunk holds.
+  function chunkHash(cx, cz, worldSeed) {
+    return (Math.imul(cx | 0, 73856093) ^ Math.imul(cz | 0, 19349663) ^ Math.imul(worldSeed >>> 0, 83492791)) >>> 0;
+  }
+  // the campaign gets deadlier the farther you roam (mapLevel adds a flat floor; distance adds bands)
+  function frontierLevel(x, z, mapLevel) { return (mapLevel | 0) + Math.floor(Math.hypot(x, z) / FRONTIER_STEP); }
+
+  // deterministic settlement sites within a chunk (most chunks hold 0–1; a few hold 2)
+  function settlementSites(cx, cz, worldSeed) {
+    var rng = mulberry32(chunkHash(cx, cz, worldSeed) ^ 0x51A7);
+    var n = rng() < 0.42 ? 0 : (rng() < 0.80 ? 1 : 2);
+    var out = [];
+    for (var i = 0; i < n; i++) {
+      var x = (cx + 0.20 + rng() * 0.60) * CHUNK;   // kept off the chunk edges so neighbours don't collide
+      var z = (cz + 0.20 + rng() * 0.60) * CHUNK;
+      var tr = rng();
+      var tier = tr < 0.70 ? 'village' : tr < 0.92 ? 'town' : 'city';
+      out.push({ x: x, z: z, tier: tier, idx: i, cx: cx, cz: cz });
+    }
+    return out;
+  }
+  function siteKey(s) { return s.cx + ',' + s.cz + ',' + s.idx; }
+  function settlementName(s, worldSeed) {
+    var r = mulberry32(chunkHash(s.cx, s.cz, worldSeed) ^ (Math.imul(s.idx + 1, 2654435761) >>> 0));
+    return NAME_A[(r() * NAME_A.length) | 0] + NAME_B[(r() * NAME_B.length) | 0];
+  }
+  // owner of a site. caps = [{name, x, z}] for the five powers (heartland Voronoi); beyond the
+  // heartland a seeded roll yields a Free City or one of the petty realms. nationOwnerOf(name)
+  // lets the caller map a capital's faction → the political owner string (defaults to the name).
+  function settlementOwner(s, worldSeed, caps, nationOwnerOf) {
+    if (Math.hypot(s.x, s.z) < HEARTLAND_R) {
+      var best = null, bd = Infinity;
+      for (var i = 0; i < (caps || []).length; i++) {
+        var c = caps[i], dx = c.x - s.x, dz = c.z - s.z, d = dx * dx + dz * dz;
+        if (d < bd) { bd = d; best = c; }
+      }
+      if (!best) return FREE_NAME;
+      return nationOwnerOf ? (nationOwnerOf(best.name) || best.name) : best.name;
+    }
+    var r = mulberry32(chunkHash(s.cx, s.cz, worldSeed) ^ (Math.imul(s.idx + 7, 40503) >>> 0));
+    return r() < 0.55 ? FREE_NAME : PETTY_NAMES[(r() * PETTY_NAMES.length) | 0];   // frontier → free cities + petty realms
+  }
+  // deterministic garrison (the client used Math.random per spawn; the server seeds it off the site
+  // so a hold's strength is stable across ticks/restarts — distant holds bristle with men).
+  function settlementGarrison(s, worldSeed, mapLevel) {
+    var r = mulberry32(chunkHash(s.cx, s.cz, worldSeed) ^ (Math.imul(s.idx + 13, 2246822519) >>> 0));
+    var g = TIER_GARRISON[s.tier] || TIER_GARRISON.village;
+    var scale = s.tier === 'city' ? 6 : s.tier === 'town' ? 3 : 1.4;
+    return Math.round(g[0] + r() * (g[1] - g[0]) + frontierLevel(s.x, s.z, mapLevel) * scale);
+  }
+
   return {
     SKILL_SCALE: SKILL_SCALE, SKILL_CAP: SKILL_CAP,
     effSkill: effSkill, mulberry32: mulberry32,
     bandPower: bandPower, resolveClash: resolveClash,
+    // settlement kernel
+    CHUNK: CHUNK, MAP_HALF: MAP_HALF, HEARTLAND_R: HEARTLAND_R, FRONTIER_STEP: FRONTIER_STEP,
+    FREE_NAME: FREE_NAME, PETTY_NAMES: PETTY_NAMES,
+    chunkHash: chunkHash, frontierLevel: frontierLevel, settlementSites: settlementSites,
+    siteKey: siteKey, settlementName: settlementName, settlementOwner: settlementOwner,
+    settlementGarrison: settlementGarrison,
     // diplomacy kernel
     stanceFromOpinion: stanceFromOpinion, rawStance: rawStance,
     areEnemies: areEnemies, areAllies: areAllies, areNonAggression: areNonAggression,

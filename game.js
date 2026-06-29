@@ -3570,52 +3570,332 @@ function buildMapTerrain() {
   mapTerrain.visible = true;
   updateChunks(true);
 }
-// A walled keep: outer curtain wall with crenellated towers, a gatehouse, a central
-// keep, and the owner's banners. Banner/roof materials are per-capital and mutable,
-// so a conquered hold can re-fly the conqueror's colors.
-function makeCapital(cap) {
+// ============================================================================
+// Terrain-aware procedural settlements (villages, towns, castles, capitals).
+// Each place is READ from the land, CLASSIFIED (plain / knoll / hillside / ridge
+// / valley / coastal), then authored by that class: villages & towns are organic
+// clusters that follow the contours; cities & capitals are CASTLES whose curtain
+// wall is an iso-elevation CONTOUR MARCH around the keep — so the hill literally
+// shapes its walls (a knoll → a tight ring; a hillside → a D-wall stepping down;
+// a ridge → an elongated wall on the crest). Every element is seated on its OWN
+// mapElevY with a foundation plinth, so nothing floats downhill or buries uphill.
+// The whole place bakes into TWO merged flat-shaded meshes: a vertex-colored
+// "structure" mesh (masonry/timber/thatch) and an owner-colored mesh (keep & hall
+// roofs + banners) that the conquest recolor re-tints. Deterministic per site.
+// ============================================================================
+const TAU = Math.PI * 2;
+// the engine's mat() never enables vertexColors (mat(0xffffff) would render solid
+// white); use a dedicated shared material, exactly like buildChunkTerrainHex's mesh.
+let SETTLE_VC_MAT = null;
+function settleVCMat() {
+  if (!SETTLE_VC_MAT) {
+    SETTLE_VC_MAT = new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: true, shininess: 5, specular: 0x0a0a0a });
+    SETTLE_VC_MAT.userData.cached = true; SETTLE_VC_MAT.userData.noTint = true;
+  }
+  return SETTLE_VC_MAT;
+}
+// unit primitives, de-indexed once so a merge is a plain vertex copy — THREE's own
+// winding & normals come along for free (no hand-rolled box verts, no inverted faces).
+function sgUnit(key, make) { return cachedGeo('sgU:' + key, () => { const g = make(), n = g.toNonIndexed(); g.dispose(); return n; }); }
+const _sgM = new THREE.Matrix4(), _sgQ = new THREE.Quaternion(), _sgE = new THREE.Euler(),
+      _sgP = new THREE.Vector3(), _sgScl = new THREE.Vector3(), _sgV = new THREE.Vector3(), _sgCol = new THREE.Color();
+function sgPushGeo(buf, geo, m, col) {
+  const p = geo.attributes.position;
+  for (let i = 0; i < p.count; i++) { _sgV.fromBufferAttribute(p, i).applyMatrix4(m); buf.pos.push(_sgV.x, _sgV.y, _sgV.z); buf.col.push(col[0], col[1], col[2]); }
+}
+function sgBox(buf, cx, cy, cz, w, h, d, yaw, col) {
+  _sgM.compose(_sgP.set(cx, cy, cz), _sgQ.setFromEuler(_sgE.set(0, yaw, 0)), _sgScl.set(w, h, d));
+  sgPushGeo(buf, sgUnit('box', () => new THREE.BoxGeometry(1, 1, 1)), _sgM, col);
+}
+function sgRoof(buf, cx, baseY, cz, w, h, d, yaw, col) {                 // 4-sided pyramidal roof, base at baseY
+  _sgM.compose(_sgP.set(cx, baseY + h / 2, cz), _sgQ.setFromEuler(_sgE.set(0, yaw + Math.PI / 4, 0)), _sgScl.set(w, h, d));
+  sgPushGeo(buf, sgUnit('roof4', () => new THREE.ConeGeometry(0.5, 1, 4)), _sgM, col);
+}
+function sgPrism(buf, cx, baseY, cz, rad, h, col) {                      // octagonal tower, base at baseY
+  _sgM.compose(_sgP.set(cx, baseY + h / 2, cz), _sgQ.identity(), _sgScl.set(rad * 2, h, rad * 2));
+  sgPushGeo(buf, sgUnit('cyl8', () => new THREE.CylinderGeometry(0.5, 0.5, 1, 8)), _sgM, col);
+}
+function sgCone8(buf, cx, baseY, cz, rad, h, col) {                      // 8-sided conical cap
+  _sgM.compose(_sgP.set(cx, baseY + h / 2, cz), _sgQ.identity(), _sgScl.set(rad * 2, h, rad * 2));
+  sgPushGeo(buf, sgUnit('cone8', () => new THREE.ConeGeometry(0.5, 1, 8)), _sgM, col);
+}
+function sgMesh(buf, material) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(buf.pos), 3));
+  g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(buf.col), 3));
+  g.computeVertexNormals();
+  const m = new THREE.Mesh(g, material); m.castShadow = true; m.receiveShadow = true; return m;
+}
+function sgRgb(hex, j) { _sgCol.setHex(hex); return [_sgCol.r * j, _sgCol.g * j, _sgCol.b * j]; }
+// biome-driven building palette (sandstone desert, dark timber forest, grey highland stone, ...)
+function settlePalette(b) {
+  const n = b.name;
+  if (n === 'Desert')                       return { stone: 0xc9a878, stoneDk: 0xb09870, wood: 0x9a7a4a, thatch: 0xc2a96a, daub: 0xd8c89c };
+  if (n === 'Forest' || n === 'Taiga')      return { stone: 0x8a8780, stoneDk: 0x6f6a60, wood: 0x563c26, thatch: 0x6f5a36, daub: 0x8f7d5c };
+  if (n === 'Tundra' || n === 'Mountains')  return { stone: 0x9a9690, stoneDk: 0x7c786f, wood: 0x6a5a48, thatch: 0x80735f, daub: 0xa8a49c };
+  if (n === 'Savanna' || n === 'Beach')     return { stone: 0xa89e88, stoneDk: 0x8a8068, wood: 0x7a5a36, thatch: 0xa89a5a, daub: 0xc2b080 };
+  return { stone: 0x9a8f80, stoneDk: 0x7d7468, wood: 0x6b4a2e, thatch: 0x9a7b43, daub: 0xb9a888 };
+}
+// per-tier knobs.  houses/bailey/lower/nwall are [base, randomRange] (count = base + r()*range|0)
+const SG_SPEC = {
+  village: { castle: false, R: 7,  houses: [10, 6], wallH: 0,   lbl: 3.8, top: 4.2, palisade: false, hall: false, gap: 2.0 },
+  town:    { castle: false, R: 10, houses: [13, 5], wallH: 1.1, lbl: 4.6, top: 5.2, palisade: true,  hall: true,  gap: 2.3 },
+  city:    { castle: true,  R: 13, bailey: [4, 4], lower: [4, 4], wallH: 1.7, lbl: 5.8, top: 8.0, gap: 2.6, nwall: [14, 5] },
+  capital: { castle: true,  R: 16, bailey: [6, 4], lower: [6, 5], wallH: 1.9, lbl: 6.6, top: 9.5, gap: 2.8, nwall: [16, 5] },
+};
+
+// --- read the landform: a center gradient (local+macro) plus a 16-spoke ring field ---
+function sgProbe(X, Z, spec) {
+  const cache = new Map();
+  const Y = (x, z) => { const k = (x * 4 | 0) + ',' + (z * 4 | 0); let v = cache.get(k); if (v === undefined) { v = mapElevY(x, z); cache.set(k, v); } return v; };
+  const refY = mapElevY(X, Z), R = spec.R, e = HEX_R;
+  // blend a tight local gradient with a footprint-wide one, so a bumpy patch on a big hill still reads the hill's fall-line
+  const gx = 0.5 * (Y(X + e, Z) - Y(X - e, Z)) / (2 * e) + 0.5 * (Y(X + R, Z) - Y(X - R, Z)) / (2 * R);
+  const gz = 0.5 * (Y(X, Z + e) - Y(X, Z - e)) / (2 * e) + 0.5 * (Y(X, Z + R) - Y(X, Z - R)) / (2 * R);
+  const slope = Math.hypot(gx, gz), downhill = Math.atan2(gz, gx), uphill = downhill + Math.PI;
+  const NS = 16, rim = []; let minY = 1e9, maxY = -1e9, sum = 0, wet = 0, hiK = 0, hiY = -1e9;
+  for (let k = 0; k < NS; k++) {
+    const a = k / NS * TAU, rx = X + Math.cos(a) * R, rz = Z + Math.sin(a) * R, y = Y(rx, rz);
+    rim.push({ a, y }); minY = Math.min(minY, y); maxY = Math.max(maxY, y); sum += y;
+    if (y > hiY) { hiY = y; hiK = k; }
+    if (isWater(rx, rz)) wet++;
+  }
+  const rimMean = sum / NS, relief = maxY - minY, prom = refY - rimMean, wetFrac = wet / NS;
+  let cls;
+  if (wetFrac > 0.12) cls = 'COASTAL';
+  else if (prom > 1.5) cls = 'KNOLL';
+  else if (prom < -1.0) cls = 'VALLEY';
+  else if (slope < 0.14 && relief < 2.0) cls = 'PLAIN';     // genuinely flat → nucleated green village
+  else cls = (relief > 2.5 && sgIsRidge(rim)) ? 'RIDGE' : 'HILLSIDE'; // a ridge needs real relief, else it's just a slope
+  return { Y, refY, R, slope, downhill, uphill, rim, rimMean, relief, prom, wetFrac, cls, spineAz: rim[hiK].a };
+}
+function sgIsRidge(rim) {                                                // two opposite rim spokes high, the perpendicular pair low
+  const n = rim.length; let hi = 0; for (let k = 1; k < n; k++) if (rim[k].y > rim[hi].y) hi = k;
+  const mean = rim.reduce((s, p) => s + p.y, 0) / n, hiY = rim[hi].y;
+  const opp = rim[(hi + n / 2) % n].y, pa = rim[(hi + n / 4) % n].y, pb = rim[(hi + 3 * n / 4) % n].y;
+  return opp > mean && Math.min(pa, pb) < mean - (hiY - mean) * 0.4;
+}
+
+// --- a building seated on its own grade, with a foundation plinth so it never floats/buries ---
+function sgHouse(P, lx, lz, opts) {
+  const { seat, pal, S } = P, r = P.r, big = !!opts.big;
+  const w = (big ? 2.0 : 0.95) + r() * (big ? 0.8 : 0.6), d = w * (0.85 + r() * 0.5), h = (big ? 1.9 : 0.9) + r() * (big ? 0.6 : 0.5);
+  const yaw = opts.yaw != null ? opts.yaw : r() * TAU, hw = w / 2, hd = d / 2;
+  const c0 = seat(lx - hw, lz - hd), c1 = seat(lx + hw, lz - hd), c2 = seat(lx - hw, lz + hd), c3 = seat(lx + hw, lz + hd);
+  const lo = Math.min(c0, c1, c2, c3), hi = Math.max(c0, c1, c2, c3);
+  if (hi - lo > 3.5) return false;                                       // too steep a footprint — caller re-rolls
+  const floorY = hi + 0.05, plinthBot = lo - 0.25;
+  sgBox(S, lx, (plinthBot + floorY) / 2, lz, w * 1.05, floorY - plinthBot, d * 1.05, yaw, sgRgb(pal.stoneDk, 0.9 + r() * 0.12));
+  sgBox(S, lx, floorY + h / 2, lz, w, h, d, yaw, sgRgb(opts.wallHex || pal.daub, 0.88 + r() * 0.22));
+  const roofH = (big ? 1.0 : 0.66) + r() * 0.3, roofBuf = opts.roofBuf || S, roofRGB = opts.roofRGB || sgRgb(pal.thatch, 0.88 + r() * 0.2);
+  sgRoof(roofBuf, lx, floorY + h, lz, w * 1.18, roofH, d * 1.18, yaw, roofRGB);
+  return true;
+}
+function sgBanner(P, lx, lz) {
+  const { seat, pal, ownerRGB, S, O } = P, y = seat(lx, lz), bh = 2.8 + (P.spec.castle ? 1.2 : 0);
+  sgBox(S, lx, y + bh / 2, lz, 0.13, bh, 0.13, 0, sgRgb(pal.wood, 1));
+  sgBox(O, lx + 0.48, y + bh - 0.5, lz, 0.9, 0.56, 0.07, 0, ownerRGB);
+}
+
+// --- organic village / town: morphology chosen by the landform class ---
+function sgBuildOrganic(P) {
+  const { r, spec, T, pal, seat, isW, S, O, ownerRGB, placed } = P;
+  const street = (T.cls === 'HILLSIDE' || T.cls === 'RIDGE' || T.cls === 'COASTAL');
+  const R = spec.R, n = spec.houses[0] + (r() * spec.houses[1] | 0);
+  if (!spec.hall) {                                                      // a focal feature at the heart
+    const y = seat(0, 0);
+    if (street) { sgBox(S, 0, y + 0.9, 0, 0.16, 1.8, 0.16, 0, sgRgb(pal.wood, 1)); sgBox(S, 0, y + 1.5, 0, 0.9, 0.16, 0.16, 0, sgRgb(pal.wood, 1)); } // market cross
+    else { sgPrism(S, 0, y - 0.1, 0, 0.45, 0.7, sgRgb(pal.stoneDk, 1)); sgBox(S, 0, y + 0.8, 0, 0.14, 0.5, 0.9, 0, sgRgb(pal.wood, 1)); } // well + winch
+  }
+  const lane = (T.cls === 'RIDGE') ? T.spineAz : T.downhill + Math.PI / 2; // streets run along the contour
+  const clear = spec.hall ? 2.2 : 1.6;
+  let made = 0, tries = 0;
+  while (made < n && tries < n * 8) {
+    tries++; let lx, lz, yaw;
+    if (street) {
+      const slot = tries, step = (slot >> 1) * 2.0 - n, sign = (slot & 1) ? 1 : -1, off = 1.5 + r() * 0.6, wob = (r() - 0.5) * 1.0;
+      lx = Math.cos(lane) * (step + wob) + Math.cos(lane + Math.PI / 2) * sign * off;
+      lz = Math.sin(lane) * (step + wob) + Math.sin(lane + Math.PI / 2) * sign * off; yaw = lane;
+    } else {
+      const a = r() * TAU, rd = 1.8 + Math.sqrt(r()) * (R - 1.8); lx = Math.cos(a) * rd; lz = Math.sin(a) * rd; yaw = Math.atan2(-lz, -lx);
+    }
+    if (Math.hypot(lx, lz) < clear || isW(lx, lz)) continue;
+    if (!placed.every(p => (p.lx - lx) ** 2 + (p.lz - lz) ** 2 > spec.gap * spec.gap)) continue;
+    if (sgHouse(P, lx, lz, { yaw })) { placed.push({ lx, lz }); made++; }
+  }
+  if (spec.hall) sgHouse(P, 0, 0, { big: true, yaw: r() * TAU, roofBuf: O, roofRGB: ownerRGB, wallHex: pal.wood }); // owner-roofed meeting hall
+  if (spec.palisade) sgPalisade(P);
+  sgBanner(P, R * 0.12, R * 0.05);
+}
+function sgPalisade(P) {                                                 // a timber ring fitted around the built cluster, gate downhill
+  const { r, T, pal, seat, S, placed } = P;
+  let R = 3.0; for (const p of placed) R = Math.max(R, Math.hypot(p.lx, p.lz)); R += 1.5;
+  const N = Math.max(12, Math.round(R * 1.2)), wood = sgRgb(pal.wood, 1), gateA = T.downhill;
+  for (let k = 0; k < N; k++) {
+    const a = k / N * TAU;
+    if (Math.abs(((a - gateA + Math.PI) % TAU + TAU) % TAU - Math.PI) < 0.34) continue; // gate gap
+    const lx = Math.cos(a) * R, lz = Math.sin(a) * R, y = seat(lx, lz);
+    sgBox(S, lx, y + 0.85, lz, 0.34, 1.6 + r() * 0.2, 0.34, a, wood);
+  }
+}
+
+// --- a castle: keep on the high ground + a curtain wall marched to the hill's contour ---
+function sgBuildCastle(P) {
+  const { r, spec, T, pal, ownerRGB, isW, placed } = P;
+  const keep = sgFindKeep(P);                                            // highest buildable inner cell
+  const DROP = 2.2 + (r() - 0.5) * 1.2;
+  const NW = spec.nwall[0] + (r() * spec.nwall[1] | 0);
+  const verts = sgCurtainMarch(P, keep, DROP, NW);
+  const gates = sgPickGates(verts, T.downhill);
+  sgBuildCurtain(P, verts, gates);
+  sgBuildKeep(P, keep);
+  // inner bailey buildings, dart-thrown inside the wall, the first a great hall
+  const innerR = Math.min.apply(null, verts.map(v => v.rd)) * 0.72;
+  const nb = spec.bailey[0] + (r() * spec.bailey[1] | 0);
+  let made = 0, tries = 0;
+  while (made < nb && tries < nb * 8) {
+    tries++;
+    const a = r() * TAU, rd = (0.2 + r() * 0.8) * innerR, lx = keep.lx + Math.cos(a) * rd, lz = keep.lz + Math.sin(a) * rd;
+    if (Math.hypot(lx - keep.lx, lz - keep.lz) < 1.8) continue;
+    if (!placed.every(p => (p.lx - lx) ** 2 + (p.lz - lz) ** 2 > spec.gap * spec.gap)) continue;
+    const yaw = Math.atan2(keep.lz - lz, keep.lx - lx), hall = (made === 0);
+    if (sgHouse(P, lx, lz, hall ? { big: true, roofBuf: P.O, roofRGB: ownerRGB, wallHex: pal.wood, yaw } : { yaw })) { placed.push({ lx, lz }); made++; }
+  }
+  sgLowerTown(P, verts[gates[0]], T.downhill);                           // the lower town spills from the main (downhill) gate
+  for (const gi of gates) sgBanner(P, verts[gi].lx, verts[gi].lz);       // a banner over each gate
+}
+function sgFindKeep(P) {
+  const { seat, spec } = P; let best = { lx: 0, lz: 0, y: seat(0, 0) }; const Rin = spec.R * 0.36;
+  for (let k = 0; k < 8; k++) { const a = k / 8 * TAU, lx = Math.cos(a) * Rin, lz = Math.sin(a) * Rin, y = seat(lx, lz); if (y > best.y) best = { lx, lz, y }; }
+  return best;
+}
+// March a ray out from the keep along each spoke; the hill decides where it falls away. But a curtain
+// wall is an ENCLOSURE meant to keep people out, so the result is kept near-CIRCULAR: terrain only
+// gently modulates the radius around a common base, instead of a spiky star whose deep notches read as
+// disjoint, parallel wall runs. Always a single simple closed loop (star-shaped about the keep).
+function sgCurtainMarch(P, keep, DROP, NW) {
+  const { seat, spec, T, r } = P;
+  const platY = keep.y - DROP, minR = spec.R * 0.5, maxR = spec.R * 1.0, jit = (r() - 0.5) * 0.25;
+  const rad = new Array(NW), ang = new Array(NW);
+  for (let k = 0; k < NW; k++) {
+    const a = k / NW * TAU + jit; ang[k] = a; let rd = minR;
+    while (rd < maxR) { const y = seat(keep.lx + Math.cos(a) * rd, keep.lz + Math.sin(a) * rd); if (y < platY || y > keep.y + 1.4) break; rd += 0.6; }
+    rad[k] = clamp(rd, minR, maxR);
+  }
+  // base radius = size of the defensible platform; pull every spoke toward it and clamp the deviation,
+  // so the wall is a clean closed ring that bulges/contracts gently with the ground — never spikes.
+  let base = rad.reduce((s, v) => s + v, 0) / NW;
+  if (T.relief < 0.8) base = (minR + maxR) / 2;                          // true plain → a clean circle
+  for (let k = 0; k < NW; k++) rad[k] = clamp(base * 0.6 + rad[k] * 0.4, base * 0.82, base * 1.18);
+  if (T.cls === 'RIDGE') for (let k = 0; k < NW; k++) rad[k] = clamp(rad[k] * (1 + 0.3 * Math.abs(Math.cos(ang[k] - T.spineAz))), base * 0.8, base * 1.5); // a gentle oval along the crest, not a thin lozenge
+  const med = new Array(NW);                                             // 2-pass smooth (median then mean) for a smooth, closed perimeter
+  for (let k = 0; k < NW; k++) { const a = rad[(k - 1 + NW) % NW], b = rad[k], c = rad[(k + 1) % NW]; med[k] = Math.max(Math.min(a, b), Math.min(Math.max(a, b), c)); }
+  for (let k = 0; k < NW; k++) rad[k] = 0.25 * med[(k - 1 + NW) % NW] + 0.5 * med[k] + 0.25 * med[(k + 1) % NW];
+  const verts = [];
+  for (let k = 0; k < NW; k++) { const lx = keep.lx + Math.cos(ang[k]) * rad[k], lz = keep.lz + Math.sin(ang[k]) * rad[k]; verts.push({ a: ang[k], rd: rad[k], lx, lz, y: seat(lx, lz) }); }
+  return verts;
+}
+// a castle has at least TWO gates so it can be entered. The main gate faces the gentlest (downhill)
+// approach; the second sits on the lowest wall foot, well away from the first (the other natural way in).
+function sgPickGates(verts, downhill) {
+  const N = verts.length;
+  let g1 = 0, bd = 1e9;
+  for (let i = 0; i < N; i++) { const d = Math.abs(((verts[i].a - downhill + Math.PI) % TAU + TAU) % TAU - Math.PI); if (d < bd) { bd = d; g1 = i; } }
+  let g2 = (g1 + (N >> 1)) % N, bestY = 1e9;
+  for (let i = 0; i < N; i++) {
+    const da = Math.abs(((verts[i].a - verts[g1].a + Math.PI) % TAU + TAU) % TAU - Math.PI);
+    if (da < TAU * 0.27) continue;                                       // keep the two gates well apart
+    if (verts[i].y < bestY) { bestY = verts[i].y; g2 = i; }
+  }
+  return [g1, g2];
+}
+// stepped-level bays: each segment's base follows the two seated corner heights (battered down to a
+// buried sill, no gap); its parapet holds level, so the wall steps down the hill bay by bay. Gate bays
+// are left open under a stone arch with tall timber doors, flanked by taller, thicker gatehouse towers.
+function sgBuildCurtain(P, verts, gates) {
+  const { pal, S, r, spec } = P, N = verts.length, wallH = spec.wallH, thick = 0.55;
+  const stone = sgRgb(pal.stone, 1), stoneDk = sgRgb(pal.stoneDk, 1), wood = sgRgb(pal.wood, 1);
+  const isGate = i => gates.indexOf(i) >= 0, gateTower = new Set();
+  for (const gi of gates) { gateTower.add(gi); gateTower.add((gi + 1) % N); }
+  for (let i = 0; i < N; i++) {
+    const A = verts[i], B = verts[(i + 1) % N];
+    const mx = (A.lx + B.lx) / 2, mz = (A.lz + B.lz) / 2, ang = Math.atan2(B.lz - A.lz, B.lx - A.lx), len = Math.hypot(B.lx - A.lx, B.lz - A.lz) + thick * 1.8;
+    const lo = Math.min(A.y, B.y), hi = Math.max(A.y, B.y), top = hi + wallH, bot = lo - 0.8;
+    if (isGate(i)) {                                                     // a giant gateway: stone arch over tall double doors
+      sgBox(S, mx, top + 0.2, mz, len, 0.85, thick * 1.6, ang, stoneDk);
+      const doorH = wallH + 1.3, doorW = len * 0.62;
+      sgBox(S, mx, lo + doorH / 2, mz, doorW, doorH, 0.42, ang, wood);
+      sgBox(S, mx, lo + doorH * 0.34, mz, doorW * 1.03, 0.17, 0.5, ang, stoneDk); // iron bands
+      sgBox(S, mx, lo + doorH * 0.72, mz, doorW * 1.03, 0.17, 0.5, ang, stoneDk);
+      continue;
+    }
+    sgBox(S, mx, (top + bot) / 2, mz, len, top - bot, thick, ang, stone);
+    sgBox(S, mx, top + 0.16, mz, len, 0.32, thick * 1.15, ang, stoneDk); // level parapet cap
+  }
+  for (let i = 0; i < N; i++) {                                          // drum towers at every vertex, taller & thicker at the gates
+    const v = verts[i], gate = gateTower.has(i), th = wallH + (gate ? 2.2 : 0.9) + r() * 0.4, rad = gate ? 1.05 : 0.78;
+    sgPrism(S, v.lx, v.y - 0.7, v.lz, rad, th + 0.7, stone);
+    sgCone8(S, v.lx, v.y - 0.7 + th + 0.7, v.lz, rad * 1.18, gate ? 1.2 : 0.9, stoneDk);
+  }
+}
+function sgBuildKeep(P, keep) {
+  const { pal, ownerRGB, S, O, spec, seat } = P;
+  const stone = sgRgb(pal.stone, 1), stoneDk = sgRgb(pal.stoneDk, 1);
+  const big = spec === SG_SPEC.capital, kw = big ? 3.2 : 2.6, kh = big ? 5.0 : 4.0, hw = kw * 0.75;
+  const c = [seat(keep.lx - hw, keep.lz - hw), seat(keep.lx + hw, keep.lz - hw), seat(keep.lx - hw, keep.lz + hw), seat(keep.lx + hw, keep.lz + hw)];
+  const lo = Math.min.apply(null, c), hiC = Math.max.apply(null, c), floorY = hiC + 0.05;
+  sgBox(S, keep.lx, (lo - 0.3 + floorY) / 2, keep.lz, kw * 1.55, floorY - (lo - 0.3), kw * 1.55, 0, stoneDk); // motte/plinth
+  if (hiC - lo > 2.5) for (let k = 0; k < 5; k++) { const a = k / 5 * TAU, rr = kw * 0.85; sgBox(S, keep.lx + Math.cos(a) * rr, lo + 0.2, keep.lz + Math.sin(a) * rr, 1.1, 0.9, 1.1, a, stoneDk); } // rocky crag skirt on steep keeps
+  sgBox(S, keep.lx, floorY + kh / 2, keep.lz, kw, kh, kw, 0, stone);     // donjon
+  const top = floorY + kh;
+  for (let i = -1; i <= 1; i++) for (const az of [-kw * 0.5, kw * 0.5]) { sgBox(S, keep.lx + i * kw * 0.34, top + 0.25, keep.lz + az, kw * 0.2, 0.5, kw * 0.2, 0, stoneDk); sgBox(S, keep.lx + az, top + 0.25, keep.lz + i * kw * 0.34, kw * 0.2, 0.5, kw * 0.2, 0, stoneDk); } // merlons
+  sgRoof(O, keep.lx, top + 0.05, keep.lz, kw * 0.85, big ? 1.4 : 1.1, kw * 0.85, 0, ownerRGB); // owner roof
+  const ph = top + (big ? 2.6 : 2.1);
+  sgBox(S, keep.lx, top + (ph - top) / 2, keep.lz, 0.15, ph - top, 0.15, 0, sgRgb(pal.wood, 1));
+  sgBox(O, keep.lx + 0.5, ph - 0.5, keep.lz, 0.95, 0.6, 0.08, 0, ownerRGB); // great banner
+}
+function sgLowerTown(P, gateV, downhill) {                               // houses spilling from the gate down the approach
+  const { r, spec, isW, seat, placed } = P; if (!spec.lower || r() > 0.6) return;
+  // only where the approach is a gentle apron — otherwise houses tumble down a cliff and read as scatter
+  const gradeY = seat(gateV.lx, gateV.lz), farY = seat(gateV.lx + Math.cos(downhill) * 6, gateV.lz + Math.sin(downhill) * 6);
+  if ((gradeY - farY) / 6 > 0.32) return;
+  const n = spec.lower[0] + (r() * spec.lower[1] | 0);
+  for (let i = 0; i < n; i++) {
+    const along = 2.4 + i * 1.7 + r() * 0.7, side = (i % 2 ? 1 : -1) * (1.4 + r() * 0.8);
+    const lx = gateV.lx + Math.cos(downhill) * along + Math.cos(downhill + Math.PI / 2) * side;
+    const lz = gateV.lz + Math.sin(downhill) * along + Math.sin(downhill + Math.PI / 2) * side;
+    if (isW(lx, lz)) continue;
+    if (sgHouse(P, lx, lz, { yaw: downhill + Math.PI / 2 })) placed.push({ lx, lz });
+  }
+}
+
+// The one terrain-aware builder behind every settlement and capital. Returns a THREE.Group
+// seated at (X, refY, Z); g.userData.ownerMats (the owner-colored material) recolors on conquest.
+function buildSettlementGroup(X, Z, tier, name, ownerColor, seed) {
+  const r = _mulberry32(seed >>> 0);
+  const spec = SG_SPEC[tier] || SG_SPEC.village;
+  const T = sgProbe(X, Z, spec), refY = T.refY;
+  const seat = (lx, lz) => T.Y(X + lx, Z + lz) - refY;                   // local Y on the real ground (relative to the site centre)
+  const isW = (lx, lz) => isWater(X + lx, Z + lz);
+  const pal = settlePalette(biomeAt(X, Z)), ownerRGB = sgRgb(ownerColor, 1);
+  const S = { pos: [], col: [] }, O = { pos: [], col: [] };
+  const P = { r, tier, spec, X, Z, refY, T, pal, ownerRGB, seat, isW, S, O, placed: [] };
+  if (spec.castle) sgBuildCastle(P); else sgBuildOrganic(P);
   const g = new THREE.Group();
-  const stone = mat(0x9a8f80), stoneDk = mat(0x807769), wood = mat(0x33240f);
-  const ownerMats = [];
-  const ownerMat = () => { const m = mat(cap.owner.color, { shared: false }); ownerMats.push(m); return m; };
-  const half = 3.6, wallH = 1.9, base = 0.3;
-  const yard = boxMesh(7.8, base, 7.8, stoneDk); yard.position.y = base / 2; g.add(yard); // courtyard slab
-  const wall = (w, h, d, x, z) => { const m = boxMesh(w, h, d, stone); m.position.set(x, base + h / 2, z); g.add(m); };
-  wall(7.6, wallH, 0.5, 0, -half);                 // north curtain
-  wall(0.5, wallH, 7.6, -half, 0);                 // west curtain
-  wall(0.5, wallH, 7.6,  half, 0);                 // east curtain
-  wall(2.3, wallH, 0.5, -2.65, half);              // south curtain (split for the gate)
-  wall(2.3, wallH, 0.5,  2.65, half);
-  // parapet caps so the walls read crenellated without a merlon per metre
-  const cap2 = (w, d, x, z) => { const m = boxMesh(w, 0.4, d, stoneDk); m.position.set(x, base + wallH + 0.15, z); g.add(m); };
-  cap2(7.6, 0.55, 0, -half); cap2(0.55, 7.6, -half, 0); cap2(0.55, 7.6, half, 0);
-  cap2(2.3, 0.55, -2.65, half); cap2(2.3, 0.55, 2.65, half);
-  // gatehouse: two towers flanking the gap + a lintel
-  const gh = wallH + 0.7;
-  for (const sx of [-1.45, 1.45]) { const m = boxMesh(0.9, gh, 0.9, stoneDk); m.position.set(sx, base + gh / 2, half); g.add(m); }
-  const lintel = boxMesh(3.2, 0.5, 0.9, stone); lintel.position.set(0, base + wallH + 0.25, half); g.add(lintel);
-  // four corner towers with pointed, owner-colored roofs
-  const towerH = 3.2;
-  for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
-    const tw = boxMesh(1.25, towerH, 1.25, stone); tw.position.set(sx * half, base + towerH / 2, sz * half); g.add(tw);
-    const roof = new THREE.Mesh(cachedGeo('caproof', () => new THREE.ConeGeometry(1.0, 1.4, 4)), ownerMat());
-    roof.castShadow = true; roof.rotation.y = Math.PI / 4; roof.position.set(sx * half, base + towerH + 0.7, sz * half); g.add(roof);
-  }
-  // central keep with battlements
-  const keepH = 4.6;
-  const keep = boxMesh(2.9, keepH, 2.9, stone); keep.position.y = base + keepH / 2; g.add(keep);
-  for (let i = -1; i <= 1; i++) for (const [ax, az] of [[i * 1.0, -1.45], [i * 1.0, 1.45], [-1.45, i * 1.0], [1.45, i * 1.0]]) {
-    const m = boxMesh(0.55, 0.55, 0.55, stoneDk); m.position.set(ax, base + keepH + 0.2, az); g.add(m);
-  }
-  // the great banner over the keep
-  const pole = boxMesh(0.14, 2.4, 0.14, wood); pole.position.set(0, base + keepH + 1.4, 0); g.add(pole);
-  const flag = boxMesh(1.7, 1.05, 0.08, ownerMat()); flag.position.set(0.9, base + keepH + 1.95, 0); g.add(flag);
-  const label = makeNameSprite(cap.def.name);
-  label.scale.set(6.6, 0.82, 1); label.position.y = base + keepH + 3.4; g.add(label);
-  g.userData.ownerMats = ownerMats;
-  g.userData.label = label;
-  g.position.set(cap.x, mapElevY(cap.x, cap.z), cap.z);   // the keep sits on its hill
+  if (S.pos.length) g.add(sgMesh(S, settleVCMat()));
+  const ownerMats = [], om = mat(ownerColor, { shared: false }); ownerMats.push(om);
+  if (O.pos.length) g.add(sgMesh(O, om));
+  const label = makeNameSprite(name);
+  label.scale.set(spec.lbl, spec.lbl / 8, 1); label.position.y = spec.top; g.add(label);
+  g.userData.ownerMats = ownerMats; g.userData.label = label;
+  g.position.set(X, refY, Z);
   return g;
+}
+
+// A nation capital: the grandest castle of all, fitted to its hill like every other hold.
+function makeCapital(cap) {
+  const seed = (Math.imul(Math.round(cap.x) | 0, 73856093) ^ Math.imul(Math.round(cap.z) | 0, 19349663) ^ (worldSeed() >>> 0)) >>> 0;
+  return buildSettlementGroup(cap.x, cap.z, 'capital', cap.def.name, cap.owner.color, seed);
 }
 // repaint a hold's banners/roofs to its current owner (after a conquest)
 function recolorCapital(cap) {
@@ -3623,68 +3903,14 @@ function recolorCapital(cap) {
   for (const m of cap.group.userData.ownerMats) m.color.setHex(cap.owner.color);
 }
 
-// A settlement scaled to its tier: a village is a cluster of thatched huts; a town adds a meeting
-// hall and a wooden palisade; a city is a walled, banner-crowned burg. Banner/roof materials are
-// per-hold and mutable, so a conquered settlement re-flies the conqueror's colors (recolorCapital).
+// A streamed settlement: village/town render as organic, contour-following clusters (10-15
+// houses, palisade for towns); a city renders as a CASTLE whose curtain wall is fitted to the
+// landform. Banner/roof materials are per-hold and mutable, so a conquered settlement re-flies
+// the conqueror's colors (recolorCapital). All terrain-aware via buildSettlementGroup above.
 function makeSettlement(hold) {
-  const g = new THREE.Group();
-  const tier = hold.tier;
-  const wood = mat(0x6b4a2e), thatch = mat(0x9a7b43), stone = mat(0x9a8f80), daub = mat(0xb9a888);
-  const ownerMats = [];
-  const ownerMat = () => { const m = mat(hold.owner.color, { shared: false }); ownerMats.push(m); return m; };
-  const r = _mulberry32(_chunkHash(hold.site.cx, hold.site.cz) ^ (Math.imul(hold.site.idx + 3, 0x9E3779B1) >>> 0));
-  const base = 0.2;
-  const spec = {
-    village: { huts: 5,  spread: 3.0, wall: null,    hall: false, banners: 1, top: 3.4, lbl: 3.6 },
-    town:    { huts: 9,  spread: 5.0, wall: 'wood',  hall: true,  banners: 1, top: 4.4, lbl: 4.6 },
-    city:    { huts: 16, spread: 8.0, wall: 'stone', hall: true,  banners: 3, top: 6.0, lbl: 5.8 },
-  }[tier];
-  const hut = (hx, hz, w, h, body) => {
-    const wall = boxMesh(w, h, w, body); wall.position.set(hx, base + h / 2, hz); wall.castShadow = false; g.add(wall);
-    const roof = new THREE.Mesh(cachedGeo('hutRoof', () => new THREE.ConeGeometry(0.95, 0.8, 4)), thatch);
-    roof.rotation.y = Math.PI / 4; roof.scale.set(w * 1.6, h * 0.85, w * 1.6);
-    roof.position.set(hx, base + h + h * 0.36, hz); g.add(roof);
-  };
-  // a ring of dwellings
-  for (let i = 0; i < spec.huts; i++) {
-    const a = r() * Math.PI * 2, rad = Math.sqrt(r()) * spec.spread;
-    const w = 0.85 + r() * 0.5, h = 0.85 + r() * 0.6 + (tier === 'city' ? r() * 0.9 : 0);
-    hut(Math.cos(a) * rad, Math.sin(a) * rad, w, h, tier === 'city' && r() < 0.4 ? stone : daub);
-  }
-  // a meeting hall at the heart of a town or city
-  if (spec.hall) {
-    const hw = tier === 'city' ? 2.6 : 2.0, hh = tier === 'city' ? 2.6 : 1.8;
-    const hall = boxMesh(hw, hh, hw * 1.3, tier === 'city' ? stone : wood); hall.position.set(0, base + hh / 2, 0); g.add(hall);
-    const roof = new THREE.Mesh(cachedGeo('hallRoof', () => new THREE.ConeGeometry(0.95, 0.9, 4)), ownerMat());
-    roof.rotation.y = Math.PI / 4; roof.scale.set(hw * 1.5, hh * 0.7, hw * 1.95);
-    roof.position.set(0, base + hh + hh * 0.34, 0); roof.castShadow = true; g.add(roof);
-  }
-  // a defensive ring — wooden palisade (town) or a stone curtain with a southern gate gap (city)
-  if (spec.wall) {
-    const wmat = spec.wall === 'stone' ? stone : wood, wallH = spec.wall === 'stone' ? 1.7 : 1.1;
-    const R = spec.spread + 1.7, side = R * 0.82;
-    for (let k = 0; k < 8; k++) {
-      if (tier === 'city' && k === 2) continue;  // leave a gateway
-      const a = k / 8 * Math.PI * 2 + Math.PI / 8;
-      const seg = boxMesh(side, wallH, spec.wall === 'stone' ? 0.5 : 0.3, wmat);
-      seg.position.set(Math.cos(a) * R, base + wallH / 2, Math.sin(a) * R);
-      seg.rotation.y = -a - Math.PI / 2; g.add(seg);
-    }
-  }
-  // owner banners
-  const banner = (bx, bz, bh) => {
-    const pole = boxMesh(0.12, bh, 0.12, wood); pole.position.set(bx, base + bh / 2, bz); g.add(pole);
-    const flag = boxMesh(1.0, 0.62, 0.06, ownerMat()); flag.position.set(bx + 0.55, base + bh - 0.42, bz); g.add(flag);
-  };
-  banner(0, spec.spread * 0.2, spec.top - 0.6);
-  if (spec.banners >= 3) { banner(spec.spread * 0.7, -spec.spread * 0.4, 3.0); banner(-spec.spread * 0.7, -spec.spread * 0.3, 3.0); }
-  // floating name label, sized to the tier
-  const label = makeNameSprite(hold.def.name);
-  label.scale.set(spec.lbl, spec.lbl / 8, 1); label.position.y = base + spec.top; g.add(label);
-  g.userData.ownerMats = ownerMats;
-  g.userData.label = label;
-  g.position.set(hold.x, mapElevY(hold.x, hold.z), hold.z);
-  return g;
+  const s = hold.site;
+  const seed = (_chunkHash(s.cx, s.cz) ^ (Math.imul(s.idx + 3, 0x9E3779B1) >>> 0)) >>> 0;
+  return buildSettlementGroup(hold.x, hold.z, hold.tier, hold.def.name, hold.owner.color, seed);
 }
 
 // show/hide the battle set-dressing (arena pad, torch ring, edge treeline) vs the strategic map terrain
@@ -6244,6 +6470,29 @@ BV.dbg = () => { const a = allies.find(x => x.alive && !x.def.ranged); const e =
     ally: a ? { state: a.state, order: a.order, hasTgt: !!(a.target && a.target.alive), dist: a.target ? Math.round(a.pos.distanceTo(a.target.pos)) : -1, z: Math.round(a.pos.z), vel: +a.vel.length().toFixed(2) } : null,
     enemyZ: e ? Math.round(e.pos.z) : null }; };
 BV.isWater = (x, z) => isWater(x, z);
+// --- settlement-generator test hooks ---
+// classify the land at a world point (what morphology a settlement there would take)
+BV.classify = (x = player.pos.x, z = player.pos.z, tier = 'city') => { const p = sgProbe(x, z, SG_SPEC[tier] || SG_SPEC.city); return { cls: p.cls, slope: +p.slope.toFixed(3), relief: +p.relief.toFixed(2), prom: +p.prom.toFixed(2), refY: +p.refY.toFixed(1) }; };
+// drop a settlement of a tier near the player (offset dx,dz). Deterministic when `seed` is given.
+BV.spawnSettlement = (tier = 'city', dx = 0, dz = 0, seed) => {
+  const X = player.pos.x + dx, Z = player.pos.z + dz;
+  const sd = (seed != null ? seed : (Math.imul(X | 0, 73856093) ^ Math.imul(Z | 0, 19349663))) >>> 0;
+  const g = buildSettlementGroup(X, Z, tier, tier.toUpperCase(), nations[0].owner.color, sd);
+  scene.add(g); (window._sgDbg || (window._sgDbg = [])).push(g);
+  return { ...BV.classify(X, Z, tier), verts: g.children.length, at: [Math.round(X), Math.round(Z)] };
+};
+BV.clearSpawned = () => { for (const g of (window._sgDbg || [])) { scene.remove(g); disposeGroup(g); } window._sgDbg = []; return 'cleared'; };
+// scan outward for high-relief sites (knolls/ridges) to test castle-on-a-hill fitting
+BV.findHill = (radius = 140, n = 8) => {
+  const out = [], px = player.pos.x, pz = player.pos.z, rng = _mulberry32((px * 131 + pz * 977) >>> 0);
+  for (let i = 0; i < 600 && out.length < n; i++) {
+    const a = rng() * TAU, rd = 18 + rng() * radius, X = px + Math.cos(a) * rd, Z = pz + Math.sin(a) * rd;
+    if (isWater(X, Z)) continue;
+    const p = sgProbe(X, Z, SG_SPEC.city);
+    if (p.cls === 'KNOLL' || p.cls === 'RIDGE') out.push({ x: Math.round(X), z: Math.round(Z), cls: p.cls, prom: +p.prom.toFixed(1), relief: +p.relief.toFixed(1) });
+  }
+  return out;
+};
 BV.fieldBatch = fieldBatch;
 BV.killFielded = () => { for (const e of enemies) if (e.alive) killEnemy(e, true); checkBattleEnd(); };
 BV.dmg = { damagePlayer, damageEnemy, damageCombatant };

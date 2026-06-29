@@ -1178,6 +1178,11 @@ let xp = 0;
 let waveKills = 0, waveHeroKills = 0, waveLosses = 0; // this-wave tally for XP
 function warbandTotal() { return WARBAND_KEYS.reduce((s, k) => s + warbandComp[k], 0); }
 function warbandCost(comp = warbandComp) { return WARBAND_KEYS.reduce((s, k) => s + comp[k] * UNIT_COST[k], 0); }
+// the player's army may split into detachments (each with its own troops + orders) that roam the
+// map. The lead column (warbandComp) is the men riding WITH you; detachments are a separate, disjoint
+// pool, so every Character lives in exactly one of warbandRoster or one detachment's roster.
+function detSize(det) { return WARBAND_KEYS.reduce((s, k) => s + (det.comp[k] || 0), 0); }
+function armyTotal() { return warbandTotal() + detachments.reduce((s, d) => s + detSize(d), 0); }
 function resetEconomy() {
   warbandComp.sword = 2; warbandComp.long = 0; warbandComp.archer = 1; warbandComp.thrower = 1;
   xp = STARTING_WEALTH - warbandCost();
@@ -2835,6 +2840,8 @@ let mode = 'menu';        // menu | map | battle | muster | gameover
 const MAP_HALF = 90;      // overworld half-size — much larger than a battle arena
 const FIELD_CAP = 50;     // combatants PER SIDE on the field at once (≤100 bodies total)
 const parties = [];       // roaming enemy bands on the map
+const detachments = [];   // the player's own roaming columns, split off the warband (see detSize/armyTotal)
+let detachCounter = 0;    // running id for detachments
 let mapLevel = 0;         // rises each time you clear the map — bands get bigger
 let universeSeed = 1;     // identifies THIS game universe — rerolled on refresh; mixes into worldSeed so terrain/capitals/diplomacy all differ run-to-run
 // Shared multiplayer: one fixed terrain seed so every player sees the SAME map + capitals, but each
@@ -4054,17 +4061,78 @@ function applyBiome(b) {
   }
 }
 
-// ---------- The player's own party banner (shown on the strategic map) ----------
-function makePlayerToken(size) {
+// ---------- The player's army on the strategic map: marching columns ----------
+// The lead column (the men riding with you) and each detachment are drawn as a banner over a small
+// cluster of WALKING soldiers — reusing the battle humanoid rig + walk cycle. The floating count
+// carries the TRUE size; only COLUMN_CAP bodies are ever drawn, so a 200-strong host still costs 6.
+const COLUMN_CAP = 6;            // marcher bodies drawn per column (the label carries the real size)
+const MAX_DETACH = 6;            // detachments the player may field at once
+const COLUMN_LOD2 = 95 * 95;     // beyond this (sq dist from the player) a column shows banner-only
+const COLUMN_SCALE = 0.6;        // marcher size under the ~4.4-tall banner
+
+// a banner on a pole: pole + cloth flag + gold trim (the player's colours)
+function makeBanner(color) {
   const g = new THREE.Group();
   const h = 4.4;
   const pole = boxMesh(0.2, h, 0.2, mat(0x2a1d10)); pole.position.y = h / 2; g.add(pole);
-  const flag = boxMesh(1.8, 1.1, 0.08, mat(0x2f5fae)); flag.position.set(1.0, h - 0.62, 0); g.add(flag);
+  const flag = boxMesh(1.8, 1.1, 0.08, mat(color)); flag.position.set(1.0, h - 0.62, 0); g.add(flag);
   const trim = boxMesh(1.8, 0.16, 0.1, mat(0xffd34d)); trim.position.set(1.0, h - 1.18, 0); g.add(trim);
-  const label = makeNameSprite('★ ' + size);
-  label.scale.set(2.8, 0.62, 1); label.position.y = h + 0.7; g.add(label);
-  g.userData.label = label;
   return g;
+}
+// set/replace a column's floating count label (disposes the old sprite's texture)
+function setColumnLabel(g, text) {
+  const old = g.userData.label;
+  if (old) { g.remove(old); if (old.material) { if (old.material.map) old.material.map.dispose(); old.material.dispose(); } }
+  const label = makeNameSprite(text);
+  label.scale.set(Math.min(5.2, 2.6 + text.length * 0.13), 0.62, 1); label.position.y = 5.2; g.add(label);
+  g.userData.label = label;
+}
+// build a marching column from a class-composition: a banner + up to COLUMN_CAP walking soldiers,
+// drawn from the class mix. Reuses buildHumanoid + makeAnimator/walkLegs (the battle rig + walk cycle).
+function makeColumn(comp, color, labelText) {
+  const g = new THREE.Group();
+  g.add(makeBanner(color));
+  const total = WARBAND_KEYS.reduce((s, k) => s + (comp[k] || 0), 0);
+  // proportionally fill the visible slots from the class mix (each present class shows at least once)
+  const slots = [];
+  if (total > 0) {
+    const cap = Math.min(COLUMN_CAP, total);
+    for (const k of WARBAND_KEYS) {
+      if (!comp[k]) continue;
+      const n = Math.max(1, Math.round(cap * comp[k] / total));
+      for (let i = 0; i < n && slots.length < cap; i++) slots.push(k);
+    }
+    while (slots.length < cap) slots.push('sword');
+  }
+  const marchers = [];
+  slots.forEach((k, i) => {
+    const def = ALLY_DEF_BY_CLASS[k];
+    const hum = buildHumanoid(ALLY_PALETTES[i % ALLY_PALETTES.length], COLUMN_SCALE, def.weapon);
+    const row = Math.floor(i / 2), col = i % 2;
+    hum.group.position.set((col - 0.5) * 1.0, 0, -1.1 - row * 0.95); // trail behind the banner (local -z = back)
+    const anim = makeAnimator(hum.parts);
+    setPose(anim, 'guard'); updateAnimator(anim, 1); // settle the arms into a readied stance once
+    g.add(hum.group);
+    marchers.push({ parts: hum.parts, group: hum.group, phase: Math.random() * Math.PI * 2 });
+  });
+  g.userData.marchers = marchers;
+  if (labelText != null) setColumnLabel(g, labelText);
+  return g;
+}
+// walk the soldiers when the column moves; settle them when it halts (skips banner-only / hidden bodies)
+function animateColumn(g, moving, dt) {
+  const ms = g.userData.marchers; if (!ms) return;
+  for (const m of ms) {
+    if (!m.group.visible) continue;
+    if (moving) { m.phase += dt * 8; walkLegs(m.parts, m.phase, 0.5); }
+    else restLegs(m.parts, dt, false);
+  }
+}
+// distance LOD: far columns drop their bodies and show only the banner + count
+function columnLOD(g, distSq) {
+  const ms = g.userData.marchers; if (!ms) return;
+  const show = distSq < COLUMN_LOD2;
+  for (const m of ms) if (m.group.visible !== show) m.group.visible = show;
 }
 
 function clearBattlefield() {
@@ -4197,7 +4265,7 @@ function enterMap() {
   updateChunks(true); // re-centre the streamed world on the actual spawn tile
   // the player rides the map as a banner party, like the rival hosts — not the walking hero
   if (player.mapToken) { scene.remove(player.mapToken); disposeGroup(player.mapToken); }
-  player.mapToken = makePlayerToken(warbandTotal());
+  player.mapToken = makeColumn(warbandComp, PLAYER_REALM.color, '★ ' + warbandTotal());
   player.mapToken.position.copy(player.pos);
   player.mapToken.position.y = mapElevY(player.pos.x, player.pos.z);
   scene.add(player.mapToken);
@@ -4563,6 +4631,7 @@ function updateMap(dt) {
     player.mapToken.position.copy(player.pos);
     player.mapToken.position.y = mapElevY(player.pos.x, player.pos.z);
     player.mapToken.rotation.y = player.facing;
+    animateColumn(player.mapToken, dir.lengthSq() > 0, dt); // the lead column marches as you ride
   }
   // tally the ground actually covered → grow the vista (haze, zoom, stream-radius all follow)
   applyVista(Math.hypot(npx - opx, npz - opz), dt);
@@ -4669,7 +4738,7 @@ function updateMap(dt) {
   if (activeCall) updateActiveCall(dt); // advance a standing Call to Arms / Crusade
   if (aliveParties === 0 && !serverDriven) enterMap(); // somehow emptied → next, bigger region
   sendPresenceMaybe(dt); // multiplayer: heartbeat your banner + refresh rivals
-  enemyCountEl.textContent = 'Band ' + warbandTotal() + ' · Foes nearby: ' + aliveParties;
+  enemyCountEl.textContent = 'Army ' + armyTotal() + (detachments.length ? ' (with you ' + warbandTotal() + ', ' + detachments.length + ' detached)' : '') + ' · Foes nearby: ' + aliveParties;
 }
 
 // --- build an enemy band roster (a flat list of defs), scaled to its size ---

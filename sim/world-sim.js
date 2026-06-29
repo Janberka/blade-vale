@@ -374,8 +374,9 @@
   // Cities are landmarks, not common holds: they live on a COARSE LATTICE so the big ones stay far
   // apart. One candidate city per CITY_BLOCK×CITY_BLOCK block of chunks, only ~CITY_CHANCE of blocks
   // actually hold one, seated near the block centre with bounded jitter — so two neighbouring cities
-  // are never closer than ~CITY_BLOCK·CHUNK·(1−2·jitter) ≈ 145u apart. Villages/towns stay per-chunk.
-  var CITY_BLOCK = 4;            // chunks per city cell (≈240 world units)
+  // are never closer than ~CITY_BLOCK·CHUNK·(1−2·jitter) ≈ 290u apart (a real journey between cities).
+  // The client then land-snaps each centre (can drift ~80u to escape a coast), still well within spacing.
+  var CITY_BLOCK = 7;            // chunks per city cell (≈420 world units)
   var CITY_CHANCE = 0.5;         // fraction of cells that actually hold a city
   var CITY_IDX = 9;             // reserved site index so a lattice city never collides with idx 0/1
   function blockCity(cx, cz, worldSeed) {

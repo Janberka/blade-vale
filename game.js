@@ -3091,8 +3091,11 @@ function placeCapitals() {
   const CAP_RING = MAP_HALF * 1.5;
   for (let i = 0; i < NATIONS.length; i++) {
     const home = (typeof NATIONS[i].home === 'number') ? NATIONS[i].home : (i / NATIONS.length) * Math.PI * 2;
-    const ang = home + jitter;
-    const [cx, cz] = nearestLand(Math.cos(ang) * CAP_RING, Math.sin(ang) * CAP_RING);
+    const ang = home + jitter, bx = Math.cos(ang) * CAP_RING, bz = Math.sin(ang) * CAP_RING;
+    // seat the capital on solid land near its bearing — a small bounded nudge (≤16u) so a coastal bearing
+    // lands on a real landmass rather than a half-submerged spit, without drifting into a neighbour.
+    const spot = bestLandSpot(bx, bz, 36, 16);
+    const [cx, cz] = spot ? [spot.x, spot.z] : nearestLand(bx, bz);
     nations.push({ def: NATIONS[i], owner: NATIONS[i], x: cx, z: cz, garrison: garrisonSize(), parleyCd: 0, conquerCd: 0, group: null });
   }
 }
@@ -3268,23 +3271,31 @@ function nearCapital(x, z, d) { for (const n of nations) if (Math.hypot(n.x - x,
 // is the fraction of the footprint ring that is land (inland ≈1, a beach city ≈0.5, an archipelago <0.4
 // → no city). The search is bounded so a coastal city only nudges inland a little — it never migrates far
 // enough to crowd a neighbouring lattice city. Returns null when there's no real land here (deep ocean).
-function cityLandCenter(x0, z0, R) {
-  const land = (x, z) => !isWater(x, z);
-  const score = (x, z) => {
-    if (!land(x, z)) return -1;                                          // the centre must be on land
-    let s = 0, n = 0;
-    for (let k = 0; k < 12; k++) { const a = k / 12 * TAU;
-      for (const rr of [R * 0.45, R * 0.9]) { s += land(x + Math.cos(a) * rr, z + Math.sin(a) * rr) ? 1 : 0; n++; } }
-    return s / n;
-  };
-  let bx = x0, bz = z0, bs = score(x0, z0);
-  const STEP = R * 0.34, MAXR = R * 1.05;                                // ≤ ~1 footprint radius of drift
-  for (let rad = STEP; rad <= MAXR && bs < 0.97; rad += STEP) {
-    for (let k = 0; k < 12; k++) { const a = k / 12 * TAU + rad * 0.5;   // interleave each ring's probes
-      const x = x0 + Math.cos(a) * rad, z = z0 + Math.sin(a) * rad, sc = score(x, z);
+function landScore(x, z, footR) {
+  if (isWater(x, z)) return -1;                                         // the centre must be on land
+  let s = 0, n = 0;                                                     // dense disk sample (16 dirs × 3 rings)
+  for (let k = 0; k < 16; k++) { const a = k / 16 * TAU, ca = Math.cos(a), sa = Math.sin(a);
+    for (const rr of [footR * 0.45, footR * 0.72, footR]) { s += isWater(x + ca * rr, z + sa * rr) ? 0 : 1; n++; } }
+  return s / n;
+}
+// Find the most-landlocked spot near (x0,z0): spiral out to searchR and keep the best landScore. Used to
+// seat cities, capitals and the player start on solid ground instead of a coastal sliver.
+function bestLandSpot(x0, z0, footR, searchR) {
+  let bx = x0, bz = z0, bs = landScore(x0, z0, footR);
+  const STEP = Math.max(6, footR * 0.34);
+  for (let rad = STEP; rad <= searchR && bs < 0.97; rad += STEP) {
+    for (let k = 0; k < 12; k++) { const a = k / 12 * TAU + rad * 0.5;  // interleave each ring's probes
+      const x = x0 + Math.cos(a) * rad, z = z0 + Math.sin(a) * rad, sc = landScore(x, z, footR);
       if (sc > bs) { bs = sc; bx = x; bz = z; } }
   }
-  return bs >= 0.42 ? { x: bx, z: bz } : null;
+  return bs >= 0 ? { x: bx, z: bz, score: bs } : null;
+}
+// Pull a city centre onto solid land near (x0,z0). Cities sit on a wide lattice now, so the search radius
+// is generous (escape a coastline); a city must end up MOSTLY land (a beach edge is fine, half-in-sea is
+// not) or it is dropped (deep ocean / archipelago → no city there).
+function cityLandCenter(x0, z0, R) {
+  const c = bestLandSpot(x0, z0, R, R * 2.2);
+  return (c && c.score >= 0.6) ? c : null;
 }
 // Deterministic settlement sites within a chunk (villages/towns per-chunk; cities on a coarse lattice) —
 // shared kernel. Cities are then snapped onto land here (terrain lives client-side, not in the pure kernel).
@@ -4135,6 +4146,177 @@ function columnLOD(g, distSq) {
   for (const m of ms) if (m.group.visible !== show) m.group.visible = show;
 }
 
+// ---------- The player's detachments: split off the lead column, roam, then merge back ----------
+function setDetVisible(v) { for (const d of detachments) { if (d.group) d.group.visible = v; if (d.routeMesh) d.routeMesh.visible = v; if (d.targetMesh) d.targetMesh.visible = v; } } // columns + overlays are map-only
+function refreshDetLabel(det) { if (det.group) setColumnLabel(det.group, '✦ ' + det.name + ' · ' + det.size); }
+function newDetachment() {
+  const id = ++detachCounter;
+  return { id, name: 'Detachment ' + id, color: GROUP_COLORS[(id - 1) % GROUP_COLORS.length],
+    comp: { sword: 0, long: 0, archer: 0, thrower: 0 }, roster: [], size: 0,
+    pos: new THREE.Vector3(), facing: player.facing, group: null,
+    order: 'follow', target: null, route: [], routeIdx: 0, routeDir: 1, routeMesh: null, targetMesh: null,
+    pace: 'march', garrisonHold: null, faction: PLAYER_REALM, isDetachment: true,
+    inBattle: null, clashCd: 0, parleyCd: 0, level: mapLevel, leader: null,
+    quality: 1 + 0.04 * mapLevel, alive: true, _shownSize: -1 };
+}
+// peel `recipe` men of each class off the lead column into a fresh detachment that marches at your side
+function detach(recipe) {
+  if (detachments.length >= MAX_DETACH) { showCmdToast('Already fielding ' + MAX_DETACH + ' detachments'); return null; }
+  ensureWarbandRoster();                        // make the lead roster match its counts before peeling men off
+  const det = newDetachment();
+  let moved = 0;
+  for (const k of WARBAND_KEYS) {
+    const n = Math.min(recipe[k] || 0, warbandComp[k]);
+    if (n <= 0) continue;
+    const pool = warbandRoster.filter(c => !c.fallen && classKeyOf(c.archetype) === k);
+    for (let i = 0; i < n; i++) {
+      const c = pool[i]; if (!c) break;
+      const idx = warbandRoster.indexOf(c); if (idx >= 0) warbandRoster.splice(idx, 1);
+      det.roster.push(c);                        // the Character MOVES (never copied) — the single-list invariant
+    }
+    warbandComp[k] -= n; det.comp[k] = n; moved += n;
+  }
+  if (moved === 0) { showCmdToast('Nothing spare to detach'); return null; }
+  det.size = detSize(det);
+  det.pos.copy(player.pos); det.pos.y = 0;
+  det.group = makeColumn(det.comp, det.color, '✦ ' + det.name + ' · ' + det.size);
+  det.group.position.copy(det.pos); det.group.position.y = mapElevY(det.pos.x, det.pos.z);
+  scene.add(det.group);
+  detachments.push(det);
+  if (player.mapToken) setColumnLabel(player.mapToken, '★ ' + warbandTotal()); // the lead column just shrank
+  showCmdToast(det.name + ' marches — ' + det.size + ' strong');
+  return det;
+}
+function orderDet(det, order, target) {
+  det.order = order;
+  if (order === 'move' || order === 'garrison') det.target = target ? { x: target.x, z: target.z } : { x: det.pos.x, z: det.pos.z };
+  else if (order === 'hold') det.target = { x: det.pos.x, z: det.pos.z };
+  else if (order === 'follow' || order === 'regroup') det.target = null;
+  if (order !== 'patrol' && det.routeMesh) disposeRouteOverlay(det); // leaving patrol clears its route line
+}
+function setPatrol(det, route) {
+  if (!route || route.length < 2) { showCmdToast('A patrol needs at least 2 points'); return; }
+  det.route = route.map(p => ({ x: p.x, z: p.z }));
+  det.routeIdx = 0; det.routeDir = 1; det.order = 'patrol'; det.target = null;
+  if (typeof updateRouteOverlay === 'function') updateRouteOverlay(det);
+}
+// fold a detachment's men back into the lead column (rebuilds warbandComp from the merged roster)
+function mergeDetachment(det) {
+  ensureWarbandRoster();                         // lead roster ⇔ counts before we add the detachment's men
+  for (const c of det.roster) if (!c.fallen && warbandRoster.indexOf(c) < 0) warbandRoster.push(c);
+  for (const k of WARBAND_KEYS) warbandComp[k] = 0;
+  for (const c of warbandRoster) if (!c.fallen) warbandComp[classKeyOf(c.archetype)]++;
+  disposeRouteOverlay(det); disposeDetFlag(det);
+  if (det.group) { scene.remove(det.group); disposeGroup(det.group); }
+  const idx = detachments.indexOf(det); if (idx >= 0) detachments.splice(idx, 1);
+  if (player.mapToken) setColumnLabel(player.mapToken, '★ ' + warbandTotal());
+}
+// after a map clash, trim a SURVIVING detachment's comp + roster down to its new (reduced) size
+function reconcileDetachment(det) {
+  const target = Math.max(0, Math.round(det.size));
+  if (target <= 0) { killBand(det); return; }
+  if (det.roster.length > target) {
+    det.roster.sort((a, b) => (b.renown || 0) - (a.renown || 0)); // the greenest fall first; veterans endure
+    for (const c of det.roster.splice(target)) warbandNameSet.delete(c.name);
+  }
+  for (const k of WARBAND_KEYS) det.comp[k] = 0;
+  for (const c of det.roster) det.comp[classKeyOf(c.archetype)]++;
+  det.size = detSize(det);
+  for (const c of det.roster) { c.renown = (c.renown || 0) + 1; c.battles = (c.battles || 0) + 1; } // survivors harden a little
+  refreshDetLabel(det);
+}
+// order a detachment to guard a hold; it parks there (storming it first if it's a weak-enough enemy hold)
+function garrisonDet(det, hold) {
+  if (!hold) return;
+  det.garrisonHold = hold; det.order = 'garrison'; det.target = { x: hold.x, z: hold.z };
+  if (det.routeMesh) disposeRouteOverlay(det);
+}
+function garrisonInto(det) {
+  const hold = det.garrisonHold;
+  if (hold && !hold.conquerCd && areFactionEnemies(det.faction, hold.owner) && detSize(det) >= effGarrison(hold) * 0.5) {
+    conquerByBand(hold, det);     // strong enough → storm and take it (flips ownership, bloodies the detachment)
+    reconcileDetachment(det);
+    if (!det.alive) return;       // a pyrrhic storm can break a small detachment
+  }
+  det.order = 'hold'; det.target = { x: det.pos.x, z: det.pos.z };
+  showCmdToast(det.name + ' holds ' + ((hold && hold.def && hold.def.name) || (hold && hold.name) || 'its ground'));
+}
+// a fresh campaign / new universe musters a clean host — dissolve any detachments from a prior life
+function clearDetachments() {
+  for (const d of detachments.slice()) { disposeRouteOverlay(d); disposeDetFlag(d); if (d.group) { scene.remove(d.group); disposeGroup(d.group); } }
+  detachments.length = 0; detachCounter = 0; cmdSelDet = null;
+  if (typeof cancelPatrolDraft === 'function') cancelPatrolDraft();
+}
+// on (re)entering the map: detachments survive, but any stranded far from the player (a region advance,
+// or a teleport) are pulled back to your side; a same-region return leaves them where they stood
+function reseatDetachments() {
+  detachments.forEach((d, i) => {
+    if (d.inBattle) { d.inBattle = null; d.clashCd = 0; } // a map clash never carries across an enterMap
+    const far = Math.hypot(d.pos.x - player.pos.x, d.pos.z - player.pos.z) > 180;
+    if (!far) { if (d.group) d.group.visible = true; return; }
+    const ang = player.facing + Math.PI + (i - (detachments.length - 1) / 2) * 0.5;
+    const [lx, lz] = nearestLand(player.pos.x + Math.sin(ang) * 9, player.pos.z + Math.cos(ang) * 9);
+    d.pos.set(lx, 0, lz); d.order = 'follow'; d.target = null; d.route = []; d.routeIdx = 0; d.routeDir = 1;
+    disposeRouteOverlay(d); disposeDetFlag(d);
+    if (d.group) { d.group.position.set(lx, mapElevY(lx, lz), lz); d.group.visible = true; }
+  });
+}
+// steer a detachment toward (tx,tz); returns true while still en route (outside stopR)
+function stepDetachmentTo(det, tx, tz, stopR, sp, dt) {
+  const dx = tx - det.pos.x, dz = tz - det.pos.z, d = Math.hypot(dx, dz);
+  if (d <= stopR) return false;
+  const mvx = dx / d, mvz = dz / d;
+  det.facing = angleLerp(det.facing, Math.atan2(mvx, mvz), dt * 10);
+  const [nx, nz] = landStep(det.pos.x, det.pos.z, mvx * sp * dt, mvz * sp * dt);
+  det.pos.x = nx; det.pos.z = nz;
+  return true;
+}
+// a fanned point a little behind the player, so trailing columns string out rather than stack
+function followOffset(det) {
+  const i = Math.max(0, detachments.indexOf(det));
+  const ang = player.facing + Math.PI + (i - (detachments.length - 1) / 2) * 0.55;
+  return { x: player.pos.x + Math.sin(ang) * 9, z: player.pos.z + Math.cos(ang) * 9 };
+}
+// advance every detachment one tick under its standing order; called from updateMap
+function updateDetachments(dt) {
+  for (const det of detachments.slice()) {
+    if (!det.alive) continue;
+    if (det.clashCd > 0) det.clashCd -= dt;
+    if (det.parleyCd > 0) det.parleyCd -= dt;
+    let moved = false;
+    if (!det.inBattle) {
+      const sp = det.pace === 'rush' ? 7 : 5;
+      if (det.order === 'follow') {
+        const t = followOffset(det); moved = stepDetachmentTo(det, t.x, t.z, 6, sp, dt);
+      } else if (det.order === 'move') {
+        if (det.target) { moved = stepDetachmentTo(det, det.target.x, det.target.z, 2, sp, dt); if (!moved) det.order = 'hold'; }
+      } else if (det.order === 'garrison') {
+        if (det.target) { moved = stepDetachmentTo(det, det.target.x, det.target.z, 2.6, sp, dt); if (!moved && typeof garrisonInto === 'function') { garrisonInto(det); continue; } }
+      } else if (det.order === 'regroup') {
+        moved = stepDetachmentTo(det, player.pos.x, player.pos.z, 4, sp, dt);
+        if (!moved) { mergeDetachment(det); continue; }
+      } else if (det.order === 'patrol' && det.route.length >= 2) {
+        const wp = det.route[det.routeIdx];
+        moved = stepDetachmentTo(det, wp.x, wp.z, 2.5, sp, dt);
+        if (!moved) {                            // reached this waypoint → advance, bouncing at either end
+          det.routeIdx += det.routeDir;
+          if (det.routeIdx >= det.route.length) { det.routeIdx = det.route.length - 2; det.routeDir = -1; }
+          else if (det.routeIdx < 0) { det.routeIdx = 1; det.routeDir = 1; }
+        }
+      }
+    }
+    if (det.group) {
+      det.group.position.copy(det.pos);
+      det.group.position.y = mapElevY(det.pos.x, det.pos.z);
+      det.group.rotation.y = det.facing;
+      const dpx = player.pos.x - det.pos.x, dpz = player.pos.z - det.pos.z;
+      columnLOD(det.group, dpx * dpx + dpz * dpz);
+      animateColumn(det.group, moved, dt);
+    }
+    updateDetMarkers(det); // destination flag for move/hold/garrison
+  }
+}
+
 function clearBattlefield() {
   for (const e of enemies) { scene.remove(e.obj); disposeGroup(e.obj); }
   enemies.length = 0;
@@ -4171,6 +4353,7 @@ function makePartyToken(size, faction) {
 }
 // after a clash trims a band, repaint its floating troop count
 function setBandLabel(band) {
+  if (band.isDetachment) { if (band.group) setColumnLabel(band.group, '✦ ' + band.name + ' · ' + Math.max(0, Math.round(band.size))); return; } // detachments keep their column label
   const g = band.group, old = g.userData.label;
   if (old) {
     g.remove(old);
@@ -4261,7 +4444,12 @@ function enterMap() {
     const cap = nations[mpHomeIdx], ang = (mpSpawnJitter % 360) * Math.PI / 180, r = 9 + (mpSpawnJitter % 8);
     spawnX = cap.x + Math.cos(ang) * r; spawnZ = cap.z + Math.sin(ang) * r;
   }
-  const [plx, plz] = nearestLand(spawnX, spawnZ); player.pos.set(plx, 0, plz); // never start at sea
+  // start on a SOLID landmass, not just any dry pixel — nearestLand can land you on a coastal sliver
+  // surrounded by sea ("half in the water"); bestLandSpot finds a tile with a clear dry radius (footR 28)
+  // around it, ranging far (220u) to reach the mainland if the spawn point sits on a small island.
+  const land = bestLandSpot(spawnX, spawnZ, 28, 220);
+  const [plx, plz] = land ? [land.x, land.z] : nearestLand(spawnX, spawnZ);
+  player.pos.set(plx, 0, plz); // never start at sea
   updateChunks(true); // re-centre the streamed world on the actual spawn tile
   // the player rides the map as a banner party, like the rival hosts — not the walking hero
   if (player.mapToken) { scene.remove(player.mapToken); disposeGroup(player.mapToken); }
@@ -4269,6 +4457,9 @@ function enterMap() {
   player.mapToken.position.copy(player.pos);
   player.mapToken.position.y = mapElevY(player.pos.x, player.pos.z);
   scene.add(player.mapToken);
+  setDetVisible(true); // the player's detachments (if any) ride the map alongside the lead column
+  reseatDetachments(); // pull any stranded detachments (region advance / teleport) back to your side
+  showCmdBtn(true);    // the overworld command button is map-only
   player.obj.visible = false;
   musterOverlay.classList.add('hidden');
   gameoverOverlay.classList.add('hidden');
@@ -4300,6 +4491,12 @@ function killBand(band) {
     bt.sideB.bands = bt.sideB.bands.filter(b => b !== band);
   }
   scene.remove(band.group); disposeGroup(band.group);
+  if (band.isDetachment) { // a player detachment broken in the field — its men (and names) are lost for good
+    for (const c of band.roster) warbandNameSet.delete(c.name);
+    disposeRouteOverlay(band); disposeDetFlag(band);
+    const idx = detachments.indexOf(band); if (idx >= 0) detachments.splice(idx, 1);
+    showCmdToast(band.name + ' is broken — ' + band.roster.length + ' men lost');
+  }
 }
 // rival hosts trade blows: each round both sides take casualties, the smaller
 // folds first. They stay locked and exchange every ~0.5s so you SEE the battle.
@@ -4505,7 +4702,7 @@ function finishMapBattle(bt) {
   const win = bt.aWins ? bt.sideA : bt.sideB, los = bt.aWins ? bt.sideB : bt.sideA;
   spawnPopup(tmpV2.set(bt.cx, 3.2, bt.cz), '⚔', '#ffe089');
   for (const b of los.bands) if (b.alive) { if (b.leader) spawnPopup(b.pos.clone().setY(3.2), b.leader.name + "'s host is broken", '#ff9b6b'); b.inBattle = null; killBand(b); }
-  for (const b of win.bands) if (b.alive) { b.inBattle = null; b.clashCd = 1.5; b._shownSize = -1; setBandLabel(b); }
+  for (const b of win.bands) if (b.alive) { b.inBattle = null; b.clashCd = 1.5; b._shownSize = -1; if (b.isDetachment) reconcileDetachment(b); else setBandLabel(b); }
   if (bt.marker) { scene.remove(bt.marker); disposeGroup(bt.marker); }
   const i = mapBattles.indexOf(bt); if (i >= 0) mapBattles.splice(i, 1);
 }
@@ -4617,7 +4814,8 @@ function updateMap(dt) {
   tickMapDiplomacy(dt, serverDriven); // evolve faction relations: server truth online, shared kernel in solo
   // the party glides across the map as a banner; faster than enemy bands so you can flee
   const dir = inputDir();
-  if (dir.lengthSq() > 0) {
+  const roaming = !mapCmdMode; // in command mode the cursor is freed and the map holds still for orders
+  if (roaming && dir.lengthSq() > 0) {
     player.vel.addScaledVector(dir, player.speed * 1.5 * dt * 9);
     player.facing = angleLerp(player.facing, Math.atan2(dir.x, dir.z), dt * 12);
   }
@@ -4631,7 +4829,7 @@ function updateMap(dt) {
     player.mapToken.position.copy(player.pos);
     player.mapToken.position.y = mapElevY(player.pos.x, player.pos.z);
     player.mapToken.rotation.y = player.facing;
-    animateColumn(player.mapToken, dir.lengthSq() > 0, dt); // the lead column marches as you ride
+    animateColumn(player.mapToken, roaming && dir.lengthSq() > 0, dt); // the lead column marches as you ride
   }
   // tally the ground actually covered → grow the vista (haze, zoom, stream-radius all follow)
   applyVista(Math.hypot(npx - opx, npz - opz), dt);
@@ -4686,6 +4884,9 @@ function updateMap(dt) {
     if (d < 3.4 && band.parleyCd <= 0 && -(player.vel.x * to.x + player.vel.z * to.z) > 1) { openEncounter(band); return; }
   }
 
+  updateDetachments(dt); // the player's own columns roam under their standing orders
+  updateCmdUI();         // selection ring + command-panel refresh (command mode only)
+
   const holds = settlements.length ? nations.concat(settlements) : nations; // every hold near you this frame
   // ride up to any hold — capital, city, town or village — to lay siege (or leave); also age its timers
   for (const cap of holds) {
@@ -4709,6 +4910,18 @@ function updateMap(dt) {
       if (dx * dx + dz * dz >= 3.6 * 3.6) continue;
       if (q.inBattle) joinSide(q.inBattle, p); // p (free) reinforces q's ongoing clash
       else startMapBattle(p, q);               // two free hosts meet — a new visible battle begins
+      break;
+    }
+  }
+  // the player's detachments lock into the same visible clashes — but only against declared ENEMIES
+  // (not neutrals), so a patrol intercepts foes without starting fresh wars
+  for (const det of detachments) {
+    if (!det.alive || det.inBattle || det.clashCd > 0) continue;
+    for (const q of parties) {
+      if (!q.alive || q.serverId || q.inBattle || !areFactionEnemies(q.faction, det.faction)) continue;
+      const dx = det.pos.x - q.pos.x, dz = det.pos.z - q.pos.z;
+      if (dx * dx + dz * dz >= 3.6 * 3.6) continue;
+      startMapBattle(det, q);
       break;
     }
   }
@@ -4812,6 +5025,8 @@ function enterBattle(band) {
   applyBiome(biomeAt(band.pos.x, band.pos.z));
   setBattleDressing(true);
   if (player.mapToken) player.mapToken.visible = false;
+  setDetVisible(false); // detachment columns are map-only — hide them during the fight
+  toggleCmdMode(false); showCmdBtn(false);
   player.obj.visible = true;
   cameraAngle = Math.PI; // battle camera sits behind the player, facing the host
   if (!playerChar) loadCareers();                // debug entry points may skip startGame
@@ -4982,6 +5197,256 @@ function disposeHoldMarker(g) {
   for (const k of ['ring', 'post', 'flag']) g.holdMarker.userData[k].material.dispose();
   g.holdMarker = null;
 }
+// ----- detachment overlays: a patrol route line + numbered waypoints, and a move/hold/garrison flag -----
+function buildRouteMarker(colorHex) {
+  const ringGeo = cachedGeo('routering', () => { const g = new THREE.RingGeometry(0.9, 1.3, 16); g.rotateX(-Math.PI / 2); return g; });
+  const grp = new THREE.Group();
+  const ring = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: colorHex, transparent: true, opacity: 0.9, depthWrite: false, side: THREE.DoubleSide }));
+  ring.position.y = 0.08; grp.add(ring);
+  return grp;
+}
+function disposeRouteOverlay(det) {
+  if (!det.routeMesh) return;
+  scene.remove(det.routeMesh);
+  det.routeMesh.traverse(o => {
+    if (o.geometry && !o.geometry.userData.cached) o.geometry.dispose();
+    if (o.material) { if (o.material.map) o.material.map.dispose(); o.material.dispose(); }
+  });
+  det.routeMesh = null;
+}
+function updateRouteOverlay(det) {
+  disposeRouteOverlay(det);
+  if (det.order !== 'patrol' || !det.route || det.route.length < 2) return;
+  const grp = new THREE.Group();
+  const pts = det.route.map(p => new THREE.Vector3(p.x, mapElevY(p.x, p.z) + 0.25, p.z));
+  const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
+    new THREE.LineBasicMaterial({ color: det.color, transparent: true, opacity: 0.85 }));
+  grp.add(line);
+  det.route.forEach((p, i) => {
+    const m = buildRouteMarker(det.color);
+    m.position.set(p.x, mapElevY(p.x, p.z), p.z);
+    const lbl = makeNameSprite(String(i + 1)); lbl.scale.set(1.3, 0.55, 1); lbl.position.y = 1.7; m.add(lbl);
+    grp.add(m);
+  });
+  scene.add(grp);
+  det.routeMesh = grp;
+}
+function buildDetFlag(colorHex) {
+  const grp = new THREE.Group();
+  const ring = new THREE.Mesh(cachedGeo('detring', () => { const g = new THREE.RingGeometry(1.3, 1.8, 18); g.rotateX(-Math.PI / 2); return g; }),
+    new THREE.MeshBasicMaterial({ color: colorHex, transparent: true, opacity: 0.8, depthWrite: false, side: THREE.DoubleSide }));
+  ring.position.y = 0.06;
+  const post = new THREE.Mesh(cachedGeo('detpost', () => new THREE.CylinderGeometry(0.1, 0.1, 2.8, 6)), new THREE.MeshBasicMaterial({ color: colorHex }));
+  post.position.y = 1.4;
+  const flag = new THREE.Mesh(cachedGeo('detflag', () => new THREE.PlaneGeometry(1.2, 0.7)), new THREE.MeshBasicMaterial({ color: colorHex, side: THREE.DoubleSide }));
+  flag.position.set(0.6, 2.4, 0);
+  grp.add(ring, post, flag);
+  scene.add(grp);
+  return grp;
+}
+function disposeDetFlag(det) {
+  if (!det.targetMesh) return;
+  scene.remove(det.targetMesh);
+  for (const o of det.targetMesh.children) if (o.material) o.material.dispose();
+  det.targetMesh = null;
+}
+// per-frame: show a destination flag for move/hold/garrison (the route line is static, built on setPatrol)
+function updateDetMarkers(det) {
+  const showFlag = !det.inBattle && (det.order === 'move' || det.order === 'hold' || det.order === 'garrison') && det.target;
+  if (showFlag) {
+    if (!det.targetMesh) det.targetMesh = buildDetFlag(det.color);
+    det.targetMesh.position.set(det.target.x, mapElevY(det.target.x, det.target.z), det.target.z);
+  } else if (det.targetMesh) disposeDetFlag(det);
+}
+
+// ====== Overworld command UX: split & order detachments (desktop click + on-screen panel + touch) ======
+let mapCmdMode = false, cmdSelDet = null, patrolDraft = null, _draftMesh = null, _detSelRing = null, _detPanelSig = '';
+const detSplitRecipe = { sword: 0, long: 0, archer: 0, thrower: 0 };
+const _disposeOverlayGroup = (g) => { if (!g) return; scene.remove(g); g.traverse(o => { if (o.geometry && !o.geometry.userData.cached) o.geometry.dispose(); if (o.material) { if (o.material.map) o.material.map.dispose(); o.material.dispose(); } }); };
+
+function setDetPace(det, pace) { det.pace = pace; renderDetPanel(); }
+function selectDet(det) { cmdSelDet = (det && det.alive) ? det : null; renderDetPanel(); }
+
+function toggleCmdMode(on) {
+  const want = (on == null) ? !mapCmdMode : !!on;
+  if (want && mode !== 'map') return;
+  mapCmdMode = want;
+  if (mapCmdMode) { if (document.exitPointerLock) document.exitPointerLock(); }
+  else { cancelPatrolDraft(); cmdSelDet = null; }
+  const panel = document.getElementById('det-panel'); if (panel) panel.classList.toggle('hidden', !mapCmdMode);
+  const btn = document.getElementById('det-cmd-btn'); if (btn) btn.classList.toggle('on', mapCmdMode);
+  if (mapCmdMode) { renderDetPanel(); showCmdToast('Command mode — pick a detachment, then click the map. Esc to exit.'); }
+  else showCmdToast('Command mode off');
+}
+
+function cancelPatrolDraft() { patrolDraft = null; _disposeOverlayGroup(_draftMesh); _draftMesh = null; }
+function beginPatrolDraft() {
+  if (!cmdSelDet) { showCmdToast('Pick a detachment first'); return; }
+  patrolDraft = [];
+  showCmdToast('Patrol: click the map to drop waypoints, then Enter / right-click to set (Esc cancels)');
+}
+function drawPatrolDraft() {
+  _disposeOverlayGroup(_draftMesh); _draftMesh = null;
+  if (!patrolDraft || !patrolDraft.length) return;
+  const col = cmdSelDet ? cmdSelDet.color : 0xffd34d, g = new THREE.Group();
+  if (patrolDraft.length >= 2) {
+    const pts = patrolDraft.map(p => new THREE.Vector3(p.x, mapElevY(p.x, p.z) + 0.25, p.z));
+    g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: col, transparent: true, opacity: 0.8 })));
+  }
+  patrolDraft.forEach((p, i) => { const m = buildRouteMarker(col); m.position.set(p.x, mapElevY(p.x, p.z), p.z); const lbl = makeNameSprite(String(i + 1)); lbl.scale.set(1.3, 0.55, 1); lbl.position.y = 1.7; m.add(lbl); g.add(m); });
+  scene.add(g); _draftMesh = g;
+}
+function commitPatrolDraft() {
+  if (!patrolDraft || !cmdSelDet) { cancelPatrolDraft(); return; }
+  if (patrolDraft.length < 2) { showCmdToast('A patrol needs at least 2 waypoints'); return; }
+  setPatrol(cmdSelDet, patrolDraft); cancelPatrolDraft(); renderDetPanel();
+}
+
+function holdNear(x, z, r) { let best = null, bd = r * r; for (const h of nations.concat(settlements)) { const dx = h.x - x, dz = h.z - z, dd = dx * dx + dz * dz; if (dd < bd) { bd = dd; best = h; } } return best; }
+function detAtScreen(cx, cy) {
+  let best = null, bd = 46 * 46;
+  for (const d of detachments) { if (!d.alive) continue; tmpV.copy(d.pos); tmpV.y += 2; tmpV.project(camera); if (tmpV.z > 1) continue;
+    const sx = (tmpV.x * 0.5 + 0.5) * innerWidth, sy = (-tmpV.y * 0.5 + 0.5) * innerHeight, dd = (sx - cx) ** 2 + (sy - cy) ** 2; if (dd < bd) { bd = dd; best = d; } }
+  return best;
+}
+// a click on the 3D map while in command mode: place a waypoint, select a column, or order the ground
+function onMapCmdClick(cx, cy) {
+  if (patrolDraft) { const p = groundPointAt(cx, cy); if (p) { const [lx, lz] = nearestLand(p.x, p.z); patrolDraft.push({ x: lx, z: lz }); drawPatrolDraft(); } return; }
+  const hit = detAtScreen(cx, cy);
+  if (hit && hit !== cmdSelDet) { selectDet(hit); return; }
+  if (cmdSelDet) {
+    const p = groundPointAt(cx, cy); if (!p) return;
+    const hold = holdNear(p.x, p.z, 6);
+    if (hold) { garrisonDet(cmdSelDet, hold); showCmdToast(cmdSelDet.name + ' → garrison ' + ((hold.def && hold.def.name) || hold.name || 'the hold')); }
+    else { const [lx, lz] = nearestLand(p.x, p.z); orderDet(cmdSelDet, 'move', { x: lx, z: lz }); showCmdToast(cmdSelDet.name + ' → march here'); }
+    renderDetPanel();
+  } else showCmdToast('Pick a detachment first (click its column or a panel card)');
+}
+// keep the selection ring + panel in sync each map frame (cheap: rebuild panel only on change)
+function updateCmdUI() {
+  if (!mapCmdMode) { if (_detSelRing) _detSelRing.visible = false; return; }
+  if (cmdSelDet && !cmdSelDet.alive) cmdSelDet = null;
+  if (cmdSelDet) {
+    if (!_detSelRing) { _detSelRing = new THREE.Mesh(cachedGeo('detselring', () => { const g = new THREE.RingGeometry(2.2, 2.7, 28); g.rotateX(-Math.PI / 2); return g; }), new THREE.MeshBasicMaterial({ color: 0x7dc8ff, transparent: true, opacity: 0.85, depthWrite: false, side: THREE.DoubleSide })); scene.add(_detSelRing); }
+    _detSelRing.visible = true;
+    _detSelRing.position.set(cmdSelDet.pos.x, mapElevY(cmdSelDet.pos.x, cmdSelDet.pos.z) + 0.12, cmdSelDet.pos.z);
+  } else if (_detSelRing) _detSelRing.visible = false;
+  const sig = detachments.map(d => d.id + ':' + d.size + ':' + d.order + ':' + d.pace).join('|') + '#' + (cmdSelDet ? cmdSelDet.id : 0) + '#' + warbandTotal();
+  if (sig !== _detPanelSig) { _detPanelSig = sig; renderDetPanel(); }
+}
+
+const DET_ORDER_LABEL = { follow: 'Following you', move: 'Marching', hold: 'Holding ground', patrol: 'On patrol', garrison: 'Garrisoning', regroup: 'Regrouping' };
+function renderDetPanel() {
+  const panel = document.getElementById('det-panel'); if (!panel || !mapCmdMode) return;
+  const ORDERS = [['follow', 'Follow'], ['hold', 'Hold'], ['patrol', 'Patrol'], ['garrison', 'Garrison'], ['regroup', 'Recall']];
+  let html = `<h3>Your Army</h3><div class="dp-hint">Lead column <b>★ ${warbandTotal()}</b> rides with you. ${detachments.length}/${MAX_DETACH} detachments. Pick one, then <b>click the map</b>: open ground = march, a hold = garrison. <b>P</b> = draw a patrol route.</div>`;
+  if (!detachments.length) html += `<div class="dp-hint" style="opacity:.7">No detachments yet — form one below.</div>`;
+  html += detachments.map((d, i) => {
+    const hex = '#' + d.color.toString(16).padStart(6, '0'), sel = d === cmdSelDet ? ' sel' : '';
+    return `<div class="dp-card${sel}" style="border-left-color:${hex}">
+      <div class="dp-head" data-sel="${i}"><span>✦ ${d.name}</span><span>${d.size}</span></div>
+      <div class="dp-sub">${i + 1} · ${DET_ORDER_LABEL[d.order] || d.order} ${d.pace === 'rush' ? '· ⚡ Rush' : '· 🐢 March'}</div>
+      <div class="dp-btns">${ORDERS.map(([k, l]) => `<button data-ord="${i}:${k}" class="${d.order === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <div class="dp-btns" style="margin-top:4px"><button data-pace="${i}:march" class="${d.pace !== 'rush' ? 'on' : ''}">🐢</button><button data-pace="${i}:rush" class="${d.pace === 'rush' ? 'on' : ''}">⚡</button></div>
+    </div>`;
+  }).join('');
+  const can = detachments.length < MAX_DETACH, recipeTotal = WARBAND_KEYS.reduce((s, k) => s + detSplitRecipe[k], 0);
+  html += `<div class="dp-split"><h3>Form a detachment</h3>` +
+    WARBAND_KEYS.map(k => `<div class="dp-row"><span>${CLASS_NAME[k]} <i style="color:#9fb2cc;font-style:normal">(${warbandComp[k]})</i></span><span><button data-sp="${k}:-1">−</button><b style="margin:0 8px">${detSplitRecipe[k]}</b><button data-sp="${k}:1">+</button></span></div>`).join('') +
+    `<button class="dp-make" data-make="1"${can && recipeTotal > 0 ? '' : ' disabled style="opacity:.4;cursor:default"'}>${can ? 'Form detachment' : 'Max detachments reached'}</button></div>`;
+  panel.innerHTML = html;
+  panel.querySelectorAll('[data-sel]').forEach(el => el.addEventListener('click', () => selectDet(detachments[+el.dataset.sel])));
+  panel.querySelectorAll('[data-ord]').forEach(el => el.addEventListener('click', () => {
+    const [i, k] = el.dataset.ord.split(':'), d = detachments[+i]; if (!d) return; selectDet(d);
+    if (k === 'patrol') beginPatrolDraft();
+    else if (k === 'garrison') { const h = holdNear(d.pos.x, d.pos.z, 1e6); if (h) { garrisonDet(d, h); showCmdToast(d.name + ' → garrison nearest hold'); } else showCmdToast('No hold in range'); }
+    else if (k === 'regroup') { d.order = 'regroup'; showCmdToast(d.name + ' → regroup on you'); }
+    else { orderDet(d, k); }
+    renderDetPanel();
+  }));
+  panel.querySelectorAll('[data-pace]').forEach(el => el.addEventListener('click', () => { const [i, p] = el.dataset.pace.split(':'), d = detachments[+i]; if (d) setDetPace(d, p); }));
+  panel.querySelectorAll('[data-sp]').forEach(el => el.addEventListener('click', () => { const [k, dv] = el.dataset.sp.split(':'); detSplitRecipe[k] = Math.max(0, Math.min(warbandComp[k], detSplitRecipe[k] + (+dv))); renderDetPanel(); }));
+  const mk = panel.querySelector('[data-make]'); if (mk) mk.addEventListener('click', () => { const made = detach({ ...detSplitRecipe }); if (made) { for (const k of WARBAND_KEYS) detSplitRecipe[k] = 0; selectDet(made); } renderDetPanel(); });
+}
+
+function initDetCmdUI() {
+  if (document.getElementById('det-cmd-btn')) return;
+  const style = document.createElement('style');
+  style.textContent = `
+    #det-cmd-btn { position: fixed; left: 24px; bottom: 54px; z-index: 7; pointer-events: auto; cursor: pointer; display: none;
+      font: 600 13px "Trebuchet MS", sans-serif; letter-spacing: .5px; color: #cfe9ff; background: rgba(12,18,30,.8);
+      border: 1px solid rgba(125,200,255,.5); border-radius: 999px; padding: 7px 15px; text-shadow: 0 1px 3px #000; }
+    #det-cmd-btn.show { display: block; }
+    #det-cmd-btn.on { background: rgba(125,200,255,.24); border-color: #7dc8ff; color: #fff; }
+    #det-panel { position: fixed; right: 0; top: 0; height: 100vh; width: 296px; z-index: 9; pointer-events: auto; box-sizing: border-box;
+      display: flex; flex-direction: column; gap: 8px; padding: 16px 12px; overflow-y: auto;
+      background: linear-gradient(180deg, rgba(10,16,26,.95), rgba(8,12,20,.98)); border-left: 1px solid rgba(125,200,255,.25);
+      font-family: "Trebuchet MS", sans-serif; color: #e9eef5; }
+    #det-panel.hidden { display: none; }
+    #det-panel h3 { font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase; color: #bfe0ff; }
+    #det-panel .dp-hint { font-size: 11px; color: #9fb2cc; line-height: 1.45; }
+    #det-panel .dp-hint b { color: #cfe9ff; }
+    .dp-card { border: 1px solid rgba(255,255,255,.14); border-left-width: 4px; border-radius: 8px; padding: 8px; background: rgba(255,255,255,.03); }
+    .dp-card.sel { background: rgba(125,200,255,.12); border-color: #7dc8ff; }
+    .dp-head { display: flex; justify-content: space-between; align-items: center; cursor: pointer; font-size: 14px; font-weight: 700; }
+    .dp-sub { font-size: 11px; color: #aebccd; margin: 3px 0 6px; }
+    .dp-btns { display: flex; flex-wrap: wrap; gap: 4px; }
+    .dp-btns button { cursor: pointer; font-size: 11px; padding: 4px 8px; border-radius: 5px; border: 1px solid rgba(255,255,255,.2); background: rgba(255,255,255,.06); color: #dfe9f5; }
+    .dp-btns button:hover { background: rgba(125,200,255,.2); }
+    .dp-btns button.on { background: rgba(125,200,255,.32); border-color: #7dc8ff; color: #fff; }
+    .dp-split { border-top: 1px solid rgba(255,255,255,.12); padding-top: 8px; margin-top: 4px; }
+    .dp-row { display: flex; align-items: center; justify-content: space-between; font-size: 12px; margin: 4px 0; }
+    .dp-row button { width: 24px; height: 24px; border-radius: 5px; border: 1px solid rgba(255,255,255,.2); background: rgba(255,255,255,.06); color: #dfe9f5; cursor: pointer; }
+    .dp-make { width: 100%; margin-top: 8px; padding: 8px; border-radius: 6px; border: 1px solid #7dc8ff; background: rgba(125,200,255,.16); color: #eaf4ff; cursor: pointer; font-weight: 700; }
+  `;
+  document.head.appendChild(style);
+  const btn = document.createElement('button'); btn.id = 'det-cmd-btn'; btn.textContent = '⚑ Command (C)';
+  btn.addEventListener('click', () => toggleCmdMode());
+  document.body.appendChild(btn);
+  const panel = document.createElement('div'); panel.id = 'det-panel'; panel.className = 'hidden';
+  document.body.appendChild(panel);
+}
+function showCmdBtn(v) { const b = document.getElementById('det-cmd-btn'); if (b) b.classList.toggle('show', v); }
+
+// pointer: a plain left-click on the map (not on the panel) issues a command
+let _cmdDown = null;
+addEventListener('mousedown', (e) => {
+  if (!mapCmdMode || mode !== 'map' || e.button !== 0) return;
+  if (e.target.closest && e.target.closest('#det-panel, #det-cmd-btn')) return;
+  _cmdDown = { x: e.clientX, y: e.clientY };
+});
+addEventListener('mouseup', (e) => {
+  if (!mapCmdMode || mode !== 'map' || e.button !== 0 || !_cmdDown) return;
+  const moved = Math.abs(e.clientX - _cmdDown.x) + Math.abs(e.clientY - _cmdDown.y) > 6; _cmdDown = null;
+  if (moved || (e.target.closest && e.target.closest('#det-panel, #det-cmd-btn'))) return;
+  onMapCmdClick(e.clientX, e.clientY);
+});
+addEventListener('contextmenu', (e) => { if (mapCmdMode && mode === 'map') { e.preventDefault(); if (patrolDraft) commitPatrolDraft(); } });
+// touch: a tap on the map in command mode places the order (runs before the move-stick handler)
+canvas.addEventListener('touchstart', (e) => {
+  if (!mapCmdMode || mode !== 'map') return;
+  const t = e.changedTouches[0]; if (!t) return;
+  e.preventDefault(); e.stopPropagation();
+  onMapCmdClick(t.clientX, t.clientY);
+}, { passive: false, capture: true });
+// keys: C toggles; in command mode digits select, P patrol, R recall, F follow, H hold, Z/X pace, Enter/Esc
+addEventListener('keydown', (e) => {
+  if (mode !== 'map' || encounter) return;
+  if (e.code === 'KeyC') { e.preventDefault(); toggleCmdMode(); return; }
+  if (!mapCmdMode) return;
+  if (e.code === 'Escape') { e.preventDefault(); if (patrolDraft) cancelPatrolDraft(); else toggleCmdMode(false); return; }
+  if (e.code === 'Enter') { e.preventDefault(); if (patrolDraft) commitPatrolDraft(); return; }
+  const m = e.code.match(/^Digit([1-9])$/); if (m) { e.preventDefault(); const d = detachments[(+m[1]) - 1]; if (d) selectDet(d); return; }
+  if (!cmdSelDet) return;
+  if (e.code === 'KeyP') { e.preventDefault(); beginPatrolDraft(); }
+  else if (e.code === 'KeyR') { e.preventDefault(); cmdSelDet.order = 'regroup'; showCmdToast(cmdSelDet.name + ' → regroup'); renderDetPanel(); }
+  else if (e.code === 'KeyF') { e.preventDefault(); orderDet(cmdSelDet, 'follow'); renderDetPanel(); }
+  else if (e.code === 'KeyH') { e.preventDefault(); orderDet(cmdSelDet, 'hold'); renderDetPanel(); }
+  else if (e.code === 'KeyZ') { e.preventDefault(); setDetPace(cmdSelDet, 'march'); }
+  else if (e.code === 'KeyX') { e.preventDefault(); setDetPace(cmdSelDet, 'rush'); }
+});
+initDetCmdUI();
+
 // ----- remembered squads: persist composition + orders, re-bind to a fresh muster each battle -----
 function refreshGroupRecipe(g) {
   const r = { sword: 0, long: 0, archer: 0, thrower: 0 };
@@ -6096,6 +6561,7 @@ const goSummary = document.getElementById('go-summary');
 function startGame() {
   clearBattlefield();
   clearParties();
+  clearDetachments(); // a fresh campaign starts with no detachments
   if (player.obj) { scene.remove(player.obj); disposeGroup(player.obj); }
   loadCareers();   // hydrate the player's character + warband careers from the local mirror
   initPlayer();
@@ -6435,6 +6901,8 @@ function enterCoopGuest(beacon) {
   setBattleDressing(true);
   applyBiome(biomeAt(beacon.x || 0, beacon.z || 0));
   if (player.mapToken) player.mapToken.visible = false; player.obj.visible = false;
+  setDetVisible(false); // detachment columns are map-only
+  toggleCmdMode(false); showCmdBtn(false);
   const enc = document.getElementById('encounter'); if (enc) enc.classList.add('hidden'); encounter = null;
   if (document.exitPointerLock) document.exitPointerLock(); pointerLocked = false;
   hud.classList.remove('hidden');
@@ -6576,6 +7044,9 @@ BV.cityAudit = (radius = 700) => {
   const sample = cities.map(s => ({ at: [Math.round(s.x), Math.round(s.z)], coastal: coastal(s) }));
   return { cities: cities.length, centresInWater: wet, coastalCities: sample.filter(s => s.coastal).length, nearestPair: cities.length > 1 ? Math.round(mind) : null, cityDiam: Math.round(R * 2 + 5), sample };
 };
+BV._land = (x, z, f = 28, s = 220) => bestLandSpot(x, z, f, s);          // debug: solid-land search
+BV._ls = (x, z, f = 28) => +landScore(x, z, f).toFixed(3);              // debug: land fraction of a footprint
+BV._mode = () => mode;
 BV.plan = { selectType, deploySelected, beginBattle, selCount: () => selected.size,
   newGroup, assignToGroup, splitIntoGroups, orderGroup, openCommandDeck, resumeBattle, countPool,
   selectGroup: (i) => { const g = planGroups[i]; if (g) selectGroup(g); },
@@ -6635,6 +7106,29 @@ BV.alliedBandsNear = (radius = 1e9) => parties.filter(p => p.alive && isAllyFact
   Math.hypot(p.pos.x - player.pos.x, p.pos.z - player.pos.z) <= radius).length;
 BV.raiseCall = raiseCall;
 BV.tp = (x, z) => { player.pos.set(x, 0, z); player.vel.set(0, 0, 0); if (player.mapToken) player.mapToken.position.copy(player.pos); return [Math.round(x), Math.round(z)]; };
+BV.enterMap = () => { enterMap(); return BV.advanceMap(0); }; // jump straight to the overworld (headless tests)
+// ---- detachment (overworld army-splitting) test hooks ----
+BV.map = {
+  detach: (recipe = { sword: 1 }) => { const d = detach(recipe); return d ? BV.map.list() : null; },
+  list: () => detachments.map((d, i) => ({ i, id: d.id, name: d.name, order: d.order, size: d.size,
+    x: Math.round(d.pos.x), z: Math.round(d.pos.z), wp: d.route.length, idx: d.routeIdx, inBattle: !!d.inBattle })),
+  orderDet: (i, order, x, z) => { const d = detachments[i]; if (d) orderDet(d, order, (x != null ? { x, z } : null)); return BV.map.list(); },
+  patrol: (i, wps) => { const d = detachments[i]; if (d) setPatrol(d, wps.map(p => ({ x: p[0], z: p[1] }))); return d ? d.route.length : 0; },
+  regroup: (i) => { const d = detachments[i]; if (d) d.order = 'regroup'; return BV.map.list(); },
+  garrison: (i) => { const d = detachments[i]; if (!d) return null; let best = null, bd = 1e9; for (const h of nations.concat(settlements)) { const dx = h.x - d.pos.x, dz = h.z - d.pos.z, dd = dx * dx + dz * dz; if (dd < bd) { bd = dd; best = h; } } if (best) garrisonDet(d, best); return BV.map.list(); },
+  engage: (i, foeSize = 6) => { const d = detachments[i]; if (!d) return null; // muster a hostile band and lock the clash (test hook)
+    let foe = null; for (const n of nations) if (areFactionEnemies(PLAYER_REALM, n.def)) { foe = n.def; break; }
+    if (!foe) for (const n of nations) if (!isAllyFaction(n.def)) { foe = n.def; break; }
+    if (!foe) return 'no foe nation';
+    const x = d.pos.x + 2, z = d.pos.z, g = makePartyToken(foeSize, foe); g.position.set(x, mapElevY(x, z), z); scene.add(g);
+    const band = { group: g, pos: new THREE.Vector3(x, 0, z), size: foeSize, alive: true, speed: 5, faction: foe, raider: false, clashCd: 0, parleyCd: 0, wanderT: 0, wanderDir: 0, level: mapLevel, leader: makeBandLeader(foeSize, mapLevel, true), quality: 1 + 0.04 * mapLevel };
+    parties.push(band); setBandLabel(band);
+    startMapBattle(d, band);            // lock them immediately so the test is deterministic
+    return { foe: foe.name, detSize: d.size, foeSize }; },
+  merge: (i) => { const d = detachments[i]; if (d) mergeDetachment(d); return BV.map.armyTotal(); },
+  dist: (i) => { const d = detachments[i]; if (!d) return null; return Math.round(Math.hypot(d.pos.x - player.pos.x, d.pos.z - player.pos.z)); },
+  armyTotal: () => ({ total: armyTotal(), lead: warbandTotal(), dets: detachments.length }),
+};
 // ---- town management test hooks ----
 BV.town = () => ((typeof window !== 'undefined' && window.net && window.net.holdings) || []);
 BV.enterTown = (key) => { const c = nations.concat(settlements).find(x => holdKeyOf(x) === key); if (c) { enterTown(c); return 'opened ' + key; } return 'no loaded hold ' + key; };
@@ -6992,6 +7486,7 @@ function applyStation(s) {
   if (playerChar) { playerChar.renown = s.renown; recomputeChar(playerChar); }
   warbandRoster.length = 0; warbandNameSet.clear();          // a new universe musters a fresh host
   ensureWarbandRoster();
+  if (typeof clearDetachments === 'function') clearDetachments(); // ...and no detachments from a prior universe
   playerPacts.clear();
   for (const i of s.pactIdx) playerPacts.add(NATIONS[i]);
   seedStationRelations(s);

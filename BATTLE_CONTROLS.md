@@ -141,6 +141,28 @@ scaling ~`size^0.4` up to a ~70s siege; a lopsided fight routs faster). Fresh ho
 host you reach. *(This plays out client-side in offline/solo worlds; in a server-driven shared world
 the macro war is still resolved by the backend.)*
 
+### Your army marches as columns — split it into detachments
+On the map your host is no longer a lone flag: the **lead column** (the men riding *with you*) walks as
+a small banner-topped cluster of soldiers, and you can peel off **detachments** that roam, fight, and
+hold ground on their own.
+
+Press **C** (or tap **⚑ Command**) to open **command mode** — the cursor frees and the map holds still.
+From the panel on the right:
+
+- **Form a detachment** — pick a class mix and press *Form detachment*. Those men leave the lead column
+  and march at your side (up to 6 detachments).
+- **Select** a detachment (click its column, its panel card, or press **1–9**), then order it:
+  - **Click open ground → March** there and hold.
+  - **Click a hold → Garrison** it (parks there to guard it; storms it first if it's a weak-enough
+    enemy hold).
+  - **Patrol (P)** → click to drop waypoints, then **Enter / right-click** to set; the detachment walks
+    the route back and forth forever, intercepting enemy bands that cross it.
+  - **Follow (F)** / **Hold (H)** / **Recall (R)** (rejoins the lead column) · pace **Z/X** (March/Rush).
+
+A detachment fights rival bands on its own through the same visible living-clash system — **ride in to
+reinforce** it, or let it auto-resolve. A detachment that loses a clash is broken and its men are lost,
+so weigh what you send where. Press **C** / **Esc** to leave command mode.
+
 ### Pacts & alliances
 Ride into a neutral band → **Propose Pact** (acceptance rises with your renown). Allied bands fly a
 **✦** marker, can't be attacked by accident, and **answer your call to arms**. In a shared world,
@@ -212,11 +234,16 @@ and the selection rings fade after a couple of seconds.)*
 | Key | Action |
 |---|---|
 | **WASD** | roam the map |
+| **C** | toggle **command mode** (split & order detachments); **Esc** to leave |
+| **1–9** | (command mode) select detachment 1–9 |
+| **P** | (command mode, detachment selected) draw a patrol route — **Enter / right-click** to set |
+| **F / H / R** | (command mode) Follow · Hold · Recall the selected detachment · **Z/X** = March/Rush |
 | **G** | Call to Arms (near an enemy hold → Crusade); press again to cancel |
 | **J** | find & join an ally's live battle (shared world) |
 | **V** | warband charsheet |
 
-*(`G` is context-sensitive: on the map it sounds the call; in a battle/plan it selects all soldiers.)*
+*(`G` is context-sensitive: on the map it sounds the call; in a battle/plan it selects all soldiers.
+`C` is overworld-only — in a battle it's crouch.)*
 
 ### Reading the field
 - **Green ring** — selected soldier.
@@ -287,6 +314,16 @@ where `order` ∈ `attack | hold | zone | regroup | free`, `recipe` is the remem
 ### The overworld / co-op layer (where the code lives)
 - **Living battles:** `startMapBattle` / `joinMapBattle` / `updateMapBattles` / `finishMapBattle` in
   `game.js`; calibrated by `clashDuration`. Bands carry `inBattle`; markers are disposed on finish.
+- **Detachments (player map columns):** `detachments[]`; `makeColumn`/`animateColumn` (reuse
+  `buildHumanoid` + `walkLegs`); `detach`/`mergeDetachment`/`reconcileDetachment`; `updateDetachments`
+  (the per-frame order AI: follow/move/patrol/hold/garrison/regroup); they clash via the same
+  `startMapBattle` path (gated on `areFactionEnemies`, so only declared foes). Command UX:
+  `toggleCmdMode` + `renderDetPanel` + `onMapCmdClick` (reuses `groundPointAt`); overlays
+  `buildRouteMarker`/`updateRouteOverlay`/`buildDetFlag`. `warbandComp`/`warbandRoster` stay the LEAD
+  column; each detachment owns a disjoint `comp`/`roster` (every Character is in exactly one). Test
+  hooks: `BV.map.*` (`detach`/`patrol`/`orderDet`/`garrison`/`engage`/`merge`/`armyTotal`), `BV.enterMap`.
+  *(Cross-reload save/load of detachments is a follow-up — they live for the session; region advance
+  re-seats them via `reseatDetachments`.)*
 - **Diplomacy:** `playerPacts` (Set of NATION defs), `isAllyFaction`, the `enc-ally` button.
 - **Call to arms:** `raiseCall` / `updateActiveCall` / `clearCall`; allied bands steer to `activeCall`.
 - **Reinforcements:** `assembleAllies` → `buildAllyReinforcement` (borrowed allies, excluded from the

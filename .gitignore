@@ -6,6 +6,7 @@ server/world.db
 server/world.db-shm
 server/world.db-wal
 server/launchd.log
+server/run.log
 .backup/
 
 # Claude Code local scratch / machine-local settings

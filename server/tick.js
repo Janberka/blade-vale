@@ -83,6 +83,10 @@ function fitJobs(farm, lumber, cap) {
 }
 
 const NATIONS = ['Aurelia', 'Khorvane', 'Sahir', 'Wendmark', 'Maridor'];
+// how many named warlord hosts the living world keeps marching at once (per-world floor). The client
+// layers an ambient swarm on top for on-screen density; this is the PERSISTENT, shared-across-players
+// layer — kept lean enough that pruneWorld stays cheap, fat enough that the world feels populated.
+const TARGET_ARMIES = NATIONS.length * 3; // ~3 hosts per nation
 // each power's heartland bearing (radians), matching the client's NATIONS[].home: the rising
 // power in the hot south, the war-tribes in the cold north, the empire and its rival east/west
 const CAP_ANGLE = [2.62, 0.15, 1.57, 4.71, 3.67];
@@ -113,7 +117,7 @@ function seedWorld(worldId) {
     for (let i = 0; i < NATIONS.length; i++) ins.run(worldId, i, NATIONS[i], NATIONS[i], 20 + ((Math.random() * 12) | 0));
   }
   let have = db.prepare("SELECT count(*) n FROM warlords WHERE world_id=? AND status='alive'").get(worldId).n;
-  for (; have < NATIONS.length * 2; have++) spawnWarlord(worldId, pick(NATIONS), 0);
+  for (; have < TARGET_ARMIES; have++) spawnWarlord(worldId, pick(NATIONS), 0);
   D.seedDiplomacy(worldId);   // relation matrix + faction posture (idempotent)
   Destiny.seedDestiny(worldId); // world destiny / "age" row (idempotent)
   db.prepare('UPDATE worlds SET last_tick_at=? WHERE id=? AND last_tick_at=0').run(Math.floor(Date.now() / 1000), worldId);
@@ -434,7 +438,7 @@ function runTick(worldId, tick) {
   Destiny.tickDestiny(worldId, tick);
   // 5. keep the war populated — only LIVING nations march in (a fallen banner stays fallen)
   const alive = db.prepare("SELECT count(*) n FROM warlords WHERE world_id=? AND status='alive'").get(worldId).n;
-  if (alive < NATIONS.length * 2 && Math.random() < 0.5) { const nat = D.aliveNations(worldId); if (nat.length) spawnWarlord(worldId, pick(nat), tick); }
+  if (alive < TARGET_ARMIES && Math.random() < 0.6) { const nat = D.aliveNations(worldId); if (nat.length) spawnWarlord(worldId, pick(nat), tick); }
 }
 
 function pruneWorld(worldId) {

@@ -371,7 +371,24 @@
   // the campaign gets deadlier the farther you roam (mapLevel adds a flat floor; distance adds bands)
   function frontierLevel(x, z, mapLevel) { return (mapLevel | 0) + Math.floor(Math.hypot(x, z) / FRONTIER_STEP); }
 
-  // deterministic settlement sites within a chunk (most chunks hold 0–1; a few hold 2)
+  // Cities are landmarks, not common holds: they live on a COARSE LATTICE so the big ones stay far
+  // apart. One candidate city per CITY_BLOCK×CITY_BLOCK block of chunks, only ~CITY_CHANCE of blocks
+  // actually hold one, seated near the block centre with bounded jitter — so two neighbouring cities
+  // are never closer than ~CITY_BLOCK·CHUNK·(1−2·jitter) ≈ 145u apart. Villages/towns stay per-chunk.
+  var CITY_BLOCK = 4;            // chunks per city cell (≈240 world units)
+  var CITY_CHANCE = 0.5;         // fraction of cells that actually hold a city
+  var CITY_IDX = 9;             // reserved site index so a lattice city never collides with idx 0/1
+  function blockCity(cx, cz, worldSeed) {
+    var bx = Math.floor(cx / CITY_BLOCK), bz = Math.floor(cz / CITY_BLOCK);
+    var r = mulberry32((Math.imul(bx | 0, 668265263) ^ Math.imul(bz | 0, 374761393) ^ Math.imul(worldSeed >>> 0, 2654435761)) >>> 0);
+    if (r() >= CITY_CHANCE) return null;
+    var x = (bx + 0.5 + (r() - 0.5) * 0.3) * CITY_BLOCK * CHUNK;   // block centre ± bounded jitter (kept
+    var z = (bz + 0.5 + (r() - 0.5) * 0.3) * CITY_BLOCK * CHUNK;   // tight so the land-snap can't crowd neighbours)
+    return { x: x, z: z, hostcx: Math.floor(x / CHUNK), hostcz: Math.floor(z / CHUNK) };
+  }
+
+  // deterministic settlement sites within a chunk: 0–2 villages/towns per chunk, plus a lattice city
+  // when this chunk hosts its block's one (see blockCity).
   function settlementSites(cx, cz, worldSeed) {
     var rng = mulberry32(chunkHash(cx, cz, worldSeed) ^ 0x51A7);
     var n = rng() < 0.42 ? 0 : (rng() < 0.80 ? 1 : 2);
@@ -379,10 +396,11 @@
     for (var i = 0; i < n; i++) {
       var x = (cx + 0.20 + rng() * 0.60) * CHUNK;   // kept off the chunk edges so neighbours don't collide
       var z = (cz + 0.20 + rng() * 0.60) * CHUNK;
-      var tr = rng();
-      var tier = tr < 0.70 ? 'village' : tr < 0.92 ? 'town' : 'city';
+      var tier = rng() < 0.78 ? 'village' : 'town';
       out.push({ x: x, z: z, tier: tier, idx: i, cx: cx, cz: cz });
     }
+    var city = blockCity(cx, cz, worldSeed);
+    if (city && city.hostcx === cx && city.hostcz === cz) out.push({ x: city.x, z: city.z, tier: 'city', idx: CITY_IDX, cx: cx, cz: cz });
     return out;
   }
   function siteKey(s) { return s.cx + ',' + s.cz + ',' + s.idx; }

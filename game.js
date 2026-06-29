@@ -3078,10 +3078,14 @@ function placeCapitals() {
   // each power sits at its themed compass bearing; a small seeded wobble keeps runs distinct
   // (and the terrain noise itself shifts per universe) without scrambling the cardinal layout
   const jitter = ((worldSeed() % 1000) / 1000 - 0.5) * 0.18; // ±~5°
+  // capitals are grand cities (diam ~98) — ring them well out from the origin so the 5 powers don't
+  // overlap each other (or the player, who starts at the contested centre). Their themed bearings are
+  // uneven, so the closest pair sits ~60° apart; this radius keeps even that pair ~35u edge-to-edge.
+  const CAP_RING = MAP_HALF * 1.5;
   for (let i = 0; i < NATIONS.length; i++) {
     const home = (typeof NATIONS[i].home === 'number') ? NATIONS[i].home : (i / NATIONS.length) * Math.PI * 2;
     const ang = home + jitter;
-    const [cx, cz] = nearestLand(Math.cos(ang) * MAP_HALF * 0.5, Math.sin(ang) * MAP_HALF * 0.5);
+    const [cx, cz] = nearestLand(Math.cos(ang) * CAP_RING, Math.sin(ang) * CAP_RING);
     nations.push({ def: NATIONS[i], owner: NATIONS[i], x: cx, z: cz, garrison: garrisonSize(), parleyCd: 0, conquerCd: 0, group: null });
   }
 }
@@ -3253,8 +3257,39 @@ function factionByName(nm) {
 }
 function nearCapital(x, z, d) { for (const n of nations) if (Math.hypot(n.x - x, n.z - z) < d) return true; return false; }
 
-// deterministic settlement sites within a chunk (most chunks hold 0–1; a few hold 2) — shared kernel
-function settlementSites(cx, cz) { return WorldSim.settlementSites(cx, cz, worldSeed()); }
+// Pull a city centre onto the largest land patch near (x0,z0). The centre itself must be dry; the score
+// is the fraction of the footprint ring that is land (inland ≈1, a beach city ≈0.5, an archipelago <0.4
+// → no city). The search is bounded so a coastal city only nudges inland a little — it never migrates far
+// enough to crowd a neighbouring lattice city. Returns null when there's no real land here (deep ocean).
+function cityLandCenter(x0, z0, R) {
+  const land = (x, z) => !isWater(x, z);
+  const score = (x, z) => {
+    if (!land(x, z)) return -1;                                          // the centre must be on land
+    let s = 0, n = 0;
+    for (let k = 0; k < 12; k++) { const a = k / 12 * TAU;
+      for (const rr of [R * 0.45, R * 0.9]) { s += land(x + Math.cos(a) * rr, z + Math.sin(a) * rr) ? 1 : 0; n++; } }
+    return s / n;
+  };
+  let bx = x0, bz = z0, bs = score(x0, z0);
+  const STEP = R * 0.34, MAXR = R * 1.05;                                // ≤ ~1 footprint radius of drift
+  for (let rad = STEP; rad <= MAXR && bs < 0.97; rad += STEP) {
+    for (let k = 0; k < 12; k++) { const a = k / 12 * TAU + rad * 0.5;   // interleave each ring's probes
+      const x = x0 + Math.cos(a) * rad, z = z0 + Math.sin(a) * rad, sc = score(x, z);
+      if (sc > bs) { bs = sc; bx = x; bz = z; } }
+  }
+  return bs >= 0.42 ? { x: bx, z: bz } : null;
+}
+// Deterministic settlement sites within a chunk (villages/towns per-chunk; cities on a coarse lattice) —
+// shared kernel. Cities are then snapped onto land here (terrain lives client-side, not in the pure kernel).
+function settlementSites(cx, cz) {
+  const sites = WorldSim.settlementSites(cx, cz, worldSeed());
+  for (let i = sites.length - 1; i >= 0; i--) {
+    const s = sites[i]; if (s.tier !== 'city') continue;
+    const c = cityLandCenter(s.x, s.z, SG_SPEC.city.R);
+    if (c) { s.x = c.x; s.z = c.z; } else { sites.splice(i, 1); }        // no land worth a city → drop it
+  }
+  return sites;
+}
 function siteKey(s) { return WorldSim.siteKey(s); }
 function settlementName(s) { return WorldSim.settlementName(s, worldSeed()); }
 // the kernel's heartland Voronoi runs over this region's capital positions; it returns the nearest
@@ -3398,7 +3433,8 @@ function buildChunk(cx, cz) {
   // settlements discovered in this chunk
   const holds = [];
   for (const s of settlementSites(cx, cz)) {
-    if (isWater(s.x, s.z) || nearCapital(s.x, s.z, 18)) continue;
+    // capitals are now ~95u across, so hold sites must clear them by far more than the old 18u
+    if (isWater(s.x, s.z) || nearCapital(s.x, s.z, s.tier === 'city' ? 100 : 58)) continue;
     const hold = makeSettlementHold(s);
     group.add(hold.group);
     holds.push(hold); settlements.push(hold);
@@ -3636,12 +3672,14 @@ function settlePalette(b) {
   if (n === 'Savanna' || n === 'Beach')     return { stone: 0xa89e88, stoneDk: 0x8a8068, wood: 0x7a5a36, thatch: 0xa89a5a, daub: 0xc2b080 };
   return { stone: 0x9a8f80, stoneDk: 0x7d7468, wood: 0x6b4a2e, thatch: 0x9a7b43, daub: 0xb9a888 };
 }
-// per-tier knobs.  houses/bailey/lower/nwall are [base, randomRange] (count = base + r()*range|0)
+// per-tier knobs.  houses/bailey are [base, randomRange] (count = base + r()*range|0).
+// castles is [base, +1 chance]: village none; town one (occasionally a second); city 3-4; capital 4-5.
+// A town is 3-4x a village's houses; a city 3-4x a town's, with a sparse castle-district centre.
 const SG_SPEC = {
-  village: { castle: false, R: 7,  houses: [10, 6], wallH: 0,   lbl: 3.8, top: 4.2, palisade: false, hall: false, gap: 2.0 },
-  town:    { castle: false, R: 10, houses: [13, 5], wallH: 1.1, lbl: 4.6, top: 5.2, palisade: true,  hall: true,  gap: 2.3 },
-  city:    { castle: true,  R: 13, bailey: [4, 4], lower: [4, 4], wallH: 1.7, lbl: 5.8, top: 8.0, gap: 2.6, nwall: [14, 5] },
-  capital: { castle: true,  R: 16, bailey: [6, 4], lower: [6, 5], wallH: 1.9, lbl: 6.6, top: 9.5, gap: 2.8, nwall: [16, 5] },
+  village: { castle: false, R: 7,  houses: [10, 6],   castles: [0, 0],   wall: null,       centerClear: 0,    lbl: 3.8, top: 4.2,  gap: 2.0 },
+  town:    { castle: true,  R: 15, houses: [38, 12],  castles: [1, 0.4], castleR: 6, bailey: [3, 3], wallH: 1.2, wall: 'palisade', centerClear: 0,    lbl: 5.4, top: 7.0,  gap: 2.0 },
+  city:    { castle: true,  R: 38, houses: [280, 80], castles: [4, 0.6], castleR: 8, bailey: [4, 3], wallH: 1.8, wall: 'stone',    centerClear: 0.30, lbl: 10.5, top: 15.0, gap: 2.0 },
+  capital: { castle: true,  R: 46, houses: [380, 90], castles: [5, 0.6], castleR: 9, bailey: [6, 4], wallH: 2.1, wall: 'stone',    centerClear: 0.32, bigKeep: true, lbl: 12.5, top: 18.0, gap: 2.1 },
 };
 
 // --- read the landform: a center gradient (local+macro) plus a 16-spoke ring field ---
@@ -3697,18 +3735,19 @@ function sgBanner(P, lx, lz) {
   sgBox(O, lx + 0.48, y + bh - 0.5, lz, 0.9, 0.56, 0.07, 0, ownerRGB);
 }
 
-// --- organic village / town: morphology chosen by the landform class ---
-function sgBuildOrganic(P) {
-  const { r, spec, T, pal, seat, isW, S, O, ownerRGB, placed } = P;
+// --- a market cross (on slopes) or village well (on the flat) marking the heart ---
+function sgFocalFeature(P) {
+  const { T, pal, seat, S } = P, y = seat(0, 0), street = (T.cls === 'HILLSIDE' || T.cls === 'RIDGE' || T.cls === 'COASTAL');
+  if (street) { sgBox(S, 0, y + 0.9, 0, 0.16, 1.8, 0.16, 0, sgRgb(pal.wood, 1)); sgBox(S, 0, y + 1.5, 0, 0.9, 0.16, 0.16, 0, sgRgb(pal.wood, 1)); } // market cross
+  else { sgPrism(S, 0, y - 0.1, 0, 0.45, 0.7, sgRgb(pal.stoneDk, 1)); sgBox(S, 0, y + 0.8, 0, 0.14, 0.5, 0.9, 0, sgRgb(pal.wood, 1)); } // well + winch
+}
+// --- organic village: a small contour-following cluster around a focal feature, no castle, no wall ---
+function sgBuildVillage(P) {
+  const { r, spec, T, isW, placed } = P;
   const street = (T.cls === 'HILLSIDE' || T.cls === 'RIDGE' || T.cls === 'COASTAL');
   const R = spec.R, n = spec.houses[0] + (r() * spec.houses[1] | 0);
-  if (!spec.hall) {                                                      // a focal feature at the heart
-    const y = seat(0, 0);
-    if (street) { sgBox(S, 0, y + 0.9, 0, 0.16, 1.8, 0.16, 0, sgRgb(pal.wood, 1)); sgBox(S, 0, y + 1.5, 0, 0.9, 0.16, 0.16, 0, sgRgb(pal.wood, 1)); } // market cross
-    else { sgPrism(S, 0, y - 0.1, 0, 0.45, 0.7, sgRgb(pal.stoneDk, 1)); sgBox(S, 0, y + 0.8, 0, 0.14, 0.5, 0.9, 0, sgRgb(pal.wood, 1)); } // well + winch
-  }
+  sgFocalFeature(P);
   const lane = (T.cls === 'RIDGE') ? T.spineAz : T.downhill + Math.PI / 2; // streets run along the contour
-  const clear = spec.hall ? 2.2 : 1.6;
   let made = 0, tries = 0;
   while (made < n && tries < n * 8) {
     tries++; let lx, lz, yaw;
@@ -3719,13 +3758,57 @@ function sgBuildOrganic(P) {
     } else {
       const a = r() * TAU, rd = 1.8 + Math.sqrt(r()) * (R - 1.8); lx = Math.cos(a) * rd; lz = Math.sin(a) * rd; yaw = Math.atan2(-lz, -lx);
     }
-    if (Math.hypot(lx, lz) < clear || isW(lx, lz)) continue;
+    if (Math.hypot(lx, lz) < 1.6 || isW(lx, lz)) continue;
     if (!placed.every(p => (p.lx - lx) ** 2 + (p.lz - lz) ** 2 > spec.gap * spec.gap)) continue;
     if (sgHouse(P, lx, lz, { yaw })) { placed.push({ lx, lz }); made++; }
   }
-  if (spec.hall) sgHouse(P, 0, 0, { big: true, yaw: r() * TAU, roofBuf: O, roofRGB: ownerRGB, wallHex: pal.wood }); // owner-roofed meeting hall
-  if (spec.palisade) sgPalisade(P);
   sgBanner(P, R * 0.12, R * 0.05);
+}
+
+// --- plan castle centres: 0 (village), 1 + occasional 2nd (town), 3-4 (city), 4-5 (capital) ---
+// The chief castle holds the centre; a town's extra keep sits off to one side, a city's lesser
+// castles ring the heart so the middle reads as a sparse civic/castle district, not packed housing.
+function sgPlanCastles(P) {
+  const { r, spec } = P;
+  const n = (spec.castles[0] | 0) + (r() < (spec.castles[1] || 0) ? 1 : 0);
+  if (n <= 0) return [];
+  const cR = spec.castleR || spec.R * 0.42, big = !!spec.bigKeep;
+  const out = [{ cx: 0, cz: 0, cR, big }];
+  if (n === 1) return out;
+  if (spec.castles[0] === 1) {                                           // a town's occasional second keep
+    const a = r() * TAU, d = spec.R * 0.5;
+    out.push({ cx: Math.cos(a) * d, cz: Math.sin(a) * d, cR: cR * 0.85, big: false });
+    return out;
+  }
+  for (let i = 1; i < n; i++) {                                          // a city's lesser castles around the centre
+    const a = (i - 1) / (n - 1) * TAU + r() * 0.5, d = spec.R * (0.40 + r() * 0.12);
+    out.push({ cx: Math.cos(a) * d, cz: Math.sin(a) * d, cR: cR * 0.82, big: false });
+  }
+  return out;
+}
+// --- houses filling the footprint around the castle(s), keeping clear of their reserved disks and
+//     (for cities) a sparse central district. Radial scatter, faces turned inward toward the heart. ---
+function sgFillHouses(P) {
+  const { r, spec, isW, placed, exclude } = P;
+  const R = spec.R, n = spec.houses[0] + (r() * spec.houses[1] | 0);
+  const inner = Math.max(2.0, (spec.centerClear || 0) * R);
+  const blocked = (lx, lz) => exclude.some(e => (e.lx - lx) ** 2 + (e.lz - lz) ** 2 < e.r * e.r);
+  let made = 0, tries = 0;
+  while (made < n && tries < n * 10) {
+    tries++;
+    const a = r() * TAU, rd = inner + Math.sqrt(r()) * (R - inner), lx = Math.cos(a) * rd, lz = Math.sin(a) * rd;
+    if (isW(lx, lz) || blocked(lx, lz)) continue;
+    if (!placed.every(p => (p.lx - lx) ** 2 + (p.lz - lz) ** 2 > spec.gap * spec.gap)) continue;
+    if (sgHouse(P, lx, lz, { yaw: Math.atan2(-lz, -lx) })) { placed.push({ lx, lz }); made++; }
+  }
+}
+// --- a castle-bearing hold (town / city / capital): castles + houses + an enclosing wall ---
+function sgBuildHold(P) {
+  const { spec } = P;
+  for (const C of sgPlanCastles(P)) sgBuildCastleAt(P, C);
+  sgFillHouses(P);
+  if (spec.wall === 'stone') sgCityWall(P);
+  else if (spec.wall === 'palisade') sgPalisade(P);
 }
 function sgPalisade(P) {                                                 // a timber ring fitted around the built cluster, gate downhill
   const { r, T, pal, seat, S, placed } = P;
@@ -3738,17 +3821,50 @@ function sgPalisade(P) {                                                 // a ti
     sgBox(S, lx, y + 0.85, lz, 0.34, 1.6 + r() * 0.2, 0.34, a, wood);
   }
 }
+// A great stone city wall ringing the whole footprint: terrain-seated bays with a level parapet,
+// drum towers round the ring, and three gatehouses (downhill + two flanks) so the city can be entered.
+function sgCityWall(P) {
+  const { r, T, pal, seat, S, spec, placed } = P;
+  let R = spec.R * 0.5; for (const p of placed) R = Math.max(R, Math.hypot(p.lx, p.lz)); R += 2.6;
+  const wallH = (spec.wallH || 1.7) + 0.4, thick = 0.7, N = Math.max(30, Math.round(R * 1.3));
+  const stone = sgRgb(pal.stone, 1), stoneDk = sgRgb(pal.stoneDk, 1), woodD = sgRgb(pal.wood, 0.72);
+  const gateAngs = [T.downhill, T.downhill + TAU / 3, T.downhill - TAU / 3];
+  const nearGate = a => gateAngs.reduce((m, g) => Math.min(m, Math.abs(((a - g + Math.PI) % TAU + TAU) % TAU - Math.PI)), 9);
+  const V = [];
+  for (let k = 0; k < N; k++) { const a = k / N * TAU, lx = Math.cos(a) * R, lz = Math.sin(a) * R; V.push({ a, lx, lz, y: seat(lx, lz) }); }
+  for (let i = 0; i < N; i++) {                                          // closed ring of seated wall bays, gateways left open
+    const A = V[i], B = V[(i + 1) % N], am = A.a + (((B.a - A.a) + TAU) % TAU) / 2;
+    if (nearGate(am) < 0.17) continue;
+    const mx = (A.lx + B.lx) / 2, mz = (A.lz + B.lz) / 2, ang = Math.atan2(-(B.lz - A.lz), B.lx - A.lx), len = Math.hypot(B.lx - A.lx, B.lz - A.lz) + thick;
+    const lo = Math.min(A.y, B.y), hi = Math.max(A.y, B.y), top = hi + wallH, bot = lo - 0.9;
+    sgBox(S, mx, (top + bot) / 2, mz, len, top - bot, thick, ang, stone);
+    sgBox(S, mx, top + 0.16, mz, len, 0.3, thick * 1.15, ang, stoneDk);  // level parapet cap
+  }
+  const TN = Math.max(10, Math.round(R * 0.45));                         // drum towers, taller & fatter at the gates
+  for (let k = 0; k < TN; k++) {
+    const a = k / TN * TAU, lx = Math.cos(a) * R, lz = Math.sin(a) * R, y = seat(lx, lz), g = nearGate(a) < 0.2, th = wallH + (g ? 2.0 : 1.0);
+    sgPrism(S, lx, y - 0.7, lz, g ? 1.0 : 0.8, th + 0.7, stone); sgCone8(S, lx, y - 0.7 + th + 0.7, lz, (g ? 1.0 : 0.8) * 1.18, g ? 1.1 : 0.85, stoneDk);
+  }
+  for (const ga of gateAngs) {                                          // a stone arch over tall timber doors at each opening
+    const d = 0.06, ax = Math.cos(ga - d) * R, az = Math.sin(ga - d) * R, bx = Math.cos(ga + d) * R, bz = Math.sin(ga + d) * R;
+    const lx = Math.cos(ga) * R, lz = Math.sin(ga) * R, y = seat(lx, lz), ang = Math.atan2(-(bz - az), bx - ax), doorH = wallH + 1.6, doorW = 2.8;
+    sgBox(S, lx, y + wallH + 0.7, lz, doorW + 1.0, 0.95, thick * 1.8, ang, stoneDk);
+    sgBox(S, lx, y + doorH / 2, lz, doorW, doorH, 0.5, ang, woodD);
+  }
+}
 
-// --- a castle: keep on the high ground + a curtain wall marched to the hill's contour ---
-function sgBuildCastle(P) {
-  const { r, spec, T, pal, ownerRGB, isW, placed } = P;
-  const keep = sgFindKeep(P);                                            // highest buildable inner cell
+// --- a single castle seated at (C.cx, C.cz): keep on the high ground + a curtain wall marched to the
+//     contour, an inner bailey (first building a great hall), gate banners, and a reserved exclusion
+//     disk so the surrounding houses keep clear of it. ---
+function sgBuildCastleAt(P, C) {
+  const { r, spec, T, pal, ownerRGB, O, placed, exclude } = P;
+  const keep = sgFindKeep(P, C.cx, C.cz, C.cR * 0.3);                    // highest buildable cell near the castle's centre
   const DROP = 2.2 + (r() - 0.5) * 1.2;
-  const NW = spec.nwall[0] + (r() * spec.nwall[1] | 0);
-  const verts = sgCurtainMarch(P, keep, DROP, NW);
+  const NW = Math.max(10, Math.round(C.cR * 2));
+  const verts = sgCurtainMarch(P, keep, DROP, NW, C.cR);
   const gates = sgPickGates(verts, T.downhill);
   sgBuildCurtain(P, verts, gates);
-  sgBuildKeep(P, keep);
+  sgBuildKeep(P, keep, C.big);
   // inner bailey buildings, dart-thrown inside the wall, the first a great hall
   const innerR = Math.min.apply(null, verts.map(v => v.rd)) * 0.72;
   const nb = spec.bailey[0] + (r() * spec.bailey[1] | 0);
@@ -3759,23 +3875,25 @@ function sgBuildCastle(P) {
     if (Math.hypot(lx - keep.lx, lz - keep.lz) < 1.8) continue;
     if (!placed.every(p => (p.lx - lx) ** 2 + (p.lz - lz) ** 2 > spec.gap * spec.gap)) continue;
     const yaw = Math.atan2(keep.lz - lz, keep.lx - lx), hall = (made === 0);
-    if (sgHouse(P, lx, lz, hall ? { big: true, roofBuf: P.O, roofRGB: ownerRGB, wallHex: pal.wood, yaw } : { yaw })) { placed.push({ lx, lz }); made++; }
+    if (sgHouse(P, lx, lz, hall ? { big: true, roofBuf: O, roofRGB: ownerRGB, wallHex: pal.wood, yaw } : { yaw })) { placed.push({ lx, lz }); made++; }
   }
-  sgLowerTown(P, verts[gates[0]], T.downhill);                           // the lower town spills from the main (downhill) gate
-  for (const gi of gates) sgBanner(P, verts[gi].lx, verts[gi].lz);       // a banner over each gate
+  for (const gi of gates) sgBanner(P, verts[gi].lx, verts[gi].lz);      // a banner over each gate
+  const wallR = Math.max.apply(null, verts.map(v => v.rd));
+  exclude.push({ lx: keep.lx, lz: keep.lz, r: wallR + 1.4 });           // keep town/city houses off the castle
 }
-function sgFindKeep(P) {
-  const { seat, spec } = P; let best = { lx: 0, lz: 0, y: seat(0, 0) }; const Rin = spec.R * 0.2; // keep near the centre so it sits well inside the snug curtain
-  for (let k = 0; k < 8; k++) { const a = k / 8 * TAU, lx = Math.cos(a) * Rin, lz = Math.sin(a) * Rin, y = seat(lx, lz); if (y > best.y) best = { lx, lz, y }; }
+function sgFindKeep(P, cx, cz, searchR) {
+  const { seat } = P; cx = cx || 0; cz = cz || 0; searchR = searchR || P.spec.R * 0.2;  // keep near the castle centre so it sits well inside the snug curtain
+  let best = { lx: cx, lz: cz, y: seat(cx, cz) };
+  for (let k = 0; k < 8; k++) { const a = k / 8 * TAU, lx = cx + Math.cos(a) * searchR, lz = cz + Math.sin(a) * searchR, y = seat(lx, lz); if (y > best.y) best = { lx, lz, y }; }
   return best;
 }
 // March a ray out from the keep along each spoke; the hill decides where it falls away. But a curtain
 // wall is an ENCLOSURE meant to keep people out, so the result is kept near-CIRCULAR: terrain only
 // gently modulates the radius around a common base, instead of a spiky star whose deep notches read as
 // disjoint, parallel wall runs. Always a single simple closed loop (star-shaped about the keep).
-function sgCurtainMarch(P, keep, DROP, NW) {
-  const { seat, spec, T, r } = P;
-  const platY = keep.y - DROP, minR = spec.R * 0.42, maxR = spec.R * 0.62, jit = (r() - 0.5) * 0.25; // a snug curtain hugging the keep+bailey, not a vast ring out at the footprint edge
+function sgCurtainMarch(P, keep, DROP, NW, cR) {
+  const { seat, T, r } = P;
+  const platY = keep.y - DROP, minR = cR * 0.78, maxR = cR * 1.12, jit = (r() - 0.5) * 0.25; // a snug curtain hugging the keep+bailey, not a vast ring out at the footprint edge
   const rad = new Array(NW), ang = new Array(NW);
   for (let k = 0; k < NW; k++) {
     const a = k / NW * TAU + jit; ang[k] = a; let rd = minR;
@@ -3839,10 +3957,10 @@ function sgBuildCurtain(P, verts, gates) {
     sgCone8(S, v.lx, v.y - 0.7 + th + 0.7, v.lz, rad * 1.18, gate ? 1.2 : 0.9, stoneDk);
   }
 }
-function sgBuildKeep(P, keep) {
-  const { pal, ownerRGB, S, O, spec, seat } = P;
+function sgBuildKeep(P, keep, big) {
+  const { pal, ownerRGB, S, O, seat } = P;
   const stone = sgRgb(pal.stone, 1), stoneDk = sgRgb(pal.stoneDk, 1);
-  const big = spec === SG_SPEC.capital, kw = big ? 3.2 : 2.6, kh = big ? 5.0 : 4.0, hw = kw * 0.75;
+  const kw = big ? 3.2 : 2.6, kh = big ? 5.0 : 4.0, hw = kw * 0.75;
   const c = [seat(keep.lx - hw, keep.lz - hw), seat(keep.lx + hw, keep.lz - hw), seat(keep.lx - hw, keep.lz + hw), seat(keep.lx + hw, keep.lz + hw)];
   const lo = Math.min.apply(null, c), hiC = Math.max.apply(null, c), floorY = hiC + 0.05;
   sgBox(S, keep.lx, (lo - 0.3 + floorY) / 2, keep.lz, kw * 1.55, floorY - (lo - 0.3), kw * 1.55, 0, stoneDk); // motte/plinth
@@ -3855,21 +3973,6 @@ function sgBuildKeep(P, keep) {
   sgBox(S, keep.lx, top + (ph - top) / 2, keep.lz, 0.15, ph - top, 0.15, 0, sgRgb(pal.wood, 1));
   sgBox(O, keep.lx + 0.5, ph - 0.5, keep.lz, 0.95, 0.6, 0.08, 0, ownerRGB); // great banner
 }
-function sgLowerTown(P, gateV, downhill) {                               // houses spilling from the gate down the approach
-  const { r, spec, isW, seat, placed } = P; if (!spec.lower || r() > 0.6) return;
-  // only where the approach is a gentle apron — otherwise houses tumble down a cliff and read as scatter
-  const gradeY = seat(gateV.lx, gateV.lz), farY = seat(gateV.lx + Math.cos(downhill) * 6, gateV.lz + Math.sin(downhill) * 6);
-  if ((gradeY - farY) / 6 > 0.32) return;
-  const n = spec.lower[0] + (r() * spec.lower[1] | 0);
-  for (let i = 0; i < n; i++) {
-    const along = 2.4 + i * 1.7 + r() * 0.7, side = (i % 2 ? 1 : -1) * (1.4 + r() * 0.8);
-    const lx = gateV.lx + Math.cos(downhill) * along + Math.cos(downhill + Math.PI / 2) * side;
-    const lz = gateV.lz + Math.sin(downhill) * along + Math.sin(downhill + Math.PI / 2) * side;
-    if (isW(lx, lz)) continue;
-    if (sgHouse(P, lx, lz, { yaw: downhill + Math.PI / 2 })) placed.push({ lx, lz });
-  }
-}
-
 // The one terrain-aware builder behind every settlement and capital. Returns a THREE.Group
 // seated at (X, refY, Z); g.userData.ownerMats (the owner-colored material) recolors on conquest.
 function buildSettlementGroup(X, Z, tier, name, ownerColor, seed) {
@@ -3880,8 +3983,8 @@ function buildSettlementGroup(X, Z, tier, name, ownerColor, seed) {
   const isW = (lx, lz) => isWater(X + lx, Z + lz);
   const pal = settlePalette(biomeAt(X, Z)), ownerRGB = sgRgb(ownerColor, 1);
   const S = { pos: [], col: [] }, O = { pos: [], col: [] };
-  const P = { r, tier, spec, X, Z, refY, T, pal, ownerRGB, seat, isW, S, O, placed: [] };
-  if (spec.castle) sgBuildCastle(P); else sgBuildOrganic(P);
+  const P = { r, tier, spec, X, Z, refY, T, pal, ownerRGB, seat, isW, S, O, placed: [], exclude: [] };
+  if (spec.castle) sgBuildHold(P); else sgBuildVillage(P);
   const g = new THREE.Group();
   if (S.pos.length) g.add(sgMesh(S, settleVCMat()));
   const ownerMats = [], om = mat(ownerColor, { shared: false }); ownerMats.push(om);
@@ -3889,6 +3992,7 @@ function buildSettlementGroup(X, Z, tier, name, ownerColor, seed) {
   const label = makeNameSprite(name);
   label.scale.set(spec.lbl, spec.lbl / 8, 1); label.position.y = spec.top; g.add(label);
   g.userData.ownerMats = ownerMats; g.userData.label = label;
+  g.userData.dbg = { buildings: P.placed.length, castles: P.exclude.length, R: spec.R, cls: T.cls };
   g.position.set(X, refY, Z);
   return g;
 }
@@ -3904,9 +4008,10 @@ function recolorCapital(cap) {
   for (const m of cap.group.userData.ownerMats) m.color.setHex(cap.owner.color);
 }
 
-// A streamed settlement: village/town render as organic, contour-following clusters (10-15
-// houses, palisade for towns); a city renders as a CASTLE whose curtain wall is fitted to the
-// landform. Banner/roof materials are per-hold and mutable, so a conquered settlement re-flies
+// A streamed settlement: a village is a small organic, contour-following cluster (10-15 houses);
+// a town is 3-4x that around a central castle (sometimes two) inside a palisade; a city is 3-4x a
+// town again — a sparse castle-district centre with 3-4 keeps, ringed by dense housing and a great
+// stone wall. Banner/roof materials are per-hold and mutable, so a conquered settlement re-flies
 // the conqueror's colors (recolorCapital). All terrain-aware via buildSettlementGroup above.
 function makeSettlement(hold) {
   const s = hold.site;
@@ -6389,6 +6494,19 @@ BV.territorySnapshot = BV.territory;
 BV.terrAt = (x, z) => { const [q, r] = worldToHex(x, z); const c = terrCells.get(hexKey(q, r)); return c ? (c.w ? 'water' : (c.o ? c.o.name : 'unclaimed')) : 'unloaded'; };
 BV.allyOrders = () => { const o = {}; for (const a of allies) if (a.alive) o[a.order] = (o[a.order] || 0) + 1; return o; };
 BV.allyStats = () => { const g = {}; for (const a of allies) if (a.alive) { const k = defKey(a.def) + ':' + a.order; (g[k] = g[k] || { n: 0, x: 0, z: 0 }); g[k].n++; g[k].x += a.pos.x; g[k].z += a.pos.z; } const o = {}; for (const k in g) o[k] = { n: g[k].n, avgX: Math.round(g[k].x / g[k].n), avgZ: Math.round(g[k].z / g[k].n) }; return o; };
+// audit the lattice cities over a region: confirms every emitted city centre is on land + reports spacing
+BV.cityAudit = (radius = 700) => {
+  const c0x = Math.floor((player.pos.x - radius) / CHUNK), c1x = Math.ceil((player.pos.x + radius) / CHUNK);
+  const c0z = Math.floor((player.pos.z - radius) / CHUNK), c1z = Math.ceil((player.pos.z + radius) / CHUNK);
+  const cities = [];
+  for (let cx = c0x; cx <= c1x; cx++) for (let cz = c0z; cz <= c1z; cz++)
+    for (const s of settlementSites(cx, cz)) if (s.tier === 'city') cities.push(s);
+  const wet = cities.filter(s => isWater(s.x, s.z)).length, R = SG_SPEC.city.R;
+  const coastal = s => { for (let k = 0; k < 16; k++) { const a = k / 16 * TAU; if (isWater(s.x + Math.cos(a) * R, s.z + Math.sin(a) * R)) return true; } return false; };
+  let mind = 1e9; for (let i = 0; i < cities.length; i++) for (let j = i + 1; j < cities.length; j++) { const d = Math.hypot(cities[i].x - cities[j].x, cities[i].z - cities[j].z); if (d < mind) mind = d; }
+  const sample = cities.map(s => ({ at: [Math.round(s.x), Math.round(s.z)], coastal: coastal(s) }));
+  return { cities: cities.length, centresInWater: wet, coastalCities: sample.filter(s => s.coastal).length, nearestPair: cities.length > 1 ? Math.round(mind) : null, cityDiam: Math.round(R * 2 + 5), sample };
+};
 BV.plan = { selectType, deploySelected, beginBattle, selCount: () => selected.size,
   newGroup, assignToGroup, splitIntoGroups, orderGroup, openCommandDeck, resumeBattle, countPool,
   selectGroup: (i) => { const g = planGroups[i]; if (g) selectGroup(g); },
@@ -6480,7 +6598,7 @@ BV.spawnSettlement = (tier = 'city', dx = 0, dz = 0, seed) => {
   const sd = (seed != null ? seed : (Math.imul(X | 0, 73856093) ^ Math.imul(Z | 0, 19349663))) >>> 0;
   const g = buildSettlementGroup(X, Z, tier, tier.toUpperCase(), nations[0].owner.color, sd);
   scene.add(g); (window._sgDbg || (window._sgDbg = [])).push(g);
-  return { ...BV.classify(X, Z, tier), verts: g.children.length, at: [Math.round(X), Math.round(Z)] };
+  return { ...BV.classify(X, Z, tier), ...g.userData.dbg, at: [Math.round(X), Math.round(Z)] };
 };
 BV.clearSpawned = () => { for (const g of (window._sgDbg || [])) { scene.remove(g); disposeGroup(g); } window._sgDbg = []; return 'cleared'; };
 // scan outward for high-relief sites (knolls/ridges) to test castle-on-a-hill fitting

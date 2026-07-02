@@ -3464,7 +3464,7 @@ const worldToHex = Terra.worldToHex, hexCellsInChunk = Terra.hexCellsInChunk;
 // kernel field — real added relief up close. Only the RENDER lattice scales: the logical lattice
 // (territory CA, server payloads, every gameplay query) is untouched, and each rendered tile inherits
 // its politics from the logical cell under its centre.
-const HEX_TIER_SCALE = [2, 1, 0.5];               // hex size multiplier per detail tier
+const HEX_TIER_SCALE = [2, 1, 0.5, 0.32];         // hex size mult per tier; idx 3 = the close-up "hyper" lattice — a client-only eye-candy tier used ONLY within CLOSEUP.hyperR of the hero, never synced
 function hexCellsInChunkScaled(cx, cz, s) {       // mirror of Terra.hexCellsInChunk at scale s
   if (s === 1) return hexCellsInChunk(cx, cz);
   const W = HEX_W * s, H = HEX_H * s, out = [];
@@ -3608,6 +3608,34 @@ function _streetCrownGeo() {
     return _mergedGeo([a, b]);
   });
 }
+// --- close-up (near-hero) prop models: same silhouettes, many more triangles. Client eye-candy only;
+//     these geometries are only ever attached to chunks inside the hyper band (scatterHyperFor). ---
+function _streetTrunkGeoHi() {
+  return cachedGeo('streetTrunkHi', () => {
+    const parts = [new THREE.CylinderGeometry(0.24, 0.56, 1, 10).toNonIndexed()];       // tapered bole, 10 sides
+    for (let k = 0; k < 3; k++) {                                                        // three short boughs so it isn't a bare pole up close
+      const a = k * 2.1 + 0.5, b = new THREE.CylinderGeometry(0.05, 0.12, 0.5, 6).toNonIndexed();
+      b.rotateZ(0.95); b.rotateY(a); b.translate(Math.sin(a) * 0.26, 0.16 + k * 0.16, Math.cos(a) * 0.26);
+      parts.push(b);
+    }
+    return _mergedGeo(parts);
+  });
+}
+function _streetFirGeoHi() {
+  return cachedGeo('streetFirHi', () => _mergedGeo([0, 1, 2, 3].map(k => {              // 4 skirts (vs 3), 10 sides (vs 7)
+    const c = new THREE.ConeGeometry(2.5 - k * 0.5, 1.9, 10).toNonIndexed();
+    c.translate(0, k * 1.0 + 1.05, 0);
+    return c;
+  })));
+}
+function _streetCrownGeoHi() {
+  return cachedGeo('streetCrownHi', () => {                                             // rounder canopy: main lobe detail 2, two smaller lobes detail 1
+    const a = new THREE.IcosahedronGeometry(1.9, 2).toNonIndexed(); a.scale(1, 0.78, 1); a.translate(0, 1.5, 0);
+    const b = new THREE.IcosahedronGeometry(1.2, 1).toNonIndexed(); b.scale(1, 0.7, 1); b.translate(0.95, 2.6, 0.35);
+    const c = new THREE.IcosahedronGeometry(0.95, 1).toNonIndexed(); c.scale(1, 0.72, 1); c.translate(-0.85, 2.45, -0.4);
+    return _mergedGeo([a, b, c]);
+  });
+}
 // deterministic per-tree shade jitter so a stand reads as individuals, not clones
 function _treeShade(x, z) { return 0.82 + ((Math.imul((Math.round(x * 10) ^ Math.round(z * 10)) | 0, 2654435761) >>> 24) / 255) * 0.36; }
 function buildScatter(group, cx, cz) {
@@ -3643,14 +3671,19 @@ function buildScatter(group, cx, cz) {
     group.add(trunks); group.add(canopies); made.push(trunks, canopies);
   };
   if (street) {                                    // real trees: firs on the cold/forest greens, broadleaf crowns elsewhere
-    emitTrees(trees.filter(t => _CONIFER_COLS.has(t[2])), _streetTrunkGeo(), _streetFirGeo(), (th) => th);
-    emitTrees(trees.filter(t => !_CONIFER_COLS.has(t[2])), _streetTrunkGeo(), _streetCrownGeo(), (th) => th * 0.85);
+    const hi = scatterHyperFor(cx, cz);            // right around the hero, swap to the high-poly models
+    const trunkG = hi ? _streetTrunkGeoHi() : _streetTrunkGeo();
+    emitTrees(trees.filter(t => _CONIFER_COLS.has(t[2])), trunkG, hi ? _streetFirGeoHi() : _streetFirGeo(), (th) => th);
+    emitTrees(trees.filter(t => !_CONIFER_COLS.has(t[2])), trunkG, hi ? _streetCrownGeoHi() : _streetCrownGeo(), (th) => th * 0.85);
   } else {                                         // the strategic map keeps its pictogram
     emitTrees(trees, cachedGeo('mapTrunk', () => new THREE.BoxGeometry(0.5, 1, 0.5)),
       cachedGeo('mapCone', () => new THREE.ConeGeometry(1.5, 3.2, 6)), (th, sc) => th + 1.2 * sc);
   }
   if (rocks.length) {
-    const rm = new THREE.InstancedMesh(cachedGeo('mapRock', () => new THREE.IcosahedronGeometry(1, 0)), mat(0x8d8f95), rocks.length);
+    const rockGeo = scatterHyperFor(cx, cz)        // near the hero, boulders get a rounder, higher-poly shell
+      ? cachedGeo('streetRockHi', () => new THREE.IcosahedronGeometry(1, 1))
+      : cachedGeo('mapRock', () => new THREE.IcosahedronGeometry(1, 0));
+    const rm = new THREE.InstancedMesh(rockGeo, mat(0x8d8f95), rocks.length);
     rocks.forEach(([x, z, r0, e1, e2, e3, sq], i) => {
       const r = r0 * rMul;
       q.setFromEuler(e.set(e1, e2, e3));
@@ -3793,6 +3826,11 @@ function updateStreetHolds() {
 // first — so low-end devices pay for one field of detail, never a whole ring of chunks.
 const TERR_SUB = 2;                                 // terrain tiles per chunk side (2 → 4 tiles of 30u)
 const DETAIL_R = 55;                                // action-rung detail bubble radius around the hero
+// ----- Close-up eye-candy: a tighter inner bubble where terrain + props get MANY more triangles -----
+// Purely client-side render detail, NEVER synced to the server. Inside CLOSEUP.hyperR of the hero (and
+// only at the action rung) the ground tessellates on the finest hex lattice (HEX_TIER_SCALE[3]) and the
+// nearby trees/rocks swap to high-poly models. Toggle CLOSEUP.on (or BV.closeup(false)) to A/B the cost.
+const CLOSEUP = { on: true, hyperR: 26 };
 const _terrRetessQ = [];                            // "cx,cz|ti" tile keys awaiting re-tessellation
 let _bubX = 1e9, _bubZ = 1e9;                       // where the bubble was last reconciled
 function _rectDist2(x0, z0, w, px, pz) {            // point → axis-aligned square distance²
@@ -3802,13 +3840,19 @@ function _rectDist2(x0, z0, w, px, pz) {            // point → axis-aligned sq
 function tileTierFor(cx, cz, tx, tz) {
   if (_appliedTier !== 2) return _appliedTier;      // rungs 0/1 tessellate uniformly (chart / map)
   const ts = CHUNK / TERR_SUB;
-  return _rectDist2(cx * CHUNK + tx * ts, cz * CHUNK + tz * ts, ts, player.pos.x, player.pos.z)
-    <= DETAIL_R * DETAIL_R ? 2 : 1;
+  const d2 = _rectDist2(cx * CHUNK + tx * ts, cz * CHUNK + tz * ts, ts, player.pos.x, player.pos.z);
+  if (CLOSEUP.on && d2 <= CLOSEUP.hyperR * CLOSEUP.hyperR) return 3; // the ground right under the hero: finest hexes
+  return d2 <= DETAIL_R * DETAIL_R ? 2 : 1;
 }
 // street-model trees + groves only near the bubble; beyond it the map's pictograms stand in
 function scatterStreetFor(cx, cz) {
   if (_appliedTier !== 2) return false;
   return _rectDist2(cx * CHUNK, cz * CHUNK, CHUNK, player.pos.x, player.pos.z) <= (DETAIL_R + 25) ** 2;
+}
+// the tight inner band around the hero where props swap to their high-poly models (client eye-candy only)
+function scatterHyperFor(cx, cz) {
+  if (_appliedTier !== 2 || !CLOSEUP.on) return false;
+  return _rectDist2(cx * CHUNK, cz * CHUNK, CHUNK, player.pos.x, player.pos.z) <= (CLOSEUP.hyperR + 22) ** 2;
 }
 function rebuildTerrainTile(qkey) {
   const bar = qkey.indexOf('|'), key = qkey.slice(0, bar), ti = +qkey.slice(bar + 1);
@@ -3840,9 +3884,10 @@ function refreshDetailBubble() {
       if (t.tier !== tileTierFor(kx, kz, t.tx, t.tz)) _terrRetessQ.push(key + '|' + ti);
     }
     const street = scatterStreetFor(kx, kz);        // scatter swaps whole-chunk (instances are cheap)
-    if (rec.scTier !== _appliedTier || rec.scStreet !== street) {
+    const hyper = scatterHyperFor(kx, kz);          // ...and again when the hi-poly inner band crosses it
+    if (rec.scTier !== _appliedTier || rec.scStreet !== street || rec.scHyper !== hyper) {
       for (const m of rec.sc || []) { rec.group.remove(m); if (m.dispose) m.dispose(); }
-      rec.sc = buildScatter(rec.group, kx, kz); rec.scTier = _appliedTier; rec.scStreet = street;
+      rec.sc = buildScatter(rec.group, kx, kz); rec.scTier = _appliedTier; rec.scStreet = street; rec.scHyper = hyper;
     }
   }
   _terrRetessQ.sort((a, b) => {
@@ -4025,7 +4070,7 @@ function buildChunk(cx, cz) {
     }
   }
   mapTerrain.add(group);
-  mapChunks.set(key, { group, holds, tiles, sc, terrOverlay, scTier: detailTier(), scStreet: scatterStreetFor(cx, cz) });
+  mapChunks.set(key, { group, holds, tiles, sc, terrOverlay, scTier: detailTier(), scStreet: scatterStreetFor(cx, cz), scHyper: scatterHyperFor(cx, cz) });
   if (_appliedTier === 0) for (const h of holds) { _iconFor(h); if (h.group) h.group.visible = false; } // a chunk born at rung 0 shows icons
   markChunkDiscovered(cx, cz);  // track this area as visited
   paintChunkTerritory(mapChunks.get(key));           // show it immediately, before the first generation
@@ -8664,12 +8709,21 @@ BV.rideView = (on) => { if (mode === 'map' && on !== undefined) setFieldMode(!!o
 BV.fieldMode = BV.rideView; // alias: the real name for the on-foot character roam
 // the LOD-by-zoom system: which tier is rendered, how many street rebuilds/icons live, detail-store depth
 BV.detailTier = () => {
-  let fine = 0, total = 0;
-  for (const rec of mapChunks.values()) if (rec.tiles) for (const t of rec.tiles) { total++; if (t.tier === 2) fine++; }
+  let fine = 0, hyper = 0, total = 0;
+  for (const rec of mapChunks.values()) if (rec.tiles) for (const t of rec.tiles) { total++; if (t.tier === 2) fine++; else if (t.tier === 3) hyper++; }
   return { tier: _appliedTier, want: detailTier(),
     streets: _allHoldEntries().filter(e => e.streetGroup).length,
     icons: _holdIcons.size, srvDetail: srvDetail.size, roadPaintTier: _roadPaintedTier,
-    terrQ: _terrRetessQ.length, fineTiles: fine, tiles: total, bubbleR: DETAIL_R };
+    terrQ: _terrRetessQ.length, fineTiles: fine, hyperTiles: hyper, tiles: total,
+    closeup: CLOSEUP.on, bubbleR: DETAIL_R, hyperR: CLOSEUP.hyperR };
+};
+// A/B the close-up eye-candy at runtime: BV.closeup(false) drops back to the plain street tier
+BV.closeup = (on, r) => {
+  if (on !== undefined) CLOSEUP.on = !!on;
+  if (typeof r === 'number') CLOSEUP.hyperR = r;
+  _bubX = _bubZ = 1e9;                              // force a bubble reconcile next frame
+  if (_appliedTier === 2) { refreshDetailBubble(); processTerrainQueue(CLOSEUP.on ? 4 : 8); }
+  return { on: CLOSEUP.on, hyperR: CLOSEUP.hyperR };
 };
 // living-battle inspection + a forced 1v? clash for timing calibration tests
 BV.mapBattles = () => mapBattles.map(b => ({ a: b.sideA.faction.name, b: b.sideB.faction.name,

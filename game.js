@@ -843,10 +843,11 @@ function updateTrails(dt) {
 // ---------- Projectiles (arrows + thrown rocks) ----------
 const projectiles = [];
 function spawnProjectile(shooter, target, R) {
-  // release from shoulder height, aim at the target's UPPER BODY (chest/head)
-  const from = shooter.pos.clone(); from.y = 1.8 * shooter.def.scale;
+  // release from shoulder height, aim at the target's UPPER BODY (chest/head). On the overworld the
+  // ground isn't flat, so reference both ends to the terrain underfoot (0 in the flat battle arena).
+  const from = shooter.pos.clone(); from.y = (fieldSimOn() ? mapElevY(from.x, from.z) : 0) + 1.8 * shooter.def.scale;
   const tScale = target.def ? target.def.scale : 1;
-  const to = target.pos.clone(); to.y = 2.1 * tScale;
+  const to = target.pos.clone(); to.y = (fieldSimOn() ? mapElevY(to.x, to.z) : 0) + 2.1 * tScale;
   const flight = Math.max(0.05, from.distanceTo(to) / R.projSpeed);
   // lead a moving target — long shots need real prediction to stay threatening
   if (target.vel) { to.x += target.vel.x * flight * 0.75; to.z += target.vel.z * flight * 0.75; }
@@ -879,8 +880,11 @@ function updateProjectiles(dt) {
     if (p.kind === 'rock') { p.mesh.rotation.x += dt * 9; p.mesh.rotation.z += dt * 7; }
     else { tmpV.copy(p.mesh.position).add(p.vel); p.mesh.lookAt(tmpV); }
     p.life -= dt;
-    let dead = p.life <= 0 || p.mesh.position.y <= 0.05 ||
-               Math.abs(p.mesh.position.x) > ARENA + 2 || Math.abs(p.mesh.position.z) > ARENA + 2;
+    const groundY = fieldSimOn() ? mapElevY(p.mesh.position.x, p.mesh.position.z) : 0; // hilly overworld vs flat arena
+    // the 3s life + ground check bound the shot; the arena xz wall only applies in the fixed-size battle arena
+    // (in field mode the hero roams far past ARENA, so that wall would kill arrows prematurely)
+    let dead = p.life <= 0 || p.mesh.position.y <= groundY + 0.05 ||
+               (!fieldSimOn() && (Math.abs(p.mesh.position.x) > ARENA + 2 || Math.abs(p.mesh.position.z) > ARENA + 2));
     if (!dead) {
       // hit the first opposing combatant in the path
       const foes = p.team === 'ally' ? enemies : opposingPlayerSide;
@@ -1511,6 +1515,8 @@ document.addEventListener('pointerlockchange', () => {
   pointerLocked = document.pointerLockElement === canvas;
   // losing the cursor mid-battle (Esc / alt-tab) surfaces the command deck instead of stranding the player
   if (!pointerLocked && mode === 'battle' && gameRunning && !commandPanelOpen) openCommandDeck();
+  // in field mode there's no deck — tell the player how to re-aim (click) or pull back out (scroll/T)
+  else if (!pointerLocked && fieldSimOn() && !mapCmdMode) showCmdToast('Cursor freed — click to re-aim · scroll out or T to pull back to the map');
 });
 addEventListener('mousemove', (e) => {
   if (!pointerLocked || !gameRunning) return;
@@ -1547,15 +1553,16 @@ if (TOUCH) {
   let tjAnchor = { x: 0, y: 0 }, lookLast = { x: 0, y: 0 };
 
   function controllable() {
-    const inMap = mode === 'map' && !encounter;
-    const inBattle = mode === 'battle' && gameRunning && !commandPanelOpen && !encounter;
-    return { inMap, inBattle, any: inMap || inBattle };
+    const field = mode === 'map' && mapFieldMode && !mapCmdMode && !encounter; // on-foot character roam = battle-like
+    const inMap = mode === 'map' && !encounter && !field;                       // strategic banner roam
+    const inBattle = (mode === 'battle' && gameRunning && !commandPanelOpen && !encounter) || field;
+    return { inMap, inBattle, field, any: inMap || inBattle };
   }
   function classify(t) {
     const c = controllable();
     if (!c.any) return null;
-    if (c.inBattle && t.clientX > innerWidth * 0.5) return 'look'; // right half steers the camera
-    return 'move'; // left thumb (and all of map mode) moves the avatar
+    if (c.inBattle && t.clientX > innerWidth * 0.5) return 'look'; // right half steers the camera (battle + field)
+    return 'move'; // left thumb (and all of strategic map mode) moves the avatar
   }
   function setStick(x, y) {
     let dx = x - tjAnchor.x, dy = y - tjAnchor.y;
@@ -1621,7 +1628,7 @@ if (TOUCH) {
   bindBtn('tb-block', () => { keys['ShiftLeft'] = true; }, () => { keys['ShiftLeft'] = false; });
   bindBtn('tb-weapon', toggleWeapon);
   bindBtn('tb-cmd', () => { if (mode === 'battle' && !commandPanelOpen) openCommandDeck(); });
-  bindBtn('tb-ride', () => { if (mode === 'map' && !encounter && !mapCmdMode) setMapView3rd(!mapView3rd); });
+  bindBtn('tb-ride', () => { if (mode === 'map' && !encounter && !mapCmdMode) setFieldMode(!mapFieldMode); });
   bindBtn('tb-rally', () => { if (mode === 'map' && !encounter) raiseCall(); });
   bindBtn('tb-beacon', () => { if (mode === 'map' && !encounter) openBeaconPanel(); });
   bindBtn('tb-warband', () => toggleCharsheet());
@@ -1634,6 +1641,7 @@ if (TOUCH) {
     touchRoot.classList.toggle('hidden', !c.any);
     touchRoot.classList.toggle('mapmode', c.inMap);
     touchRoot.classList.toggle('battlemode', c.inBattle);
+    touchRoot.classList.toggle('fieldmode', !!c.field); // on-foot map roam: battle buttons + the View toggle stay reachable
     if (!c.any && moveId !== null) { moveId = null; hideStick(); } // dropped into a menu mid-drag
   };
 }
@@ -2253,8 +2261,9 @@ function stepFighter(f, dt) {
         f.walkPhase += dt * f.def.speed * 1.6; f.moving = true;
       } else if (f.team === 'ally' && player.alive) {
         const pd = f.pos.distanceTo(player.pos);
-        if (pd > 4.5) {
-          const mv = new THREE.Vector3().subVectors(player.pos, f.pos).setY(0).normalize();
+        if (pd > (fieldSimOn() ? 4.5 * FIELD_SCALE : 4.5)) { // a tight escort at the small field scale
+          const mv = new THREE.Vector3().subVectors(player.pos, f.pos).setY(0);
+          if (mv.lengthSq() > 1e-6) mv.normalize(); else mv.set(1, 0, 0); // guard: never normalize a zero vector (stacked on the player)
           f.vel.addScaledVector(mv, f.def.speed * 0.7 * dt * 6);
           f.walkPhase += dt * f.def.speed * 1.4; f.moving = true;
         }
@@ -2372,9 +2381,18 @@ function stepFighter(f, dt) {
 
   // physics
   f.vel.multiplyScalar(Math.pow(0.0008, dt));
-  f.pos.addScaledVector(f.vel, dt);
-  confine(f.pos);
+  let fBaseY = 0;
+  if (fieldSimOn()) { // overworld escort: confine to land + ride the terrain height, like the hero
+    const fx = f.pos.x, fz = f.pos.z;
+    const [nx, nz] = landStep(fx, fz, f.vel.x * dt * FIELD_SPEED_MUL, f.vel.z * dt * FIELD_SPEED_MUL); // match the hero's scaled pace
+    f.pos.x = nx; f.pos.z = nz;
+    fBaseY = mapElevY(nx, nz);
+  } else {
+    f.pos.addScaledVector(f.vel, dt);
+    confine(f.pos);
+  }
   f.obj.position.copy(f.pos);
+  f.obj.position.y = fBaseY;
   f.obj.rotation.y = f.facing;
 
   // crowd LOD: distant fighters animate every 3rd frame, far ones hold their
@@ -2387,7 +2405,7 @@ function stepFighter(f, dt) {
   if (animate) {
     if (f.moving) {
       walkLegs(f.parts, f.walkPhase);
-      f.obj.position.y = Math.abs(Math.cos(f.walkPhase)) * 0.05 * f.def.scale;
+      f.obj.position.y = fBaseY + Math.abs(Math.cos(f.walkPhase)) * 0.05 * f.def.scale;
     } else {
       restLegs(f.parts, dt, true);
     }
@@ -2504,6 +2522,8 @@ function rebuildSepGrid() {
 }
 function separation(self) {
   sepV.set(0, 0, 0);
+  // personal-space radius; at the small field scale the crowd packs proportionally tighter
+  const R = fieldSimOn() ? 2.2 * FIELD_SCALE : 2.2, R2 = R * R;
   const cx = Math.floor(self.pos.x / SEP_CELL), cz = Math.floor(self.pos.z / SEP_CELL);
   for (let gx = cx - 1; gx <= cx + 1; gx++) {
     for (let gz = cz - 1; gz <= cz + 1; gz++) {
@@ -2513,9 +2533,9 @@ function separation(self) {
         const o = arr[i];
         if (o === self || !o.alive) continue;
         const d2 = self.pos.distanceToSquared(o.pos);
-        if (d2 < 4.84 && d2 > 1e-6) {
+        if (d2 < R2 && d2 > 1e-6) {
           const d = Math.sqrt(d2);
-          sepV.add(tmpV.subVectors(self.pos, o.pos).setY(0).normalize().multiplyScalar((2.2 - d) / 2.2));
+          sepV.add(tmpV.subVectors(self.pos, o.pos).setY(0).normalize().multiplyScalar((R - d) / R));
         }
       }
     }
@@ -2688,11 +2708,25 @@ function updatePlayer(dt) {
 
   // physics integrate
   player.vel.multiplyScalar(Math.pow(0.0001, dt));
-  player.pos.addScaledVector(player.vel, dt);
-  confine(player.pos);
+  let baseY = 0, fsc = 1;
+  if (fieldSimOn()) {
+    // overworld: confine to dry land (landStep) and ride the terrain height instead of the flat arena.
+    // Displacement is scaled by FIELD_SPEED_MUL so the small hero reads as jogging through a big world.
+    fsc = FIELD_SCALE;
+    const ox = player.pos.x, oz = player.pos.z;
+    const [nx, nz] = landStep(ox, oz, player.vel.x * dt * FIELD_SPEED_MUL, player.vel.z * dt * FIELD_SPEED_MUL);
+    if (nx === ox) player.vel.x = 0;   // bumped the coast — kill that component
+    if (nz === oz) player.vel.z = 0;
+    player.pos.x = nx; player.pos.z = nz; player.pos.y = 0;
+    baseY = mapElevY(nx, nz);
+  } else {
+    player.pos.addScaledVector(player.vel, dt);
+    confine(player.pos);
+  }
   player.obj.position.copy(player.pos);
+  player.obj.position.y = baseY;
   if (walking) {
-    player.obj.position.y = Math.abs(Math.cos(player.walkPhase)) * 0.06;
+    player.obj.position.y = baseY + Math.abs(Math.cos(player.walkPhase)) * 0.06 * fsc;
     // a footfall every half walk-cycle (one per foot)
     const stepIdx = Math.round(player.walkPhase / Math.PI);
     if (stepIdx !== player.lastStepIdx) { player.lastStepIdx = stepIdx; SFX.foot(); }
@@ -2710,14 +2744,14 @@ function updatePlayer(dt) {
   // hips and lean the spine — both set absolutely each frame, so safe to add to
   if (player.crouchT > 0.001) {
     const ct = player.crouchT;
-    player.obj.position.y -= 0.7 * ct;       // hips sink toward the folded legs
+    player.obj.position.y -= 0.7 * ct * fsc; // hips sink toward the folded legs (scaled with the body in field mode)
     // lean ramps gently at first, then HARD once the knees hit their limit —
     // a deep crouch tips the torso forward over the knees instead of sinking more
     const deep = Math.max(0, (ct - 0.4) / 0.6);
     p.upperBody.rotation.x += 0.22 * ct + 0.4 * deep;
-    // hard floor: never let the fold clip the body through the ground
+    // hard floor: never let the fold clip the body through the ground (baseY = terrain height, 0 in the arena)
     const minY = _crouchBox.setFromObject(player.obj).min.y;
-    if (minY < 0) player.obj.position.y -= minY; // lift so the lowest point rests at ground
+    if (minY < baseY) player.obj.position.y -= (minY - baseY); // lift so the lowest point rests on the ground underfoot
   }
 
   // hurt tint
@@ -2782,16 +2816,23 @@ function updateCamera(dt) {
     if (keys['KeyQ']) cameraAngle -= dt * 2;
     if (keys['KeyE']) cameraAngle += dt * 2;
   }
-  // over-the-shoulder: shift the frame so the character sits left of center,
-  // leaving room on the right where the sword swings
-  const ox = Math.cos(cameraAngle) * 0.7, oz = -Math.sin(cameraAngle) * 0.7;
+  // over-the-shoulder: shift the frame so the character sits left of center, leaving room on the right
+  // where the sword swings. In field mode the hero is tiny (FIELD_SCALE), so the shoulder offset, eye
+  // height and look-at all shrink to match — which is exactly what makes the fixed-size walls tower.
+  const fsc = fieldSimOn() ? FIELD_SCALE : 1;
+  const ox = Math.cos(cameraAngle) * 0.7 * fsc, oz = -Math.sin(cameraAngle) * 0.7 * fsc;
   const tx = player.pos.x + ox + Math.sin(cameraAngle) * cameraDist;
   const tz = player.pos.z + oz + Math.cos(cameraAngle) * cameraDist;
+  // on the overworld the floor isn't flat — lift the rig by the terrain under the hero, and never let
+  // the eye sink into a hill it's sitting behind
+  const baseY = fieldSimOn() ? mapElevY(player.pos.x, player.pos.z) : 0;
+  let wantY = baseY + cameraHeight;
+  if (fieldSimOn()) wantY = Math.max(wantY, mapElevY(camBase.x, camBase.z) + 1.4 * fsc);
   camBase.x = lerp(camBase.x, tx, clamp(dt * 6, 0, 1));
   camBase.z = lerp(camBase.z, tz, clamp(dt * 6, 0, 1));
-  camBase.y = lerp(camBase.y, cameraHeight, clamp(dt * 6, 0, 1));
+  camBase.y = lerp(camBase.y, wantY, clamp(dt * 6, 0, 1));
   camera.position.copy(camBase);
-  camera.lookAt(player.pos.x + ox, 1.7, player.pos.z + oz);
+  camera.lookAt(player.pos.x + ox, baseY + 1.7 * fsc, player.pos.z + oz);
   if (trauma > 0) {
     trauma = Math.max(0, trauma - dt * 2.0);
     const sh = trauma * trauma;
@@ -2829,58 +2870,173 @@ function updateMapCamera(dt) {
   camera.lookAt(player.pos.x, gy, player.pos.z);
 }
 
-// ---------- Ride-along: a 3rd-person follow camera for the overworld (like battle mode) ----------
-// Toggle (T) between the strategic eye-in-the-sky and a chase cam that rides behind the hero with
-// the whole warband marching around the banner — exactly the framing you fight in.
-let mapView3rd = false;             // false = strategic top-down; true = 3rd-person ride-along
-const MAP_RIDE = { dist: 12, height: 6.4, look: 1.7, lead: 1.4 }; // chase distance / eye lift / look-at height / hero lead ahead of the banner
-// the hero leads the marching column; this is where the avatar (and the camera's focus) sits
-function rideHeroPos(out) {
-  const gy = mapElevY(player.pos.x, player.pos.z);
-  return out.set(player.pos.x + Math.sin(player.facing) * MAP_RIDE.lead, gy,
-                 player.pos.z + Math.cos(player.facing) * MAP_RIDE.lead);
-}
-function updateMapChaseCamera(dt) {
-  // trail behind the hero's heading; cameraAngle drives inputDir so W stays "forward where you face"
-  cameraAngle = angleLerp(cameraAngle, player.facing + Math.PI, clamp(dt * 5, 0, 1));
-  const focus = rideHeroPos(_rideV);
-  const tx = focus.x + Math.sin(cameraAngle) * MAP_RIDE.dist;
-  const tz = focus.z + Math.cos(cameraAngle) * MAP_RIDE.dist;
-  const k = clamp(dt * 6, 0, 1);
-  camBase.x = lerp(camBase.x, tx, k);
-  camBase.z = lerp(camBase.z, tz, k);
-  camBase.y = lerp(camBase.y, Math.max(focus.y, mapElevY(tx, tz)) + MAP_RIDE.height, k); // clear hills behind the hero
-  camera.position.copy(camBase);
-  camera.lookAt(focus.x, focus.y + MAP_RIDE.look, focus.z);
-}
-const _rideV = new THREE.Vector3();
-// show + walk the hero avatar at the head of the column while riding; hide it in every other map view
-function updateMapHero(dt) {
-  const ride = mapView3rd && !mapCmdMode && !encounter; // (only ever called from updateMap, i.e. mode==='map')
-  if (!ride) { if (player.obj.visible) player.obj.visible = false; return; }
-  player.obj.visible = true;
-  const focus = rideHeroPos(_rideV);
-  player.obj.position.copy(focus);
-  player.obj.rotation.set(0, player.facing, 0);
-  player.obj.scale.y = 1;
-  const moving = inputDir().lengthSq() > 0;
-  const p = player.parts;
-  if (moving) {
-    player.walkPhase += dt * 9;
-    walkLegs(p, player.walkPhase, 0.6);
-    player.obj.position.y = focus.y + Math.abs(Math.cos(player.walkPhase)) * 0.06;
-  } else {
-    setPose(player.anim, 'guard', 0.2);
-    restLegs(p, dt, true);
+// ---------- Field mode: zoom into the overworld and play as your character (battle controls) ----------
+// Strategic view = the eye-in-the-sky banner. FIELD MODE = the camera drops to ground level and you run
+// the actual hero (player.obj) across the real terrain with the FULL battle control stack — mouse-aim,
+// click attack, right-click heavy, SHIFT block, SPACE dodge, F weapon swap, weapon drawn — and your
+// warband COMPANY follows as individual soldiers. The world keeps simulating; ride into a band and the
+// normal encounter -> battle flow takes over. Scroll wheel zooms in/out across the threshold; T toggles.
+let mapFieldMode = false;            // false = strategic top-down banner; true = character-level free-roam
+let fieldPref = false;               // remember the player's choice so it survives battles / new regions
+const FIELD_COMPANY_CAP = 24;        // warband soldiers drawn escorting you (the rest of a big host is abstracted)
+// The overworld is a strategic MINIATURE — a city wall is only ~1.8 world units tall — so a battle-scale
+// hero (~1.8u) would tower over it. In field mode the whole "person layer" (hero, company, the materialised
+// enemy hosts, the camera framing and the move speed) is shrunk by FIELD_SCALE, so the fixed-size world
+// (walls, houses, hills) reads as genuinely large and you feel like one soldier walking through it.
+const FIELD_SCALE = 0.42;            // person height relative to battle scale (~0.74u tall vs a 1.8u city wall)
+const FIELD_SPEED_MUL = 0.6;         // displacement is scaled down so it reads as a jog across a big world
+const FIELD_ARMY = { showR: 36, hideR: 44, capPerBand: 16, capTotal: 80 }; // nearby flags -> real soldier crowds
+const fieldArmies = new Map();       // band -> { bodies:[...] } — materialised hosts near the hero
+// true only while the overworld is driven as a character — makes updatePlayer / stepFighter / updateCamera
+// ride terrain elevation (mapElevY) + land-confinement (landStep) instead of the flat battle arena
+function fieldSimOn() { return mapFieldMode && mode === 'map'; }
+// spawn the warband as individual ally fighters clustered behind the hero; order 'free' = follow the player
+function spawnFieldCompany() {
+  clearAllies();
+  ensureWarbandRoster();
+  const live = warbandRoster.filter(c => !c.fallen);
+  const n = Math.min(live.length, FIELD_COMPANY_CAP);
+  for (let i = 0; i < n; i++) {
+    const c = live[i];
+    const def = ALLY_DEF_BY_CLASS[classKeyOf(c.archetype)] || ALLY_DEF;
+    const ang = player.facing + Math.PI + rand(-0.95, 0.95);                  // fan out behind the hero
+    const r = (2.0 + (i % 5) * 1.0 + rand(0, 0.6)) * FIELD_SCALE;             // tight cluster, scaled to the small bodies
+    const [lx, lz] = landStep(player.pos.x, player.pos.z, Math.sin(ang) * r, Math.cos(ang) * r);
+    const a = spawnAlly(lx, lz, ALLY_PALETTES[i % ALLY_PALETTES.length], def, c);
+    a.order = 'free'; a.facing = player.facing;        // 'free' + no enemy = regroup/follow on the player
+    a.obj.scale.multiplyScalar(FIELD_SCALE);           // shrink to person-vs-city scale
+    a.obj.position.y = mapElevY(lx, lz);
   }
-  updateAnimator(player.anim, dt);
 }
-// flip between strategic and ride-along; restore screen-relative control when pulling back out
-function setMapView3rd(on) {
-  if (on === mapView3rd) return;
-  mapView3rd = on;
-  if (!on) { cameraAngle = 0; player.obj.visible = false; } // strategic: W = up the screen again
-  showCmdToast(on ? 'Ride-along view — march with your warband (T to pull back)' : 'Strategic view (T to ride along)');
+// enter/leave field mode. Entering flips on the battle control stack (gameRunning) and grabs the cursor.
+function setFieldMode(on, opts) {
+  on = !!on;
+  if (on === mapFieldMode) return;
+  if (on && (mode !== 'map' || encounter || mapCmdMode)) return; // only from the free strategic overworld
+  mapFieldMode = on;
+  if (!(opts && opts.keepPref)) fieldPref = on;
+  if (on) {
+    coopMult = 1;                                    // no co-op buff while just roaming
+    player.alive = true;
+    player.attacking = player.shooting = player.heavy = player.rolling = player.blocking = false;
+    player.attackPhase = 0; player.cooldown = 0; player.combo = 0;
+    player.obj.scale.setScalar(FIELD_SCALE);          // a realistic soldier, not a colossus over the walls
+    player.obj.rotation.set(0, player.facing, 0);
+    setPlayerWeaponVisual();                          // weapon drawn, exactly like battle
+    spawnFieldCompany();                              // your company falls in behind you
+    if (player.mapToken) player.mapToken.visible = false; // hide the strategic banner...
+    setDetVisible(false);                             // ...and any detachment columns
+    player.obj.visible = true;
+    gameRunning = true;                              // unlocks pointer-lock + mouse-aim + attack/dodge/weapon
+    cameraAngle = player.facing + Math.PI;            // start the camera behind the hero
+    cameraDist = 9 * FIELD_SCALE; cameraHeight = 5 * FIELD_SCALE; // frame the small hero so the walls tower over him
+    if (canvas.requestPointerLock) { try { canvas.requestPointerLock(); } catch (e) { /* needs a user gesture */ } }
+    showCmdToast('Field view — lead the company on foot · mouse aim · click attack · scroll out / T to pull back');
+  } else {
+    clearAllies();                                   // the on-foot escort folds back into the banner
+    clearAllFieldArmies();                           // nearby hosts go back to being banner tokens
+    player.obj.visible = false;
+    player.obj.scale.setScalar(1);                   // restore battle scale for the next real fight
+    if (player.mapToken) player.mapToken.visible = true;
+    setDetVisible(true);
+    gameRunning = false;
+    cameraAngle = 0;                                  // strategic: W = up the screen again
+    if (document.exitPointerLock) document.exitPointerLock();
+    showCmdToast('Strategic view — scroll in (or T) to drop down and lead on foot');
+  }
+  if (TOUCH && window.updateTouchHud) window.updateTouchHud();
+}
+
+// ----- Nearby hosts become REAL soldiers, not flags. While in field mode, every band within range is
+// drawn as a small crowd of fighters at FIELD_SCALE; a band locked in a clash visibly fights the host on
+// the other side of its map-battle. The banner token (and the clash icon) hide while materialised and
+// return when you walk away or leave field mode. These crowds are visual — riding in still opens the
+// real encounter -> battle. -----
+function factionFieldPalette(faction) {
+  const c = (faction && faction.color != null) ? faction.color : 0x8a1a1a;
+  return { skin: 0xd9a877, cloth: c, accent: c, blade: 0xcdd4dc };
+}
+function makeFieldExtra(faction, weapon) {
+  const h = buildHumanoid(factionFieldPalette(faction), FIELD_SCALE, weapon);
+  scene.add(h.group);
+  return { group: h.group, parts: h.parts, anim: makeAnimator(h.parts), phase: rand(0, 6.28),
+           ox: 0, oz: 0, swing: rand(0.3, 1.2), swinging: false };
+}
+function clearFieldArmy(band) {
+  const fa = fieldArmies.get(band); if (!fa) return;
+  for (const b of fa.bodies) { scene.remove(b.group); disposeGroup(b.group); }
+  fieldArmies.delete(band);
+  if (band.group) band.group.visible = true;          // banner returns (clash markers are re-shown centrally below)
+}
+function clearAllFieldArmies() {
+  for (const band of [...fieldArmies.keys()]) clearFieldArmy(band);
+  for (const bt of mapBattles) if (bt.marker) bt.marker.visible = true; // back to flags/markers in the strategic view
+}
+function materialiseBand(band, budget) {
+  const n = Math.min(Math.round(band.size) || 1, FIELD_ARMY.capPerBand, budget);
+  if (n <= 0) return 0;
+  const bodies = [];
+  for (let i = 0; i < n; i++) {
+    const w = (i % 6 === 0) ? 'bow' : 'sword';                            // a few archers for silhouette variety
+    const b = makeFieldExtra(band.faction, w);
+    const a = (i / n) * Math.PI * 2 + rand(-0.3, 0.3);
+    const rr = (0.5 + Math.sqrt((i + 1) / n) * 2.4) * FIELD_SCALE;        // packed cluster, scaled to the bodies
+    b.ox = Math.cos(a) * rr; b.oz = Math.sin(a) * rr;
+    bodies.push(b);
+  }
+  fieldArmies.set(band, { bodies, lx: band.pos.x, lz: band.pos.z });
+  if (band.group) band.group.visible = false;          // the flag gives way to the soldiers
+  return n;
+}
+function updateFieldArmyBodies(band, fa, dt) {
+  // a band locked in a clash fights a host on the OTHER side of its map-battle (sideA/sideB are SIDE
+  // objects holding .bands — pick a living enemy band from the opposite side to orient/strike toward)
+  let foe = null;
+  if (band.inBattle) {
+    const bt = band.inBattle, other = bt.sideA.bands.includes(band) ? bt.sideB : bt.sideA;
+    foe = other.bands.find(x => x.alive) || other.bands[0] || null;
+  }
+  const mx = band.pos.x - fa.lx, mz = band.pos.z - fa.lz; fa.lx = band.pos.x; fa.lz = band.pos.z;
+  const moving = !foe && (mx * mx + mz * mz) > 1e-5;
+  const faceTo = foe ? Math.atan2(foe.pos.x - band.pos.x, foe.pos.z - band.pos.z)
+              : moving ? Math.atan2(mx, mz)
+              : Math.atan2(player.pos.x - band.pos.x, player.pos.z - band.pos.z); // idle: turn toward the traveller
+  for (const b of fa.bodies) {
+    const wx = band.pos.x + b.ox, wz = band.pos.z + b.oz;
+    b.group.position.set(wx, mapElevY(wx, wz), wz);
+    b.group.rotation.y = faceTo + (foe ? Math.sin(b.phase * 1.7) * 0.3 : 0);
+    if (foe) {                                          // melee: shuffle + periodic swings into the enemy host
+      b.phase += dt * 6; walkLegs(b.parts, b.phase, 0.25);
+      b.swing -= dt;
+      if (b.swing <= 0) { b.swinging = !b.swinging; b.swing = b.swinging ? 0.16 : rand(0.4, 1.1); setPose(b.anim, b.swinging ? MOVES.slashR.strike : 'guard', 0.08); }
+    } else if (moving) {                                // marching column
+      b.phase += dt * 7; walkLegs(b.parts, b.phase, 0.4); setPose(b.anim, 'guard', 0.3);
+    } else {                                            // halted, watching you pass
+      restLegs(b.parts, dt, true); setPose(b.anim, 'guard', 0.3);
+    }
+    updateAnimator(b.anim, dt);
+  }
+}
+function updateFieldArmies(dt) {
+  if (!fieldSimOn()) { if (fieldArmies.size) clearAllFieldArmies(); return; }
+  for (const band of [...fieldArmies.keys()]) if (!band.alive || !parties.includes(band)) clearFieldArmy(band); // died / despawned
+  let total = 0; for (const fa of fieldArmies.values()) total += fa.bodies.length;
+  const px = player.pos.x, pz = player.pos.z;
+  for (const band of parties) {
+    if (!band.alive) continue;
+    const d = Math.hypot(band.pos.x - px, band.pos.z - pz);
+    const has = fieldArmies.get(band);
+    if (!has && d <= FIELD_ARMY.showR && total < FIELD_ARMY.capTotal) total += materialiseBand(band, FIELD_ARMY.capTotal - total);
+    else if (has && d >= FIELD_ARMY.hideR) { clearFieldArmy(band); continue; }
+    const fa = fieldArmies.get(band);
+    if (fa) updateFieldArmyBodies(band, fa, dt);
+  }
+  // clash icons: hide a battle's marker only while one of its hosts is drawn as a real crowd, else show it.
+  // Centralised here so it self-heals — a band dying mid-clash (which nulls band.inBattle) can't strand a marker.
+  for (const bt of mapBattles) {
+    if (!bt.marker) continue;
+    bt.marker.visible = !(bt.sideA.bands.some(b => fieldArmies.has(b)) || bt.sideB.bands.some(b => fieldArmies.has(b)));
+  }
 }
 
 // ---------- Game state ----------
@@ -3212,7 +3368,12 @@ function groundColorBlended(x, z, out) {
 // real vertical relief so mountains tower and valleys sink. Water dips into a seabed basin
 // beneath its tint; land eases upward, with peaks getting an extra exponential lift.
 const MAP_RELIEF = 17;     // overworld vertical exaggeration — base lift for the rolling country
+// object-editor only: when set, mapElevY yields this sculpted height field instead of the world's,
+// so the editor can seat a real settlement on a bespoke landform (e.g. a mountain) using the SAME
+// generators the game uses. Inert in the live game — only editApply ever sets it (see OBJECT EDITOR).
+let editTerrainFn = null;
 function mapElevY(x, z) {
+  if (editTerrainFn) return editTerrainFn(x, z);
   const e = elevationAt(x, z);
   if (e < SEA_LEVEL) return -0.6 - (SEA_LEVEL - e) * 2.0;              // seabed basin under the water tint
   const land = (e - SEA_LEVEL) / (1 - SEA_LEVEL);                     // 0..~0.76 across the dry range
@@ -3345,21 +3506,113 @@ function bestLandSpot(x0, z0, footR, searchR) {
   }
   return bs >= 0 ? { x: bx, z: bz, score: bs } : null;
 }
-// Pull a city centre onto solid land near (x0,z0). Cities sit on a wide lattice now, so the search radius
-// is generous (escape a coastline); a city must end up MOSTLY land (a beach edge is fine, half-in-sea is
-// not) or it is dropped (deep ocean / archipelago → no city there).
-function cityLandCenter(x0, z0, R) {
-  const c = bestLandSpot(x0, z0, R, R * 2.2);
-  return (c && c.score >= 0.6) ? c : null;
+// Seat a city the way a founder would: dry, FLAT, low ground with room to build — never a mountain
+// shoulder, never an archipelago sliver. Candidates score land-fraction × flatness; if nothing nearby
+// qualifies the site is dropped (deep ocean / broken coast / high crags → no city there).
+function citySeatScore(x, z, footR) {
+  const land = landScore(x, z, footR);
+  if (land < 0) return -1;
+  let rough = 0;
+  for (let k = 0; k < 8; k++) { const a = k / 8 * TAU, rr = _fastRoughAt(x + Math.cos(a) * footR * 0.6, z + Math.sin(a) * footR * 0.6); rough += rr < 0 ? 1 : rr; }
+  return land * (1 - (rough / 8) * 0.75);
 }
-// Deterministic settlement sites within a chunk (villages/towns per-chunk; cities on a coarse lattice) —
-// shared kernel. Cities are then snapped onto land here (terrain lives client-side, not in the pure kernel).
+function cityLandCenter(x0, z0, R) {
+  let bx = x0, bz = z0, bs = citySeatScore(x0, z0, R);
+  const STEP = Math.max(6, R * 0.34);
+  for (let rad = STEP; rad <= R * 2.6 && bs < 0.95; rad += STEP)
+    for (let k = 0; k < 12; k++) { const a = k / 12 * TAU + rad * 0.5;
+      const x = x0 + Math.cos(a) * rad, z = z0 + Math.sin(a) * rad, sc = citySeatScore(x, z, R);
+      if (sc > bs) { bs = sc; bx = x; bz = z; } }
+  return bs >= 0.62 ? { x: bx, z: bz, score: bs } : null;
+}
+// ============ THE v4 PIPELINE: terrain → arteries → settlements ON the arteries ============
+// The kernel still decides WHICH blocks/chunks hold settlements (identity, owners, server sync), but the
+// land decides WHERE they stand: city candidates are re-seated onto founder's ground (flat dry lowland),
+// and those seats ARE the arterial nodes — the Gabriel highways run seat-to-seat. Towns and villages that
+// fall near that skeleton are pulled to the WAYSIDE, strung along the highways a seeded step off the
+// roadbed, so the map reads like a settled land: roads through the valleys, life along the roads.
+const _CITY_BLOCK = 7;                                        // mirrors WorldSim CITY_BLOCK — keep in sync
+function _blockCityRaw(bx, bz) {                              // mirrors WorldSim.blockCity (not exported)
+  const r = _mulberry32((Math.imul(bx | 0, 668265263) ^ Math.imul(bz | 0, 374761393) ^ Math.imul(worldSeed() >>> 0, 2654435761)) >>> 0);
+  if (r() >= 0.5) return null;
+  return { x: (bx + 0.5 + (r() - 0.5) * 0.3) * _CITY_BLOCK * CHUNK, z: (bz + 0.5 + (r() - 0.5) * 0.3) * _CITY_BLOCK * CHUNK };
+}
+// which way is the nearest highway? (pure: the same skeleton the wayside uses) — a hold's MAIN GATE
+// faces the road that serves it, so the approach spur is short and straight.
+function _roadwardBearing(x, z) {
+  const BW = _CITY_BLOCK * CHUNK, bx0 = Math.floor(x / BW), bz0 = Math.floor(z / BW);
+  const seats = [];
+  for (let bx = bx0 - 2; bx <= bx0 + 2; bx++) for (let bz = bz0 - 2; bz <= bz0 + 2; bz++) { const c = _citySeat(bx, bz); if (c) seats.push(c); }
+  for (const n of nations) if (Math.hypot(n.x - x, n.z - z) < BW * 2.5) seats.push({ x: n.x, z: n.z });
+  if (seats.length < 2) return null;
+  let best = null;
+  for (let i = 0; i < seats.length; i++) for (let j = i + 1; j < seats.length; j++) {
+    const A = seats[i], B = seats[j];
+    if (Math.hypot(A.x - x, A.z - z) < 8 || Math.hypot(B.x - x, B.z - z) < 8) continue;  // our own seat isn't a target
+    const mx = (A.x + B.x) / 2, mz = (A.z + B.z) / 2, rr = ((A.x - B.x) ** 2 + (A.z - B.z) ** 2) / 4;
+    let open = true;
+    for (const c of seats) { if (c === A || c === B) continue; if ((c.x - mx) ** 2 + (c.z - mz) ** 2 < rr - 1e-6) { open = false; break; } }
+    if (!open) continue;
+    const vx = B.x - A.x, vz = B.z - A.z, L2 = vx * vx + vz * vz || 1;
+    let u = ((x - A.x) * vx + (z - A.z) * vz) / L2; u = u < 0 ? 0 : u > 1 ? 1 : u;
+    const px = A.x + vx * u, pz = A.z + vz * u, d2 = (x - px) ** 2 + (z - pz) ** 2;
+    if (!best || d2 < best.d2) best = { px, pz, d2 };
+  }
+  if (!best || best.d2 > 90 * 90 || best.d2 < 4) return null;
+  return Math.atan2(best.pz - z, best.px - x);
+}
+const _seatMemo = new Map();                                  // region-scoped (cleared with the road caches)
+function _citySeat(bx, bz) {
+  const k = bx + ',' + bz;
+  let v = _seatMemo.get(k);
+  if (v === undefined) { const c = _blockCityRaw(bx, bz); v = c ? cityLandCenter(c.x, c.z, SG_SPEC.city.R) : null; _seatMemo.set(k, v); }
+  return v;
+}
+// pull a town/village onto the wayside of the arterial skeleton (the straight Gabriel preview of the
+// real roads between city seats) — if one passes close enough. A seeded offset keeps it OFF the roadbed.
+function _snapToSkeleton(s) {
+  const BW = _CITY_BLOCK * CHUNK, bx0 = Math.floor(s.x / BW), bz0 = Math.floor(s.z / BW);
+  const seats = [];
+  for (let bx = bx0 - 2; bx <= bx0 + 2; bx++) for (let bz = bz0 - 2; bz <= bz0 + 2; bz++) { const c = _citySeat(bx, bz); if (c) seats.push(c); }
+  for (const n of nations) if (Math.hypot(n.x - s.x, n.z - s.z) < BW * 2.5) seats.push({ x: n.x, z: n.z });   // capitals anchor highways too
+  if (seats.length < 2) return;
+  let best = null;
+  for (let i = 0; i < seats.length; i++) for (let j = i + 1; j < seats.length; j++) {
+    const A = seats[i], B = seats[j];
+    const mx = (A.x + B.x) / 2, mz = (A.z + B.z) / 2, rr = ((A.x - B.x) ** 2 + (A.z - B.z) ** 2) / 4;
+    let open = true;
+    for (const c of seats) { if (c === A || c === B) continue; if ((c.x - mx) ** 2 + (c.z - mz) ** 2 < rr - 1e-6) { open = false; break; } }
+    if (!open) continue;                                      // matches the trunk builder's Gabriel test
+    const vx = B.x - A.x, vz = B.z - A.z, L2 = vx * vx + vz * vz || 1, L = Math.sqrt(L2);
+    const uMin = Math.min(0.45, 75 / L);                                    // stay well outside the city walls
+    let u = ((s.x - A.x) * vx + (s.z - A.z) * vz) / L2; u = u < uMin ? uMin : u > 1 - uMin ? 1 - uMin : u;
+    const px = A.x + vx * u, pz = A.z + vz * u, d2 = (s.x - px) ** 2 + (s.z - pz) ** 2;
+    if (!best || d2 < best.d2) best = { px, pz, d2, nx: -vz / L, nz: vx / L };
+  }
+  const cap = s.tier === 'town' ? 150 : 60;    // towns are DRAWN to the highways; villages join when near
+  if (!best || best.d2 > cap * cap) return;                   // too far from any highway → stays a backcountry hold
+  const rng = _mulberry32((_chunkHash(s.cx, s.cz) ^ Math.imul(s.idx + 11, 0x27d4eb2f)) >>> 0);
+  if (s.tier === 'village') {                                 // a village EMBRACES the road: the highway IS its main street
+    if (isWater(best.px, best.pz)) return;
+    s.x = best.px; s.z = best.pz;
+    s.roadAx = Math.atan2(-best.nx, best.nz) + Math.PI / 2;   // the skeleton edge direction — houses flank THIS
+    return;
+  }
+  const off = 24 + rng() * 4, sgn = rng() < 0.5 ? -1 : 1;     // a town stands OFF the road, its whole palisade clear of it
+  for (const sd of [sgn, -sgn]) {
+    const tx = best.px + best.nx * off * sd, tz = best.pz + best.nz * off * sd;
+    if (!isWater(tx, tz)) { s.x = tx; s.z = tz; return; }     // take the dry side of the road
+  }
+}
+// Deterministic settlement sites within a chunk — kernel identity, land-decided positions (see above).
 function settlementSites(cx, cz) {
   const sites = WorldSim.settlementSites(cx, cz, worldSeed());
   for (let i = sites.length - 1; i >= 0; i--) {
-    const s = sites[i]; if (s.tier !== 'city') continue;
-    const c = cityLandCenter(s.x, s.z, SG_SPEC.city.R);
-    if (c) { s.x = c.x; s.z = c.z; } else { sites.splice(i, 1); }        // no land worth a city → drop it
+    const s = sites[i];
+    if (s.tier === 'city') {
+      const c = _citySeat(Math.floor(s.x / (_CITY_BLOCK * CHUNK)), Math.floor(s.z / (_CITY_BLOCK * CHUNK)));
+      if (c) { s.x = c.x; s.z = c.z; } else { sites.splice(i, 1); }      // no founder's ground → no city
+    } else _snapToSkeleton(s);                                           // towns & villages take to the wayside
   }
   return sites;
 }
@@ -3392,6 +3645,7 @@ function buildScatter(group, cx, cz, cells) {
   for (const [, , jx, jz] of cells) {              // at most one feature per hex tile, on its centre
     if (isWater(jx, jz)) continue;
     const b = biomeAt(jx, jz), roll = rng(), tc = b.treeChance * SCATTER_DENSITY, rc = b.rockChance * SCATTER_DENSITY;
+    if (roadFactorAt(jx, jz) > 0.28) continue;     // the roadbed stays clear (rng already drawn — stream stable)
     if (roll < tc) trees.push([jx, jz, b.tree]);
     else if (roll < tc + rc) rocks.push([jx, jz]);
   }
@@ -3678,20 +3932,26 @@ function paintChunkTerritory(rec) {
 // Pure function of (worldSeed, settlement lattice) — no Math.random, so it matches run-to-run.
 // ============================================================================
 const ROAD = {
-  nodeChunkR: 6,        // gather settlement nodes within ±this many chunks (≈±360u) — a margin wider than the view so edges near the view never flicker
+  v2: true,             // v2 = hierarchical Gabriel trunks + gate termination (+ later phases). false → legacy K-nearest mesh (A/B)
+  nodeChunkR: 10,       // gather hub/settlement nodes within ±this many chunks (≈±600u). Wide enough that every DRAWN trunk
+                        // edge (max ≈ 2 city-spacings ≈ 580u) has all its possible Gabriel disk-blockers in-window → the
+                        // edge set is identical wherever the player stands → no flicker as the gather window slides.
   renderChunkR: 5,      // only route + draw edges with an endpoint/midpoint within ±this (≈±300u) of the player
-  kNearest: 3,          // each node links to its K nearest neighbours (symmetric union)
-  trunkK: 2,            // cities/capitals additionally link to their nearest big neighbours → a city-to-city trunk net
-  segStep: 8,           // polyline sample spacing, world units
+  kNearest: 3,          // legacy/minor: each node links to its K nearest neighbours (symmetric union)
+  trunkK: 2,            // legacy: cities/capitals additionally link to their nearest big neighbours
+  hubDegCap: 4,         // v2: cap a hub's trunk fan-out so a central capital doesn't become a hairball
+  segStep: 5,           // polyline sample spacing, world units (denser = the ribbon hugs the relief, fewer chord gaps)
   relaxPasses: 3,       // terrain-following relaxation iterations per edge
   fall: 2.6,            // how far (u) the road's movement benefit fades past its edge
 };
-// per-tier look + width; tier is set by the humbler of the two endpoints (a road is only as grand as its lesser town)
+// per-tier look + width; tier is set by the humbler of the two endpoints (a road is only as grand as its lesser town).
+// Colours are a deep packed-earth so the roads read against bright grass AND blown-out highland glare; the
+// material carries a small emissive floor (see roadMat) so they never wash fully white under the strong map sun.
 const ROAD_TIER = {
-  major:  { w: 2.3, lift: 0.18, col: 0x6f5d3f, str: 1.00 }, // packed-earth highway between cities & capitals
-  medium: { w: 1.5, lift: 0.16, col: 0x7c6a47, str: 0.82 }, // town road
-  small:  { w: 0.95, lift: 0.15, col: 0x8a784f, str: 0.62 }, // village lane
-  path:   { w: 0.5,  lift: 0.14, col: 0x9a8a63, str: 0.40 }, // a tiny foot-track
+  major:  { w: 3.4, lift: 0.50, col: 0x9a9ba0, str: 1.00 }, // grey stone highway between cities & capitals
+  medium: { w: 2.2, lift: 0.46, col: 0x85868b, str: 0.82 }, // town road — dressed gravel
+  small:  { w: 1.4, lift: 0.42, col: 0x737470, str: 0.62 }, // village lane — packed grit
+  path:   { w: 0.7, lift: 0.38, col: 0x7a6a50, str: 0.40 }, // a tiny foot-trail stays bare earth
 };
 // movement feel — terrain slows & tires, roads speed & rest
 const MOVE = {
@@ -3713,6 +3973,7 @@ const roadRouteCache = new Map();// edgeKey -> routed polyline [{x,z}], region-s
 const roadSiteCache = new Map(); // "cx,cz" -> settlementSites(cx,cz), region-scoped (skips re-running the city land-snap)
 let _roadChunk = '';             // player chunk the current network was built for
 let _roadStats = { nodes: 0, edges: 0, drawn: 0, segs: 0 };
+let _roadEdges = [];   // last-built edge list (for BV.roadGraph inspection)
 
 // ruggedness at a point: 0 = easy lowland, 1 = steep mountain. Height (foothills→peaks) OR slope, plus a
 // mild penalty for deep woods so hosts favour open ground & roads over diving into the forest.
@@ -3775,6 +4036,174 @@ function roadSteer(px, pz, desx, desz) {
   _steerOut[0] = bx; _steerOut[1] = bz; return _steerOut;
 }
 
+// ---------- Deterministic hex-lattice A*: one routing engine under BOTH road-building and travel orders ----------
+// Routes on the same global hex lattice the terrain uses (pointy-top, odd-r offset). Costs are pure
+// functions of position (no loaded chunks needed) and the heap tie-break is a total order (f,g,q,r),
+// so paths are bit-identical run-to-run — safe for the deterministic world.
+function _MinHeap() { this.a = []; }
+_MinHeap.prototype.push = function (n) { const a = this.a; a.push(n); let i = a.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (_heapLt(a[i], a[p])) { const t = a[i]; a[i] = a[p]; a[p] = t; i = p; } else break; } };
+_MinHeap.prototype.pop = function () { const a = this.a, top = a[0], last = a.pop(); if (a.length) { a[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, rr = l + 1; let m = i; if (l < a.length && _heapLt(a[l], a[m])) m = l; if (rr < a.length && _heapLt(a[rr], a[m])) m = rr; if (m === i) break; const t = a[i]; a[i] = a[m]; a[m] = t; i = m; } } return top; };
+function _heapLt(x, y) { return x.f !== y.f ? x.f < y.f : x.g !== y.g ? x.g < y.g : x.q !== y.q ? x.q < y.q : x.r < y.r; }
+// axial coords over the same lattice: x = (aq + ar/2)·HEX_W, z = ar·HEX_H — strides scale cleanly here,
+// which the odd-r offset form can't do (its half-row shift breaks under multiplication).
+function _axC(aq, ar) { return [(aq + ar / 2) * HEX_W, ar * HEX_H]; }
+function _worldToAxial(x, z) { const o = worldToHex(x, z); return [o[0] - ((o[1] - (o[1] & 1)) / 2), o[1]]; }
+const _AX_DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, -1], [-1, 1]];
+// A* from (ax,az) to (bx,bz). cellCost(x,z) = cost per world-unit ENTERING a cell (Infinity = blocked);
+// hFloor = smallest possible cost/unit (>1 ⇒ weighted A*: near-best paths, far smaller search);
+// stride = lattice coarseness (long routes ride a 2-3× coarser grid — the smoothing hides it).
+// Returns a thinned + lightly smoothed polyline [{x,z}] with exact endpoints, or null (blocked / budget).
+function hexAStar(ax, az, bx, bz, cellCost, hFloor, maxExpand, stride) {
+  const st = Math.max(1, stride | 0), step = HEX_W * st;
+  const sA = _worldToAxial(ax, az);
+  const sq = sA[0], sr = sA[1];
+  const gA = _worldToAxial(bx, bz);                          // snap the goal onto the start-anchored sub-lattice
+  const gq = sq + Math.round((gA[0] - sq) / st) * st, gr = sr + Math.round((gA[1] - sr) / st) * st;
+  const gC = _axC(gq, gr), gx = gC[0], gzz = gC[1];
+  const open = new _MinHeap(), best = new Map(), parents = new Map(), memo = new Map();
+  const hK = (q, r) => q + ',' + r;
+  const cellC = (q, r, x, z) => { const k = hK(q, r); let c = memo.get(k); if (c === undefined) { c = cellCost(x, z); memo.set(k, c); } return c; };
+  const sC = _axC(sq, sr);
+  open.push({ q: sq, r: sr, g: 0, f: Math.hypot(gx - sC[0], gzz - sC[1]) * hFloor });
+  best.set(hK(sq, sr), 0);
+  let found = false, expanded = 0;
+  while (open.a.length) {
+    const cur = open.pop(), ck = hK(cur.q, cur.r);
+    if (best.get(ck) < cur.g - 1e-9) continue;              // stale heap entry
+    if (cur.q === gq && cur.r === gr) { found = true; break; }
+    if (++expanded > maxExpand) break;
+    for (const d of _AX_DIRS) {
+      const nq = cur.q + d[0] * st, nr = cur.r + d[1] * st;
+      const nC = _axC(nq, nr), nx = nC[0], nz = nC[1];
+      const cc = cellC(nq, nr, nx, nz); if (!(cc < Infinity)) continue;
+      const ng = cur.g + step * cc, nk = hK(nq, nr), ex = best.get(nk);
+      if (ex !== undefined && ex <= ng + 1e-9) continue;
+      best.set(nk, ng); parents.set(nk, ck);
+      open.push({ q: nq, r: nr, g: ng, f: ng + Math.hypot(gx - nx, gzz - nz) * hFloor });
+    }
+  }
+  if (!found) return null;
+  const pts = []; let k = hK(gq, gr);
+  while (k !== undefined) { const c = k.indexOf(','), q = +k.slice(0, c), r = +k.slice(c + 1); const w = _axC(q, r); pts.push({ x: w[0], z: w[1] }); k = parents.get(k); }
+  pts.reverse();
+  pts[0] = { x: ax, z: az }; pts[pts.length - 1] = { x: bx, z: bz };
+  const out = _smoothPath(_thinPath(pts));
+  for (let i = 1; i < out.length - 1; i++) if (_fastRoughAt(out[i].x, out[i].z) < 0) {  // Chaikin cut a lake corner — probe ashore
+    const px = out[i].x, pz = out[i].z;
+    fix: for (const rr of [3, 6]) for (let k = 0; k < 8; k++) {
+      const a = k / 8 * TAU, nx2 = px + Math.cos(a) * rr, nz2 = pz + Math.sin(a) * rr;
+      if (_fastRoughAt(nx2, nz2) >= 0) { out[i] = { x: nx2, z: nz2 }; break fix; }
+    }
+  }
+  return out;
+}
+// drop near-collinear lattice points, then one Chaikin pass so the hex staircase reads as a laid road
+function _thinPath(pts) {
+  if (pts.length <= 2) return pts;
+  const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const a = out[out.length - 1], b = pts[i], c = pts[i + 1];
+    const cross = (b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x);
+    if (Math.abs(cross) > 2.0 || (b.x - a.x) ** 2 + (b.z - a.z) ** 2 > 100) out.push(b);
+  }
+  out.push(pts[pts.length - 1]);
+  return out;
+}
+function _smoothPath(pts) {
+  if (pts.length <= 2) return pts;
+  const out = [pts[0]];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i], b = pts[i + 1];
+    if (i > 0) out.push({ x: a.x * 0.75 + b.x * 0.25, z: a.z * 0.75 + b.z * 0.25 });
+    if (i < pts.length - 2) out.push({ x: a.x * 0.25 + b.x * 0.75, z: a.z * 0.25 + b.z * 0.75 });
+  }
+  out.push(pts[pts.length - 1]);
+  return out;
+}
+function _angD(a, b) { return Math.abs(((a - b + Math.PI) % TAU + TAU) % TAU - Math.PI); }
+// walled holds that roads (and marching armies) flow AROUND, not through — rebuilt with the network
+let _routeAvoid = [];
+// terrain cost per unit for LAYING a road: rough² so valleys are cheap, climbs dear, and A* threads the
+// lowest saddle of a range (the pass) instead of climbing over; walls block outright (no bridges either).
+// elevation-band ruggedness only — 1 noise sample instead of landRoughAt's ~8 (slope+biome). Valleys read
+// low, ranges high, passes are local minima on the ridge: exactly what routing needs, at routing speed.
+// The 2u-quantised memo is shared by EVERY route search in a rebuild (their corridors overlap heavily).
+const _terraMemo = new Map();
+function _fastRoughAt(x, z) {
+  const k = Math.round(x * 0.5) * 131071 + Math.round(z * 0.5);
+  let v = _terraMemo.get(k);
+  if (v === undefined) {
+    const e = elevationAt(x, z);
+    if (e < SEA_LEVEL) v = -1;                              // water sentinel
+    else { const hi = (e - 0.50) / 0.34; v = hi < 0 ? 0 : hi > 1 ? 1 : hi; }
+    if (_terraMemo.size > 200000) _terraMemo.clear();
+    _terraMemo.set(k, v);
+  }
+  return v;
+}
+function _roadBuildCost(x, z, avoid, rays) {
+  const rough = _fastRoughAt(x, z);
+  if (rough < 0) return Infinity;                           // water
+  let c = 1 + rough * rough * 7;
+  for (let i = 0; i < avoid.length; i++) {
+    const t = avoid[i], dx = x - t.x, dz = z - t.z;
+    if (dx * dx + dz * dz < t.r2) {
+      // inside a hold's ground: legal ONLY in the narrow channel straight out from an assigned gate
+      let inChannel = false;
+      if (rays) for (let k = 0; k < rays.length && !inChannel; k++) {
+        const ry = rays[k], px = x - ry.x, pz = z - ry.z;
+        const u = px * ry.dx + pz * ry.dz;
+        if (u > -3 && u < 36) { const ox = px - ry.dx * u, oz = pz - ry.dz * u; if (ox * ox + oz * oz < 4.5 * 4.5) inChannel = true; }
+      }
+      if (!inChannel) c += 60;                              // a wall is a WALL
+      break;
+    }
+  }
+  return c;
+}
+// the walled holds that could actually block a corridor A→B (inflated AABB pre-filter, skip the endpoints)
+function _avoidNear(A, B) {
+  const pad = 70;
+  const x0 = Math.min(A.x, B.x) - pad, x1 = Math.max(A.x, B.x) + pad;
+  const z0 = Math.min(A.z, B.z) - pad, z1 = Math.max(A.z, B.z) + pad;
+  const out = [];
+  for (const t of _routeAvoid) {
+    if (t.x >= x0 && t.x <= x1 && t.z >= z0 && t.z <= z1) out.push(t);
+  }
+  return out;
+}
+// travel cost in SECONDS per unit: the same speed model the march actually uses, so the planner's promise
+// ("faster by the great road") is exactly what the column experiences. Big roads (str 1.0) beat small
+// lanes (str 0.62) beat open country beat the mountains.
+const TRAVEL_BASE_SPEED = 12.2;   // steady-state banner march on open flat ground, world-units/s
+function _travelCost(x, z, avoid) {
+  const rough = _fastRoughAt(x, z);
+  if (rough < 0) return Infinity;                           // water
+  let mul = terrainSpeedMul(roadFactorAt(x, z), rough, false);
+  const av = avoid || _routeAvoid;
+  for (let i = 0; i < av.length; i++) {
+    const t = av[i], dx = x - t.x, dz = z - t.z;
+    if (dx * dx + dz * dz < t.r2) { mul *= 0.34; break; }   // marching through a hold is slow — go around
+  }
+  return 1 / (TRAVEL_BASE_SPEED * mul);
+}
+// Road-aware travel order: the fastest route from A to B and how long the column will take. Returns
+// { pts, seconds, roadFrac } or null when the land bars the way (or the search budget runs dry).
+function travelPath(sx, sz, tx, tz, maxExpand) {
+  const d0 = Math.hypot(tx - sx, tz - sz);
+  const avoid = _avoidNear({ x: sx, z: sz }, { x: tx, z: tz }, null, null);
+  const pts = hexAStar(sx, sz, tx, tz, (x, z) => _travelCost(x, z, avoid), 1.3 / (TRAVEL_BASE_SPEED * 1.8), maxExpand || 16000, d0 > 140 ? 2 : 1); // mildly weighted: ETAs stay honest, clicks stay instant
+  if (!pts) return null;
+  let secs = 0, road = 0, total = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const mx = (pts[i].x + pts[i - 1].x) / 2, mz = (pts[i].z + pts[i - 1].z) / 2;
+    const d = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z);
+    secs += d * _travelCost(mx, mz); total += d;
+    if (roadFactorAt(mx, mz) > 0.45) road += d;
+  }
+  return { pts, seconds: secs, roadFrac: total ? road / total : 0 };
+}
+
 // ---- the road network: nodes → edges → routed polylines → one ribbon mesh ----
 function _roadSites(cx, cz) {
   const k = cx + ',' + cz; let s = roadSiteCache.get(k);
@@ -3784,69 +4213,311 @@ function _roadSites(cx, cz) {
 // gather every settlement + capital node within ±nodeChunkR chunks of the player's chunk
 function roadGatherNodes(pcx, pcz) {
   const nodes = [];
-  for (const n of nations) if (!isWater(n.x, n.z)) nodes.push({ x: n.x, z: n.z, rank: 3, key: 'cap:' + n.def.name });
+  for (const n of nations) if (!isWater(n.x, n.z)) { const seed = (Math.imul(Math.round(n.x) | 0, 73856093) ^ Math.imul(Math.round(n.z) | 0, 19349663) ^ (worldSeed() >>> 0)) >>> 0; nodes.push({ x: n.x, z: n.z, rank: 3, tier: 'capital', seed, key: 'cap:' + n.def.name }); }
   const R = ROAD.nodeChunkR;
   for (let cx = pcx - R; cx <= pcx + R; cx++) for (let cz = pcz - R; cz <= pcz + R; cz++) {
     for (const s of _roadSites(cx, cz)) {
       if (isWater(s.x, s.z)) continue;
       const rank = s.tier === 'city' ? 2 : s.tier === 'town' ? 1 : 0;
-      nodes.push({ x: s.x, z: s.z, rank, key: siteKey(s) });
+      const seed = (_chunkHash(s.cx, s.cz) ^ (Math.imul(s.idx + 3, 0x9E3779B1) >>> 0)) >>> 0;
+      nodes.push({ x: s.x, z: s.z, rank, tier: s.tier, seed, site: s, key: siteKey(s) });
     }
   }
   return nodes;
 }
 function _edgeTier(a, b) {
   const lo = Math.min(a.rank, b.rank), hi = Math.max(a.rank, b.rank);
-  if (lo >= 2) return 'major';                 // city/capital ↔ city/capital
-  if (hi >= 2 && lo >= 1) return 'medium';     // city ↔ town
-  if (lo >= 1) return 'medium';                // town ↔ town/city
-  if (hi >= 1) return 'small';                 // town/city ↔ village
-  return 'small';                              // village ↔ village
+  if (lo >= 2) return 'major';                 // city/capital ↔ city/capital → trunk
+  if (hi >= 2 && lo >= 1) return 'medium';     // city ↔ town → branch
+  if (lo >= 1) return 'medium';                // town ↔ town/city → branch
+  if (hi >= 1) return 'small';                 // town/city ↔ village → lane
+  return 'small';                              // village ↔ village → lane
 }
-// symmetric K-nearest + a city/capital trunk overlay → the edge list (deduped)
-function roadBuildEdges(nodes) {
-  const N = nodes.length, near = [];
-  for (let i = 0; i < N; i++) {
-    const a = nodes[i], ds = [];
-    for (let j = 0; j < N; j++) if (j !== i) { const dx = nodes[j].x - a.x, dz = nodes[j].z - a.z; ds.push([dx * dx + dz * dz, j]); }
-    ds.sort((p, q) => p[0] - q[0]);
-    const list = [];
-    for (let m = 0; m < Math.min(ROAD.kNearest, ds.length); m++) list.push(ds[m][1]);
-    if (a.rank >= 2) { let added = 0; for (let m = 0; m < ds.length && added < ROAD.trunkK; m++) { const j = ds[m][1]; if (nodes[j].rank >= 2) { if (list.indexOf(j) < 0) list.push(j); added++; } } }
-    near.push(list);
+// Gabriel test: trunk edge (a,b) survives iff no other hub sits inside the circle on diameter ab
+// (i.e. is closer to the midpoint than the radius |ab|/2). Local + deterministic → window-stable.
+function _gabrielEdge(a, b, hubs) {
+  const mx = (a.x + b.x) * 0.5, mz = (a.z + b.z) * 0.5, rr = ((a.x - b.x) ** 2 + (a.z - b.z) ** 2) * 0.25;
+  for (let k = 0; k < hubs.length; k++) {
+    const c = hubs[k]; if (c === a || c === b) continue;
+    if ((c.x - mx) ** 2 + (c.z - mz) ** 2 < rr - 1e-6) return false;   // a hub blocks the diameter-disk
   }
+  return true;
+}
+// a node's gates (memoised per rebuild): {big,small} sets derived from the terrain + wall footprint
+function nodeGates(node) {
+  if (!node._gates) node._gates = (node.tier && node.tier !== 'village') ? settlementGates(node.x, node.z, node.tier, node.seed) : { big: [], small: [] };
+  return node._gates;
+}
+// pick the gate that best faces (tx,tz): big roads take the grand gatehouses, small roads the posterns.
+// Each pick claims its gate, so a city's three arteries spread across three DIFFERENT big gates.
+function _pickGate(node, tx, tz, wantBig) {
+  const g = nodeGates(node);
+  const list = wantBig ? (g.big.length ? g.big : g.small) : (g.small.length ? g.small : g.big);
+  if (!list.length) return null;
+  const want = Math.atan2(tz - node.z, tx - node.x);
+  let best = null, bs = -Infinity;
+  for (const gt of list) { const sc = Math.cos(gt.bearing - want) - (gt._claims || 0) * 0.35; if (sc > bs) { bs = sc; best = gt; } }  // mild spreading: same-quarter roads SHARE a gate and split at the plaza inside
+  best._claims = (best._claims || 0) + 1;
+  return best;
+}
+// gates for real settlement endpoints (junction points & spur tips pass through untouched)
+function _routeEdgeGates(e, big) {
+  if (e.a.tier && e.a.tier !== 'village') e.aGate = _pickGate(e.a, e.b.x, e.b.z, big);
+  if (e.b.tier && e.b.tier !== 'village') e.bGate = _pickGate(e.b, e.a.x, e.a.z, big);
+}
+// flatten routed edges into segments for T-junction searches
+function _segIndex(edgeList) {
+  const segs = [];
+  for (const e of edgeList) {
+    const pts = e.pts; if (!pts) continue;
+    for (let i = 0; i < pts.length - 1; i++) segs.push({ ax: pts[i].x, az: pts[i].z, bx: pts[i + 1].x, bz: pts[i + 1].z, key: e.key + ':' + i });
+  }
+  return segs;
+}
+function _nearestSegPoint(x, z, segs) {
+  let best = null;
+  for (const sg of segs) {
+    const vx = sg.bx - sg.ax, vz = sg.bz - sg.az, L2 = vx * vx + vz * vz || 1;
+    let u = ((x - sg.ax) * vx + (z - sg.az) * vz) / L2; u = u < 0 ? 0 : u > 1 ? 1 : u;
+    const jx = sg.ax + vx * u, jz = sg.az + vz * u, d2 = (x - jx) ** 2 + (z - jz) ** 2;
+    if (!best || d2 < best.d2) best = { x: jx, z: jz, d2, key: sg.key };
+  }
+  return best;
+}
+// A village's main street points at its natural market partner: the nearest town/city within ±3 chunks
+// (else the nearest neighbouring village, else a seeded bearing). Pure function of the site, so the road
+// engine and the house-builder always draw the SAME street.
+function villageRoadAxis(st) {
+  if (st.roadAx != null) return st.roadAx;    // waysided ON the highway → the highway is the street
+  let best = null, bd = Infinity, any = null, ad = Infinity;
+  for (let cx = st.cx - 3; cx <= st.cx + 3; cx++) for (let cz = st.cz - 3; cz <= st.cz + 3; cz++)
+    for (const o of _roadSites(cx, cz)) {
+      if (o.cx === st.cx && o.cz === st.cz && o.idx === st.idx) continue;
+      const d = (o.x - st.x) ** 2 + (o.z - st.z) ** 2;
+      if (o.tier !== 'village' && d < bd) { bd = d; best = o; }
+      if (d < ad) { ad = d; any = o; }
+    }
+  const t = best || any;
+  if (t) return Math.atan2(t.z - st.z, t.x - st.x);
+  const rr = _mulberry32((WorldSim.chunkHash(st.cx, st.cz, worldSeed()) ^ Math.imul(st.idx + 5, 0x85EBCA6B)) >>> 0);
+  return rr() * TAU;
+}
+// ============================================================================
+// The network builder — a hierarchical road net, not a nearest-neighbour mesh:
+//   trunks   (major)  Gabriel graph over hubs (cities+capitals); every city keeps ≥3 marching roads
+//   branches (medium) each town FORKS OFF the nearest trunk (a real T-junction) or marches to its hub
+//   lanes    (small)  villages hook onto the nearest roadside or neighbour; a through-village gets a
+//                     main street on its shared axis, a leaf village's lane dead-ends at the green
+//   paths    (path)   seeded dead-end foot-trails, as before
+// Edges are routed HERE (A* for trunk/branch, relaxation for the rest) so junctions are real points on
+// real roads. Deterministic throughout; window-stable as the player rides.
+// ============================================================================
+function roadBuildNetwork(nodes) {
   const seen = new Set(), edges = [];
-  const link = (i, j) => {
-    const lo = Math.min(i, j), hi = Math.max(i, j), ek = lo + '|' + hi;
-    if (seen.has(ek)) return; seen.add(ek);
-    edges.push({ a: nodes[lo], b: nodes[hi], tier: _edgeTier(nodes[lo], nodes[hi]), key: nodes[lo].key + '~' + nodes[hi].key });
+  const mk = (a, b, tier) => {
+    if (a === b || a.key === b.key) return null;
+    const lo = a.key <= b.key ? a : b, hi = a.key <= b.key ? b : a, ek = lo.key + '~' + hi.key;
+    if (seen.has(ek)) return null; seen.add(ek);
+    const e = { a: lo, b: hi, tier, key: ek, aGate: null, bGate: null, pts: null };
+    edges.push(e); return e;
   };
-  for (let i = 0; i < N; i++) for (const j of near[i]) link(i, j);
-  // tiny foot-paths: short dead-end trails spurring off the humbler holds into the countryside — the
-  // "paths all around" between the proper roads. Seeded per node so they're stable run-to-run.
-  for (let i = 0; i < N; i++) {
-    const a = nodes[i]; if (a.rank > 1) continue;     // villages & towns sprout trails; cities/capitals stay groomed
+  // roads (and marching armies) flow AROUND walled holds, never through them
+  _routeAvoid = nodes.filter(n => n.tier)
+    .map(n => {
+      let R;
+      if (n.tier === 'village') R = SG_SPEC.village.R + 2;
+      else { const sp = SG_SPEC[n.tier], margin = sp.wall === 'stone' ? 2.6 : 1.5; R = (sp.R + margin / 0.8) * 1.4 + 2.5; } // past the wall's widest lobe — nothing threads between disk and wall
+      return { x: n.x, z: n.z, r2: R * R, key: n.key };
+    });
+
+  // ---- trunks: Gabriel over hubs, shortest-first under the degree cap, then a ≥3-roads floor per city ----
+  const hubs = nodes.filter(n => n.rank >= 2), H = hubs.length, deg = new Array(H).fill(0);
+  const cand = [];
+  for (let i = 0; i < H; i++) for (let j = i + 1; j < H; j++) {
+    const dx = hubs[i].x - hubs[j].x, dz = hubs[i].z - hubs[j].z;
+    cand.push([dx * dx + dz * dz, i, j, _gabrielEdge(hubs[i], hubs[j], hubs)]);
+  }
+  cand.sort((p, q) => p[0] - q[0]);
+  const hubLink = (i, j) => { const e = mk(hubs[i], hubs[j], 'major'); if (e) { deg[i]++; deg[j]++; } };
+  for (const c of cand) if (c[3] && deg[c[1]] < ROAD.hubDegCap && deg[c[2]] < ROAD.hubDegCap) hubLink(c[1], c[2]);
+  for (let i = 0; i < H; i++) {                              // every city commands ≥3 marching roads (as the map allows)
+    const want = Math.min(3, H - 1);
+    for (const c of cand) { if (deg[i] >= want) break; if (c[1] === i || c[2] === i) hubLink(c[1], c[2]); }
+  }
+  const trunks = edges.slice();
+  for (const e of trunks) { _routeEdgeGates(e, true); e.pts = roadRoute(e); }
+
+  // ---- branches: towns fork off the artery (1.1× bias toward the trunk) or march to the nearest hub ----
+  const trunkSegs = _segIndex(trunks), branches = [];
+  for (const t of nodes) {
+    if (t.rank !== 1) continue;
+    const j = _nearestSegPoint(t.x, t.z, trunkSegs);
+    let hub = null, hd = Infinity;
+    for (const h of hubs) { const d = (h.x - t.x) ** 2 + (h.z - t.z) ** 2; if (d < hd) { hd = d; hub = h; } }
+    let e = null;
+    if (j && Math.sqrt(j.d2) * 1.1 < Math.sqrt(hd)) e = mk(t, { x: j.x, z: j.z, rank: -2, tier: null, key: 'jct:' + j.key }, 'medium');
+    else if (hub) e = mk(t, hub, 'medium');
+    if (e) { _routeEdgeGates(e, false); e.pts = roadRoute(e); branches.push(e); }
+  }
+
+  // ---- lanes: villages hook onto the nearest roadside (T-junction) or the nearest settlement ----
+  const roadSegs = _segIndex(trunks.concat(branches)), lanes = [];
+  for (const v of nodes) {
+    if (v.rank !== 0) continue;
+    const j = _nearestSegPoint(v.x, v.z, roadSegs);
+    if (j && j.d2 < 16) continue;                             // the road already runs through this village
+    let near = null, nd = Infinity;
+    for (const o of nodes) { if (o === v || o.rank < 0) continue; const d = (o.x - v.x) ** 2 + (o.z - v.z) ** 2; if (d < nd) { nd = d; near = o; } }
+    let e = null;
+    if (j && j.d2 * 1.15 < nd) e = mk(v, { x: j.x, z: j.z, rank: -2, tier: null, key: 'jct:' + j.key }, 'small');
+    else if (near) e = mk(v, near, 'small');
+    if (e) { _routeEdgeGates(e, false); lanes.push(e); }
+  }
+  // a village with through-traffic gets a MAIN STREET on its shared axis; its lanes land on the street
+  // mouths (the road runs through the village). A lane plus the seeded foot-path also reads as a through
+  // road (the trail walks out the far side). A lone dead-end lane stops at the green.
+  const spurIntent = new Map();                                // per-node seeded spur (same rng the spur pass replays)
+  for (const a of nodes) {
+    if (a.rank > 1 || a.rank < 0) continue;
     const rng = WorldSim.mulberry32((Math.imul(Math.round(a.x) | 0, 374761393) ^ Math.imul(Math.round(a.z) | 0, 668265263) ^ (worldSeed() >>> 0)) >>> 0);
-    if (rng() >= 0.55) continue;
-    const ang = rng() * Math.PI * 2, len = 16 + rng() * 18, ex = a.x + Math.cos(ang) * len, ez = a.z + Math.sin(ang) * len;
+    if (rng() < 0.55) spurIntent.set(a.key, { ang: rng() * Math.PI * 2, len: 16 + rng() * 18 });
+  }
+  const vdeg = new Map();
+  for (const e of edges) for (const n of [e.a, e.b]) if (n.tier === 'village') vdeg.set(n.key, (vdeg.get(n.key) || 0) + 1);
+  const streets = new Map();
+  for (const v of nodes) {
+    if (v.rank !== 0 || !v.site) continue;
+    const d = (vdeg.get(v.key) || 0);
+    if (d < 2 && !(d >= 1 && spurIntent.has(v.key))) continue;
+    const ax = villageRoadAxis(v.site), L = SG_SPEC.village.R * 1.15;
+    streets.set(v.key, { cx: v.x, cz: v.z, x1: v.x + Math.cos(ax) * L, z1: v.z + Math.sin(ax) * L, x2: v.x - Math.cos(ax) * L, z2: v.z - Math.sin(ax) * L, m1: 0, m2: 0 });
+  }
+  for (const e of lanes.concat()) for (const end of ['a', 'b']) {
+    const n = e[end]; if (!n.tier || n.tier !== 'village') continue;
+    const st = streets.get(n.key); if (!st) continue;
+    const o = end === 'a' ? e.b : e.a;
+    const d1 = (o.x - st.x1) ** 2 + (o.z - st.z1) ** 2, d2 = (o.x - st.x2) ** 2 + (o.z - st.z2) ** 2;
+    if (d1 <= d2) { e[end + 'Gate'] = { x: st.x1, z: st.z1, bearing: Math.atan2(st.z1 - st.cz, st.x1 - st.cx) }; st.m1++; }
+    else { e[end + 'Gate'] = { x: st.x2, z: st.z2, bearing: Math.atan2(st.z2 - st.cz, st.x2 - st.cx) }; st.m2++; }
+  }
+  // lanes route LAZILY at draw time (roadRebuild routes what's in view) — their endpoints are final here
+  for (const [vk, st] of streets) edges.push({                             // the street is a real piece of road
+    a: { x: st.x1, z: st.z1, rank: -1, tier: null, key: vk + ':stA' },
+    b: { x: st.x2, z: st.z2, rank: -1, tier: null, key: vk + ':stB' },
+    tier: 'small', key: 'street:' + vk, aGate: null, bGate: null,
+    pts: [{ x: st.x1, z: st.z1 }, { x: st.cx, z: st.cz }, { x: st.x2, z: st.z2 }],
+  });
+
+  // ---- interior streets: every walled hold's arteries + plaza + veins become REAL roadbeds — the road
+  // that enters a gate continues through the city, meets the others at the plaza, and leaves opposite.
+  for (const n of nodes) {
+    if (!n.tier || n.tier === 'village' || n.rank < 1) continue;
+    const plan = settlementStreetPlan(n.x, n.z, n.tier, n.seed);
+    for (let i = 0; i < plan.length; i++) {
+      const stt = plan[i], pts = stt.pts; if (pts.length < 2) continue;
+      edges.push({
+        a: { x: pts[0].x, z: pts[0].z, rank: -1, tier: null, key: n.key + ':in' + i + 'a' },
+        b: { x: pts[pts.length - 1].x, z: pts[pts.length - 1].z, rank: -1, tier: null, key: n.key + ':in' + i + 'b' },
+        tier: stt.art && n.rank >= 2 ? 'medium' : 'small', key: 'city:' + n.key + ':' + i,
+        aGate: null, bGate: null, pts,
+      });
+    }
+  }
+
+  // ---- tiny foot-paths: short dead-end trails off villages/towns — the "paths all around". Where the
+  // village has a street, the trail leaves from its QUIET mouth, walking the road out the far side. ----
+  for (const a of nodes) {
+    if (a.rank > 1 || a.rank < 0) continue;
+    const si = spurIntent.get(a.key); if (!si) continue;
+    const st = a.tier === 'village' ? streets.get(a.key) : null;
+    let sx = a.x, sz = a.z, ang = si.ang;
+    if (st) {
+      const quiet = st.m1 <= st.m2 ? { x: st.x1, z: st.z1 } : { x: st.x2, z: st.z2 };
+      sx = quiet.x; sz = quiet.z;
+      ang = Math.atan2(quiet.z - a.z, quiet.x - a.x) + (si.ang - Math.PI) * 0.12;   // mostly straight on, a little wander
+    }
+    const ex = sx + Math.cos(ang) * si.len, ez = sz + Math.sin(ang) * si.len;
     if (isWater(ex, ez)) continue;
-    const end = { x: ex, z: ez, rank: -1, key: 'spur:' + a.key };
-    edges.push({ a, b: end, tier: 'path', key: a.key + '~' + end.key });
+    if (_chordHitsHold({ x: sx, z: sz }, { x: ex, z: ez }, new Set([a.key]))) continue; // a trail never pokes through a wall
+    const start = st ? { x: sx, z: sz, rank: -1, tier: null, key: a.key + ':stq' } : a;
+    const end = { x: ex, z: ez, rank: -1, tier: null, key: 'spur:' + a.key };
+    edges.push({ a: start, b: end, tier: 'path', key: a.key + '~' + end.key, aGate: null, bGate: null, pts: null });
   }
   return edges;
 }
 // cost of placing a road sample at (x,z) between neighbours a,c — penalise water, rough ground, and kinks
-function _roadSegCost(x, z, a, c) {
-  let cost = landRoughAt(x, z) * 3.0;
-  if (isWater(x, z)) cost += 40;
+function _roadSegCost(x, z, a, c, skip) {
+  const rough = _fastRoughAt(x, z);
+  let cost = rough < 0 ? 43 : rough * 3.0;              // water ≈ old landRough(1)*3 + 40 penalty
+  for (let i = 0; i < _routeAvoid.length; i++) {
+    const t = _routeAvoid[i];
+    if (skip && skip.has(t.key)) continue;
+    const dx = x - t.x, dz = z - t.z;
+    if (dx * dx + dz * dz < t.r2) { cost += 25; break; } // walls push even the small lanes aside
+  }
   const mx = (a.x + c.x) * 0.5, mz = (a.z + c.z) * 0.5;
   cost += Math.hypot(x - mx, z - mz) * 0.05;            // hug the line between neighbours → smoothness
   return cost;
 }
-// route one edge into a natural curved polyline (seeded S-curve + terrain relaxation), cached per region
+// route one edge: trunks & branches take the A* engine (valley-seeking, wall-averse, pass-finding);
+// lanes, streets & spurs take the cheap seeded relaxation. Cached per region, keyed by the EXACT endpoints
+// so a re-assigned gate or street mouth can never serve a stale polyline.
+// a gate's APRON: a point a few strides straight out from the doors. The wild route runs to the apron,
+// then the last leg apron→gate is dead straight along the gate's outward bearing — every road enters its
+// gate square-on (90° to the wall), swinging beforehand instead of grazing in sideways.
+function _gateApron(g, tier) {
+  if (!g || g.bearing == null) return null;
+  const ap = tier === 'major' ? 7 : tier === 'medium' ? 5 : 3.2;
+  return { x: g.x + Math.cos(g.bearing) * ap, z: g.z + Math.sin(g.bearing) * ap };
+}
+// does the straight chord clip a walled hold it doesn't belong to? (then the lane must A* around it)
+function _chordHitsHold(A, B, skip) {
+  for (const t of _routeAvoid) {
+    if (skip && skip.has(t.key)) continue;
+    const vx = B.x - A.x, vz = B.z - A.z, L2 = vx * vx + vz * vz || 1;
+    let u = ((t.x - A.x) * vx + (t.z - A.z) * vz) / L2; u = u < 0 ? 0 : u > 1 ? 1 : u;
+    if ((t.x - (A.x + vx * u)) ** 2 + (t.z - (A.z + vz * u)) ** 2 < t.r2) return true;
+  }
+  return false;
+}
 function roadRoute(edge) {
-  const cached = roadRouteCache.get(edge.key); if (cached) return cached;
-  const ax = edge.a.x, az = edge.a.z, bx = edge.b.x, bz = edge.b.z;
+  const A = edge.aGate || edge.a, B = edge.bGate || edge.b;
+  const ck = edge.key + '|' + Math.round(A.x * 2) + ',' + Math.round(A.z * 2) + '~' + Math.round(B.x * 2) + ',' + Math.round(B.z * 2);
+  const cached = roadRouteCache.get(ck); if (cached) return cached;
+  const skip = new Set([edge.a.key, edge.b.key]);
+  const apA = _gateApron(A, edge.tier), apB = _gateApron(B, edge.tier);
+  // the wild leg aims at a FAR apron; the last stretch swings through a smoothed elbow onto the straight
+  // doorway leg — the road CURVES into its gate instead of kinking
+  const farA = apA ? { x: A.x + (apA.x - A.x) * 2.6, z: A.z + (apA.z - A.z) * 2.6 } : null;
+  const farB = apB ? { x: B.x + (apB.x - B.x) * 2.6, z: B.z + (apB.z - B.z) * 2.6 } : null;
+  const RA = farA || A, RB = farB || B;
+  // the gate rays: the one legal channel through each endpoint's own wall
+  const rays = [];
+  for (const g of [A, B]) if (g && g.bearing != null) rays.push({ x: g.x, z: g.z, dx: Math.cos(g.bearing), dz: Math.sin(g.bearing) });
+  let pts = null;
+  if (edge.tier === 'major' || edge.tier === 'medium' || (edge.tier === 'small' && _chordHitsHold(RA, RB, skip))) {
+    const avoid = _avoidNear(RA, RB);
+    const len = Math.hypot(RB.x - RA.x, RB.z - RA.z);
+    if (len > 16) pts = hexAStar(RA.x, RA.z, RB.x, RB.z, (x, z) => _roadBuildCost(x, z, avoid, rays), 1.7, Math.min(1900, 340 + len * 3), len > 380 ? 3 : len > 180 ? 2 : 1); // weighted A* + coarse stride on the long hauls
+  }
+  if (!pts && _chordHitsHold(RA, RB, skip)) {                    // never fall back THROUGH a hold — search harder first
+    const avoid2 = _avoidNear(RA, RB);
+    const len2 = Math.hypot(RB.x - RA.x, RB.z - RA.z);
+    pts = hexAStar(RA.x, RA.z, RB.x, RB.z, (x, z) => _roadBuildCost(x, z, avoid2, rays), 1.7, Math.min(6400, 1000 + len2 * 12), len2 > 220 ? 2 : 1);
+  }
+  if (!pts) pts = _roadRouteRelax(RA, RB, skip);
+  if (apA) pts.unshift({ x: A.x, z: A.z }, { x: apA.x, z: apA.z });
+  if (apB) pts.push({ x: apB.x, z: apB.z }, { x: B.x, z: B.z });
+  for (let pass = 0; pass < 2; pass++) {                    // round the elbows (gate points stay pinned)
+    if (apA) for (const k of [2, 3]) if (k < pts.length - 1) pts[k] = { x: pts[k - 1].x * 0.25 + pts[k].x * 0.5 + pts[k + 1].x * 0.25, z: pts[k - 1].z * 0.25 + pts[k].z * 0.5 + pts[k + 1].z * 0.25 };
+    if (apB) for (const k of [pts.length - 3, pts.length - 4]) if (k > 0 && k < pts.length - 1) pts[k] = { x: pts[k - 1].x * 0.25 + pts[k].x * 0.5 + pts[k + 1].x * 0.25, z: pts[k - 1].z * 0.25 + pts[k].z * 0.5 + pts[k + 1].z * 0.25 };
+  }
+  roadRouteCache.set(ck, pts);
+  return pts;
+}
+// the light router: seeded S-curve + terrain relaxation (used for lanes/paths and as the A* fallback)
+function _roadRouteRelax(A, B, skip) {
+  const ax = A.x, az = A.z, bx = B.x, bz = B.z;
   const dx = bx - ax, dz = bz - az, len = Math.hypot(dx, dz) || 1;
   const n = Math.max(2, Math.round(len / ROAD.segStep));
   const ux = dx / len, uz = dz / len, perpx = -uz, perpz = ux;
@@ -3862,15 +4533,14 @@ function roadRoute(edge) {
     for (let i = 1; i < n; i++) {
       const a = pts[i - 1], c = pts[i + 1], m = pts[i];
       const lx = -(c.z - a.z), lz = (c.x - a.x), ll = Math.hypot(lx, lz) || 1, nx = lx / ll, nz = lz / ll;
-      let best = m, bc = _roadSegCost(m.x, m.z, a, c);
+      let best = m, bc = _roadSegCost(m.x, m.z, a, c, skip);
       for (const o of [-9, -6, -3, 3, 6, 9]) {
-        const cx = m.x + nx * o, cz = m.z + nz * o, cc = _roadSegCost(cx, cz, a, c);
+        const cx = m.x + nx * o, cz = m.z + nz * o, cc = _roadSegCost(cx, cz, a, c, skip);
         if (cc < bc) { bc = cc; best = { x: cx, z: cz }; }
       }
       pts[i] = best;
     }
   }
-  roadRouteCache.set(edge.key, pts);
   return pts;
 }
 function _roadGridAdd(seg) {
@@ -3881,52 +4551,92 @@ function _roadGridAdd(seg) {
       const k = gx + ',' + gz; let b = roadGrid.get(k); if (!b) roadGrid.set(k, b = []); b.push(seg);
     }
 }
-// (re)build the whole in-view network: nodes → edges → routed ribbons → one merged mesh + the query grid
+// (re)build the whole in-view network: hierarchy → routed ribbons → one merged mesh + rocks + query grid
 function roadRebuild(pcx, pcz) {
+  // keep the region-scoped caches from growing without bound on a very long ride (they refill lazily)
+  if (roadRouteCache.size > 4000) roadRouteCache.clear();
+  if (roadSiteCache.size > 2000) roadSiteCache.clear();
   const nodes = roadGatherNodes(pcx, pcz);
-  const edges = roadBuildEdges(nodes);
+  const edges = roadBuildNetwork(nodes);
+  _roadEdges = edges;
   roadGrid = new Map();
-  const pos = [], col = [], rc = new THREE.Color();
+  const pos = [], col = [], rc = new THREE.Color(), rockPts = [];
   const cxw = (pcx + 0.5) * CHUNK, czw = (pcz + 0.5) * CHUNK, renderR = (ROAD.renderChunkR + 0.5) * CHUNK;
   let drawn = 0, segs = 0;
   for (const e of edges) {
     const mx = (e.a.x + e.b.x) * 0.5, mz = (e.a.z + e.b.z) * 0.5;
     if (Math.hypot(mx - cxw, mz - czw) > renderR + Math.hypot(e.a.x - e.b.x, e.a.z - e.b.z) * 0.5) continue;
-    const T = ROAD_TIER[e.tier], hw = T.w * 0.5, pts = roadRoute(e);
-    let wet = 0; for (let w = 0; w < pts.length; w++) if (isWater(pts[w].x, pts[w].z)) wet++;
-    if (wet / pts.length > 0.18) continue;             // no bridges yet — the land won't carry this road across open water
+    const pts = e.pts || (e.pts = roadRoute(e));
+    if (!pts || pts.length < 2) continue;
+    let wet = 0, run = 0, maxRun = 0;
+    for (let w = 0; w < pts.length; w++) { if (isWater(pts[w].x, pts[w].z)) { wet++; run++; if (run > maxRun) maxRun = run; } else run = 0; }
+    if (wet / pts.length > 0.18 || maxRun >= 3) continue; // no bridges yet — a road never fords open water
+    const T = ROAD_TIER[e.tier];
     rc.setHex(T.col);
     drawn++;
-    // ribbon: a quad per polyline segment, two verts per joint offset along the segment normal, draped on the relief
-    for (let i = 0; i < pts.length - 1; i++) {
+    // MITERED ribbon: each JOINT gets one shared pair of offset verts (normal = the average of its two
+    // segment normals), so consecutive quads share edges — a continuous laid road, no cracks or wedge
+    // gaps at the bends. Width/tone still graded per joint by the land.
+    const J = pts.length, jx1 = new Float64Array(J), jz1 = new Float64Array(J), jx2 = new Float64Array(J), jz2 = new Float64Array(J),
+          jy1 = new Float64Array(J), jy2 = new Float64Array(J), jr = new Float64Array(J), jg = new Float64Array(J), jb = new Float64Array(J), jhw = new Float64Array(J);
+    for (let i = 0; i < J; i++) {
+      const p = pts[i], pPrev = pts[Math.max(0, i - 1)], pNext = pts[Math.min(J - 1, i + 1)];
+      let tx = pNext.x - pPrev.x, tz = pNext.z - pPrev.z;                // joint tangent (central difference)
+      const tl = Math.hypot(tx, tz) || 1; tx /= tl; tz /= tl;
+      const nx = -tz, nz = tx;
+      const rgh = landRoughAt(p.x, p.z);
+      const hw = T.w * 0.5 * (1.12 - rgh * 0.62);
+      const jit = (0.95 + _vnoise(p.x * 0.3, p.z * 0.3, worldSeed() + 51) * 0.12) * (1 - rgh * 0.16);
+      jr[i] = rc.r * jit; jg[i] = rc.g * jit; jb[i] = rc.b * jit; jhw[i] = hw;
+      jx1[i] = p.x + nx * hw; jz1[i] = p.z + nz * hw; jx2[i] = p.x - nx * hw; jz2[i] = p.z - nz * hw;
+      jy1[i] = mapElevY(jx1[i], jz1[i]) + T.lift; jy2[i] = mapElevY(jx2[i], jz2[i]) + T.lift;
+    }
+    for (let i = 0; i < J - 1; i++) {
       const p = pts[i], q = pts[i + 1];
-      const dx = q.x - p.x, dz = q.z - p.z, dl = Math.hypot(dx, dz) || 1, nx = -dz / dl, nz = dx / dl;
-      const jit = 0.86 + _vnoise(p.x * 0.3, p.z * 0.3, worldSeed() + 51) * 0.22;        // worn, uneven dirt tone
-      const r = rc.r * jit, g = rc.g * jit, b = rc.b * jit;
-      const pl = mapElevY(p.x, p.z) + T.lift, ql = mapElevY(q.x, q.z) + T.lift;
-      const ax1 = p.x + nx * hw, az1 = p.z + nz * hw, ax2 = p.x - nx * hw, az2 = p.z - nz * hw;
-      const bx1 = q.x + nx * hw, bz1 = q.z + nz * hw, bx2 = q.x - nx * hw, bz2 = q.z - nz * hw;
-      pos.push(ax1, pl, az1, ax2, pl, az2, bx1, ql, bz1,   ax2, pl, az2, bx2, ql, bz2, bx1, ql, bz1);
-      for (let v = 0; v < 6; v++) col.push(r, g, b);
-      _roadGridAdd({ x1: p.x, z1: p.z, x2: q.x, z2: q.z, w: T.w, str: T.str });
+      pos.push(jx1[i], jy1[i], jz1[i], jx2[i], jy2[i], jz2[i], jx1[i + 1], jy1[i + 1], jz1[i + 1],
+               jx2[i], jy2[i], jz2[i], jx2[i + 1], jy2[i + 1], jz2[i + 1], jx1[i + 1], jy1[i + 1], jz1[i + 1]);
+      col.push(jr[i], jg[i], jb[i], jr[i], jg[i], jb[i], jr[i + 1], jg[i + 1], jb[i + 1],
+               jr[i], jg[i], jb[i], jr[i + 1], jg[i + 1], jb[i + 1], jr[i + 1], jg[i + 1], jb[i + 1]);
+      _roadGridAdd({ x1: p.x, z1: p.z, x2: q.x, z2: q.z, w: jhw[i] * 2, str: T.str });
+      if (e.tier === 'major' && (i % 3 === 1)) {       // waymarker stones line the great roads
+        const side = (i % 6 === 1) ? 1 : -1, nx = (jx1[i] - p.x) / (jhw[i] || 1), nz = (jz1[i] - p.z) / (jhw[i] || 1);
+        const ox = p.x + nx * side * (jhw[i] + 0.9), oz = p.z + nz * side * (jhw[i] + 0.9);
+        if (!isWater(ox, oz)) rockPts.push({ x: ox, z: oz });
+      }
       segs++;
     }
   }
   if (roadMesh) { if (mapTerrain) mapTerrain.remove(roadMesh); disposeGroup(roadMesh); roadMesh = null; }
   if (pos.length && mapTerrain) {
+    const grp = new THREE.Group();
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
     geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(col), 3));
     geo.computeVertexNormals();
-    roadMesh = new THREE.Mesh(geo, roadMat());
-    roadMesh.receiveShadow = true; roadMesh.renderOrder = 1;
-    mapTerrain.add(roadMesh);
+    const ribbon = new THREE.Mesh(geo, roadMat());
+    ribbon.receiveShadow = true; ribbon.renderOrder = 1;
+    grp.add(ribbon); grp.userData.ribbon = ribbon;
+    if (rockPts.length) {                              // seeded roadside stones (deterministic from position)
+      const rm = new THREE.InstancedMesh(cachedGeo('mapRock', () => new THREE.IcosahedronGeometry(1, 0)), mat(0x8d8f95), rockPts.length);
+      const m4 = new THREE.Matrix4(), qq = new THREE.Quaternion(), ee = new THREE.Euler(), vv = new THREE.Vector3(), sv = new THREE.Vector3();
+      rockPts.forEach((p, i) => {
+        const j = _vnoise(p.x * 1.7, p.z * 1.7, worldSeed() + 77), rr = 0.2 + j * 0.3;
+        qq.setFromEuler(ee.set(j * 9 % 3, j * 17 % 3, 0));
+        m4.compose(vv.set(p.x, mapElevY(p.x, p.z) + rr * 0.4, p.z), qq, sv.set(rr, rr * 0.8, rr));
+        rm.setMatrixAt(i, m4);
+      });
+      grp.add(rm);
+    }
+    roadMesh = grp;
+    mapTerrain.add(grp);
   }
   _roadStats = { nodes: nodes.length, edges: edges.length, drawn, segs };
 }
 let _ROAD_MAT = null;
 function roadMat() {
-  if (!_ROAD_MAT) { _ROAD_MAT = new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: true, shininess: 2, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }); _ROAD_MAT.userData.cached = true; _ROAD_MAT.userData.noTint = true; }
+  // UNLIT so the ribbons keep their packed-earth tone everywhere — they never wash to white in the
+  // blown-out highland glare the way a lit material does. polygonOffset keeps them off the relief cleanly.
+  if (!_ROAD_MAT) { _ROAD_MAT = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }); _ROAD_MAT.userData.cached = true; _ROAD_MAT.userData.noTint = true; }
   return _ROAD_MAT;
 }
 // rebuild the network only when the player crosses into a new chunk (cheap, routes are cached)
@@ -3941,8 +4651,99 @@ function ensureRoads(force) {
 function roadResetRegion() {
   roadMesh = null; roadGrid = null; _roadChunk = '';
   roadRouteCache.clear(); roadSiteCache.clear();
+  _terraMemo.clear(); _seatMemo.clear();          // both key off worldSeed-derived terrain — a new region invalidates them
+  _routeAvoid = [];
   partyStamina = 100;
+  clearMarch();
 }
+
+// ---------- March orders & the column-of-route ----------
+// Click the map: the warband plans the FASTEST route (big roads beat lanes beat open country beat the
+// hills — the same speed model the march uses) and rides it by itself, reporting the ETA. While it
+// marches a road the column strings out SINGLE FILE down its own wake: a huge army is a long line on
+// the road. Bands and detachments plan the same way, budgeted to one route per frame.
+let marchPath = null, marchInfo = null, marchFlag = null;
+const _mDir = new THREE.Vector3();
+let _pathBudget = 1;                 // route plans allowed this frame (bands + detachments share it)
+function clearMarch(msg) {
+  marchPath = null; marchInfo = null;
+  if (marchFlag) { scene.remove(marchFlag); for (const o of marchFlag.children) if (o.material) o.material.dispose(); marchFlag = null; }
+  if (msg) showCmdToast(msg);
+}
+function orderMarch(tx, tz) {
+  const land = nearestLand(tx, tz), lx = land[0], lz = land[1];
+  const t = travelPath(player.pos.x, player.pos.z, lx, lz);
+  if (!t) { showCmdToast('No route — the land bars the way'); return false; }
+  marchPath = t.pts.slice(1); marchInfo = t;
+  if (!marchFlag) marchFlag = buildDetFlag(PLAYER_REALM.color);
+  marchFlag.position.set(lx, mapElevY(lx, lz), lz);
+  const secs = Math.max(1, Math.round(t.seconds));
+  showCmdToast('March: ~' + (secs >= 90 ? Math.round(secs / 60) + ' min' : secs + ' s') +
+    (t.roadFrac > 0.5 ? ' — mostly by road' : t.roadFrac > 0.15 ? ' — part road, part wild' : ' — cross-country'));
+  return true;
+}
+// serve a unit's long march: (re)plan a road-aware route when its goal moves, then hand back the live waypoint
+function unitPathStep(u, tx, tz) {
+  if (u._route && u._routeGoal && Math.hypot(u._routeGoal.x - tx, u._routeGoal.z - tz) < 24) {
+    const rt = u._route;
+    while (rt.length && Math.hypot(rt[0].x - u.pos.x, rt[0].z - u.pos.z) < 2.2) rt.shift();
+    if (rt.length) return rt[0];
+    u._route = null; return null;                    // arrived along the route — direct steering finishes it
+  }
+  if (_pathBudget <= 0) return (u._route && u._route[0]) || null;
+  _pathBudget--;
+  const t = travelPath(u.pos.x, u.pos.z, tx, tz, 4500);
+  u._routeGoal = { x: tx, z: tz };
+  u._route = t ? t.pts.slice(1) : null;
+  return (u._route && u._route[0]) || null;
+}
+// breadcrumb wake behind a moving column (for the single-file stretch)
+function trailPush(u, x, z) {
+  const tr = u._trail || (u._trail = []);
+  const last = tr[tr.length - 1];
+  if (last && (last.x - x) ** 2 + (last.z - z) ** 2 < 0.36) return;
+  tr.push({ x, z });
+  if (tr.length > 96) tr.shift();
+}
+// stretch the marchers single-file along the wake while filing; ease them home into ranks otherwise
+function fileColumn(g, u, filing, dt, spacing) {
+  const ms = g.userData.marchers; if (!ms || !ms.length) return;
+  if (!g.userData.home) g.userData.home = ms.map(m => m.group.position.clone());
+  const k = Math.min(1, dt * 5), tr = u._trail, sp = spacing || 1.15;
+  if (filing && tr && tr.length >= 2) {
+    const cy = Math.cos(g.rotation.y), sy = Math.sin(g.rotation.y);
+    let i = tr.length - 1, ax = u.pos.x, az = u.pos.z, need = sp, mi = 0;
+    while (mi < ms.length && i >= 0) {
+      const p = tr[i], seg = Math.hypot(p.x - ax, p.z - az);
+      if (seg >= need) {
+        const tt = need / (seg || 1), wx = ax + (p.x - ax) * tt, wz = az + (p.z - az) * tt;
+        const rx = wx - u.pos.x, rz = wz - u.pos.z;
+        const lx = rx * cy - rz * sy, lz = rx * sy + rz * cy;        // world → column-local (undo the yaw)
+        const m = ms[mi].group.position;
+        m.x += (lx - m.x) * k; m.z += (lz - m.z) * k;
+        m.y += (mapElevY(wx, wz) - g.position.y - m.y) * k;
+        ax = wx; az = wz; need = sp; mi++;
+      } else { need -= seg; ax = p.x; az = p.z; i--; }
+    }
+  } else {
+    const home = g.userData.home;
+    for (let j = 0; j < ms.length; j++) { const m = ms[j].group.position, h = home[j]; m.x += (h.x - m.x) * k; m.z += (h.z - m.z) * k; m.y += (h.y - m.y) * k; }
+  }
+}
+// a plain left-click on the strategic map (outside command mode) orders the march
+let _mvDown = null;
+addEventListener('mousedown', (e) => {
+  if (mode !== 'map' || mapCmdMode || mapFieldMode || encounter || e.button !== 0) return;
+  if (e.target !== canvas) return;
+  _mvDown = { x: e.clientX, y: e.clientY };
+});
+addEventListener('mouseup', (e) => {
+  if (!_mvDown) return; const st = _mvDown; _mvDown = null;
+  if (mode !== 'map' || mapCmdMode || mapFieldMode || encounter || e.button !== 0) return;
+  if (Math.abs(e.clientX - st.x) + Math.abs(e.clientY - st.y) > 6) return;
+  const p = groundPointAt(e.clientX, e.clientY); if (!p) return;
+  orderMarch(p.x, p.z);
+});
 
 // ---------- Strategic map: persistent capitals + streamed chunks ----------
 function buildMapTerrain() {
@@ -3958,8 +4759,8 @@ function buildMapTerrain() {
     mapTerrainLevel = mapLevel;
   }
   mapTerrain.visible = true;
+  ensureRoads(true);   // knit the roads FIRST (they need no chunks) — the streamed scatter then avoids them
   updateChunks(true);
-  ensureRoads(true);   // knit the roads across the freshly streamed region
 }
 // ============================================================================
 // Terrain-aware procedural settlements (villages, towns, castles, capitals).
@@ -4035,8 +4836,8 @@ function settlePalette(b) {
 const SG_SPEC = {
   village: { castle: false, R: 7,  houses: [10, 6],   castles: [0, 0],   wall: null,       centerClear: 0,    lbl: 3.8, top: 4.2,  gap: 2.0 },
   town:    { castle: true,  R: 15, houses: [38, 12],  castles: [1, 0.4], castleR: 6, bailey: [3, 3], wallH: 1.2, wall: 'palisade', centerClear: 0,    lbl: 5.4, top: 7.0,  gap: 2.0 },
-  city:    { castle: true,  R: 38, houses: [280, 80], castles: [4, 0.6], castleR: 8, bailey: [4, 3], wallH: 1.8, wall: 'stone',    centerClear: 0.30, lbl: 10.5, top: 15.0, gap: 2.0 },
-  capital: { castle: true,  R: 46, houses: [380, 90], castles: [5, 0.6], castleR: 9, bailey: [6, 4], wallH: 2.1, wall: 'stone',    centerClear: 0.32, bigKeep: true, lbl: 12.5, top: 18.0, gap: 2.1 },
+  city:    { castle: true,  R: 38, houses: [280, 80], castles: [3, 0], castleR: 8, bailey: [4, 3], wallH: 1.8, wall: 'stone',    centerClear: 0.30, lbl: 10.5, top: 15.0, gap: 2.0 },
+  capital: { castle: true,  R: 46, houses: [380, 90], castles: [3, 0], castleR: 9, bailey: [6, 4], wallH: 2.1, wall: 'stone',    centerClear: 0.32, bigKeep: true, lbl: 12.5, top: 18.0, gap: 2.1 },
 };
 
 // --- read the landform: a center gradient (local+macro) plus a 16-spoke ring field ---
@@ -4070,6 +4871,107 @@ function sgIsRidge(rim) {                                                // two 
   const opp = rim[(hi + n / 2) % n].y, pa = rim[(hi + n / 4) % n].y, pb = rim[(hi + 3 * n / 4) % n].y;
   return opp > mean && Math.min(pa, pb) < mean - (hiY - mean) * 0.4;
 }
+// World-positions + outward bearings of a walled hold's GATES, derived (deterministically, no mesh) from the
+// same terrain probe the wall builder uses: the main gate faces downhill (matches sgPickGates/sgCityWall),
+// cities add two flanking gates ~120° apart, a capital adds a second on its lowest wall point. Open villages
+// (no wall) return [] so a road just runs to the centre. Used by the road engine to land roads at real gates.
+// big-gate + postern BEARINGS for a stone-walled hold — shared by the wall builder (sgCityWall) and the
+// road engine, so wall openings and road endpoints always agree. Posterns draw from an independent rng
+// off the site seed (NOT the builder's stream), so both sides derive them without replaying the build.
+function cityGateBearings(T, seed, x, z) {
+  // a gate that opens onto open water is useless — rotate it around the ring until its approach is dry
+  const dryAt = b => x == null || (!isWater(x + Math.cos(b) * T.R * 0.9, z + Math.sin(b) * T.R * 0.9) && !isWater(x + Math.cos(b) * T.R * 1.4, z + Math.sin(b) * T.R * 1.4));
+  const taken = [];
+  const dry = b0 => {
+    for (let t = 0; t < 13; t++) {
+      const b = b0 + (t % 2 ? -1 : 1) * Math.ceil(t / 2) * 0.42;
+      if (dryAt(b) && taken.every(g => _angD(b, g) > 0.5)) { taken.push(b); return b; }
+    }
+    taken.push(b0); return b0;
+  };
+  // the MAIN gate faces the highway that serves the hold (falls back to the gentle downhill approach)
+  const roadward = (x != null && typeof _roadwardBearing === 'function') ? _roadwardBearing(x, z) : null;
+  const base = roadward != null ? roadward : T.downhill;
+  const big = [dry(base), dry(base + TAU / 3), dry(base - TAU / 3)];
+  const rr = _mulberry32((((seed || 0) >>> 0) ^ 0x9A7E5) >>> 0), small = [];
+  const n = 2 + (rr() * 2 | 0);                                              // 2-3 posterns for the small roads
+  for (let i = 0; i < n; i++) for (let t = 0; t < 10; t++) {
+    const b = rr() * TAU;
+    if (dryAt(b) && big.every(g => _angD(b, g) > 0.55) && small.every(g => _angD(b, g) > 0.6)) { small.push(b); break; }
+  }
+  return { big, small };
+}
+// The INTERIOR STREET PLAN of a walled hold, in WORLD coords — the arteries run from the castle plaza
+// straight out of every big gate (so through-traffic crosses the centre: in one gate, past the plaza,
+// out another), ring veins arc between them carving the neighbourhoods. Pure function of (x,z,tier,seed):
+// the ROAD ENGINE draws these as real draped roadbeds (and armies march them), while the house-builder
+// uses the same plan for corridors + frontages — the city's map IS its road map.
+// the two lesser keeps of a stone hold, PURE from the site seed and clear of the gate bearings — shared
+// by the castle builder AND the street plan, so ring veins never pierce a curtain wall.
+function cityFlankerCastles(T, seed, spec, gateBearings) {
+  if (!spec || spec.wall !== 'stone') return [];
+  const rr = _mulberry32((((seed || 0) >>> 0) ^ 0xCA57E) >>> 0), out = [];
+  const cR = (spec.castleR || spec.R * 0.42) * 0.68;
+  let base = rr() * TAU;
+  for (let t = 0; t < 8 && gateBearings.some(g => _angD(base, g) < 0.5 || _angD(base + Math.PI, g) < 0.5); t++) base = rr() * TAU;
+  for (let i = 0; i < 2; i++) {
+    const a = base + i * Math.PI + (rr() - 0.5) * 0.4, d = spec.R * (0.56 + rr() * 0.08);
+    out.push({ cx: Math.cos(a) * d, cz: Math.sin(a) * d, cR });
+  }
+  return out;
+}
+function settlementStreetPlan(x, z, tier, seed) {
+  const spec = SG_SPEC[tier]; if (!spec || !spec.wall) return [];
+  const p = sgProbe(x, z, spec);
+  const fp = sgFootprint({ r: _mulberry32((seed || 0) >>> 0), T: p });
+  const margin = spec.wall === 'stone' ? 2.6 : 1.5;
+  const Rfit = Math.max(spec.R * 0.5, spec.R + margin / 0.8);
+  const R = spec.R, r0 = (spec.castleR || R * 0.42) + 2.2;               // the plaza ring hugs the chief castle
+  const gbAll = cityGateBearings(p, seed, x, z);
+  const bearings = spec.wall === 'stone' ? gbAll.big : [gbAll.big[0]];
+  const st = [];
+  for (const b of bearings) st.push({ w: 2.0, art: true, pts: [           // artery: plaza edge → THROUGH the gate
+    { x: x + Math.cos(b) * r0, z: z + Math.sin(b) * r0 },
+    { x: x + Math.cos(b) * Rfit * fp(b), z: z + Math.sin(b) * Rfit * fp(b) }] });
+  const plaza = { w: 1.5, art: false, pts: [] };
+  for (let k = 0; k <= 12; k++) { const a = k / 12 * TAU; plaza.pts.push({ x: x + Math.cos(a) * r0, z: z + Math.sin(a) * r0 }); }
+  st.push(plaza);                                                         // the plaza ring joins the arteries
+  if (spec.wall === 'stone') {
+    const rr = _mulberry32((((seed || 0) >>> 0) ^ 0x57E37) >>> 0);
+    const flank = cityFlankerCastles(p, seed, spec, bearings);            // the veins bow around the lesser keeps
+    const blocked = (px, pz) => flank.some(c => (px - (x + c.cx)) ** 2 + (pz - (z + c.cz)) ** 2 < (c.cR * 1.5 + 1.5) ** 2);
+    const bs = bearings.slice().sort((a, b) => a - b);
+    for (const frac of [0.48, 0.76]) {                                    // ring veins between the arteries
+      for (let i = 0; i < bs.length; i++) {
+        if (rr() < 0.3) continue;                                         // a missing arc keeps it grown, not drawn
+        const a0 = bs[i], a1 = (i === bs.length - 1 ? bs[0] + TAU : bs[i + 1]);
+        const steps = Math.max(3, Math.round((a1 - a0) / 0.38));
+        let seg = null;
+        for (let k = 0; k <= steps; k++) {
+          const a = a0 + (a1 - a0) * k / steps, px = x + Math.cos(a) * R * frac * fp(a), pz = z + Math.sin(a) * R * frac * fp(a);
+          if (blocked(px, pz)) { if (seg && seg.pts.length >= 2) st.push(seg); seg = null; continue; } // the arc breaks at a castle wall
+          if (!seg) seg = { w: 1.1, art: false, pts: [] };
+          seg.pts.push({ x: px, z: pz });
+        }
+        if (seg && seg.pts.length >= 2) st.push(seg);
+      }
+    }
+  }
+  return st;
+}
+// world-positions + outward bearings of a hold's gates, on the TRUE (lumpy) wall ring. Cities & capitals:
+// 3 grand gatehouses + 2-3 posterns; towns: the one palisade gate; open villages: none (their street rules).
+function settlementGates(x, z, tier, seed) {
+  const spec = SG_SPEC[tier]; if (!spec || !spec.wall) return { big: [], small: [] };
+  const p = sgProbe(x, z, spec);
+  const fp = sgFootprint({ r: _mulberry32((seed || 0) >>> 0), T: p });       // the site's EXACT lumpy outline (same seed+probe as the builder)
+  const margin = spec.wall === 'stone' ? 2.6 : 1.5;                          // matches sgCityWall (2.6) / sgPalisade (1.5) envelopes
+  const Rfit = Math.max(spec.R * 0.5, spec.R + margin / 0.8);                // ≈ the builder's fitted wall radius scale
+  const at = b => { const RA = Rfit * fp(b); return { x: x + Math.cos(b) * RA, z: z + Math.sin(b) * RA, bearing: b }; };
+  const gb = cityGateBearings(p, seed, x, z);
+  if (spec.wall === 'stone') return { big: gb.big.map(at), small: gb.small.map(at) };
+  return { big: [at(gb.big[0])], small: [] };                              // town: the one (dry) palisade gate
+}
 
 // --- a building seated on its own grade, with a foundation plinth so it never floats/buries ---
 function sgHouse(P, lx, lz, opts) {
@@ -4098,28 +5000,34 @@ function sgFocalFeature(P) {
   if (street) { sgBox(S, 0, y + 0.9, 0, 0.16, 1.8, 0.16, 0, sgRgb(pal.wood, 1)); sgBox(S, 0, y + 1.5, 0, 0.9, 0.16, 0.16, 0, sgRgb(pal.wood, 1)); } // market cross
   else { sgPrism(S, 0, y - 0.1, 0, 0.45, 0.7, sgRgb(pal.stoneDk, 1)); sgBox(S, 0, y + 0.8, 0, 0.14, 0.5, 0.9, 0, sgRgb(pal.wood, 1)); } // well + winch
 }
-// --- organic village: a small contour-following cluster around a focal feature, no castle, no wall ---
+// --- street village: the ROAD is the village's spine. Houses gather in two rows flanking the roadbed
+//     (the road engine lays the actual grey road on this same shared axis), the rest scatter as crofts
+//     behind. The corridor itself stays clear, and the well/market cross stands at the crossing. ---
 function sgBuildVillage(P) {
   const { r, spec, T, isW, placed } = P;
-  const street = (T.cls === 'HILLSIDE' || T.cls === 'RIDGE' || T.cls === 'COASTAL');
   const R = spec.R, n = spec.houses[0] + (r() * spec.houses[1] | 0);
   sgFocalFeature(P);
-  const lane = (T.cls === 'RIDGE') ? T.spineAz : T.downhill + Math.PI / 2; // streets run along the contour
+  const axis = (P.roadAxis != null) ? P.roadAxis
+             : (T.cls === 'RIDGE') ? T.spineAz : T.downhill + Math.PI / 2;  // editor/capital fallback: contour street
+  const ux = Math.cos(axis), uz = Math.sin(axis);
   let made = 0, tries = 0;
-  while (made < n && tries < n * 8) {
+  while (made < n && tries < n * 10) {
     tries++; let lx, lz, yaw;
-    if (street) {
-      const slot = tries, step = (slot >> 1) * 2.0 - n, sign = (slot & 1) ? 1 : -1, off = 1.5 + r() * 0.6, wob = (r() - 0.5) * 1.0;
-      lx = Math.cos(lane) * (step + wob) + Math.cos(lane + Math.PI / 2) * sign * off;
-      lz = Math.sin(lane) * (step + wob) + Math.sin(lane + Math.PI / 2) * sign * off; yaw = lane;
-    } else {
-      const a = r() * TAU, maxR = Math.max(2.4, R * P.fp(a)), rd = 1.8 + Math.sqrt(r()) * (maxR - 1.8); lx = Math.cos(a) * rd; lz = Math.sin(a) * rd; yaw = Math.atan2(-lz, -lx);
+    if (r() < 0.78) {                                                       // street rows — the village front doors
+      const t = (r() * 2 - 1) * R * 0.95, side = (tries & 1) ? 1 : -1, off = 1.9 + r() * 2.8;
+      lx = ux * t + -uz * side * off; lz = uz * t + ux * side * off;
+      yaw = axis + (r() - 0.5) * 0.2;
+    } else {                                                                // scattered crofts behind the rows
+      const a = r() * TAU, maxR = Math.max(2.4, R * P.fp(a)), rd = 1.8 + Math.sqrt(r()) * (maxR - 1.8);
+      lx = Math.cos(a) * rd; lz = Math.sin(a) * rd; yaw = Math.atan2(-lz, -lx);
     }
+    const dPerp = Math.abs(lx * uz - lz * ux), dAlong = Math.abs(lx * ux + lz * uz);
+    if (dPerp < 1.6 && dAlong < R * 1.25) continue;                         // the roadbed itself stays clear
     if (Math.hypot(lx, lz) < 1.6 || isW(lx, lz)) continue;
     if (!placed.every(p => (p.lx - lx) ** 2 + (p.lz - lz) ** 2 > spec.gap * spec.gap)) continue;
     if (sgHouse(P, lx, lz, { yaw })) { placed.push({ lx, lz }); made++; }
   }
-  sgBanner(P, R * 0.12, R * 0.05);
+  sgBanner(P, -uz * 2.4 + ux * 1.2, ux * 2.4 + uz * 1.2);                   // the banner stands at the roadside
 }
 
 // --- plan castle centres: 0 (village), 1 + occasional 2nd (town), 3-4 (city), 4-5 (capital) ---
@@ -4133,13 +5041,16 @@ function sgPlanCastles(P) {
   const out = [{ cx: 0, cz: 0, cR, big }];
   if (n === 1) return out;
   if (spec.castles[0] === 1) {                                           // a town's occasional second keep
-    const a = r() * TAU, d = spec.R * 0.5;
-    out.push({ cx: Math.cos(a) * d, cz: Math.sin(a) * d, cR: cR * 0.85, big: false });
+    for (let t = 0; t < 6; t++) {                                        // dry ground or no keep at all
+      const a = r() * TAU, d = spec.R * 0.5, cx = Math.cos(a) * d, cz = Math.sin(a) * d;
+      if (!P.isW(cx, cz)) { out.push({ cx, cz, cR: cR * 0.85, big: false }); break; }
+    }
     return out;
   }
-  for (let i = 1; i < n; i++) {                                          // a city's lesser castles around the centre
-    const a = (i - 1) / (n - 1) * TAU + r() * 0.5, d = spec.R * (0.40 + r() * 0.12);
-    out.push({ cx: Math.cos(a) * d, cz: Math.sin(a) * d, cR: cR * 0.82, big: false });
+  // a stone hold: ONE keep at the heart + the two shared flankers on opposite sides (dry ground or none)
+  const gb = cityGateBearings(P.T, P.seed, P.X, P.Z);
+  for (const c of cityFlankerCastles(P.T, P.seed, spec, gb.big)) {
+    if (!P.isW(c.cx, c.cz)) out.push({ cx: c.cx, cz: c.cz, cR: c.cR, big: false });
   }
   return out;
 }
@@ -4155,14 +5066,43 @@ function sgFillHouses(P) {
     tries++;
     const a = r() * TAU, maxR = Math.max(inner + 1, R * P.fp(a)), rd = inner + Math.sqrt(r()) * (maxR - inner), lx = Math.cos(a) * rd, lz = Math.sin(a) * rd;
     if (isW(lx, lz) || blocked(lx, lz)) continue;
+    let yaw = Math.atan2(-lz, -lx);
+    if (P.streets && P.streets.length) {                     // the streets shape the town
+      const sn = sgStreetNear(P, lx, lz);
+      if (sn.d < sn.w * 0.5 + 0.9) continue;                 // the roadbed stays clear
+      if (sn.d > 4.6 && r() < 0.5) continue;                 // crowd the frontages, thin the backlots
+      if (sn.d < 4.6) yaw = Math.atan2(sn.z - lz, sn.x - lx); // front doors open onto the street
+    }
     if (!placed.every(p => (p.lx - lx) ** 2 + (p.lz - lz) ** 2 > spec.gap * spec.gap)) continue;
-    if (sgHouse(P, lx, lz, { yaw: Math.atan2(-lz, -lx) })) { placed.push({ lx, lz }); made++; }
+    if (sgHouse(P, lx, lz, { yaw })) { placed.push({ lx, lz }); made++; }
   }
 }
 // --- a castle-bearing hold (town / city / capital): castles + houses + an enclosing wall ---
+// ---- the interior street plan: the SAME world plan the road engine draws, localised to the site frame,
+// so corridors, frontages and the drawn roadbeds always agree. ----
+function sgPlanStreets(P) {
+  if (!P.spec.castle) return [];
+  return settlementStreetPlan(P.X, P.Z, P.tier, P.seed)
+    .map(st => ({ w: st.w, pts: st.pts.map(pt => ({ x: pt.x - P.X, z: pt.z - P.Z })) }));
+}
+// nearest point on the street plan (for corridors + frontage)
+function sgStreetNear(P, lx, lz) {
+  let bd = Infinity, bx = 0, bz = 0, bw = 0;
+  for (const stt of P.streets) {
+    const pts = stt.pts;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i], b = pts[i + 1], vx = b.x - a.x, vz = b.z - a.z, L2 = vx * vx + vz * vz || 1;
+      let u = ((lx - a.x) * vx + (lz - a.z) * vz) / L2; u = u < 0 ? 0 : u > 1 ? 1 : u;
+      const px = a.x + vx * u, pz = a.z + vz * u, d = (lx - px) ** 2 + (lz - pz) ** 2;
+      if (d < bd) { bd = d; bx = px; bz = pz; bw = stt.w; }
+    }
+  }
+  return { d: Math.sqrt(bd), x: bx, z: bz, w: bw };
+}
 function sgBuildHold(P) {
   const { spec } = P;
   for (const C of sgPlanCastles(P)) sgBuildCastleAt(P, C);
+  P.streets = sgPlanStreets(P);        // corridors + frontages; the ROAD ENGINE drapes the actual roadbeds
   sgFillHouses(P);
   if (spec.wall === 'stone') sgCityWall(P);
   else if (spec.wall === 'palisade') sgPalisade(P);
@@ -4196,12 +5136,19 @@ function sgWallEnvelope(P, margin, minR) {
 }
 function sgPalisade(P) {                                                 // a timber ring fitted around the built cluster, gate downhill
   const { r, T, pal, seat, S, fp } = P;
-  const Rfit = sgWallEnvelope(P, 1.5, 3.0), N = Math.max(14, Math.round(Rfit * 1.4 * 1.2)), wood = sgRgb(pal.wood, 1), gateA = T.downhill;
+  const Rfit = sgWallEnvelope(P, 1.5, 3.0), N = Math.max(14, Math.round(Rfit * 1.4 * 1.2)), wood = sgRgb(pal.wood, 1);
+  const gateA = cityGateBearings(T, P.seed, P.X, P.Z).big[0];              // the shared (dry-rotated) gate bearing
   for (let k = 0; k < N; k++) {
     const a = k / N * TAU;
     if (Math.abs(((a - gateA + Math.PI) % TAU + TAU) % TAU - Math.PI) < 0.34) continue; // gate gap
     const R = Rfit * fp(a), lx = Math.cos(a) * R, lz = Math.sin(a) * R, y = seat(lx, lz);
+    if (P.isW(lx, lz)) continue;                                         // the stockade stops at the water
     sgBox(S, lx, y + 0.85, lz, 0.34, 1.6 + r() * 0.2, 0.34, a, wood);
+  }
+  for (const sgn of [-0.4, 0.4]) {                                       // stout gateposts so the town gate reads from the map
+    const a2 = gateA + sgn * 0.34, R2 = Rfit * fp(a2), lx = Math.cos(a2) * R2, lz = Math.sin(a2) * R2, y = seat(lx, lz);
+    sgPrism(S, lx, y - 0.3, lz, 0.55, 3.1, sgRgb(pal.wood, 0.85));
+    sgCone8(S, lx, y - 0.3 + 3.1, lz, 0.68, 0.7, sgRgb(pal.stoneDk, 1));
   }
 }
 // A great stone city wall ringing the whole footprint: terrain-seated bays with a level parapet,
@@ -4211,28 +5158,61 @@ function sgCityWall(P) {
   const Rfit = sgWallEnvelope(P, 2.6, spec.R * 0.5), Rmax = Rfit * 1.4, RA = a => Rfit * fp(a); // ring follows the lumpy footprint
   const wallH = (spec.wallH || 1.7) + 0.4, thick = 0.7, N = Math.max(30, Math.round(Rmax * 1.3));
   const stone = sgRgb(pal.stone, 1), stoneDk = sgRgb(pal.stoneDk, 1), woodD = sgRgb(pal.wood, 0.72);
-  const gateAngs = [T.downhill, T.downhill + TAU / 3, T.downhill - TAU / 3];
-  const nearGate = a => gateAngs.reduce((m, g) => Math.min(m, Math.abs(((a - g + Math.PI) % TAU + TAU) % TAU - Math.PI)), 9);
+  // gate bearings come from the SHARED helper — the road engine lands its roads on these exact openings:
+  // three grand gatehouses for the big roads, two-three posterns for the lanes.
+  const gb = cityGateBearings(T, P.seed, P.X, P.Z), gateAngs = gb.big, postAngs = gb.small;
+  const nearGate = a => gateAngs.reduce((m, g) => Math.min(m, _angD(a, g)), 9);
+  const nearPost = a => postAngs.reduce((m, g) => Math.min(m, _angD(a, g)), 9);
   const V = [];
-  for (let k = 0; k < N; k++) { const a = k / N * TAU, R = RA(a), lx = Math.cos(a) * R, lz = Math.sin(a) * R; V.push({ a, lx, lz, y: seat(lx, lz) }); }
-  for (let i = 0; i < N; i++) {                                          // closed ring of seated wall bays, gateways left open
+  for (let k = 0; k < N; k++) {                                          // wet verts pull ASHORE — the ring stays closed
+    const a = k / N * TAU; let R = RA(a), lx = Math.cos(a) * R, lz = Math.sin(a) * R;
+    while (P.isW(lx, lz) && R > RA(a) * 0.45) { R -= 1.2; lx = Math.cos(a) * R; lz = Math.sin(a) * R; }
+    V.push({ a, lx, lz, y: seat(lx, lz), R });
+  }
+  for (let i = 0; i < N; i++) {                                          // closed ring of seated wall bays; ONLY gates + posterns open it
     const A = V[i], B = V[(i + 1) % N], am = A.a + (((B.a - A.a) + TAU) % TAU) / 2;
-    if (nearGate(am) < 0.17) continue;
-    const mx = (A.lx + B.lx) / 2, mz = (A.lz + B.lz) / 2, ang = Math.atan2(-(B.lz - A.lz), B.lx - A.lx), len = Math.hypot(B.lx - A.lx, B.lz - A.lz) + thick;
+    const gapR = (A.R + B.R) / 2 || 1;
+    if (nearGate(am) < 3.4 / gapR || nearPost(am) < 1.35 / gapR) continue; // the opening is exactly the gatehouse, not a breach
+    const mx = (A.lx + B.lx) / 2, mz = (A.lz + B.lz) / 2;
+    if (P.isW(mx, mz)) continue;                                         // true open water (a deep bay) — the one honest gap
+    const ang = Math.atan2(-(B.lz - A.lz), B.lx - A.lx), len = Math.hypot(B.lx - A.lx, B.lz - A.lz) + thick;
     const lo = Math.min(A.y, B.y), hi = Math.max(A.y, B.y), top = hi + wallH, bot = lo - 0.9;
     sgBox(S, mx, (top + bot) / 2, mz, len, top - bot, thick, ang, stone);
     sgBox(S, mx, top + 0.16, mz, len, 0.3, thick * 1.15, ang, stoneDk);  // level parapet cap
   }
-  const TN = Math.max(10, Math.round(Rmax * 0.45));                      // drum towers, taller & fatter at the gates
+  const TN = Math.max(10, Math.round(Rmax * 0.45));                      // drum towers round the ring (gatehouses get their own)
   for (let k = 0; k < TN; k++) {
-    const a = k / TN * TAU, R = RA(a), lx = Math.cos(a) * R, lz = Math.sin(a) * R, y = seat(lx, lz), g = nearGate(a) < 0.2, th = wallH + (g ? 2.0 : 1.0);
-    sgPrism(S, lx, y - 0.7, lz, g ? 1.0 : 0.8, th + 0.7, stone); sgCone8(S, lx, y - 0.7 + th + 0.7, lz, (g ? 1.0 : 0.8) * 1.18, g ? 1.1 : 0.85, stoneDk);
+    const a = k / TN * TAU, R0 = RA(a);
+    if (nearGate(a) < 5.0 / (R0 || 1)) continue;                         // stand clear of the twin watchtowers
+    let R = R0, lx = Math.cos(a) * R, lz = Math.sin(a) * R;
+    while (P.isW(lx, lz) && R > R0 * 0.45) { R -= 1.2; lx = Math.cos(a) * R; lz = Math.sin(a) * R; }
+    if (P.isW(lx, lz)) continue;
+    const y = seat(lx, lz), th = wallH + 1.0;
+    sgPrism(S, lx, y - 0.7, lz, 0.8, th + 0.7, stone); sgCone8(S, lx, y - 0.7 + th + 0.7, lz, 0.94, 0.85, stoneDk);
   }
-  for (const ga of gateAngs) {                                          // a stone arch over tall timber doors at each opening
+  for (const ga of gateAngs) {                                          // GRAND GATEHOUSE: arch + tall doors + twin watchtowers
     const d = 0.06, ax = Math.cos(ga - d) * RA(ga - d), az = Math.sin(ga - d) * RA(ga - d), bx = Math.cos(ga + d) * RA(ga + d), bz = Math.sin(ga + d) * RA(ga + d);
     const R = RA(ga), lx = Math.cos(ga) * R, lz = Math.sin(ga) * R, y = seat(lx, lz), ang = Math.atan2(-(bz - az), bx - ax), doorH = wallH + 1.6, doorW = 2.8;
     sgBox(S, lx, y + wallH + 0.7, lz, doorW + 1.0, 0.95, thick * 1.8, ang, stoneDk);
     sgBox(S, lx, y + doorH / 2, lz, doorW, doorH, 0.5, ang, woodD);
+    const dt = (doorW * 0.5 + 1.55) / Math.max(4, R);                    // the two watchtowers flank the opening
+    for (const sgn of [-1, 1]) {
+      const a2 = ga + sgn * dt, R2 = RA(a2), tx = Math.cos(a2) * R2, tz = Math.sin(a2) * R2, ty = seat(tx, tz), th2 = wallH + 3.8;
+      sgPrism(S, tx, ty - 0.7, tz, 1.34, th2 + 0.7, stone);
+      sgCone8(S, tx, ty - 0.7 + th2 + 0.7, tz, 1.6, 1.5, stoneDk);
+    }
+  }
+  for (const pa of postAngs) {                                          // POSTERN: a narrow door with flanking posts for the small roads
+    const d = 0.03, ax = Math.cos(pa - d) * RA(pa - d), az = Math.sin(pa - d) * RA(pa - d), bx = Math.cos(pa + d) * RA(pa + d), bz = Math.sin(pa + d) * RA(pa + d);
+    const R = RA(pa), lx = Math.cos(pa) * R, lz = Math.sin(pa) * R, y = seat(lx, lz), ang = Math.atan2(-(bz - az), bx - ax);
+    sgBox(S, lx, y + wallH * 0.62, lz, 1.6, 0.55, thick * 1.5, ang, stoneDk);
+    sgBox(S, lx, y + wallH * 0.28, lz, 1.15, wallH * 0.56, 0.4, ang, woodD);
+    const pd = 1.15 / Math.max(4, R);
+    for (const sgn of [-1, 1]) {                                        // squat towers so the postern reads from the map
+      const a2 = pa + sgn * pd, R2 = RA(a2), tx = Math.cos(a2) * R2, tz = Math.sin(a2) * R2, ty = seat(tx, tz);
+      sgPrism(S, tx, ty - 0.5, tz, 0.62, wallH + 1.5, stone);
+      sgCone8(S, tx, ty - 0.5 + wallH + 1.5, tz, 0.74, 0.7, stoneDk);
+    }
   }
 }
 
@@ -4245,7 +5225,7 @@ function sgBuildCastleAt(P, C) {
   const DROP = 2.2 + (r() - 0.5) * 1.2;
   const NW = Math.max(10, Math.round(C.cR * 2));
   const verts = sgCurtainMarch(P, keep, DROP, NW, C.cR);
-  const gates = sgPickGates(verts, T.downhill);
+  const gates = sgPickGates(verts, cityGateBearings(T, P.seed, P.X, P.Z).big[0]); // the keep's main gate faces the artery, like every other gate
   sgBuildCurtain(P, verts, gates);
   sgBuildKeep(P, keep, C.big);
   // inner bailey buildings, dart-thrown inside the wall, the first a great hall
@@ -4280,7 +5260,12 @@ function sgCurtainMarch(P, keep, DROP, NW, cR) {
   const rad = new Array(NW), ang = new Array(NW);
   for (let k = 0; k < NW; k++) {
     const a = k / NW * TAU + jit; ang[k] = a; let rd = minR;
-    while (rd < maxR) { const y = seat(keep.lx + Math.cos(a) * rd, keep.lz + Math.sin(a) * rd); if (y < platY || y > keep.y + 1.4) break; rd += 0.6; }
+    while (rd < maxR) {
+      const wx = keep.lx + Math.cos(a) * rd, wz = keep.lz + Math.sin(a) * rd;
+      if (P.isW(wx, wz)) break;                                          // the wall never wades into the sea
+      const y = seat(wx, wz); if (y < platY || y > keep.y + 1.4) break;
+      rd += 0.6;
+    }
     rad[k] = clamp(rd, minR, maxR);
   }
   // base radius = size of the defensible platform; pull every spoke toward it and clamp the deviation,
@@ -4293,7 +5278,11 @@ function sgCurtainMarch(P, keep, DROP, NW, cR) {
   for (let k = 0; k < NW; k++) { const a = rad[(k - 1 + NW) % NW], b = rad[k], c = rad[(k + 1) % NW]; med[k] = Math.max(Math.min(a, b), Math.min(Math.max(a, b), c)); }
   for (let k = 0; k < NW; k++) rad[k] = 0.25 * med[(k - 1 + NW) % NW] + 0.5 * med[k] + 0.25 * med[(k + 1) % NW];
   const verts = [];
-  for (let k = 0; k < NW; k++) { const lx = keep.lx + Math.cos(ang[k]) * rad[k], lz = keep.lz + Math.sin(ang[k]) * rad[k]; verts.push({ a: ang[k], rd: rad[k], lx, lz, y: seat(lx, lz) }); }
+  for (let k = 0; k < NW; k++) {
+    let rd = rad[k], lx = keep.lx + Math.cos(ang[k]) * rd, lz = keep.lz + Math.sin(ang[k]) * rd;
+    while (rd > minR * 0.55 && P.isW(lx, lz)) { rd -= 0.6; lx = keep.lx + Math.cos(ang[k]) * rd; lz = keep.lz + Math.sin(ang[k]) * rd; } // smoothing may have pushed it wet — pull ashore
+    verts.push({ a: ang[k], rd, lx, lz, y: seat(lx, lz) });
+  }
   return verts;
 }
 // a castle has at least TWO gates so it can be entered. The main gate faces the gentlest (downhill)
@@ -4329,6 +5318,10 @@ function sgBuildCurtain(P, verts, gates) {
       sgBox(S, mx, lo + doorH * 0.30, mz, doorW * 1.03, 0.18, 0.55, ang, stoneDk); // iron bands
       sgBox(S, mx, lo + doorH * 0.70, mz, doorW * 1.03, 0.18, 0.55, ang, stoneDk);
       sgBox(S, mx, lo + doorH / 2, mz, 0.12, doorH * 0.9, 0.6, ang, stoneDk);      // seam between the two leaves
+      for (const c of [A, B]) {                                                    // twin turrets — the castle gate reads like a gate
+        sgPrism(S, c.lx, c.y - 0.5, c.lz, 0.62, wallH + 2.1, stone);
+        sgCone8(S, c.lx, c.y - 0.5 + wallH + 2.1, c.lz, 0.74, 0.7, stoneDk);
+      }
       continue;
     }
     sgBox(S, mx, (top + bot) / 2, mz, len, top - bot, thick, ang, stone);
@@ -4358,7 +5351,7 @@ function sgBuildKeep(P, keep, big) {
 }
 // The one terrain-aware builder behind every settlement and capital. Returns a THREE.Group
 // seated at (X, refY, Z); g.userData.ownerMats (the owner-colored material) recolors on conquest.
-function buildSettlementGroup(X, Z, tier, name, ownerColor, seed) {
+function buildSettlementGroup(X, Z, tier, name, ownerColor, seed, opts) {
   const r = _mulberry32(seed >>> 0);
   const spec = SG_SPEC[tier] || SG_SPEC.village;
   const T = sgProbe(X, Z, spec), refY = T.refY;
@@ -4366,7 +5359,7 @@ function buildSettlementGroup(X, Z, tier, name, ownerColor, seed) {
   const isW = (lx, lz) => isWater(X + lx, Z + lz);
   const pal = settlePalette(biomeAt(X, Z)), ownerRGB = sgRgb(ownerColor, 1);
   const S = { pos: [], col: [] }, O = { pos: [], col: [] };
-  const P = { r, tier, spec, X, Z, refY, T, pal, ownerRGB, seat, isW, S, O, placed: [], exclude: [] };
+  const P = { r, tier, spec, X, Z, refY, T, pal, ownerRGB, seat, isW, S, O, placed: [], exclude: [], seed, roadAxis: opts && opts.roadAxis };
   P.fp = sgFootprint(P);                                                 // this site's own organic outline (towns/cities/villages grow irregularly; the castle curtain stays round)
   if (spec.castle) sgBuildHold(P); else sgBuildVillage(P);
   const g = new THREE.Group();
@@ -4400,7 +5393,9 @@ function recolorCapital(cap) {
 function makeSettlement(hold) {
   const s = hold.site;
   const seed = (_chunkHash(s.cx, s.cz) ^ (Math.imul(s.idx + 3, 0x9E3779B1) >>> 0)) >>> 0;
-  return buildSettlementGroup(hold.x, hold.z, hold.tier, hold.def.name, hold.owner.color, seed);
+  // a village is built AROUND ITS ROAD: the road engine draws the actual roadbed on this same axis
+  const opts = hold.tier === 'village' ? { roadAxis: villageRoadAxis(s) } : null;
+  return buildSettlementGroup(hold.x, hold.z, hold.tier, hold.def.name, hold.owner.color, seed, opts);
 }
 
 // show/hide the battle set-dressing (arena pad, torch ring, edge treeline) vs the strategic map terrain
@@ -4631,7 +5626,11 @@ function reseatDetachments() {
 function stepDetachmentTo(det, tx, tz, stopR, sp, dt) {
   const dx = tx - det.pos.x, dz = tz - det.pos.z, d = Math.hypot(dx, dz);
   if (d <= stopR) return false;
-  const mvx = dx / d, mvz = dz / d;
+  let mvx = dx / d, mvz = dz / d;
+  if (d > 55) {                                       // far orders march by road, not as the crow flies
+    const wp = unitPathStep(det, tx, tz);
+    if (wp) { const wd = Math.hypot(wp.x - det.pos.x, wp.z - det.pos.z) || 1; mvx = (wp.x - det.pos.x) / wd; mvz = (wp.z - det.pos.z) / wd; }
+  } else det._route = null;
   det.facing = angleLerp(det.facing, Math.atan2(mvx, mvz), dt * 10);
   sp *= terrainSpeedMul(roadFactorAt(det.pos.x, det.pos.z), landRoughAt(det.pos.x, det.pos.z), false); // own columns march fast on roads, slow through the hills
   const [nx, nz] = landStep(det.pos.x, det.pos.z, mvx * sp * dt, mvz * sp * dt);
@@ -4678,6 +5677,9 @@ function updateDetachments(dt) {
       det.group.rotation.y = det.facing;
       const dpx = player.pos.x - det.pos.x, dpz = player.pos.z - det.pos.z;
       columnLOD(det.group, dpx * dpx + dpz * dpz);
+      trailPush(det, det.pos.x, det.pos.z);
+      fileColumn(det.group, det, moved && (det._route != null || roadFactorAt(det.pos.x, det.pos.z) > 0.45), dt,
+        clamp(1.05 + det.size / 60, 1.05, 2.4));
       animateColumn(det.group, moved, dt);
     }
     updateDetMarkers(det); // destination flag for move/hold/garrison
@@ -4785,6 +5787,7 @@ function reinforceMap() {
 
 function enterMap() {
   mode = 'map'; gameRunning = false;
+  mapFieldMode = false; clearAllFieldArmies(); // start strategic; clear any stale materialised-host crowds (fieldPref re-enters below)
   encounter = null; siegeCapital = null;
   if (typeof clearCall === 'function' && activeCall) clearCall(); // no stale call/beacon carries into a (new) region
   const encEl = document.getElementById('encounter'); if (encEl) encEl.classList.add('hidden');
@@ -4794,7 +5797,7 @@ function enterMap() {
   player.pos.set(0, 0, 0); player.vel.set(0, 0, 0);
   player.alive = true; player.hp = player.maxHp; player.stamina = player.maxStam;
   player.attacking = player.shooting = player.rolling = player.blocking = false; player.crouchT = 0;
-  player.obj.scale.y = 1; player.obj.rotation.set(0, 0, 0);
+  player.obj.scale.setScalar(1); player.obj.rotation.set(0, 0, 0); // full reset (field mode may have left it at FIELD_SCALE)
   cameraAngle = 0; // top-down map: W = up the screen (toward -Z), D = right
   mapSpawnT = 6;
   if (advanceRegion || !parties.some(p => p.alive)) { advanceRegion = false; clearParties(); mapLevel++; placeCapitals(); if (isServerMap()) addServerArmies(); spawnMapParties(); } // server's named hosts first, then top up the ambient swarm
@@ -4835,6 +5838,8 @@ function enterMap() {
   pointerLocked = false;
   updateHUD();
   obMapStart(); // first-time-on-the-map onboarding hint (shown once)
+  mapFieldMode = false;                                // enterMap rebuilt the strategic banner...
+  if (fieldPref) setFieldMode(true, { keepPref: true }); // ...but if you were on foot, drop back down and re-muster the company
 }
 
 // nearest living band of a DIFFERENT, non-allied faction within `radius` — drives the inter-host war.
@@ -5155,7 +6160,21 @@ function updateActiveCall(dt) {
 }
 addEventListener('keydown', (e) => { if (e.code === 'KeyG' && mode === 'map' && !encounter) { e.preventDefault(); raiseCall(); } });
 // T: swap the overworld between the strategic eye-in-the-sky and the 3rd-person ride-along
-addEventListener('keydown', (e) => { if (e.code === 'KeyT' && mode === 'map' && !encounter && !mapCmdMode && !commandPanelOpen) { e.preventDefault(); setMapView3rd(!mapView3rd); } });
+addEventListener('keydown', (e) => { if (e.code === 'KeyT' && mode === 'map' && !encounter && !mapCmdMode && !commandPanelOpen) { e.preventDefault(); setFieldMode(!mapFieldMode); } });
+// mouse wheel zooms the overworld: scroll IN drops you to field mode (then zooms the chase cam closer);
+// scroll OUT pulls the chase cam back, and once it's all the way out, lifts you to the strategic view
+addEventListener('wheel', (e) => {
+  if (mode !== 'map' || encounter || mapCmdMode || commandPanelOpen) return;
+  e.preventDefault();
+  // field cameraDist lives at FIELD_SCALE (the hero is small), so the zoom band scales with it
+  const step = 1.2 * FIELD_SCALE, near = 4 * FIELD_SCALE, far = 16 * FIELD_SCALE, popOut = 15 * FIELD_SCALE;
+  if (e.deltaY < 0) {                          // zoom in
+    if (!mapFieldMode) setFieldMode(true);
+    else cameraDist = clamp(cameraDist - step, near, far);
+  } else {                                      // zoom out
+    if (mapFieldMode) { if (cameraDist >= popOut) setFieldMode(false); else cameraDist = clamp(cameraDist + step, near, far); }
+  }
+}, { passive: false });
 
 // Fold the distance just ridden into the running survey reach, then push fog / stream-radius to match.
 // (The camera lift+pullback is read from mapVista in updateMapCamera so the zoom-out stays smoothed.)
@@ -5178,42 +6197,69 @@ function applyVista(moved, dt) {
 }
 
 function updateMap(dt) {
-  updateMapHero(dt); // ride-along: show/walk the hero at the column's head (hidden in strategic/command/encounter)
-  if (encounter) return; // a parley/siege prompt is open — the whole map holds until you choose
+  const opx = player.pos.x, opz = player.pos.z;   // ground reference BEFORE movement (hero or banner)
+  if (encounter) return; // a parley/siege prompt is open — the whole map (and the character) holds until you choose
   const serverDriven = isServerMap(); // when online, the server owns the macro war (clashes/conquests)
   tickMapDiplomacy(dt, serverDriven); // evolve faction relations: server truth online, shared kernel in solo
-  // the party glides across the map as a banner; faster than enemy bands so you can flee
+  _pathBudget = 1;                    // one road-route plan per frame across all bands/detachments — no hitches
+  const field = fieldSimOn() && !mapCmdMode; // true = you're on foot as the hero, false = strategic banner march
   const dir = inputDir();
   const roaming = !mapCmdMode; // in command mode the cursor is freed and the map holds still for orders
-  if (roaming && dir.lengthSq() > 0) {
-    player.vel.addScaledVector(dir, player.speed * 1.5 * dt * 9);
-    player.facing = angleLerp(player.facing, Math.atan2(dir.x, dir.z), dt * 12);
-  }
-  player.vel.multiplyScalar(Math.pow(0.0001, dt));
-  const opx = player.pos.x, opz = player.pos.z;
-  // roads speed the march & rest the column; mountains slow it & drain its stamina (a graded road tames the climb)
-  const pRoad = roadInfoAt(opx, opz), pRough = landRoughAt(opx, opz);
-  const pSpeed = terrainSpeedMul(pRoad.factor, pRough, true);
-  const [npx, npz] = landStep(opx, opz, player.vel.x * dt * pSpeed, player.vel.z * dt * pSpeed);
-  player.pos.x = npx; player.pos.z = npz; player.pos.y = 0;
-  if (npx === opx) player.vel.x = 0; // bumped the coast — kill that component
-  if (npz === opz) player.vel.z = 0;
-  // party stamina: marching tires the column (fast through rough country, almost free on a road); resting restores it
-  const pMoved = Math.hypot(npx - opx, npz - opz);
-  if (pMoved > 0.01 * pSpeed) {
-    const effRough = pRough * (1 - pRoad.factor * MOVE.roadGrade);
-    const drain = MOVE.drainBase * (1 + effRough * MOVE.roughDrain) * (1 - pRoad.factor * MOVE.roadRelief);
-    partyStamina = clamp(partyStamina - drain * dt, 0, 100);
+  if (field) {
+    // FIELD MODE: you ARE the hero on the ground — full battle controls, the company follows as soldiers
+    updatePlayer(dt);     // mouse-aim + WASD + attack/heavy/block/dodge, confined to land + riding terrain
+    rebuildSepGrid();     // so the escort spreads instead of stacking
+    updateAllies(dt);     // the warband company (order 'free') trails the hero
+    updateProjectiles(dt); // arrows you loose still fly
+    updateFieldArmies(dt); // nearby hosts render as real soldier crowds (clashing ones fight) instead of flags
   } else {
-    partyStamina = clamp(partyStamina + MOVE.regen * dt * (pRoad.factor > 0.5 ? 1.4 : 1), 0, 100);
+    // STRATEGIC MARCH: the party glides across the map as a banner; faster than enemy bands so you can flee
+    let mdir = dir;
+    if (marchPath && roaming) {                      // an ordered march rides its planned route by itself
+      if (dir.lengthSq() > 0) clearMarch('You take the reins');
+      else {
+        let wp = marchPath[0];
+        while (wp && Math.hypot(wp.x - player.pos.x, wp.z - player.pos.z) < 1.7) { marchPath.shift(); wp = marchPath[0]; }
+        if (!wp) clearMarch('The column arrives');
+        else { const wd = Math.hypot(wp.x - player.pos.x, wp.z - player.pos.z) || 1; _mDir.set((wp.x - player.pos.x) / wd, 0, (wp.z - player.pos.z) / wd); mdir = _mDir; }
+      }
+    }
+    if (roaming && mdir.lengthSq() > 0) {
+      player.vel.addScaledVector(mdir, player.speed * 1.5 * dt * 9);
+      player.facing = angleLerp(player.facing, Math.atan2(mdir.x, mdir.z), dt * 12);
+    }
+    player.vel.multiplyScalar(Math.pow(0.0001, dt));
+    // roads speed the march & rest the column; mountains slow it & drain its stamina (a graded road tames the climb)
+    const pRoad = roadInfoAt(opx, opz), pRough = landRoughAt(opx, opz);
+    const pSpeed = terrainSpeedMul(pRoad.factor, pRough, true);
+    const [npx, npz] = landStep(opx, opz, player.vel.x * dt * pSpeed, player.vel.z * dt * pSpeed);
+    player.pos.x = npx; player.pos.z = npz; player.pos.y = 0;
+    if (npx === opx) player.vel.x = 0; // bumped the coast — kill that component
+    if (npz === opz) player.vel.z = 0;
+    // party stamina: marching tires the column (fast through rough country, almost free on a road); resting restores it
+    const pMovedC = Math.hypot(npx - opx, npz - opz);
+    if (pMovedC > 0.01 * pSpeed) {
+      const effRough = pRough * (1 - pRoad.factor * MOVE.roadGrade);
+      const drain = MOVE.drainBase * (1 + effRough * MOVE.roughDrain) * (1 - pRoad.factor * MOVE.roadRelief);
+      partyStamina = clamp(partyStamina - drain * dt, 0, 100);
+    } else {
+      partyStamina = clamp(partyStamina + MOVE.regen * dt * (pRoad.factor > 0.5 ? 1.4 : 1), 0, 100);
+    }
+    if (player.mapToken) {
+      player.mapToken.position.copy(player.pos);
+      player.mapToken.position.y = mapElevY(player.pos.x, player.pos.z);
+      player.mapToken.rotation.y = player.facing;
+      const marching = roaming && mdir.lengthSq() > 0;
+      trailPush(player, player.pos.x, player.pos.z);
+      // a warband on the road (or under a march order) stretches single-file down its own wake — the
+      // bigger the army, the longer its line (spacing grows with the muster)
+      fileColumn(player.mapToken, player, marching && pMovedC > 0.012 && (marchPath != null || pRoad.factor > 0.45), dt,
+        clamp(1.05 + warbandTotal() / 90, 1.05, 2.6));
+      animateColumn(player.mapToken, marching, dt); // the lead column marches as you ride
+    }
   }
-  if (player.mapToken) {
-    player.mapToken.position.copy(player.pos);
-    player.mapToken.position.y = mapElevY(player.pos.x, player.pos.z);
-    player.mapToken.rotation.y = player.facing;
-    animateColumn(player.mapToken, roaming && dir.lengthSq() > 0, dt); // the lead column marches as you ride
-  }
-  // tally the ground actually covered → grow the vista (haze, zoom, stream-radius all follow)
+  // tally the ground actually covered (hero OR banner) → grow the vista (haze, zoom, stream-radius all follow)
+  const pMoved = Math.hypot(player.pos.x - opx, player.pos.z - opz);
   applyVista(pMoved, dt);
   updateChunks(); // stream fresh terrain + settlements in as the player crosses chunk lines
   ensureRoads();  // re-knit the road network when the player crosses into a new chunk (routes are cached, so this is cheap)
@@ -5259,8 +6305,16 @@ function updateMap(dt) {
     }
     let sp = band.speed || 5;
     if (mvx !== 0 || mvz !== 0) {
-      // hosts keep to the roads and skirt the mountains rather than ploughing through the wilds (server hosts keep the server's path)
-      if (!band.serverId) { const s = roadSteer(band.pos.x, band.pos.z, mvx, mvz); mvx = s[0]; mvz = s[1]; }
+      if (!band.serverId) {
+        // a distant objective is MARCHED to by road (a planned route, one plan per frame map-wide);
+        // pursuits and near goals keep the direct heading. Local steering still nudges onto the roadbed.
+        const goal = answeringCall ? activeCall : (!rival ? objective : null);
+        if (goal && Math.hypot(goal.x - band.pos.x, goal.z - band.pos.z) > 55) {
+          const wp = unitPathStep(band, goal.x, goal.z);
+          if (wp) { const wd = Math.hypot(wp.x - band.pos.x, wp.z - band.pos.z) || 1; mvx = (wp.x - band.pos.x) / wd; mvz = (wp.z - band.pos.z) / wd; }
+        } else band._route = null;
+        const s = roadSteer(band.pos.x, band.pos.z, mvx, mvz); mvx = s[0]; mvz = s[1];
+      }
       sp *= terrainSpeedMul(roadFactorAt(band.pos.x, band.pos.z), landRoughAt(band.pos.x, band.pos.z), false);
     }
     const [bnx, bnz] = landStep(band.pos.x, band.pos.z, mvx * sp * dt, mvz * sp * dt);
@@ -5414,6 +6468,9 @@ function enterBattle(band) {
   wave++;
   waveKills = waveHeroKills = waveLosses = 0;
   clearBattlefield();
+  mapFieldMode = false; // leaving the overworld for a real fight — drop the on-foot roam (fieldPref restores it after)
+  clearAllFieldArmies(); // dispose the materialised nearby-host crowds (the real fight musters fresh)
+  player.obj.scale.setScalar(1); // back to battle scale
   // the clash takes on the look of the map region it's fought in
   applyBiome(biomeAt(band.pos.x, band.pos.z));
   setBattleDressing(true);
@@ -5663,6 +6720,7 @@ function selectDet(det) { cmdSelDet = (det && det.alive) ? det : null; renderDet
 function toggleCmdMode(on) {
   const want = (on == null) ? !mapCmdMode : !!on;
   if (want && mode !== 'map') return;
+  if (want && mapFieldMode) setFieldMode(false, { keepPref: true }); // command needs the overhead view — pull out, but keep the field preference (it's a temporary view switch, not a choice to stop roaming)
   mapCmdMode = want;
   if (mapCmdMode) { if (document.exitPointerLock) document.exitPointerLock(); }
   else { cancelPatrolDraft(); cmdSelDet = null; }
@@ -5825,7 +6883,7 @@ canvas.addEventListener('touchstart', (e) => {
 // keys: C toggles; in command mode digits select, P patrol, R recall, F follow, H hold, Z/X pace, Enter/Esc
 addEventListener('keydown', (e) => {
   if (mode !== 'map' || encounter) return;
-  if (e.code === 'KeyC') { e.preventDefault(); toggleCmdMode(); return; }
+  if (e.code === 'KeyC' && !mapFieldMode) { e.preventDefault(); toggleCmdMode(); return; } // in field mode C is crouch, not command
   if (!mapCmdMode) return;
   if (e.code === 'Escape') { e.preventDefault(); if (patrolDraft) cancelPatrolDraft(); else toggleCmdMode(false); return; }
   if (e.code === 'Enter') { e.preventDefault(); if (patrolDraft) commitPatrolDraft(); return; }
@@ -7068,6 +8126,7 @@ function governFps(dt) {
 let last = performance.now();
 let frameNo = 0;
 function loop(now) {
+  if (EDIT.on) return editFrame(now);   // object-editor mode: orbit + render one model, skip the game sim
   const dt = Math.min((now - last) / 1000, 0.05);
   last = now;
   rtNow = now / 1000;
@@ -7143,7 +8202,7 @@ function loop(now) {
     updateArcs(gdt);
     updateTrails(gdt);
     updatePopups(gdt);
-    if (mode === 'map') (mapView3rd && !mapCmdMode && !encounter ? updateMapChaseCamera : updateMapCamera)(dt);
+    if (mode === 'map') (fieldSimOn() && !mapCmdMode ? updateCamera : updateMapCamera)(dt); // field = over-the-shoulder; else strategic (held during an encounter too)
     else if (mode === 'plan' || commandPanelOpen) updatePlanCamera(dt);
     else if (mode === 'coopguest') { /* camera is set inside updateCoopGuest */ }
     else if (player.obj) updateCamera(dt);
@@ -7441,10 +8500,25 @@ BV.cityAudit = (radius = 700) => {
 BV._land = (x, z, f = 28, s = 220) => bestLandSpot(x, z, f, s);          // debug: solid-land search
 BV._ls = (x, z, f = 28) => +landScore(x, z, f).toFixed(3);              // debug: land fraction of a footprint
 // roads: prove the network generated, connects the holds, and shapes the march
-BV.roads = () => ({ ..._roadStats, chunk: _roadChunk, gridCells: roadGrid ? roadGrid.size : 0, mesh: !!roadMesh, partyStamina: Math.round(partyStamina) });
+BV.roads = () => { const t = {}; for (const e of _roadEdges) t[e.tier] = (t[e.tier] || 0) + 1; return { ..._roadStats, v2: ROAD.v2, tiers: t, chunk: _roadChunk, gridCells: roadGrid ? roadGrid.size : 0, mesh: !!roadMesh, partyStamina: Math.round(partyStamina) }; };
+// inspect the road graph: per-node degree (variable degree proof) + edge list with tiers + gate flags
+BV.roadGraph = () => {
+  const deg = {}, edges = _roadEdges.map(e => { deg[e.a.key] = (deg[e.a.key] || 0) + 1; deg[e.b.key] = (deg[e.b.key] || 0) + 1; return { a: e.a.key, b: e.b.key, tier: e.tier, gated: !!(e.aGate || e.bGate) }; });
+  const degVals = Object.values(deg), hist = {}; for (const d of degVals) hist[d] = (hist[d] || 0) + 1;
+  return { edges: edges.length, nodes: degVals.length, degreeHistogram: hist, maxDegree: degVals.length ? Math.max(...degVals) : 0, sample: edges.slice(0, 30) };
+};
 BV.roadAt = (x, z) => { const r = roadInfoAt(x, z), rough = landRoughAt(x, z); return { factor: +r.factor.toFixed(3), tangent: [+r.dx.toFixed(2), +r.dz.toFixed(2)], rough: +rough.toFixed(3), speedMul: +terrainSpeedMul(r.factor, rough, false).toFixed(3), water: isWater(x, z) }; };
 BV.partyStamina = (set) => { if (typeof set === 'number') partyStamina = clamp(set, 0, 100); return Math.round(partyStamina); };
-BV.roadDebug = (on) => { if (roadMesh) roadMesh.material.userData.dbg = !!on; if (roadMesh) roadMesh.position.y = on ? 1.2 : 0; return !!roadMesh; }; // lift the ribbons for a clear screenshot
+BV.roadDebug = (on) => { // lift + recolor the ribbons bright for a clear screenshot (debug only)
+  const rb = roadMesh && roadMesh.userData && roadMesh.userData.ribbon; if (!rb) return false;
+  if (on) { if (!BV._dbgMat) BV._dbgMat = new THREE.MeshBasicMaterial({ color: 0xff5a2a, side: THREE.DoubleSide }); rb.material = BV._dbgMat; roadMesh.position.y = 2.6; }
+  else { rb.material = roadMat(); roadMesh.position.y = 0; }
+  return true;
+};
+BV.travelTo = (x, z) => { const ok = orderMarch(x, z); return ok && marchInfo ? { seconds: Math.round(marchInfo.seconds), waypoints: marchPath.length, roadFrac: +marchInfo.roadFrac.toFixed(2) } : null; };
+BV.march = () => marchPath ? { left: marchPath.length, eta: marchInfo ? Math.round(marchInfo.seconds) : null } : null;
+BV.travelPath = (ax, az, bx, bz) => { const t = travelPath(ax, az, bx, bz); return t ? { seconds: +t.seconds.toFixed(1), roadFrac: +t.roadFrac.toFixed(2), n: t.pts.length } : null; };
+BV.gates = (x, z, tier, seed) => settlementGates(x, z, tier, seed || 0);
 BV._mode = () => mode;
 BV.plan = { selectType, deploySelected, beginBattle, selCount: () => selected.size,
   newGroup, assignToGroup, splitIntoGroups, orderGroup, openCommandDeck, resumeBattle, countPool,
@@ -7483,7 +8557,8 @@ BV.vista = (miles) => {
     fog: [Math.round(scene.fog.near), Math.round(scene.fog.far)], camLift: +vlerp(VISTA.camLift).toFixed(1) };
 };
 // ride-along view: read/set the 3rd-person overworld camera (automated-test + console hook)
-BV.rideView = (on) => { if (mode === 'map' && on !== undefined) setMapView3rd(!!on); return mapView3rd; };
+BV.rideView = (on) => { if (mode === 'map' && on !== undefined) setFieldMode(!!on); return mapFieldMode; };
+BV.fieldMode = BV.rideView; // alias: the real name for the on-foot character roam
 // living-battle inspection + a forced 1v? clash for timing calibration tests
 BV.mapBattles = () => mapBattles.map(b => ({ a: b.sideA.faction.name, b: b.sideB.faction.name,
   na: Math.round(b.sideA.live), nb: Math.round(b.sideB.live), t: +b.t.toFixed(2), dur: +b.duration.toFixed(2), aWins: b.aWins }));
@@ -8030,12 +9105,224 @@ BV.station = () => currentStation && { seed: currentStation.seed, title: station
   rival: NATIONS[currentStation.rivalIdx].name, enemy: currentStation.enemy, encounter: currentStation.encounter };
 BV.universeSeed = () => universeSeed;
 
-// Auto-deal a universe on load. The DEFAULT is the humble 'drifter' — begin on the overworld
-// (MAP mode) with a 3–4 warband and no forced opening fight; raise the band from there.
-// A PINNED #u=<seed> instead reproduces a full dramatic station (outlaw/prince/…), and the
-// "New Universe" reroll deals a fresh random station — both via the station panel.
-const _bootMatch = (typeof location !== 'undefined' && location.hash || '').match(/u=(\d+)/);
-if (_bootMatch) bootUniverse(parseInt(_bootMatch[1], 10) >>> 0);
-else bootUniverse(undefined, 'drifter');
+/* ============================================================================
+   OBJECT EDITOR — an isolated stage to view & iterate ONE procedural object.
+   Activated by ?edit=<kind> (or by setting window.BV_EDIT before this script).
+   It suppresses the normal world boot, drops the battle dressing, builds the
+   requested object on a clean stage with an orbit camera, and frames it.
+   Crucially, every object is built by the REAL generators (buildHumanoid,
+   buildSettlementGroup, sgHouse, makeBanner, …) — so any edit to those
+   functions shows up here AND in the live game. Driven by the `object-editor`
+   skill. Live hooks: BV.edit / BV.editSpin / BV.editSeed / BV.editFrameCam. */
+const EDIT = { on: false, spec: null, obj: null, ground: null, spin: true, mtn: null,
+               spinRate: 0.35, last: 0,
+               orbit: { target: new THREE.Vector3(), r: 14, theta: 0.7, phi: 1.0 } };
+
+// ---- "city on a mountain": a sculpted peak the editor seats a settlement on (via the mapElevY hook) ----
+// A rounded, buildable SUMMIT (a gentle dome the size of the town footprint) atop steep flanks that
+// fall to a flat base — so the real settlement generator terraces its houses over the crown while its
+// curtain wall drapes down the shoulder, and steeper faces below naturally reject buildings.
+function editMtnSpec(seed) {
+  const r = _mulberry32((seed >>> 0) || 7);
+  return { peak: 50, shoulder: 30, base: 68, summitFall: 10, ridges: 6, rough: 3.5, phase: r() * TAU };
+}
+function editMountainY(x, z) {
+  const M = EDIT.mtn, d = Math.hypot(x, z), sh = M.shoulder, base = M.base, peak = M.peak, sf = M.summitFall;
+  let h;
+  if (d <= sh)       { const t = d / sh;               h = peak - sf * t * t; }              // gentle dome crown
+  else if (d < base) { const t = (d - sh) / (base - sh); h = (peak - sf) * (1 - t * t * (3 - 2 * t)); } // steep flank (smootherstep)
+  else               { h = 0; }                                                              // flat foot
+  const flank = Math.max(0, Math.min(1, (d - sh) / (base - sh)));                             // 0 crown → 1 base
+  const fade = flank * (1 - flank) * 4;                                                       // 0 at crown & foot, 1 mid-flank
+  h += Math.sin(Math.atan2(z, x) * M.ridges + M.phase) * M.rough * fade;                      // ridge folds — a natural, non-conical silhouette
+  return Math.max(0, h);
+}
+// alpine ground under the peak: grass foot → earthy rock → bare grey crag → a thin snow tip. Kept
+// value-controlled (no pale mid-tones) so the studio key doesn't clamp the crown to a white blob;
+// the city then crowns grey stone, with green slopes falling away and snow only at the very summit.
+const _MTN_STOPS = [[0.00, 0x3f6a24], [0.40, 0x4f6f2c], [0.58, 0x6b6a48], [0.74, 0x726d63], [0.90, 0x8a867f], [0.975, 0xaab0b3], [1.00, 0xd7dce0]];
+function editMtnColor(c, y, peak) {
+  const f = Math.max(0, Math.min(1, y / peak));
+  let a = _MTN_STOPS[0], b = _MTN_STOPS[_MTN_STOPS.length - 1];
+  for (let i = 0; i < _MTN_STOPS.length - 1; i++) if (f >= _MTN_STOPS[i][0] && f <= _MTN_STOPS[i + 1][0]) { a = _MTN_STOPS[i]; b = _MTN_STOPS[i + 1]; break; }
+  const t = (b[0] - a[0]) < 1e-6 ? 0 : (f - a[0]) / (b[0] - a[0]);
+  return c.setHex(a[1]).lerp(_tmpCol.setHex(b[1]), t);
+}
+const _tmpCol = new THREE.Color();
+function editMountainGround(M) {
+  const pad = M.base * 1.35, seg = 100;
+  const geo = new THREE.PlaneGeometry(pad * 2, pad * 2, seg, seg); geo.rotateX(-Math.PI / 2);
+  const p = geo.attributes.position, col = new Float32Array(p.count * 3), c = new THREE.Color();
+  for (let i = 0; i < p.count; i++) {
+    const y = editMountainY(p.getX(i), p.getZ(i)); p.setY(i, y);
+    editMtnColor(c, y, M.peak); col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3)); geo.computeVertexNormals();
+  const m = new THREE.Mesh(geo, new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: true, shininess: 2, specular: 0x000000 }));
+  m.receiveShadow = true; return m;
+}
+
+// one-word request / ?edit= keyword  ->  a build spec
+const EDIT_KINDS = {
+  house: { kind: 'house' }, hut: { kind: 'house' }, cottage: { kind: 'house' },
+  villa: { kind: 'house', big: true }, manor: { kind: 'house', big: true },
+  village: { kind: 'settlement', tier: 'village' }, town: { kind: 'settlement', tier: 'town' },
+  city: { kind: 'settlement', tier: 'city' }, capital: { kind: 'settlement', tier: 'capital' },
+  castle: { kind: 'settlement', tier: 'town' }, keep: { kind: 'settlement', tier: 'town' },
+  knight: { kind: 'humanoid', weapon: 'sword' }, soldier: { kind: 'humanoid', weapon: 'sword' },
+  warrior: { kind: 'humanoid', weapon: 'sword' }, swordsman: { kind: 'humanoid', weapon: 'sword' },
+  archer: { kind: 'humanoid', weapon: 'bow' }, humanoid: { kind: 'humanoid', weapon: 'sword' },
+  fighter: { kind: 'humanoid', weapon: 'sword' }, banner: { kind: 'banner' },
+};
+function parseEditSpec(word, q) {
+  const spec = { seed: 3, spin: true, ...(EDIT_KINDS[(word || 'house').toLowerCase()] || { kind: 'house' }) };
+  if (q) {
+    if (q.get('tier')) spec.tier = q.get('tier');
+    const sd = q.get('seed'); if (sd != null && sd !== '') spec.seed = parseInt(sd, 10) >>> 0;
+    if (q.get('weapon')) spec.weapon = q.get('weapon');
+    if (q.get('spin') === '0' || q.get('spin') === 'false') spec.spin = false;
+    if (q.get('big') === '1') spec.big = true;
+    const at = q.get('at'); if (at) { const p = at.split(',').map(Number); if (p.length === 2 && p.every(n => !isNaN(n))) spec.at = p; }
+    if (q.get('mountain') === '1' || q.get('mtn') === '1') { spec.mtn = editMtnSpec(spec.seed); spec.at = [0, 0]; }
+  }
+  return spec;
+}
+
+// build exactly ONE object via the real generators; {seated:true} => sits on real mapElevY terrain
+function editBuild(spec) {
+  const seed = (spec.seed >>> 0) || 1;
+  if (spec.kind === 'raw' && typeof spec.build === 'function') return { obj: spec.build(), seated: !!spec.seated, at: spec.at };
+  if (spec.kind === 'humanoid') {
+    const pal = spec.palette || { skin: 0xe0b088, cloth: 0x356fb0, accent: 0x223a66, blade: 0xeaf2ff };
+    const h = buildHumanoid(pal, spec.scale || 1, spec.weapon || 'sword'); // returns {group, parts}
+    return { obj: h.group || h, seated: false };
+  }
+  if (spec.kind === 'banner') return { obj: makeBanner(spec.color || 0xffcf5b), seated: false };
+  if (spec.kind === 'settlement') {
+    const at = spec.at || [0, 0], tier = spec.tier || 'village';
+    return { obj: buildSettlementGroup(at[0], at[1], tier, tier.toUpperCase(), spec.color || 0xffcf5b, seed),
+             seated: true, at };
+  }
+  // default: a single house from the real sgHouse, on a flat seat
+  const pal = settlePalette(biomeAt(0, 0)), S = { pos: [], col: [] };
+  const P = { r: _mulberry32(seed), spec: SG_SPEC.village, seat: () => 0, pal,
+              ownerRGB: sgRgb(0xffcf5b, 1), S, O: { pos: [], col: [] } };
+  for (let i = 0; i < 6 && !sgHouse(P, 0, 0, { big: !!spec.big, yaw: 0.6 }); i++) { /* re-roll on a steep reject */ }
+  const g = new THREE.Group(); if (S.pos.length) g.add(sgMesh(S, settleVCMat()));
+  return { obj: g, seated: false };
+}
+
+// a ground patch: real displaced mapElevY terrain under a settlement, a flat disc otherwise
+function editGround(spec, built) {
+  if (EDIT.mtn && built.seated) return editMountainGround(EDIT.mtn);
+  if (built.seated) {
+    const [X, Z] = built.at, R = (SG_SPEC[spec.tier] || SG_SPEC.village).R, pad = R * 1.7;
+    const geo = new THREE.PlaneGeometry(pad * 2, pad * 2, 56, 56); geo.rotateX(-Math.PI / 2);
+    const p = geo.attributes.position;
+    for (let i = 0; i < p.count; i++) p.setY(i, mapElevY(X + p.getX(i), Z + p.getZ(i)));
+    geo.computeVertexNormals();
+    const m = new THREE.Mesh(geo, mat(biomeAt(X, Z).ground || 0x6f8f4a, { smooth: false }));
+    m.position.set(X, 0, Z); m.receiveShadow = true; return m;
+  }
+  const geo = new THREE.CircleGeometry(7, 56); geo.rotateX(-Math.PI / 2);
+  const m = new THREE.Mesh(geo, mat(0x5f7a44, { smooth: false }));
+  m.position.y = -0.26; m.receiveShadow = true; return m;
+}
+
+function editClear() {
+  for (const k of ['obj', 'ground']) { const o = EDIT[k]; if (o) { scene.remove(o); try { disposeGroup(o); } catch (e) {} EDIT[k] = null; } }
+}
+function editFrameCam() {
+  if (!EDIT.obj) return;
+  if (EDIT.mtn) {                                    // frame the whole peak from a low, majestic 3/4 angle
+    const M = EDIT.mtn;
+    EDIT.orbit.target.set(0, M.peak * 0.5, 0);
+    EDIT.orbit.r = M.base * 2.2; EDIT.orbit.theta = 2.2; EDIT.orbit.phi = 1.1;  // off the sun axis → raking light models the slopes
+    return;
+  }
+  const box = new THREE.Box3().setFromObject(EDIT.obj); if (box.isEmpty()) return;
+  EDIT.orbit.target.copy(box.getCenter(tmpV));
+  const s = box.getSize(tmpV2);
+  EDIT.orbit.r = Math.max(5, Math.max(s.x, s.y, s.z) * 1.7);
+  EDIT.orbit.theta = 0.7; EDIT.orbit.phi = 1.0;
+}
+function editStatus() {
+  const s = EDIT.spec, sz = EDIT.obj ? new THREE.Box3().setFromObject(EDIT.obj).getSize(new THREE.Vector3()) : null;
+  return { kind: s.kind, tier: s.tier, seed: s.seed, weapon: s.weapon, spin: EDIT.spin,
+           size: sz ? [+sz.x.toFixed(1), +sz.y.toFixed(1), +sz.z.toFixed(1)] : null };
+}
+function editApply(spec) {
+  EDIT.spec = spec; EDIT.spin = spec.spin !== false;
+  EDIT.mtn = spec.mtn || null;
+  editTerrainFn = EDIT.mtn ? editMountainY : null;   // sculpt the peak while building (or restore world terrain)
+  // studio key: the peak's height-tint (rock→snow) only reads if the bright sky+sun don't clamp the
+  // pale facets to white, so dim to a calm key while a landform is shown (runtime-only; never the live game).
+  if (typeof hemi !== 'undefined') hemi.intensity = EDIT.mtn ? 0.35 : 0.85;
+  if (typeof sun !== 'undefined') sun.intensity = EDIT.mtn ? 0.80 : 1.15;
+  editClear();
+  const built = editBuild(spec);
+  EDIT.obj = built.obj; scene.add(EDIT.obj);
+  EDIT.ground = editGround(spec, built); scene.add(EDIT.ground);
+  editFrameCam();
+  return editStatus();
+}
+function editFrame(now) {
+  const o = EDIT.orbit, dt = Math.min((now - (EDIT.last || now)) / 1000, 0.05); EDIT.last = now;
+  if (EDIT.spin) o.theta += EDIT.spinRate * dt;
+  const st = Math.sin(o.phi);
+  camera.position.set(o.target.x + o.r * st * Math.sin(o.theta),
+                      o.target.y + o.r * Math.cos(o.phi),
+                      o.target.z + o.r * st * Math.cos(o.theta));
+  camera.lookAt(o.target);
+  renderer.render(scene, camera);
+  requestAnimationFrame(loop);
+}
+function editInstallControls() {
+  const o = EDIT.orbit; let drag = false, px = 0, py = 0;
+  canvas.addEventListener('pointerdown', e => { drag = true; EDIT.spin = false; px = e.clientX; py = e.clientY; });
+  window.addEventListener('pointermove', e => {
+    if (!drag) return;
+    o.theta -= (e.clientX - px) * 0.01; o.phi = clamp(o.phi - (e.clientY - py) * 0.01, 0.15, 1.5);
+    px = e.clientX; py = e.clientY;
+  });
+  window.addEventListener('pointerup', () => drag = false);
+  canvas.addEventListener('wheel', e => { o.r = clamp(o.r * (1 + Math.sign(e.deltaY) * 0.08), 2, 280); e.preventDefault(); }, { passive: false });
+}
+function editorBoot(spec) {
+  EDIT.on = true;
+  try { setBattleDressing(false); } catch (e) {}        // clear the battle arena/torches/treeline
+  // hide ALL pre-existing world geometry so the stage holds only our object: the load-time
+  // buildWorld() (arena/decor) and initPlayer() (a humanoid at the origin) both clutter it.
+  for (const c of scene.children.slice()) { if (!c.isLight) c.visible = false; }
+  scene.fog = null;                                      // fog at 45–95 would swallow a whole city
+  scene.background = new THREE.Color(0x223040);          // calm studio backdrop
+  const hud = document.getElementById('hud'); if (hud) hud.classList.add('hidden');
+  const tch = document.getElementById('touch'); if (tch) tch.classList.add('hidden');
+  document.querySelectorAll('.overlay').forEach(o => o.classList.add('hidden'));
+  const fill = new THREE.DirectionalLight(0xbcd0ff, 0.22); fill.position.set(-30, 24, -18); scene.add(fill);
+  editInstallControls();
+  editApply(spec);
+  try { console.log('[object-editor]', JSON.stringify(editStatus())); } catch (e) {}
+}
+const _toSpec = (s) => typeof s === 'string' ? parseEditSpec(s) : s;
+BV.edit = (s) => { if (!EDIT.on) editorBoot(_toSpec(s) || { kind: 'house' }); else editApply(typeof s === 'string' ? parseEditSpec(s) : { ...EDIT.spec, ...s }); return editStatus(); };
+BV.editSpin = (on) => { EDIT.spin = on === undefined ? !EDIT.spin : !!on; return EDIT.spin; };
+BV.editSeed = (n) => editApply({ ...EDIT.spec, seed: n >>> 0 });
+BV.editFrameCam = () => { editFrameCam(); return 'framed'; };
+BV.editStatus = editStatus;
+
+// Boot. ?edit=<kind> (or window.BV_EDIT) opens the object editor; otherwise deal a universe.
+// DEFAULT universe is the humble 'drifter' — begin on the overworld (MAP) with a small warband.
+// A PINNED #u=<seed> reproduces a dramatic station; the "New Universe" reroll deals a fresh one.
+const _editQ = (typeof location !== 'undefined') ? new URLSearchParams(location.search) : null;
+const _editWord = (_editQ && _editQ.get('edit')) ||
+  ((typeof location !== 'undefined' && location.hash || '').match(/edit=([^&]+)/) || [])[1];
+if (window.BV_EDIT || _editWord) {
+  editorBoot(window.BV_EDIT || parseEditSpec(_editWord, _editQ));
+} else {
+  const _bootMatch = (typeof location !== 'undefined' && location.hash || '').match(/u=(\d+)/);
+  if (_bootMatch) bootUniverse(parseInt(_bootMatch[1], 10) >>> 0);
+  else bootUniverse(undefined, 'drifter');
+}
 
 })();

@@ -3,12 +3,16 @@
 // stays client-side and reports its results here. The always-on world tick lands in Step 4.
 const http = require('http');
 const { db, migrate } = require('./db');
-const { ensureAccount, ensureSharedWorld } = require('./seed');
+const { ensureAccount, ensureWorldFor, ensureSharedWorld } = require('./seed');
 const tick = require('./tick');
+const auth = require('./auth');
+const chars = require('./chars');
 const diplomacy = require('./diplomacy');
 const destiny = require('./destiny');
 const validate = require('./validate');
 const coop = require('./ws'); // real-time co-op battle relay (WebSocket, no external deps)
+const chunks = require('./chunks');
+const zlib = require('zlib');
 
 migrate();
 // seed every world's macro state and start the always-on heartbeat (advances inactive worlds)
@@ -23,6 +27,17 @@ const CORS = {
 };
 function send(res, code, obj) {
   const body = JSON.stringify(obj);
+  res.writeHead(code, Object.assign({ 'Content-Type': 'application/json' }, CORS));
+  res.end(body);
+}
+// like send(), but gzips large payloads when the client accepts it (chunk batches compress ~5x)
+function sendZ(req, res, code, obj) {
+  const body = JSON.stringify(obj);
+  if (body.length > 1024 && /\bgzip\b/.test(req.headers['accept-encoding'] || '')) {
+    const gz = zlib.gzipSync(Buffer.from(body, 'utf8'));
+    res.writeHead(code, Object.assign({ 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' }, CORS));
+    return res.end(gz);
+  }
   res.writeHead(code, Object.assign({ 'Content-Type': 'application/json' }, CORS));
   res.end(body);
 }
@@ -73,13 +88,30 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const p = url.pathname;
   try {
-    const token = req.headers['x-player-token'] || 'local'; // auth seam: token → account+world (single-player = 'local')
-    const { acct, world } = ensureAccount(token);
-    const viewWorldId = (req.headers['x-world'] === 'shared') ? ensureSharedWorld().id : world.id; // solo world (own) or the shared multiplayer world
-
     if (req.method === 'GET' && p === '/api/v1/health') {
       return send(res, 200, { ok: true, ts: Date.now() });
     }
+
+    // ----- auth: super-simple username/password (before the account seam — no token needed) -----
+    if (req.method === 'POST' && p === '/api/v1/auth/register') {
+      const b = await readBody(req);
+      const r = auth.register(b.username, b.password);
+      return send(res, r.ok ? 200 : 400, r);
+    }
+    if (req.method === 'POST' && p === '/api/v1/auth/login') {
+      const b = await readBody(req);
+      const r = auth.login(b.username, b.password);
+      return send(res, r.ok ? 200 : 401, r);
+    }
+
+    // auth seam: token → account+world. A session token (s-…) wins; otherwise the legacy
+    // handle-as-token path — refused when that handle is password-protected (no bypass).
+    const token = req.headers['x-player-token'] || 'local'; // single-player = 'local'
+    let acct = auth.resolveSession(token), world;
+    if (acct) world = ensureWorldFor(acct);
+    else if (auth.handleLocked(token)) return send(res, 401, { error: 'that name is password-protected — sign in' });
+    else ({ acct, world } = ensureAccount(token));
+    const viewWorldId = (req.headers['x-world'] === 'shared') ? ensureSharedWorld().id : world.id; // solo world (own) or the shared multiplayer world
 
     if (req.method === 'GET' && p === '/api/v1/profile') {
       const player = db.prepare('SELECT * FROM characters WHERE world_id=? AND is_player=1').get(world.id);
@@ -132,7 +164,8 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, {
         worldId: wid, shared: wid !== world.id, account: acct.id, simTick,
         capitals: tick.getCapitals(wid), armies, warlords, holdings: tick.getHoldings(wid),
-        players: tick.getPresence(wid, acct.id), events,
+        players: tick.getPresence(wid, acct.id).concat(chars.idleCharsOf(wid, acct.id)), // live banners + camped characters
+        chars: chars.roster(wid, acct.id), events,
         relations: diplomacy.relationsForApi(wid), factionState: diplomacy.factionStateForApi(wid),
         destiny: destiny.destinyForApi(wid)
       });
@@ -141,9 +174,11 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && p === '/api/v1/world/presence') { // a player's banner heartbeat
       const b = await readBody(req);
       tick.updatePresence(viewWorldId, acct.id, b);
-      // shared world: the server owns the whole map — generate (idempotently) the frontier holds
-      // around this navigating player so factions have ground to contest. (Solo stays client-local.)
-      if (viewWorldId !== world.id && b && b.x != null) tick.ensureRegion(viewWorldId, +b.x || 0, +b.z || 0);
+      chars.trackActive(viewWorldId, acct.id, b); // the ACTIVE character's row follows the live banner
+      // the server owns the whole map: pre-warm the chunk store (terrain + holds) around this
+      // navigating player so factions have ground to contest — solo AND shared alike (a solo
+      // world only generates once its client has claimed a universe via /chunks).
+      if (b && b.x != null) tick.ensureRegion(viewWorldId, +b.x || 0, +b.z || 0);
       return send(res, 200, { ok: true });
     }
 
@@ -159,6 +194,28 @@ const server = http.createServer(async (req, res) => {
       db.prepare('UPDATE capitals SET owner_name=? WHERE world_id=? AND idx=?').run(String(b.owner || ''), viewWorldId, b.idx | 0);
       db.prepare('INSERT INTO world_events(world_id, tick, type, summary) VALUES (?,?,?,?)').run(viewWorldId, st, 'capital_taken', String(b.summary || 'A hold changed hands'));
       return send(res, 200, { ok: true });
+    }
+
+    // ----- the world itself: server-generated terrain chunks (Phase 1 of server-side worldgen) -----
+    // GET /api/v1/chunks?list=cx:cz,cx:cz[&level=N][&u=SEED]
+    // Shared world: level/universe are pinned server-side. Solo: the client passes its mapLevel +
+    // universeSeed; the first call CLAIMS that universe on the world row (the background tick then
+    // contests that terrain). Chunks are generated at most once and persist forever.
+    if (req.method === 'GET' && p === '/api/v1/chunks') {
+      const q = url.searchParams;
+      const w = db.prepare('SELECT kind, map_level, universe_seed FROM worlds WHERE id=?').get(viewWorldId);
+      let level, useed;
+      if (w.kind === 'shared') { level = 0; useed = chunks.SHARED_WORLD_SEED; }
+      else {
+        level = Math.max(0, Math.min(9999, parseInt(q.get('level') || '0', 10) || 0));
+        useed = (parseInt(q.get('u') || '0', 10) || w.universe_seed || 0) >>> 0;
+        if (!useed) return send(res, 400, { error: 'no universe seed claimed — pass ?u=<universeSeed>' });
+        if (w.universe_seed !== useed || (w.map_level | 0) !== level)
+          db.prepare('UPDATE worlds SET universe_seed=?, map_level=? WHERE id=?').run(useed, level, viewWorldId);
+      }
+      const list = String(q.get('list') || '').split(',').filter(Boolean).slice(0, 81);
+      if (!list.length) return send(res, 400, { error: 'empty chunk list' });
+      return sendZ(req, res, 200, chunks.serveBatch(viewWorldId, level, useed, list));
     }
 
     // server-owned frontier settlements: who currently holds each generated village/town/city.
@@ -189,6 +246,30 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'POST' && p === '/api/v1/holdings/levy') {
       return send(res, 200, tick.levyHolding(viewWorldId, await readBody(req)));
+    }
+
+    // ----- multiple characters per account, same map: adopt / switch / split / give -----
+    if (req.method === 'GET' && p === '/api/v1/chars') {
+      return send(res, 200, { ok: true, chars: chars.roster(viewWorldId, acct.id) });
+    }
+    if (req.method === 'POST' && p === '/api/v1/chars/adopt') {      // first contact: roster (creates char #1 from the live hero)
+      return send(res, 200, chars.adopt(viewWorldId, acct.id, await readBody(req)));
+    }
+    if (req.method === 'POST' && p === '/api/v1/chars/switch') {     // play another character; the old one waits where it stands
+      const r = chars.switchChar(viewWorldId, acct.id, await readBody(req));
+      return send(res, r.ok ? 200 : 400, r);
+    }
+    if (req.method === 'POST' && p === '/api/v1/chars/split') {      // split men off under a brand-new character
+      const r = chars.splitChar(viewWorldId, acct.id, await readBody(req));
+      return send(res, r.ok ? 200 : 400, r);
+    }
+    if (req.method === 'POST' && p === '/api/v1/chars/create') {     // brand-new independent random character
+      const r = chars.createChar(viewWorldId, acct.id, await readBody(req));
+      return send(res, r.ok ? 200 : 400, r);
+    }
+    if (req.method === 'POST' && p === '/api/v1/chars/give') {       // move men between two of your characters (they must have met)
+      const r = chars.giveMen(viewWorldId, acct.id, await readBody(req));
+      return send(res, r.ok ? 200 : 400, r);
     }
 
     if (req.method === 'POST' && p === '/api/v1/_advance') { // dev/test: force N world ticks immediately

@@ -21,12 +21,28 @@
     else SHARED = localStorage.getItem('bv-mp') === '1';
   } catch (e) {}
 
+  // server-worldgen mode: the client FETCHES terrain chunks from the backend instead of
+  // generating locally. ?srv=1 turns it on and sticks; ?srv=0 turns it back off.
+  var SRV = false;
+  try {
+    var ss = location.search;
+    if (/[?&]srv=0(&|$)/.test(ss)) { localStorage.removeItem('bv-srv'); SRV = false; }
+    else if (/[?&]srv(=1)?(&|$)/.test(ss)) { localStorage.setItem('bv-srv', '1'); SRV = true; }
+    else SRV = localStorage.getItem('bv-srv') === '1';
+  } catch (e) {}
+
+  // Signed-in session (username/password auth). When present, the session token IS the player
+  // token — it rides the same X-Player-Token seam and the server resolves it to the account.
+  var SESSION = null;
+  try { SESSION = JSON.parse(localStorage.getItem('bv-session') || 'null'); } catch (e) {}
+
   // Player identity → server account. Single-player keeps 'local' (existing progress untouched).
   // Multiplayer needs a DISTINCT token per person, else everyone collapses into one account and
-  // nobody sees anybody. Priority: ?p=<name> (readable, assignable) → a name set earlier on this
-  // device → a per-device random id when in shared mode → 'local'.
+  // nobody sees anybody. Priority: signed-in session → ?p=<name> (readable, assignable) → a name
+  // set earlier on this device → a per-device random id when in shared mode → 'local'.
   var PLAYER_TOKEN = (function () {
     try {
+      if (SESSION && SESSION.token) return SESSION.token;
       var m = /[?&]p=([^&#]+)/.exec(location.search);
       if (m) { var name = (decodeURIComponent(m[1]) || '').slice(0, 32) || 'local'; localStorage.setItem('bv-token', name); return name; }
       var explicit = localStorage.getItem('bv-token');
@@ -41,6 +57,8 @@
   })();
   net.token = PLAYER_TOKEN;
   net.sharedWorld = SHARED;
+  net.srvWorld = SRV;
+  net.session = SESSION; // {token, username} when signed in, else null
 
   function withTimeout(promise, ms) {
     return Promise.race([
@@ -96,6 +114,17 @@
       .then(function (w) { net.online = true; net.world = w; if (w && w.holdings) net.holdings = w.holdings; return w; })
       .catch(function () { return null; });
   };
+  // ----- server-generated terrain chunks (worldgen Phase 1) -----
+  // keys = ['cx:cz', ...]; level/u = the client's mapLevel + universeSeed (shared world ignores them)
+  net.loadChunks = function (level, u, keys) {
+    var path = '/chunks?level=' + (level | 0) + '&u=' + (u >>> 0) + '&list=' + keys.join(',');
+    var opts = { method: 'GET', headers: Object.assign({ 'Content-Type': 'application/json', 'X-Player-Token': PLAYER_TOKEN }, worldHeaders()) };
+    return withTimeout(fetch(BASE + path, opts), 20000).then(function (r) {
+      if (!r.ok) throw new Error('http ' + r.status);
+      net.online = true;
+      return r.json();
+    });
+  };
   net.reportCapital = function (idx, owner, summary) {
     return jfetch('/world/capital', { method: 'POST', headers: worldHeaders(), body: JSON.stringify({ idx: idx, owner: owner, summary: summary }) }).catch(function () { return null; });
   };
@@ -133,6 +162,45 @@
   net.diplomacy = function () { // the authoritative faction relations + posture from the last world poll
     return net.world ? { relations: net.world.relations || [], factionState: net.world.factionState || [] } : null;
   };
+  // ----- auth: super-simple username/password. Success stores the session and reloads the page
+  // so every boot-time fetch (profile, world, chunks) re-runs under the new identity. -----
+  // like jfetch, but keeps the server's {ok:false, error} body on 4xx instead of throwing it away
+  function jpost(path, body, extraHeaders) {
+    var opts = { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json', 'X-Player-Token': PLAYER_TOKEN }, extraHeaders || {}), body: JSON.stringify(body || {}) };
+    return withTimeout(fetch(BASE + path, opts), TIMEOUT)
+      .then(function (r) { return r.json(); })
+      .catch(function () { return { ok: false, error: 'server unreachable' }; });
+  }
+  function authCall(path, username, password) {
+    return jpost(path, { username: username, password: password }).then(function (r) {
+      if (r && r.ok && r.token) {
+        try { localStorage.setItem('bv-session', JSON.stringify({ token: r.token, username: r.username })); } catch (e) {}
+        location.reload();
+      }
+      return r;
+    });
+  }
+  net.register = function (u, p) { return authCall('/auth/register', u, p); };
+  net.login = function (u, p) { return authCall('/auth/login', u, p); };
+  net.logout = function () { try { localStorage.removeItem('bv-session'); } catch (e) {} location.reload(); };
+
+  // ----- multiple characters per account, same map: adopt / switch / split / give -----
+  net.charsList = [];   // last server roster [{charId, name, x, z, men, renown, active}]
+  function charsCall(path, body) {
+    return jpost('/chars' + path, body, worldHeaders())
+      .then(function (r) { if (r && r.chars) net.charsList = r.chars; return r; });
+  }
+  net.loadChars = function () {
+    return jfetch('/chars', { method: 'GET', headers: worldHeaders() })
+      .then(function (r) { if (r && r.chars) net.charsList = r.chars; return net.charsList; })
+      .catch(function () { return null; });
+  };
+  net.adoptChar = function (body) { return charsCall('/adopt', body); };
+  net.switchChar = function (toId, from) { return charsCall('/switch', { toId: toId, from: from }); };
+  net.splitChar = function (body) { return charsCall('/split', body); };
+  net.createChar = function (body) { return charsCall('/create', body); };
+  net.giveMen = function (fromId, toId, men) { return charsCall('/give', { fromId: fromId, toId: toId, men: men }); };
+
   // pre-fetch the world alongside the profile so the digest is ready when the player starts
   net.worldReady = net.loadWorld();
 

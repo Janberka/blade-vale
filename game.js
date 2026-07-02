@@ -1632,6 +1632,7 @@ if (TOUCH) {
   bindBtn('tb-rally', () => { if (mode === 'map' && !encounter) raiseCall(); });
   bindBtn('tb-beacon', () => { if (mode === 'map' && !encounter) openBeaconPanel(); });
   bindBtn('tb-warband', () => toggleCharsheet());
+  bindBtn('tb-chars', () => { if (mode === 'map') toggleCharsPanel(); });
   bindBtn('tb-town', () => { if (mode === 'map' && !encounter) { const h = nearestOwnedHold(); if (h) enterTown(h); } });
 
   // show the right control set for the current mode; called each frame from the loop
@@ -3075,106 +3076,124 @@ const CALL_MUSTER_RADIUS = 130; // a standing Call pulls allied bands from this 
 // ---------- Coherent value noise: the world is generated, not scattered ----------
 // Two smooth fields (elevation + moisture) plus latitude (temperature) drive a
 // natural biome layout with soft transitions, seas, and coastlines.
-const SEA_LEVEL = 0.38;
-function _nHash(ix, iz, seed) { const h = Math.sin(ix * 127.1 + iz * 311.7 + seed * 53.7) * 43758.5453; return h - Math.floor(h); }
-function _vnoise(x, z, seed) {
-  const ix = Math.floor(x), iz = Math.floor(z), fx = x - ix, fz = z - iz;
-  const ux = fx * fx * (3 - 2 * fx), uz = fz * fz * (3 - 2 * fz);
-  const a = _nHash(ix, iz, seed), b = _nHash(ix + 1, iz, seed), c = _nHash(ix, iz + 1, seed), d = _nHash(ix + 1, iz + 1, seed);
-  return a * (1 - ux) * (1 - uz) + b * ux * (1 - uz) + c * (1 - ux) * uz + d * ux * uz;
-}
-function _fbm(x, z, seed) {
-  let v = 0, amp = 0.5, f = 1, norm = 0;
-  for (let o = 0; o < 4; o++) { v += amp * _vnoise(x * f, z * f, seed + o * 31); norm += amp; f *= 2; amp *= 0.5; }
-  return v / norm;
-}
-// Ridged fractal noise: fold each octave at its midline (1-|2v-1|) and square it so the high values
-// line up into CONNECTED spines instead of the round, isolated bumps plain fbm gives. Each octave is
-// gated by the one below (`prev`) so detail only grows along the existing ridge — this is what turns a
-// scatter of peaks into a continuous mountain RANGE. Returns ~0..1, peaking sharply along the crests.
-function _ridge(x, z, seed) {
-  let v = 0, amp = 0.5, f = 1, norm = 0, prev = 1;
-  for (let o = 0; o < 4; o++) {
-    let n = _vnoise(x * f, z * f, seed + o * 31);
-    n = 1 - Math.abs(2 * n - 1); n *= n;
-    v += amp * n * prev; prev = clamp(n * 1.4, 0, 1);
-    norm += amp; f *= 2; amp *= 0.5;
-  }
-  return v / norm;
-}
+// The math itself lives in sim/terra.js — the SHARED terrain kernel the server runs verbatim, so
+// client and server generate byte-identical worlds from the same seed. game.js keeps thin same-name
+// shims over a seed-bound instance that is rebuilt whenever worldSeed() changes (region advance,
+// universe reroll). NEVER tune terrain here: tune it in terra.js and bump Terra.VERSION.
 const worldSeed = () => ((mapLevel * 1000 + 7) ^ (universeSeed * 2654435761)) >>> 0;
-const TERR_SCALE = 1 / 42;
-// Mountain ranges: a slow "orogeny belt" field decides WHERE the crust is buckled into highlands;
-// a ridged spine field carves the actual peaks within those belts. Together they replace the old
-// scatter of lone peaks with long, connected ranges — and lift far more of the map into hill/rock/
-// snow country. Tune `lift` for how high ranges tower, `beltThresh/beltWidth` for how much of the
-// world is mountainous, `beltScale/spineScale` for the size of ranges vs. individual ridges.
-const MOUNTAINS = {
-  beltScale:  0.16,   // frequency of the belt mask — smaller = broader, fewer, longer ranges
-  beltThresh: 0.48,   // belt onset: land below this stays lowland (more mountains as this drops)
-  beltWidth:  0.34,   // how quickly a belt ramps from foothills to full range
-  spineScale: 1.05,   // frequency of the ridge spines inside a belt — larger = tighter, craggier ridges
-  lift:       0.62,   // how much elevation a full-strength spine adds (the range's prominence)
-};
-function elevationAt(x, z) {
-  const base = _fbm((x + 1000) * TERR_SCALE, (z - 1000) * TERR_SCALE, worldSeed() + 1);
-  // Broad seas, gulfs, and inland lakes are carved by a slow "continent" field instead of a
-  // radial rim, so dry land continues forever in every direction (the old heartland was an
-  // island walled off by ocean at the map edge). Peaks still rise from the base noise.
-  const cont = _fbm((x - 4000) * TERR_SCALE * 0.20, (z + 4000) * TERR_SCALE * 0.20, worldSeed() + 5);
-  let e = 0.30 + base * 0.55 + (cont - 0.55) * 0.80;
-  // Raise mountain ranges on top of the base land. The belt mask gates WHERE; the ridged spine
-  // shapes the crests. We scale by a "foothill" factor so ranges grow out of already-high ground
-  // rather than erupting straight from the coastline, and only ever ADD to land above the sea — so
-  // water coverage (and the nations' coasts) are untouched no matter how high we push the peaks.
-  const M = MOUNTAINS;
-  const belt = _fbm((x + 6000) * TERR_SCALE * M.beltScale, (z - 6000) * TERR_SCALE * M.beltScale, worldSeed() + 23);
-  const inBelt = clamp((belt - M.beltThresh) / M.beltWidth, 0, 1);
-  if (inBelt > 0 && e > SEA_LEVEL) {
-    const spine = _ridge((x - 1500) * TERR_SCALE * M.spineScale, (z + 1500) * TERR_SCALE * M.spineScale, worldSeed() + 29);
-    e += inBelt * spine * M.lift * clamp((e - SEA_LEVEL) / 0.12, 0, 1);
+const SEA_LEVEL = Terra.SEA_LEVEL;
+const TERR_SCALE = Terra.TERR_SCALE;
+let _terraInst = null, _terraInstSeed = -1;
+function terra() {
+  const s = worldSeed();
+  if (!_terraInst || _terraInstSeed !== s) {
+    _terraInst = Terra.make(s, {
+      capitalsProvider: () => nations.map(n => ({ x: n.x, z: n.z, name: n.def.name })),
+      roadFactorAt: (x, z) => roadFactorAt(x, z),   // drawn-road benefit feeds the kernel's travel costs
+    });
+    _terraInst.heightFn = (x, z) => mapElevY(x, z); // the ?edit sculpted-terrain hook rides through the probes
+    _terraInstSeed = s;
   }
-  return clamp(e, 0, 1);
+  return _terraInst;
 }
-function moistureAt(x, z) { return _fbm((x - 2200) * TERR_SCALE * 1.15, (z + 1700) * TERR_SCALE * 1.15, worldSeed() + 19); }
-function tempAt(x, z) {
-  // Heartland climate stays latitude-led (0 = frozen north, 1 = hot south) so the five powers
-  // keep their themed homelands — desert south, tribal north. Out past the heartland it dissolves
-  // into broad noise "provinces" so the frontier holds fresh climates instead of one endless band.
-  // Altitude cools the highlands so peaks stay snowbound everywhere.
-  const latBand = clamp((z + MAP_HALF) / (2 * MAP_HALF), 0, 1);
-  const prov = _fbm((x + 9000) * 0.0016, (z - 9000) * 0.0016, worldSeed() + 71);
-  const frontier = clamp((Math.hypot(x, z) - MAP_HALF) / (MAP_HALF * 3), 0, 1); // 0 heartland → 1 deep frontier
-  const lat = latBand * (1 - frontier) + prov * frontier;
-  return clamp(lat * 0.95 + 0.03 + _fbm(x * 0.025, z * 0.025, worldSeed() + 41) * 0.1 - elevationAt(x, z) * 0.18, 0, 1);
-}
-const isWater = (x, z) => elevationAt(x, z) < SEA_LEVEL;
-
-// ---------- Biomes: classified from the fields, with battle backdrops ----------
-const B = {
-  OCEAN:    { name: 'Ocean',     water: true, ground: 0x16415f },
-  SHALLOW:  { name: 'Coast',     water: true, ground: 0x2b7aa6 },
-  BEACH:    { name: 'Coast',     ground: 0xddd2a0, pad: 0xc8bd86, fog: 0xd6e6ea, sky: 0xe3eef2, tree: 0x7a9a55, treeChance: 0.02, rockChance: 0.06 },
-  GRASS:    { name: 'Grassland', ground: 0x6f9e54, pad: 0x8a6a45, fog: 0x9fc6e8, sky: 0x9fc6e8, tree: 0x4f8a3f, treeChance: 0.10, rockChance: 0.04 },
-  SAVANNA:  { name: 'Savanna',   ground: 0x9a9c58, pad: 0x9a8a4f, fog: 0xcfd2a0, sky: 0xdcdca8, tree: 0x8a9a4a, treeChance: 0.06, rockChance: 0.10 },
-  FOREST:   { name: 'Forest',    ground: 0x3f6b34, pad: 0x5a6038, fog: 0x86a98e, sky: 0x93b89e, tree: 0x2f6a30, treeChance: 0.50, rockChance: 0.05 },
-  TAIGA:    { name: 'Taiga',     ground: 0x47675a, pad: 0x4f5f50, fog: 0xacc2c2, sky: 0xbcd0cc, tree: 0x356a52, treeChance: 0.42, rockChance: 0.10 },
-  DESERT:   { name: 'Desert',    ground: 0xc9a266, pad: 0xb8924f, fog: 0xe6d09c, sky: 0xeedaa6, tree: 0x9a8a4a, treeChance: 0.02, rockChance: 0.28 },
-  TUNDRA:   { name: 'Tundra',    ground: 0xdde7f0, pad: 0xc6d2dc, fog: 0xcfe0ee, sky: 0xdcebf6, tree: 0x6f8a7a, treeChance: 0.07, rockChance: 0.14 },
-  MOUNTAIN: { name: 'Mountains', ground: 0x8c8c86, pad: 0x77756f, fog: 0xc8ccd2, sky: 0xd2d6dc, tree: 0x5a6a55, treeChance: 0.05, rockChance: 0.34 },
+const _vnoise = Terra.vnoise, _fbm = Terra.fbm;      // seed-explicit statics (callers pass worldSeed()+k)
+function elevationAt(x, z) { return terra().elevationAt(x, z); }
+function moistureAt(x, z) { return terra().moistureAt(x, z); }
+function tempAt(x, z) { return terra().tempAt(x, z); }
+const isWater = (x, z) => {
+  if (SRV_ON) { const e = srvElevAt(x, z); if (e !== null) return e < SEA_LEVEL; }
+  return terra().isWater(x, z);
 };
+
+// ---------- SRV mode: the world arrives as SERVER CHUNK PAYLOADS instead of local generation ----------
+// ?srv=1 (sticky; ?srv=0 off) — Phase 1 of server-authoritative worldgen. The ChunkStore holds only
+// the viewport ring (+1 prefetch ring); every gameplay query (height/water/biome/rough) prefers a
+// stored payload and falls back to the local kernel outside it — provably identical math, so the
+// fallback is seamless while roads/capitals/routing migrate in later phases. Nothing is cached to
+// disk: evicted chunks are re-fetched from the server's persisted store on return.
+const SRV_ON = !!(typeof window !== 'undefined' && window.net && window.net.srvWorld);
+const srvChunks = new Map();      // "cx,cz" -> decoded payload {cells, cellIdx, elev, temp, moist, rough, holds}
+const _srvInflight = new Set();   // chunk keys currently on the wire
+let _srvSeed = -1;                // worldSeed the store was filled for (reroll/region change wipes it)
+let _srvKernelWarned = false;
+function _srvB64(s) { const bin = atob(s); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; }
+function _srvDecode(p) {
+  const cells = hexCellsInChunk(p.cx, p.cz);           // SAME static enumeration the server sampled in
+  const cellIdx = new Map();
+  for (let i = 0; i < cells.length; i++) cellIdx.set(hexKey(cells[i][0], cells[i][1]), i);
+  const eu = _srvB64(p.elev);
+  return { cx: p.cx, cz: p.cz, n: p.n, cells, cellIdx,
+    elev: new Uint16Array(eu.buffer, 0, eu.length >> 1),
+    temp: _srvB64(p.temp), moist: _srvB64(p.moist), rough: _srvB64(p.rough),
+    holds: p.holds || [], roads: p.roads || [] };
+}
+// batch-fetch missing chunks; the stream rebuilds when they land (fog hides the wait)
+function srvRequest(keys) {
+  const need = keys.filter(k => !srvChunks.has(k) && !_srvInflight.has(k));
+  if (!need.length || !window.net || !window.net.loadChunks) return;
+  for (const k of need) _srvInflight.add(k);
+  const ws = worldSeed();
+  window.net.loadChunks(mapLevel, universeSeed, need.map(k => k.replace(',', ':'))).then(resp => {
+    for (const k of need) _srvInflight.delete(k);
+    if (!resp || resp.tseed !== ws || ws !== worldSeed()) return;   // a reroll/region change outran this batch
+    if (resp.kernel !== Terra.VERSION && !_srvKernelWarned) {
+      _srvKernelWarned = true;
+      console.error('[srv] kernel version mismatch: server', resp.kernel, 'vs client', Terra.VERSION, '— sync sim/terra.js on both sides');
+    }
+    for (const p of resp.chunks || []) srvChunks.set(p.cx + ',' + p.cz, _srvDecode(p));
+    updateChunks(true);
+  }).catch(() => { for (const k of need) _srvInflight.delete(k); });   // retried on the next crossing
+}
+// the payload cell under a world point (cells own the chunk containing their centre)
+function _srvCellAt(x, z) {
+  const qr = worldToHex(x, z);
+  const e = srvChunks.get(Math.floor(hexCenterX(qr[0], qr[1]) / CHUNK) + ',' + Math.floor(hexCenterZ(qr[1]) / CHUNK));
+  if (!e) return null;
+  const i = e.cellIdx.get(qr[0] + ',' + qr[1]);
+  return i === undefined ? null : { e, i, q: qr[0], r: qr[1] };
+}
+// payload vertex index of ring position m (0..11 around the fan): even = corner, odd = edge midpoint
+function _srvRingVert(m) { return (m & 1) ? 7 + ((m - 1) >> 1) : 1 + (m >> 1); }
+// the fan triangle under (x,z) + barycentric weights — interpolating over the SAME triangles the
+// mesh draws, so gameplay heights match the rendered surface exactly
+function _srvFan(x, z) {
+  const c = _srvCellAt(x, z); if (!c) return null;
+  const dx = x - hexCenterX(c.q, c.r), dz = z - hexCenterZ(c.r);
+  let th = Math.atan2(dx, dz); if (th < 0) th += TAU;              // template corners sit at [R·sin, R·cos]
+  const m = Math.min(11, Math.floor(th / (TAU / 12)));
+  const p1 = Terra.TOP_OFFSETS[_srvRingVert(m)], p2 = Terra.TOP_OFFSETS[_srvRingVert((m + 1) % 12)];
+  const det = p1[0] * p2[1] - p2[0] * p1[1];
+  if (!det) return null;
+  let w1 = (dx * p2[1] - p2[0] * dz) / det, w2 = (p1[0] * dz - dx * p1[1]) / det;
+  w1 = clamp(w1, 0, 1); w2 = clamp(w2, 0, 1);
+  const base = c.i * 13;
+  return { e: c.e, i0: base, i1: base + _srvRingVert(m), i2: base + _srvRingVert((m + 1) % 12), w0: Math.max(0, 1 - w1 - w2), w1, w2 };
+}
+function srvElevAt(x, z) {
+  const f = _srvFan(x, z); if (!f) return null;
+  const E = f.e.elev;
+  return (E[f.i0] * f.w0 + E[f.i1] * f.w1 + E[f.i2] * f.w2) / 65535;
+}
+function srvHeightAt(x, z) {   // per-vertex elevToY THEN interpolate — the mesh's exact facet plane
+  const f = _srvFan(x, z); if (!f) return null;
+  const E = f.e.elev, k = 1 / 65535;
+  return Terra.elevToY(E[f.i0] * k) * f.w0 + Terra.elevToY(E[f.i1] * k) * f.w1 + Terra.elevToY(E[f.i2] * k) * f.w2;
+}
+function srvBiomeAt(x, z) {
+  const c = _srvCellAt(x, z); if (!c) return null;
+  const o = c.i * 13;                                              // classify at the cell centre
+  return Terra.classifyBiome(c.e.elev[o] / 65535, c.e.temp[o] / 255, c.e.moist[o] / 255);
+}
+function srvRoughAt(x, z) {
+  const c = _srvCellAt(x, z);
+  return c ? c.e.rough[c.i] / 255 : null;
+}
+
+// ---------- Biomes: classified from the fields, with battle backdrops (table lives in the kernel) ----------
+const B = Terra.B;
 function biomeAt(x, z) {
-  const e = elevationAt(x, z);
-  if (e < SEA_LEVEL) return e < SEA_LEVEL - 0.10 ? B.OCEAN : B.SHALLOW;
-  if (e < SEA_LEVEL + 0.035) return B.BEACH;          // a sandy coastal strip
-  if (e > 0.80) return B.MOUNTAIN;                    // snow-capped peaks at any latitude
-  // CLIMATE BANDS, north (cold) → south (hot); moisture varies the band within itself
-  const t = tempAt(x, z), m = moistureAt(x, z);
-  if (t < 0.20) return B.TUNDRA;                          // frozen north
-  if (t < 0.38) return m > 0.45 ? B.TAIGA : B.TUNDRA;     // cold: boreal forest / open tundra
-  if (t < 0.58) return m > 0.45 ? B.FOREST : B.GRASS;     // temperate: forest / grassland
-  if (t < 0.78) return m > 0.50 ? B.FOREST : B.SAVANNA;   // warm: woodland / savanna
-  return m < 0.40 ? B.DESERT : B.SAVANNA;                 // hot south: desert / dry savanna
+  if (SRV_ON) { const b = srvBiomeAt(x, z); if (b) return b; }
+  return terra().biomeAt(x, z);
 }
 
 // ---------- Nations: five powers around an inner sea, on the eve of a great upheaval ----------
@@ -3282,32 +3301,13 @@ let nations = [];           // this region's capitals: [{ def, owner, x, z, garr
 const _tcA = new THREE.Color(), _tcB = new THREE.Color();
 // a capital is a real prize — its garrison outnumbers a field host
 function garrisonSize() { return Math.round(rand(18, 28) + mapLevel * 8); }
-function nearestLand(x, z) { // spiral out from a point until we find dry ground (unbounded — the world is infinite)
-  if (!isWater(x, z)) return [x, z];
-  for (let r = 4; r < MAP_HALF * 2; r += 4) for (let a = 0; a < 12; a++) {
-    const ax = x + Math.cos(a / 12 * Math.PI * 2) * r;
-    const az = z + Math.sin(a / 12 * Math.PI * 2) * r;
-    if (!isWater(ax, az)) return [ax, az];
-  }
-  return [x, z];
-}
+function nearestLand(x, z) { return terra().nearestLand(x, z); } // spiral out from a point until we find dry ground
 function placeCapitals() {
+  // the five seats are PURE terrain (kernel capitalSeats: themed bearing + seeded wobble + land
+  // seating) so the server derives the SAME positions; game.js only attaches defs + live state
   nations = [];
-  // each power sits at its themed compass bearing; a small seeded wobble keeps runs distinct
-  // (and the terrain noise itself shifts per universe) without scrambling the cardinal layout
-  const jitter = ((worldSeed() % 1000) / 1000 - 0.5) * 0.18; // ±~5°
-  // capitals are grand cities (diam ~98) — ring them well out from the origin so the 5 powers don't
-  // overlap each other (or the player, who starts at the contested centre). Their themed bearings are
-  // uneven, so the closest pair sits ~60° apart; this radius keeps even that pair ~35u edge-to-edge.
-  const CAP_RING = MAP_HALF * 1.5;
-  for (let i = 0; i < NATIONS.length; i++) {
-    const home = (typeof NATIONS[i].home === 'number') ? NATIONS[i].home : (i / NATIONS.length) * Math.PI * 2;
-    const ang = home + jitter, bx = Math.cos(ang) * CAP_RING, bz = Math.sin(ang) * CAP_RING;
-    // seat the capital on solid land near its bearing — a small bounded nudge (≤16u) so a coastal bearing
-    // lands on a real landmass rather than a half-submerged spit, without drifting into a neighbour.
-    const spot = bestLandSpot(bx, bz, 36, 16);
-    const [cx, cz] = spot ? [spot.x, spot.z] : nearestLand(bx, bz);
-    nations.push({ def: NATIONS[i], owner: NATIONS[i], x: cx, z: cz, garrison: garrisonSize(), parleyCd: 0, conquerCd: 0, group: null });
+  for (const seat of terra().capitalSeats()) {
+    nations.push({ def: NATIONS[seat.idx], owner: NATIONS[seat.idx], x: seat.x, z: seat.z, garrison: garrisonSize(), parleyCd: 0, conquerCd: 0, group: null });
   }
 }
 function nationAt(x, z) { // Voronoi: land belongs to its nearest capital
@@ -3339,47 +3339,21 @@ function terrainColorAt(x, z, out) {
   // (political colour is no longer baked here — the living territory overlay paints it dynamically)
   return out;
 }
-// CONTINUOUS biome colour — the smooth cousin of terrainColorAt/biomeAt. biomeAt classifies with hard
-// thresholds, so its ground colour STEPS at every band edge (visible seams where biomes meet). Here we
-// evaluate the same fields ONCE and blend: temperature interpolates across band stops (dry & wet anchor
-// colours), moisture cross-fades dry↔wet, and elevation eases in shoreline sand, highland rock and snow.
-// Result: grass melts into desert, forest into taiga, land into coast — no banding. (biomeAt still drives
-// the discrete scatter; only the painted ground uses this.)
-const _tc2 = new THREE.Color(), _tc3 = new THREE.Color(), _tc4 = new THREE.Color();
-const _BAND_T   = [0.10, 0.29, 0.48, 0.68, 0.88];          // temperature stops: frozen → cold → temperate → warm → hot
-const _BAND_DRY = [0xdde7f0, 0xdde7f0, 0x6f9e54, 0x9a9c58, 0xc9a266]; // tundra, tundra, grass,  savanna, desert
-const _BAND_WET = [0xdde7f0, 0x47675a, 0x3f6b34, 0x3f6b34, 0x9a9c58]; // tundra, taiga,  forest, forest,  savanna
-function groundColorBlended(x, z, out) {
-  const e = elevationAt(x, z);
-  if (e < SEA_LEVEL) { return out.setHex(0x123a5e).lerp(_tcB.setHex(0x2f86b4), clamp(e / SEA_LEVEL, 0, 1)); } // sea depth
-  const t = tempAt(x, z), m = moistureAt(x, z);
-  let seg = 0; while (seg < _BAND_T.length - 2 && t > _BAND_T[seg + 1]) seg++;          // find the temperature band
-  const f = clamp((t - _BAND_T[seg]) / (_BAND_T[seg + 1] - _BAND_T[seg]), 0, 1);
-  const dry = _tc2.setHex(_BAND_DRY[seg]).lerp(_tcB.setHex(_BAND_DRY[seg + 1]), f);
-  const wet = _tc3.setHex(_BAND_WET[seg]).lerp(_tc4.setHex(_BAND_WET[seg + 1]), f);
-  const mw = clamp((m - 0.40) / 0.16, 0, 1); out.copy(dry).lerp(wet, mw * mw * (3 - 2 * mw)); // moisture cross-fade
-  const beach = clamp((e - SEA_LEVEL) / 0.05, 0, 1);          // 0 at the waterline → 1 a little inland
-  if (beach < 1) out.lerp(_tcB.setHex(0xddd2a0), (1 - beach) * 0.85);                   // sandy coastal strip, eased in
-  const rock = clamp((e - 0.66) / 0.12, 0, 1); if (rock > 0) out.lerp(_tcB.setHex(0x8c8c86), rock * 0.7);  // bare highland stone
-  const snow = clamp((e - 0.78) / 0.10, 0, 1); if (snow > 0) out.lerp(_tcB.setHex(0xeef3f7), snow * 0.9);  // snow-capped peaks
-  return out.multiplyScalar(clamp(0.80 + (e - SEA_LEVEL) * 0.4, 0.7, 1.0));             // gentle relief shading
-}
-// Display elevation for the strategic map: turn the (gameplay-only) elevation field into
-// real vertical relief so mountains tower and valleys sink. Water dips into a seabed basin
-// beneath its tint; land eases upward, with peaks getting an extra exponential lift.
-const MAP_RELIEF = 17;     // overworld vertical exaggeration — base lift for the rolling country
+// CONTINUOUS biome colour — lives in the kernel (groundColorRGB); this shim wraps the plain
+// [r,g,b] result back into the caller's THREE.Color.
+const _gcArr = [0, 0, 0];
+function groundColorBlended(x, z, out) { const c = terra().groundColorRGB(x, z, _gcArr); return out.setRGB(c[0], c[1], c[2]); }
+// Display elevation for the strategic map (elevToY in the kernel): real vertical relief.
+const MAP_RELIEF = Terra.MAP_RELIEF;   // overworld vertical exaggeration
 // object-editor only: when set, mapElevY yields this sculpted height field instead of the world's,
 // so the editor can seat a real settlement on a bespoke landform (e.g. a mountain) using the SAME
 // generators the game uses. Inert in the live game — only editApply ever sets it (see OBJECT EDITOR).
 let editTerrainFn = null;
 function mapElevY(x, z) {
   if (editTerrainFn) return editTerrainFn(x, z);
-  const e = elevationAt(x, z);
-  if (e < SEA_LEVEL) return -0.6 - (SEA_LEVEL - e) * 2.0;              // seabed basin under the water tint
-  const land = (e - SEA_LEVEL) / (1 - SEA_LEVEL);                     // 0..~0.76 across the dry range
-  let h = Math.pow(land, 1.35) * MAP_RELIEF;                          // gentler exponent lifts the mid-slopes — more land reads as rolling hills
-  if (e > 0.68) h += (e - 0.68) * MAP_RELIEF * 2.6;                   // ranges and peaks tower well above the foothills
-  return h;
+  if (SRV_ON) { const y = srvHeightAt(x, z); if (y !== null) return y; }
+  const t = terra();
+  return t.elevToY(t.elevationAt(x, z));
 }
 // ---------- Infinite world: streaming terrain chunks + a settlement hierarchy ----------
 // The strategic map is no longer one bounded sheet. Terrain, scatter, and settlements stream in as
@@ -3413,38 +3387,12 @@ const vlerp = (pair) => pair[0] + (pair[1] - pair[0]) * mapVista;
 // offset). A cell is addressed by integer (q, r); its world centre is a pure function of (q, r),
 // independent of chunks, so cells tile seamlessly across chunk seams. Each cell belongs to exactly
 // the chunk that contains its centre — a clean partition with no gaps and no double-paint.
-const HEX_R = 2.4;                       // hexagon circumradius (centre→corner), world units
-const HEX_W = Math.sqrt(3) * HEX_R;      // column spacing (centre→centre across a row)  ~4.16
-const HEX_H = 1.5 * HEX_R;               // row spacing (centre→centre between rows)     3.60
-const HEX_FLOOR = -14;                   // hex prisms drop to this y so cliffs never show a gap
-function hexKey(q, r) { return q + ',' + r; }
-function hexCenterX(q, r) { return (q + 0.5 * (r & 1)) * HEX_W; } // odd rows shift right by half a column
-function hexCenterZ(r) { return r * HEX_H; }
-// nearest cell to a world point (brute-checks the 3 candidate rows — exact enough for picks/snaps)
-function worldToHex(x, z) {
-  const ar = z / HEX_H; let best = [0, 0], bd = Infinity;
-  for (let dr = -1; dr <= 1; dr++) {
-    const r = Math.round(ar) + dr, off = 0.5 * (r & 1), q = Math.round(x / HEX_W - off);
-    const dx = (q + off) * HEX_W - x, dz = r * HEX_H - z, d = dx * dx + dz * dz;
-    if (d < bd) { bd = d; best = [q, r]; }
-  }
-  return best;
-}
-// every cell whose centre falls inside chunk (cx,cz): returns [q, r, worldX, worldZ]
-function hexCellsInChunk(cx, cz) {
-  const out = [];
-  const rLo = Math.floor(cz * CHUNK / HEX_H) - 1, rHi = Math.ceil((cz + 1) * CHUNK / HEX_H) + 1;
-  for (let r = rLo; r <= rHi; r++) {
-    const zc = r * HEX_H; if (Math.floor(zc / CHUNK) !== cz) continue;
-    const off = 0.5 * (r & 1);
-    const qLo = Math.floor(cx * CHUNK / HEX_W - off) - 1, qHi = Math.ceil((cx + 1) * CHUNK / HEX_W - off) + 1;
-    for (let q = qLo; q <= qHi; q++) {
-      const xc = (q + off) * HEX_W; if (Math.floor(xc / CHUNK) !== cx) continue;
-      out.push([q, r, xc, zc]);
-    }
-  }
-  return out;
-}
+const HEX_R = Terra.HEX_R;               // hexagon circumradius (centre→corner), world units
+const HEX_W = Terra.HEX_W;               // column spacing (centre→centre across a row)  ~4.16
+const HEX_H = Terra.HEX_H;               // row spacing (centre→centre between rows)     3.60
+const HEX_FLOOR = Terra.HEX_FLOOR;       // hex prisms drop to this y so cliffs never show a gap
+const hexKey = Terra.hexKey, hexCenterX = Terra.hexCenterX, hexCenterZ = Terra.hexCenterZ;
+const worldToHex = Terra.worldToHex, hexCellsInChunk = Terra.hexCellsInChunk;
 
 const mapChunks = new Map();   // "cx,cz" -> { group, holds:[settlement holds] }
 const settlements = [];        // every currently-loaded village/town/city (duck-typed like a capital)
@@ -3483,139 +3431,14 @@ function factionByName(nm) {
 }
 function nearCapital(x, z, d) { for (const n of nations) if (Math.hypot(n.x - x, n.z - z) < d) return true; return false; }
 
-// Pull a city centre onto the largest land patch near (x0,z0). The centre itself must be dry; the score
-// is the fraction of the footprint ring that is land (inland ≈1, a beach city ≈0.5, an archipelago <0.4
-// → no city). The search is bounded so a coastal city only nudges inland a little — it never migrates far
-// enough to crowd a neighbouring lattice city. Returns null when there's no real land here (deep ocean).
-function landScore(x, z, footR) {
-  if (isWater(x, z)) return -1;                                         // the centre must be on land
-  let s = 0, n = 0;                                                     // dense disk sample (16 dirs × 3 rings)
-  for (let k = 0; k < 16; k++) { const a = k / 16 * TAU, ca = Math.cos(a), sa = Math.sin(a);
-    for (const rr of [footR * 0.45, footR * 0.72, footR]) { s += isWater(x + ca * rr, z + sa * rr) ? 0 : 1; n++; } }
-  return s / n;
-}
-// Find the most-landlocked spot near (x0,z0): spiral out to searchR and keep the best landScore. Used to
-// seat cities, capitals and the player start on solid ground instead of a coastal sliver.
-function bestLandSpot(x0, z0, footR, searchR) {
-  let bx = x0, bz = z0, bs = landScore(x0, z0, footR);
-  const STEP = Math.max(6, footR * 0.34);
-  for (let rad = STEP; rad <= searchR && bs < 0.97; rad += STEP) {
-    for (let k = 0; k < 12; k++) { const a = k / 12 * TAU + rad * 0.5;  // interleave each ring's probes
-      const x = x0 + Math.cos(a) * rad, z = z0 + Math.sin(a) * rad, sc = landScore(x, z, footR);
-      if (sc > bs) { bs = sc; bx = x; bz = z; } }
-  }
-  return bs >= 0 ? { x: bx, z: bz, score: bs } : null;
-}
-// Seat a city the way a founder would: dry, FLAT, low ground with room to build — never a mountain
-// shoulder, never an archipelago sliver. Candidates score land-fraction × flatness; if nothing nearby
-// qualifies the site is dropped (deep ocean / broken coast / high crags → no city there).
-function citySeatScore(x, z, footR) {
-  const land = landScore(x, z, footR);
-  if (land < 0) return -1;
-  let rough = 0;
-  for (let k = 0; k < 8; k++) { const a = k / 8 * TAU, rr = _fastRoughAt(x + Math.cos(a) * footR * 0.6, z + Math.sin(a) * footR * 0.6); rough += rr < 0 ? 1 : rr; }
-  return land * (1 - (rough / 8) * 0.75);
-}
-function cityLandCenter(x0, z0, R) {
-  let bx = x0, bz = z0, bs = citySeatScore(x0, z0, R);
-  const STEP = Math.max(6, R * 0.34);
-  for (let rad = STEP; rad <= R * 2.6 && bs < 0.95; rad += STEP)
-    for (let k = 0; k < 12; k++) { const a = k / 12 * TAU + rad * 0.5;
-      const x = x0 + Math.cos(a) * rad, z = z0 + Math.sin(a) * rad, sc = citySeatScore(x, z, R);
-      if (sc > bs) { bs = sc; bx = x; bz = z; } }
-  return bs >= 0.62 ? { x: bx, z: bz, score: bs } : null;
-}
+// Land seating (landScore/bestLandSpot/citySeatScore/cityLandCenter) lives in the kernel —
+// cities, capitals and the player start are seated by the SAME code on client and server.
+function landScore(x, z, footR) { return terra().landScore(x, z, footR); }
+function bestLandSpot(x0, z0, footR, searchR) { return terra().bestLandSpot(x0, z0, footR, searchR); }
 // ============ THE v4 PIPELINE: terrain → arteries → settlements ON the arteries ============
-// The kernel still decides WHICH blocks/chunks hold settlements (identity, owners, server sync), but the
-// land decides WHERE they stand: city candidates are re-seated onto founder's ground (flat dry lowland),
-// and those seats ARE the arterial nodes — the Gabriel highways run seat-to-seat. Towns and villages that
-// fall near that skeleton are pulled to the WAYSIDE, strung along the highways a seeded step off the
-// roadbed, so the map reads like a settled land: roads through the valleys, life along the roads.
-const _CITY_BLOCK = 7;                                        // mirrors WorldSim CITY_BLOCK — keep in sync
-function _blockCityRaw(bx, bz) {                              // mirrors WorldSim.blockCity (not exported)
-  const r = _mulberry32((Math.imul(bx | 0, 668265263) ^ Math.imul(bz | 0, 374761393) ^ Math.imul(worldSeed() >>> 0, 2654435761)) >>> 0);
-  if (r() >= 0.5) return null;
-  return { x: (bx + 0.5 + (r() - 0.5) * 0.3) * _CITY_BLOCK * CHUNK, z: (bz + 0.5 + (r() - 0.5) * 0.3) * _CITY_BLOCK * CHUNK };
-}
-// which way is the nearest highway? (pure: the same skeleton the wayside uses) — a hold's MAIN GATE
-// faces the road that serves it, so the approach spur is short and straight.
-function _roadwardBearing(x, z) {
-  const BW = _CITY_BLOCK * CHUNK, bx0 = Math.floor(x / BW), bz0 = Math.floor(z / BW);
-  const seats = [];
-  for (let bx = bx0 - 2; bx <= bx0 + 2; bx++) for (let bz = bz0 - 2; bz <= bz0 + 2; bz++) { const c = _citySeat(bx, bz); if (c) seats.push(c); }
-  for (const n of nations) if (Math.hypot(n.x - x, n.z - z) < BW * 2.5) seats.push({ x: n.x, z: n.z });
-  if (seats.length < 2) return null;
-  let best = null;
-  for (let i = 0; i < seats.length; i++) for (let j = i + 1; j < seats.length; j++) {
-    const A = seats[i], B = seats[j];
-    if (Math.hypot(A.x - x, A.z - z) < 8 || Math.hypot(B.x - x, B.z - z) < 8) continue;  // our own seat isn't a target
-    const mx = (A.x + B.x) / 2, mz = (A.z + B.z) / 2, rr = ((A.x - B.x) ** 2 + (A.z - B.z) ** 2) / 4;
-    let open = true;
-    for (const c of seats) { if (c === A || c === B) continue; if ((c.x - mx) ** 2 + (c.z - mz) ** 2 < rr - 1e-6) { open = false; break; } }
-    if (!open) continue;
-    const vx = B.x - A.x, vz = B.z - A.z, L2 = vx * vx + vz * vz || 1;
-    let u = ((x - A.x) * vx + (z - A.z) * vz) / L2; u = u < 0 ? 0 : u > 1 ? 1 : u;
-    const px = A.x + vx * u, pz = A.z + vz * u, d2 = (x - px) ** 2 + (z - pz) ** 2;
-    if (!best || d2 < best.d2) best = { px, pz, d2 };
-  }
-  if (!best || best.d2 > 90 * 90 || best.d2 < 4) return null;
-  return Math.atan2(best.pz - z, best.px - x);
-}
-const _seatMemo = new Map();                                  // region-scoped (cleared with the road caches)
-function _citySeat(bx, bz) {
-  const k = bx + ',' + bz;
-  let v = _seatMemo.get(k);
-  if (v === undefined) { const c = _blockCityRaw(bx, bz); v = c ? cityLandCenter(c.x, c.z, SG_SPEC.city.R) : null; _seatMemo.set(k, v); }
-  return v;
-}
-// pull a town/village onto the wayside of the arterial skeleton (the straight Gabriel preview of the
-// real roads between city seats) — if one passes close enough. A seeded offset keeps it OFF the roadbed.
-function _snapToSkeleton(s) {
-  const BW = _CITY_BLOCK * CHUNK, bx0 = Math.floor(s.x / BW), bz0 = Math.floor(s.z / BW);
-  const seats = [];
-  for (let bx = bx0 - 2; bx <= bx0 + 2; bx++) for (let bz = bz0 - 2; bz <= bz0 + 2; bz++) { const c = _citySeat(bx, bz); if (c) seats.push(c); }
-  for (const n of nations) if (Math.hypot(n.x - s.x, n.z - s.z) < BW * 2.5) seats.push({ x: n.x, z: n.z });   // capitals anchor highways too
-  if (seats.length < 2) return;
-  let best = null;
-  for (let i = 0; i < seats.length; i++) for (let j = i + 1; j < seats.length; j++) {
-    const A = seats[i], B = seats[j];
-    const mx = (A.x + B.x) / 2, mz = (A.z + B.z) / 2, rr = ((A.x - B.x) ** 2 + (A.z - B.z) ** 2) / 4;
-    let open = true;
-    for (const c of seats) { if (c === A || c === B) continue; if ((c.x - mx) ** 2 + (c.z - mz) ** 2 < rr - 1e-6) { open = false; break; } }
-    if (!open) continue;                                      // matches the trunk builder's Gabriel test
-    const vx = B.x - A.x, vz = B.z - A.z, L2 = vx * vx + vz * vz || 1, L = Math.sqrt(L2);
-    const uMin = Math.min(0.45, 75 / L);                                    // stay well outside the city walls
-    let u = ((s.x - A.x) * vx + (s.z - A.z) * vz) / L2; u = u < uMin ? uMin : u > 1 - uMin ? 1 - uMin : u;
-    const px = A.x + vx * u, pz = A.z + vz * u, d2 = (s.x - px) ** 2 + (s.z - pz) ** 2;
-    if (!best || d2 < best.d2) best = { px, pz, d2, nx: -vz / L, nz: vx / L };
-  }
-  const cap = s.tier === 'town' ? 150 : 60;    // towns are DRAWN to the highways; villages join when near
-  if (!best || best.d2 > cap * cap) return;                   // too far from any highway → stays a backcountry hold
-  const rng = _mulberry32((_chunkHash(s.cx, s.cz) ^ Math.imul(s.idx + 11, 0x27d4eb2f)) >>> 0);
-  if (s.tier === 'village') {                                 // a village EMBRACES the road: the highway IS its main street
-    if (isWater(best.px, best.pz)) return;
-    s.x = best.px; s.z = best.pz;
-    s.roadAx = Math.atan2(-best.nx, best.nz) + Math.PI / 2;   // the skeleton edge direction — houses flank THIS
-    return;
-  }
-  const off = 24 + rng() * 4, sgn = rng() < 0.5 ? -1 : 1;     // a town stands OFF the road, its whole palisade clear of it
-  for (const sd of [sgn, -sgn]) {
-    const tx = best.px + best.nx * off * sd, tz = best.pz + best.nz * off * sd;
-    if (!isWater(tx, tz)) { s.x = tx; s.z = tz; return; }     // take the dry side of the road
-  }
-}
-// Deterministic settlement sites within a chunk — kernel identity, land-decided positions (see above).
-function settlementSites(cx, cz) {
-  const sites = WorldSim.settlementSites(cx, cz, worldSeed());
-  for (let i = sites.length - 1; i >= 0; i--) {
-    const s = sites[i];
-    if (s.tier === 'city') {
-      const c = _citySeat(Math.floor(s.x / (_CITY_BLOCK * CHUNK)), Math.floor(s.z / (_CITY_BLOCK * CHUNK)));
-      if (c) { s.x = c.x; s.z = c.z; } else { sites.splice(i, 1); }      // no founder's ground → no city
-    } else _snapToSkeleton(s);                                           // towns & villages take to the wayside
-  }
-  return sites;
-}
+// The whole pipeline (block cities, founder's-ground reseating, wayside snapping) lives in the
+// Terra kernel now, so the server seats settlements EXACTLY where the client draws them.
+function settlementSites(cx, cz) { return terra().settlementSites(cx, cz); }
 function siteKey(s) { return WorldSim.siteKey(s); }
 function settlementName(s) { return WorldSim.settlementName(s, worldSeed()); }
 // the kernel's heartland Voronoi runs over this region's capital positions; it returns the nearest
@@ -3627,12 +3450,12 @@ function settlementOwner(s) {
   return factionByName(owner) || FREE;
 }
 function settlementGarrison(s) { return WorldSim.settlementGarrison(s, worldSeed(), mapLevel); }
-function makeSettlementHold(s) {
+function makeSettlementHold(s, srv) {
   const key = siteKey(s);
   const restored = heldOwners.get(key);
-  const owner = (restored && factionByName(restored)) || settlementOwner(s);
-  const hold = { def: { name: settlementName(s) }, owner, x: s.x, z: s.z, tier: s.tier,
-    garrison: settlementGarrison(s), parleyCd: 0, conquerCd: 0, group: null, site: s, key };
+  const owner = (restored && factionByName(restored)) || (srv && factionByName(srv.owner)) || (srv ? FREE : settlementOwner(s));
+  const hold = { def: { name: srv ? srv.name : settlementName(s) }, owner, x: s.x, z: s.z, tier: s.tier,
+    garrison: srv ? srv.garrison : settlementGarrison(s), parleyCd: 0, conquerCd: 0, group: null, site: s, key };
   hold.group = makeSettlement(hold);
   return hold;
 }
@@ -3713,22 +3536,35 @@ function tileColorAt(x, z, out) {
   const jit = 0.86 + _vnoise(x * 0.23, z * 0.23, worldSeed() + 99) * 0.22 + _vnoise(x * 0.6, z * 0.6, worldSeed() + 131) * 0.08;
   return out.multiplyScalar(jit);
 }
-function buildChunkTerrainHex(group, cells) {
+function buildChunkTerrainHex(group, cells, srvE) {
   const tmpl = _hexTemplate(), tPos = tmpl.attributes.position.array, tIdx = tmpl.index.array;
   const tvc = tmpl.attributes.position.count, tic = tIdx.length, N = cells.length;
   const positions = new Float32Array(N * tvc * 3), colors = new Float32Array(N * tvc * 3);
   const base = new Float32Array(N * tvc * 3), indices = new Uint32Array(N * tic);
   const topIdx = []; for (let v = 0; v < tvc; v++) if (tPos[v * 3 + 1] > 0.49) topIdx.push(v); // top-face verts carry politics
   const items = new Array(N);
+  const ws = worldSeed(), _c3 = [0, 0, 0];             // srv path: payload fields + client-side cosmetic jitter
   for (let i = 0; i < N; i++) {
     const q = cells[i][0], r = cells[i][1], xc = cells[i][2], zc = cells[i][3];
     const vb = i * tvc;
     for (let v = 0; v < tvc; v++) {
       const ty = tPos[v * 3 + 1], px = tPos[v * 3] + xc, pz = tPos[v * 3 + 2] + zc;
-      const py = (ty > 0.49) ? mapElevY(px, pz) : HEX_FLOOR;  // top verts ride the terrain per-vertex (no flat plateaus); bottom ring sits on the skirt floor
+      let py;
       const o = (vb + v) * 3;
+      if (srvE) {
+        // template verts 0..12 ARE the payload's TOP_OFFSETS order; a bottom vert 13+k shares its
+        // column (and so its field sample) with top corner 1+k
+        const pv = i * 13 + (v < 13 ? v : 1 + (v - 13));
+        const e = srvE.elev[pv] / 65535;
+        py = (ty > 0.49) ? Terra.elevToY(e) : HEX_FLOOR;
+        Terra.groundColorFromFields(e, srvE.temp[pv] / 255, srvE.moist[pv] / 255, _c3);
+        const jit = 0.86 + _vnoise(px * 0.23, pz * 0.23, ws + 99) * 0.22 + _vnoise(px * 0.6, pz * 0.6, ws + 131) * 0.08;
+        _terrCol.setRGB(_c3[0] * jit, _c3[1] * jit, _c3[2] * jit);
+      } else {
+        py = (ty > 0.49) ? mapElevY(px, pz) : HEX_FLOOR;  // top verts ride the terrain per-vertex; bottom ring sits on the skirt floor
+        tileColorAt(px, pz, _terrCol);
+      }
       positions[o] = px; positions[o + 1] = py; positions[o + 2] = pz;
-      tileColorAt(px, pz, _terrCol);
       const shade = 0.7 + (ty + 0.5) * 0.3;             // top face bright, cliff base dim — a soft vertical gradient
       base[o] = colors[o] = _terrCol.r * shade;
       base[o + 1] = colors[o + 1] = _terrCol.g * shade;
@@ -3752,19 +3588,31 @@ function buildChunkTerrainHex(group, cells) {
 function buildChunk(cx, cz) {
   const key = cx + ',' + cz;
   if (mapChunks.has(key)) return;
+  const srvE = SRV_ON ? srvChunks.get(key) : null;
+  if (SRV_ON && !srvE) return;                       // payload not yet arrived — the fog holds this ground
   const group = new THREE.Group();
   const cells = hexCellsInChunk(cx, cz);            // the honeycomb tiles whose centres live in this chunk
   initTerritoryCells(cells);                         // seed this chunk's territory cells first (gen-0 = the political map)
-  const terr = buildChunkTerrainHex(group, cells);  // hex-prism relief; the tiles themselves fly the political colours
+  const terr = buildChunkTerrainHex(group, cells, srvE);  // hex-prism relief; the tiles themselves fly the political colours
   buildScatter(group, cx, cz, cells);
-  // settlements discovered in this chunk
+  // settlements discovered in this chunk — srv mode renders the SERVER's holds (reseated + live owners)
   const holds = [];
-  for (const s of settlementSites(cx, cz)) {
-    // capitals are now ~95u across, so hold sites must clear them by far more than the old 18u
-    if (isWater(s.x, s.z) || nearCapital(s.x, s.z, s.tier === 'city' ? 100 : 58)) continue;
-    const hold = makeSettlementHold(s);
-    group.add(hold.group);
-    holds.push(hold); settlements.push(hold);
+  if (srvE) {
+    for (const h of srvE.holds) {
+      const s = { x: h.x, z: h.z, tier: h.tier, idx: h.idx, cx, cz };
+      if (h.roadAx != null) s.roadAx = h.roadAx;
+      const hold = makeSettlementHold(s, h);
+      group.add(hold.group);
+      holds.push(hold); settlements.push(hold);
+    }
+  } else {
+    for (const s of settlementSites(cx, cz)) {
+      // capitals are now ~95u across, so hold sites must clear them by far more than the old 18u
+      if (isWater(s.x, s.z) || nearCapital(s.x, s.z, s.tier === 'city' ? 100 : 58)) continue;
+      const hold = makeSettlementHold(s);
+      group.add(hold.group);
+      holds.push(hold); settlements.push(hold);
+    }
   }
   mapTerrain.add(group);
   mapChunks.set(key, { group, holds, terr });
@@ -3784,10 +3632,21 @@ function updateChunks(force) {
   const pcx = Math.floor(player.pos.x / CHUNK), pcz = Math.floor(player.pos.z / CHUNK), pk = pcx + ',' + pcz;
   if (!force && pk === _lastPlayerChunk) return;   // only re-stream when the player crosses a chunk line
   _lastPlayerChunk = pk;
+  if (SRV_ON) {
+    const ws = worldSeed();
+    if (ws !== _srvSeed) { srvChunks.clear(); _srvInflight.clear(); _srvSeed = ws; }  // reroll/region → fresh store
+    const want = [];                               // mesh ring + one prefetch ring so riding never waits
+    for (let dx = -VIEW - 1; dx <= VIEW + 1; dx++) for (let dz = -VIEW - 1; dz <= VIEW + 1; dz++) want.push((pcx + dx) + ',' + (pcz + dz));
+    srvRequest(want);
+  }
   for (let dx = -VIEW; dx <= VIEW; dx++) for (let dz = -VIEW; dz <= VIEW; dz++) buildChunk(pcx + dx, pcz + dz);
   for (const key of Array.from(mapChunks.keys())) {
     const c = key.indexOf(','), kx = +key.slice(0, c), kz = +key.slice(c + 1);
     if (Math.abs(kx - pcx) > VIEW + 1 || Math.abs(kz - pcz) > VIEW + 1) disposeChunk(key);
+  }
+  if (SRV_ON) for (const key of Array.from(srvChunks.keys())) {   // the store holds ONLY the rings (user rule: viewport memory)
+    const c = key.indexOf(','), kx = +key.slice(0, c), kz = +key.slice(c + 1);
+    if (Math.abs(kx - pcx) > VIEW + 2 || Math.abs(kz - pcz) > VIEW + 2) srvChunks.delete(key);
   }
 }
 
@@ -3932,64 +3791,22 @@ function paintChunkTerritory(rec) {
 // a road and slow & tired through the mountains, and bias enemy hosts toward the roads.
 // Pure function of (worldSeed, settlement lattice) — no Math.random, so it matches run-to-run.
 // ============================================================================
-const ROAD = {
-  v2: true,             // v2 = hierarchical Gabriel trunks + gate termination (+ later phases). false → legacy K-nearest mesh (A/B)
-  nodeChunkR: 10,       // gather hub/settlement nodes within ±this many chunks (≈±600u). Wide enough that every DRAWN trunk
-                        // edge (max ≈ 2 city-spacings ≈ 580u) has all its possible Gabriel disk-blockers in-window → the
-                        // edge set is identical wherever the player stands → no flicker as the gather window slides.
-  renderChunkR: 5,      // only route + draw edges with an endpoint/midpoint within ±this (≈±300u) of the player
-  kNearest: 3,          // legacy/minor: each node links to its K nearest neighbours (symmetric union)
-  trunkK: 2,            // legacy: cities/capitals additionally link to their nearest big neighbours
-  hubDegCap: 4,         // v2: cap a hub's trunk fan-out so a central capital doesn't become a hairball
-  segStep: 5,           // polyline sample spacing, world units (denser = smoother curves in the painted stroke)
-  relaxPasses: 3,       // terrain-following relaxation iterations per edge
-  fall: 2.6,            // how far (u) the road's movement benefit fades past its edge
-};
-// per-tier look + width; tier is set by the humbler of the two endpoints (a road is only as grand as its lesser town).
-// Colours are a deep packed-earth so the roads read against bright grass; they're painted into the terrain's own
-// diffuse (see _roadSplatPaint / terraMat), so they shade WITH the land instead of fighting its glare.
-const ROAD_TIER = {
-  major:  { w: 3.4, col: 0x9a9ba0, str: 1.00 }, // grey stone highway between cities & capitals
-  medium: { w: 2.2, col: 0x85868b, str: 0.82 }, // town road — dressed gravel
-  small:  { w: 1.4, col: 0x737470, str: 0.62 }, // village lane — packed grit
-  path:   { w: 0.7, col: 0x7a6a50, str: 0.40 }, // a tiny foot-trail stays bare earth
-};
-// movement feel — terrain slows & tires, roads speed & rest
-const MOVE = {
-  roadSpeed: 0.62,      // a full road is +62% march speed
-  roughSlow: 0.60,      // full mountain is −60% before fatigue
-  roadGrade: 0.85,      // a road through rough ground tames this fraction of the penalty
-  drainBase: 2.0,       // party stamina %/s while marching open flat ground
-  roughDrain: 3.6,      // rough ground multiplies the drain by up to (1+this)
-  roadRelief: 0.90,     // a full road removes this fraction of the drain
-  regen: 9,             // %/s recovered while resting
-  fatigueAt: 35,        // below this stamina, the column starts to flag
-  fatigueSlow: 0.45,    // exhausted (0%) march is this much slower
-};
+// spec + tier look + movement feel all live in the kernel (tune them THERE — the server shares them)
+const ROAD = Terra.ROAD;
+const ROAD_TIER = Terra.ROAD_TIER;
+const MOVE = Terra.MOVE;
 let partyStamina = 100;          // the warband's marching condition on the overworld (separate from combat player.stamina)
 let roadMesh = null;             // roadside decoration (waymarker stones) for the loaded region — the roadbeds themselves are painted into the terrain splat
 let roadGrid = null;             // Map "gx,gz" -> [segment] spatial hash for O(1) roadInfoAt queries
 const ROAD_GRID = 14;            // spatial-hash cell size (u)
-const roadRouteCache = new Map();// edgeKey -> routed polyline [{x,z}], region-scoped (kept across chunk crossings)
-const roadSiteCache = new Map(); // "cx,cz" -> settlementSites(cx,cz), region-scoped (skips re-running the city land-snap)
-let _roadChunk = '';             // player chunk the current network was built for
+let _roadChunk = '';             // player chunk the current network was built for (route/site caches live in the kernel instance)
 let _roadStats = { nodes: 0, edges: 0, drawn: 0, segs: 0 };
 let _roadEdges = [];   // last-built edge list (for BV.roadGraph inspection)
 
-// ruggedness at a point: 0 = easy lowland, 1 = steep mountain. Height (foothills→peaks) OR slope, plus a
-// mild penalty for deep woods so hosts favour open ground & roads over diving into the forest.
+// ruggedness at a point: 0 = easy lowland, 1 = steep mountain (kernel math; srv payloads carry it per cell)
 function landRoughAt(x, z) {
-  const e = elevationAt(x, z);
-  if (e < SEA_LEVEL) return 1;
-  const hi = clamp((e - 0.50) / 0.34, 0, 1);                 // 0 at lowland, 1 by full-mountain height (~0.84)
-  const d = 3.2;                                             // central-difference slope
-  const ex = elevationAt(x + d, z) - elevationAt(x - d, z);
-  const ez = elevationAt(x, z + d) - elevationAt(x, z - d);
-  const slope = clamp(Math.hypot(ex, ez) / (2 * d) * 70, 0, 1);
-  let rough = Math.max(hi, slope * 0.92);
-  const b = biomeAt(x, z);
-  if (b === B.FOREST || b === B.TAIGA) rough = Math.max(rough, 0.22); // woods drag a little
-  return clamp(rough, 0, 1);
+  if (SRV_ON) { const r = srvRoughAt(x, z); if (r !== null) return r; }
+  return terra().landRoughAt(x, z);
 }
 // nearest road influence at a point: { factor 0..1, dx, dz } where (dx,dz) is the road's tangent there.
 const _riOut = { factor: 0, dx: 0, dz: 0 };
@@ -4015,12 +3832,7 @@ function roadInfoAt(x, z) {
 }
 function roadFactorAt(x, z) { return roadInfoAt(x, z).factor; }
 // the march-speed multiplier at a point given its road factor & ruggedness (1 = open-ground baseline)
-function terrainSpeedMul(road, rough, fatigued) {
-  const effRough = rough * (1 - road * MOVE.roadGrade);
-  let m = (1 + road * MOVE.roadSpeed) * (1 - effRough * MOVE.roughSlow);
-  if (fatigued) { const f = clamp(1 - partyStamina / MOVE.fatigueAt, 0, 1); m *= 1 - f * MOVE.fatigueSlow; }
-  return clamp(m, 0.3, 1.8);
-}
+function terrainSpeedMul(road, rough, fatigued) { return terra().terrainSpeedMul(road, rough, fatigued ? partyStamina : null); }
 // steer a desired heading toward roads & away from rough ground, while still chasing the goal. Returns [dx,dz].
 const _steerOut = [0, 0];
 function roadSteer(px, pz, desx, desz) {
@@ -4037,517 +3849,20 @@ function roadSteer(px, pz, desx, desz) {
   _steerOut[0] = bx; _steerOut[1] = bz; return _steerOut;
 }
 
-// ---------- Deterministic hex-lattice A*: one routing engine under BOTH road-building and travel orders ----------
-// Routes on the same global hex lattice the terrain uses (pointy-top, odd-r offset). Costs are pure
-// functions of position (no loaded chunks needed) and the heap tie-break is a total order (f,g,q,r),
-// so paths are bit-identical run-to-run — safe for the deterministic world.
-function _MinHeap() { this.a = []; }
-_MinHeap.prototype.push = function (n) { const a = this.a; a.push(n); let i = a.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (_heapLt(a[i], a[p])) { const t = a[i]; a[i] = a[p]; a[p] = t; i = p; } else break; } };
-_MinHeap.prototype.pop = function () { const a = this.a, top = a[0], last = a.pop(); if (a.length) { a[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, rr = l + 1; let m = i; if (l < a.length && _heapLt(a[l], a[m])) m = l; if (rr < a.length && _heapLt(a[rr], a[m])) m = rr; if (m === i) break; const t = a[i]; a[i] = a[m]; a[m] = t; i = m; } } return top; };
-function _heapLt(x, y) { return x.f !== y.f ? x.f < y.f : x.g !== y.g ? x.g < y.g : x.q !== y.q ? x.q < y.q : x.r < y.r; }
-// axial coords over the same lattice: x = (aq + ar/2)·HEX_W, z = ar·HEX_H — strides scale cleanly here,
-// which the odd-r offset form can't do (its half-row shift breaks under multiplication).
-function _axC(aq, ar) { return [(aq + ar / 2) * HEX_W, ar * HEX_H]; }
-function _worldToAxial(x, z) { const o = worldToHex(x, z); return [o[0] - ((o[1] - (o[1] & 1)) / 2), o[1]]; }
-const _AX_DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, -1], [-1, 1]];
-// A* from (ax,az) to (bx,bz). cellCost(x,z) = cost per world-unit ENTERING a cell (Infinity = blocked);
-// hFloor = smallest possible cost/unit (>1 ⇒ weighted A*: near-best paths, far smaller search);
-// stride = lattice coarseness (long routes ride a 2-3× coarser grid — the smoothing hides it).
-// Returns a thinned + lightly smoothed polyline [{x,z}] with exact endpoints, or null (blocked / budget).
-function hexAStar(ax, az, bx, bz, cellCost, hFloor, maxExpand, stride) {
-  const st = Math.max(1, stride | 0), step = HEX_W * st;
-  const sA = _worldToAxial(ax, az);
-  const sq = sA[0], sr = sA[1];
-  const gA = _worldToAxial(bx, bz);                          // snap the goal onto the start-anchored sub-lattice
-  const gq = sq + Math.round((gA[0] - sq) / st) * st, gr = sr + Math.round((gA[1] - sr) / st) * st;
-  const gC = _axC(gq, gr), gx = gC[0], gzz = gC[1];
-  const open = new _MinHeap(), best = new Map(), parents = new Map(), memo = new Map();
-  const hK = (q, r) => q + ',' + r;
-  const cellC = (q, r, x, z) => { const k = hK(q, r); let c = memo.get(k); if (c === undefined) { c = cellCost(x, z); memo.set(k, c); } return c; };
-  const sC = _axC(sq, sr);
-  open.push({ q: sq, r: sr, g: 0, f: Math.hypot(gx - sC[0], gzz - sC[1]) * hFloor });
-  best.set(hK(sq, sr), 0);
-  let found = false, expanded = 0;
-  while (open.a.length) {
-    const cur = open.pop(), ck = hK(cur.q, cur.r);
-    if (best.get(ck) < cur.g - 1e-9) continue;              // stale heap entry
-    if (cur.q === gq && cur.r === gr) { found = true; break; }
-    if (++expanded > maxExpand) break;
-    for (const d of _AX_DIRS) {
-      const nq = cur.q + d[0] * st, nr = cur.r + d[1] * st;
-      const nC = _axC(nq, nr), nx = nC[0], nz = nC[1];
-      const cc = cellC(nq, nr, nx, nz); if (!(cc < Infinity)) continue;
-      const ng = cur.g + step * cc, nk = hK(nq, nr), ex = best.get(nk);
-      if (ex !== undefined && ex <= ng + 1e-9) continue;
-      best.set(nk, ng); parents.set(nk, ck);
-      open.push({ q: nq, r: nr, g: ng, f: ng + Math.hypot(gx - nx, gzz - nz) * hFloor });
-    }
-  }
-  if (!found) return null;
-  const pts = []; let k = hK(gq, gr);
-  while (k !== undefined) { const c = k.indexOf(','), q = +k.slice(0, c), r = +k.slice(c + 1); const w = _axC(q, r); pts.push({ x: w[0], z: w[1] }); k = parents.get(k); }
-  pts.reverse();
-  pts[0] = { x: ax, z: az }; pts[pts.length - 1] = { x: bx, z: bz };
-  const out = _smoothPath(_thinPath(pts));
-  for (let i = 1; i < out.length - 1; i++) if (_fastRoughAt(out[i].x, out[i].z) < 0) {  // Chaikin cut a lake corner — probe ashore
-    const px = out[i].x, pz = out[i].z;
-    fix: for (const rr of [3, 6]) for (let k = 0; k < 8; k++) {
-      const a = k / 8 * TAU, nx2 = px + Math.cos(a) * rr, nz2 = pz + Math.sin(a) * rr;
-      if (_fastRoughAt(nx2, nz2) >= 0) { out[i] = { x: nx2, z: nz2 }; break fix; }
-    }
-  }
-  return out;
-}
-// drop near-collinear lattice points, then one Chaikin pass so the hex staircase reads as a laid road
-function _thinPath(pts) {
-  if (pts.length <= 2) return pts;
-  const out = [pts[0]];
-  for (let i = 1; i < pts.length - 1; i++) {
-    const a = out[out.length - 1], b = pts[i], c = pts[i + 1];
-    const cross = (b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x);
-    if (Math.abs(cross) > 2.0 || (b.x - a.x) ** 2 + (b.z - a.z) ** 2 > 100) out.push(b);
-  }
-  out.push(pts[pts.length - 1]);
-  return out;
-}
-function _smoothPath(pts) {
-  if (pts.length <= 2) return pts;
-  const out = [pts[0]];
-  for (let i = 0; i < pts.length - 1; i++) {
-    const a = pts[i], b = pts[i + 1];
-    if (i > 0) out.push({ x: a.x * 0.75 + b.x * 0.25, z: a.z * 0.75 + b.z * 0.25 });
-    if (i < pts.length - 2) out.push({ x: a.x * 0.25 + b.x * 0.75, z: a.z * 0.25 + b.z * 0.75 });
-  }
-  out.push(pts[pts.length - 1]);
-  return out;
-}
-function _angD(a, b) { return Math.abs(((a - b + Math.PI) % TAU + TAU) % TAU - Math.PI); }
-// walled holds that roads (and marching armies) flow AROUND, not through — rebuilt with the network
-let _routeAvoid = [];
-let _avoidNodes = new Map();   // hold key → its node (gate lookups for the wall-safety cull)
-// terrain cost per unit for LAYING a road: rough² so valleys are cheap, climbs dear, and A* threads the
-// lowest saddle of a range (the pass) instead of climbing over; walls block outright (no bridges either).
-// elevation-band ruggedness only — 1 noise sample instead of landRoughAt's ~8 (slope+biome). Valleys read
-// low, ranges high, passes are local minima on the ridge: exactly what routing needs, at routing speed.
-// The 2u-quantised memo is shared by EVERY route search in a rebuild (their corridors overlap heavily).
-const _terraMemo = new Map();
-function _fastRoughAt(x, z) {
-  const k = Math.round(x * 0.5) * 131071 + Math.round(z * 0.5);
-  let v = _terraMemo.get(k);
-  if (v === undefined) {
-    const e = elevationAt(x, z);
-    if (e < SEA_LEVEL) v = -1;                              // water sentinel
-    else { const hi = (e - 0.50) / 0.34; v = hi < 0 ? 0 : hi > 1 ? 1 : hi; }
-    if (_terraMemo.size > 200000) _terraMemo.clear();
-    _terraMemo.set(k, v);
-  }
-  return v;
-}
-function _roadBuildCost(x, z, avoid, rays) {
-  const rough = _fastRoughAt(x, z);
-  if (rough < 0) return Infinity;                           // water
-  let c = 1 + rough * rough * 7;
-  for (let i = 0; i < avoid.length; i++) {
-    const t = avoid[i], dx = x - t.x, dz = z - t.z;
-    if (dx * dx + dz * dz < t.r2) {
-      // inside a hold's ground: legal ONLY in the narrow channel straight out from an assigned gate
-      let inChannel = false;
-      if (rays) for (let k = 0; k < rays.length && !inChannel; k++) {
-        const ry = rays[k], px = x - ry.x, pz = z - ry.z;
-        const u = px * ry.dx + pz * ry.dz;
-        if (u > -3 && u < 36) { const ox = px - ry.dx * u, oz = pz - ry.dz * u; if (ox * ox + oz * oz < 4.5 * 4.5) inChannel = true; }
-      }
-      if (!inChannel) c += 60;                              // a wall is a WALL
-      break;
-    }
-  }
-  return c;
-}
-// the walled holds that could actually block a corridor A→B (inflated AABB pre-filter, skip the endpoints)
-function _avoidNear(A, B) {
-  const pad = 70;
-  const x0 = Math.min(A.x, B.x) - pad, x1 = Math.max(A.x, B.x) + pad;
-  const z0 = Math.min(A.z, B.z) - pad, z1 = Math.max(A.z, B.z) + pad;
-  const out = [];
-  for (const t of _routeAvoid) {
-    if (t.x >= x0 && t.x <= x1 && t.z >= z0 && t.z <= z1) out.push(t);
-  }
-  return out;
-}
-// travel cost in SECONDS per unit: the same speed model the march actually uses, so the planner's promise
-// ("faster by the great road") is exactly what the column experiences. Big roads (str 1.0) beat small
-// lanes (str 0.62) beat open country beat the mountains.
-const TRAVEL_BASE_SPEED = 12.2;   // steady-state banner march on open flat ground, world-units/s
-function _travelCost(x, z, avoid) {
-  const rough = _fastRoughAt(x, z);
-  if (rough < 0) return Infinity;                           // water
-  let mul = terrainSpeedMul(roadFactorAt(x, z), rough, false);
-  const av = avoid || _routeAvoid;
-  for (let i = 0; i < av.length; i++) {
-    const t = av[i], dx = x - t.x, dz = z - t.z;
-    if (dx * dx + dz * dz < t.r2) { mul *= 0.34; break; }   // marching through a hold is slow — go around
-  }
-  return 1 / (TRAVEL_BASE_SPEED * mul);
-}
-// Road-aware travel order: the fastest route from A to B and how long the column will take. Returns
-// { pts, seconds, roadFrac } or null when the land bars the way (or the search budget runs dry).
-function travelPath(sx, sz, tx, tz, maxExpand) {
-  const d0 = Math.hypot(tx - sx, tz - sz);
-  const avoid = _avoidNear({ x: sx, z: sz }, { x: tx, z: tz }, null, null);
-  const pts = hexAStar(sx, sz, tx, tz, (x, z) => _travelCost(x, z, avoid), 1.3 / (TRAVEL_BASE_SPEED * 1.8), maxExpand || 16000, d0 > 140 ? 2 : 1); // mildly weighted: ETAs stay honest, clicks stay instant
-  if (!pts) return null;
-  let secs = 0, road = 0, total = 0;
-  for (let i = 1; i < pts.length; i++) {
-    const mx = (pts[i].x + pts[i - 1].x) / 2, mz = (pts[i].z + pts[i - 1].z) / 2;
-    const d = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z);
-    secs += d * _travelCost(mx, mz); total += d;
-    if (roadFactorAt(mx, mz) > 0.45) road += d;
-  }
-  return { pts, seconds: secs, roadFrac: total ? road / total : 0 };
-}
+// ---------- Deterministic hex-lattice A*: lives in the Terra kernel (one engine, both sides) ----------
+// The kernel instance carries the cost model, the walled-hold avoid list (set by its own
+// roadBuildNetwork), and the 2u-quantised roughness memo. travelPath keeps its exact signature.
+const _angD = Terra.angD;
+function travelPath(sx, sz, tx, tz, maxExpand) { return terra().travelPath(sx, sz, tx, tz, maxExpand); }
 
-// ---- the road network: nodes → edges → routed polylines → brush strokes on the terrain splat ----
-function _roadSites(cx, cz) {
-  const k = cx + ',' + cz; let s = roadSiteCache.get(k);
-  if (!s) { s = settlementSites(cx, cz); roadSiteCache.set(k, s); }
-  return s;
-}
-// gather every settlement + capital node within ±nodeChunkR chunks of the player's chunk
-function roadGatherNodes(pcx, pcz) {
-  const nodes = [];
-  for (const n of nations) if (!isWater(n.x, n.z)) { const seed = (Math.imul(Math.round(n.x) | 0, 73856093) ^ Math.imul(Math.round(n.z) | 0, 19349663) ^ (worldSeed() >>> 0)) >>> 0; nodes.push({ x: n.x, z: n.z, rank: 3, tier: 'capital', seed, key: 'cap:' + n.def.name }); }
-  const R = ROAD.nodeChunkR;
-  for (let cx = pcx - R; cx <= pcx + R; cx++) for (let cz = pcz - R; cz <= pcz + R; cz++) {
-    for (const s of _roadSites(cx, cz)) {
-      if (isWater(s.x, s.z)) continue;
-      const rank = s.tier === 'city' ? 2 : s.tier === 'town' ? 1 : 0;
-      const seed = (_chunkHash(s.cx, s.cz) ^ (Math.imul(s.idx + 3, 0x9E3779B1) >>> 0)) >>> 0;
-      nodes.push({ x: s.x, z: s.z, rank, tier: s.tier, seed, site: s, key: siteKey(s) });
-    }
-  }
-  return nodes;
-}
-function _edgeTier(a, b) {
-  const lo = Math.min(a.rank, b.rank), hi = Math.max(a.rank, b.rank);
-  if (lo >= 2) return 'major';                 // city/capital ↔ city/capital → trunk
-  if (hi >= 2 && lo >= 1) return 'medium';     // city ↔ town → branch
-  if (lo >= 1) return 'medium';                // town ↔ town/city → branch
-  if (hi >= 1) return 'small';                 // town/city ↔ village → lane
-  return 'small';                              // village ↔ village → lane
-}
-// Gabriel test: trunk edge (a,b) survives iff no other hub sits inside the circle on diameter ab
-// (i.e. is closer to the midpoint than the radius |ab|/2). Local + deterministic → window-stable.
-function _gabrielEdge(a, b, hubs) {
-  const mx = (a.x + b.x) * 0.5, mz = (a.z + b.z) * 0.5, rr = ((a.x - b.x) ** 2 + (a.z - b.z) ** 2) * 0.25;
-  for (let k = 0; k < hubs.length; k++) {
-    const c = hubs[k]; if (c === a || c === b) continue;
-    if ((c.x - mx) ** 2 + (c.z - mz) ** 2 < rr - 1e-6) return false;   // a hub blocks the diameter-disk
-  }
-  return true;
-}
-// a node's gates (memoised per rebuild): {big,small} sets derived from the terrain + wall footprint
-function nodeGates(node) {
-  if (!node._gates) node._gates = (node.tier && node.tier !== 'village') ? settlementGates(node.x, node.z, node.tier, node.seed) : { big: [], small: [] };
-  return node._gates;
-}
-// pick the gate that best faces (tx,tz): big roads take the grand gatehouses, small roads the posterns.
-// Each pick claims its gate, so a city's three arteries spread across three DIFFERENT big gates.
-function _pickGate(node, tx, tz, wantBig) {
-  const g = nodeGates(node);
-  const list = wantBig ? (g.big.length ? g.big : g.small) : (g.small.length ? g.small : g.big);
-  if (!list.length) return null;
-  const want = Math.atan2(tz - node.z, tx - node.x);
-  let best = null, bs = -Infinity;
-  for (const gt of list) { const sc = Math.cos(gt.bearing - want) - (gt._claims || 0) * 0.35; if (sc > bs) { bs = sc; best = gt; } }  // mild spreading: same-quarter roads SHARE a gate and split at the plaza inside
-  best._claims = (best._claims || 0) + 1;
-  return best;
-}
-// gates for real settlement endpoints (junction points & spur tips pass through untouched)
-function _routeEdgeGates(e, big) {
-  if (e.a.tier && e.a.tier !== 'village') e.aGate = _pickGate(e.a, e.b.x, e.b.z, big);
-  if (e.b.tier && e.b.tier !== 'village') e.bGate = _pickGate(e.b, e.a.x, e.a.z, big);
-}
-// flatten routed edges into segments for T-junction searches
-function _segIndex(edgeList) {
-  const segs = [];
-  for (const e of edgeList) {
-    const pts = e.pts; if (!pts) continue;
-    for (let i = 0; i < pts.length - 1; i++) segs.push({ ax: pts[i].x, az: pts[i].z, bx: pts[i + 1].x, bz: pts[i + 1].z, key: e.key + ':' + i });
-  }
-  return segs;
-}
-function _nearestSegPoint(x, z, segs) {
-  let best = null;
-  for (const sg of segs) {
-    const vx = sg.bx - sg.ax, vz = sg.bz - sg.az, L2 = vx * vx + vz * vz || 1;
-    let u = ((x - sg.ax) * vx + (z - sg.az) * vz) / L2; u = u < 0 ? 0 : u > 1 ? 1 : u;
-    const jx = sg.ax + vx * u, jz = sg.az + vz * u, d2 = (x - jx) ** 2 + (z - jz) ** 2;
-    if (!best || d2 < best.d2) best = { x: jx, z: jz, d2, key: sg.key };
-  }
-  return best;
-}
-// A village's main street points at its natural market partner: the nearest town/city within ±3 chunks
-// (else the nearest neighbouring village, else a seeded bearing). Pure function of the site, so the road
-// engine and the house-builder always draw the SAME street.
-function villageRoadAxis(st) {
-  if (st.roadAx != null) return st.roadAx;    // waysided ON the highway → the highway is the street
-  let best = null, bd = Infinity, any = null, ad = Infinity;
-  for (let cx = st.cx - 3; cx <= st.cx + 3; cx++) for (let cz = st.cz - 3; cz <= st.cz + 3; cz++)
-    for (const o of _roadSites(cx, cz)) {
-      if (o.cx === st.cx && o.cz === st.cz && o.idx === st.idx) continue;
-      const d = (o.x - st.x) ** 2 + (o.z - st.z) ** 2;
-      if (o.tier !== 'village' && d < bd) { bd = d; best = o; }
-      if (d < ad) { ad = d; any = o; }
-    }
-  const t = best || any;
-  if (t) return Math.atan2(t.z - st.z, t.x - st.x);
-  const rr = _mulberry32((WorldSim.chunkHash(st.cx, st.cz, worldSeed()) ^ Math.imul(st.idx + 5, 0x85EBCA6B)) >>> 0);
-  return rr() * TAU;
-}
+// ---- the road network: nodes → edges → routed polylines — the BUILDER lives in the kernel ----
+// (roadRebuild below feeds kernel output into the client-only splat canvas + spatial hash + rocks)
+function villageRoadAxis(st) { return terra().villageRoadAxis(st); }  // the house-builder shares the street axis
 // ============================================================================
-// The network builder — a hierarchical road net, not a nearest-neighbour mesh:
-//   trunks   (major)  Gabriel graph over hubs (cities+capitals); every city keeps ≥3 marching roads
-//   branches (medium) each town FORKS OFF the nearest trunk (a real T-junction) or marches to its hub
-//   lanes    (small)  villages hook onto the nearest roadside or neighbour; a through-village gets a
-//                     main street on its shared axis, a leaf village's lane dead-ends at the green
-//   paths    (path)   seeded dead-end foot-trails, as before
-// Edges are routed HERE (A* for trunk/branch, relaxation for the rest) so junctions are real points on
-// real roads. Deterministic throughout; window-stable as the player rides.
+// The network builder moved into the Terra kernel (roadBuildNetwork/roadRoute/edgeWallSafe) so
+// the server knits the SAME roads. What remains below is pure PRESENTATION: the splat painter,
+// the spatial query grid, and the waymarker rocks.
 // ============================================================================
-function roadBuildNetwork(nodes) {
-  const seen = new Set(), edges = [];
-  const mk = (a, b, tier) => {
-    if (a === b || a.key === b.key) return null;
-    const lo = a.key <= b.key ? a : b, hi = a.key <= b.key ? b : a, ek = lo.key + '~' + hi.key;
-    if (seen.has(ek)) return null; seen.add(ek);
-    const e = { a: lo, b: hi, tier, key: ek, aGate: null, bGate: null, pts: null };
-    edges.push(e); return e;
-  };
-  // roads (and marching armies) flow AROUND walled holds, never through them
-  _avoidNodes = new Map(nodes.filter(n => n.tier && n.tier !== 'village').map(n => [n.key, n]));
-  _wallRingMemo.clear();
-  _routeAvoid = nodes.filter(n => n.tier)
-    .map(n => {
-      let R;
-      if (n.tier === 'village') R = SG_SPEC.village.R + 2;
-      else { const sp = SG_SPEC[n.tier], margin = sp.wall === 'stone' ? 2.6 : 1.5; R = (sp.R + margin / 0.8) * 1.4 + 2.5; } // past the wall's widest lobe — nothing threads between disk and wall
-      return { x: n.x, z: n.z, r2: R * R, key: n.key };
-    });
-
-  // ---- trunks: Gabriel over hubs, shortest-first under the degree cap, then a ≥3-roads floor per city ----
-  const hubs = nodes.filter(n => n.rank >= 2), H = hubs.length, deg = new Array(H).fill(0);
-  const cand = [];
-  for (let i = 0; i < H; i++) for (let j = i + 1; j < H; j++) {
-    const dx = hubs[i].x - hubs[j].x, dz = hubs[i].z - hubs[j].z;
-    cand.push([dx * dx + dz * dz, i, j, _gabrielEdge(hubs[i], hubs[j], hubs)]);
-  }
-  cand.sort((p, q) => p[0] - q[0]);
-  const hubLink = (i, j) => { const e = mk(hubs[i], hubs[j], 'major'); if (e) { deg[i]++; deg[j]++; } };
-  for (const c of cand) if (c[3] && deg[c[1]] < ROAD.hubDegCap && deg[c[2]] < ROAD.hubDegCap) hubLink(c[1], c[2]);
-  for (let i = 0; i < H; i++) {                              // every city commands ≥3 marching roads (as the map allows)
-    const want = Math.min(3, H - 1);
-    for (const c of cand) { if (deg[i] >= want) break; if (c[1] === i || c[2] === i) hubLink(c[1], c[2]); }
-  }
-  const trunks = edges.slice();
-  for (const e of trunks) { _routeEdgeGates(e, true); e.pts = roadRoute(e); }
-
-  // ---- branches: towns fork off the artery (1.1× bias toward the trunk) or march to the nearest hub ----
-  const trunkSegs = _segIndex(trunks), branches = [];
-  for (const t of nodes) {
-    if (t.rank !== 1) continue;
-    const j = _nearestSegPoint(t.x, t.z, trunkSegs);
-    let hub = null, hd = Infinity;
-    for (const h of hubs) { const d = (h.x - t.x) ** 2 + (h.z - t.z) ** 2; if (d < hd) { hd = d; hub = h; } }
-    let e = null;
-    if (j && Math.sqrt(j.d2) * 1.1 < Math.sqrt(hd)) e = mk(t, { x: j.x, z: j.z, rank: -2, tier: null, key: 'jct:' + j.key }, 'medium');
-    else if (hub) e = mk(t, hub, 'medium');
-    if (e) { _routeEdgeGates(e, false); e.pts = roadRoute(e); branches.push(e); }
-  }
-
-  // ---- lanes: villages hook onto the nearest roadside (T-junction) or the nearest settlement ----
-  const roadSegs = _segIndex(trunks.concat(branches)), lanes = [];
-  for (const v of nodes) {
-    if (v.rank !== 0) continue;
-    const j = _nearestSegPoint(v.x, v.z, roadSegs);
-    if (j && j.d2 < 16) continue;                             // the road already runs through this village
-    let near = null, nd = Infinity;
-    for (const o of nodes) { if (o === v || o.rank < 0) continue; const d = (o.x - v.x) ** 2 + (o.z - v.z) ** 2; if (d < nd) { nd = d; near = o; } }
-    let e = null;
-    if (j && j.d2 * 1.15 < nd) e = mk(v, { x: j.x, z: j.z, rank: -2, tier: null, key: 'jct:' + j.key }, 'small');
-    else if (near) e = mk(v, near, 'small');
-    if (e) { _routeEdgeGates(e, false); lanes.push(e); }
-  }
-  // a village with through-traffic gets a MAIN STREET on its shared axis; its lanes land on the street
-  // mouths (the road runs through the village). A lane plus the seeded foot-path also reads as a through
-  // road (the trail walks out the far side). A lone dead-end lane stops at the green.
-  const spurIntent = new Map();                                // per-node seeded spur (same rng the spur pass replays)
-  for (const a of nodes) {
-    if (a.rank > 1 || a.rank < 0) continue;
-    const rng = WorldSim.mulberry32((Math.imul(Math.round(a.x) | 0, 374761393) ^ Math.imul(Math.round(a.z) | 0, 668265263) ^ (worldSeed() >>> 0)) >>> 0);
-    if (rng() < 0.55) spurIntent.set(a.key, { ang: rng() * Math.PI * 2, len: 16 + rng() * 18 });
-  }
-  const vdeg = new Map();
-  for (const e of edges) for (const n of [e.a, e.b]) if (n.tier === 'village') vdeg.set(n.key, (vdeg.get(n.key) || 0) + 1);
-  const streets = new Map();
-  for (const v of nodes) {
-    if (v.rank !== 0 || !v.site) continue;
-    const d = (vdeg.get(v.key) || 0);
-    if (d < 2 && !(d >= 1 && spurIntent.has(v.key))) continue;
-    const ax = villageRoadAxis(v.site), L = SG_SPEC.village.R * 1.15;
-    streets.set(v.key, { cx: v.x, cz: v.z, x1: v.x + Math.cos(ax) * L, z1: v.z + Math.sin(ax) * L, x2: v.x - Math.cos(ax) * L, z2: v.z - Math.sin(ax) * L, m1: 0, m2: 0 });
-  }
-  for (const e of lanes.concat()) for (const end of ['a', 'b']) {
-    const n = e[end]; if (!n.tier || n.tier !== 'village') continue;
-    const st = streets.get(n.key); if (!st) continue;
-    const o = end === 'a' ? e.b : e.a;
-    const d1 = (o.x - st.x1) ** 2 + (o.z - st.z1) ** 2, d2 = (o.x - st.x2) ** 2 + (o.z - st.z2) ** 2;
-    if (d1 <= d2) { e[end + 'Gate'] = { x: st.x1, z: st.z1, bearing: Math.atan2(st.z1 - st.cz, st.x1 - st.cx) }; st.m1++; }
-    else { e[end + 'Gate'] = { x: st.x2, z: st.z2, bearing: Math.atan2(st.z2 - st.cz, st.x2 - st.cx) }; st.m2++; }
-  }
-  // lanes route LAZILY at draw time (roadRebuild routes what's in view) — their endpoints are final here
-  for (const [vk, st] of streets) edges.push({                             // the street is a real piece of road
-    a: { x: st.x1, z: st.z1, rank: -1, tier: null, key: vk + ':stA' },
-    b: { x: st.x2, z: st.z2, rank: -1, tier: null, key: vk + ':stB' },
-    tier: 'small', key: 'street:' + vk, aGate: null, bGate: null,
-    pts: [{ x: st.x1, z: st.z1 }, { x: st.cx, z: st.cz }, { x: st.x2, z: st.z2 }],
-  });
-
-  // ---- interior streets: every walled hold's arteries + plaza + veins become REAL roadbeds — the road
-  // that enters a gate continues through the city, meets the others at the plaza, and leaves opposite.
-  for (const n of nodes) {
-    if (!n.tier || n.tier === 'village' || n.rank < 1) continue;
-    const plan = settlementStreetPlan(n.x, n.z, n.tier, n.seed);
-    for (let i = 0; i < plan.length; i++) {
-      const stt = plan[i], pts = stt.pts; if (pts.length < 2) continue;
-      edges.push({
-        a: { x: pts[0].x, z: pts[0].z, rank: -1, tier: null, key: n.key + ':in' + i + 'a' },
-        b: { x: pts[pts.length - 1].x, z: pts[pts.length - 1].z, rank: -1, tier: null, key: n.key + ':in' + i + 'b' },
-        tier: stt.art && n.rank >= 2 ? 'medium' : 'small', key: 'city:' + n.key + ':' + i,
-        aGate: null, bGate: null, pts,
-      });
-    }
-  }
-
-  // ---- tiny foot-paths: short dead-end trails off villages/towns — the "paths all around". Where the
-  // village has a street, the trail leaves from its QUIET mouth, walking the road out the far side. ----
-  for (const a of nodes) {
-    if (a.rank > 1 || a.rank < 0) continue;
-    const si = spurIntent.get(a.key); if (!si) continue;
-    const st = a.tier === 'village' ? streets.get(a.key) : null;
-    let sx = a.x, sz = a.z, ang = si.ang;
-    if (st) {
-      const quiet = st.m1 <= st.m2 ? { x: st.x1, z: st.z1 } : { x: st.x2, z: st.z2 };
-      sx = quiet.x; sz = quiet.z;
-      ang = Math.atan2(quiet.z - a.z, quiet.x - a.x) + (si.ang - Math.PI) * 0.12;   // mostly straight on, a little wander
-    }
-    const ex = sx + Math.cos(ang) * si.len, ez = sz + Math.sin(ang) * si.len;
-    if (isWater(ex, ez)) continue;
-    if (_chordHitsHold({ x: sx, z: sz }, { x: ex, z: ez }, new Set([a.key]))) continue; // a trail never pokes through a wall
-    const start = st ? { x: sx, z: sz, rank: -1, tier: null, key: a.key + ':stq' } : a;
-    const end = { x: ex, z: ez, rank: -1, tier: null, key: 'spur:' + a.key };
-    edges.push({ a: start, b: end, tier: 'path', key: a.key + '~' + end.key, aGate: null, bGate: null, pts: null });
-  }
-  return edges;
-}
-// cost of placing a road sample at (x,z) between neighbours a,c — penalise water, rough ground, and kinks
-function _roadSegCost(x, z, a, c, skip) {
-  const rough = _fastRoughAt(x, z);
-  let cost = rough < 0 ? 43 : rough * 3.0;              // water ≈ old landRough(1)*3 + 40 penalty
-  for (let i = 0; i < _routeAvoid.length; i++) {
-    const t = _routeAvoid[i];
-    if (skip && skip.has(t.key)) continue;
-    const dx = x - t.x, dz = z - t.z;
-    if (dx * dx + dz * dz < t.r2) { cost += 45; break; } // walls push even the small lanes aside
-  }
-  const mx = (a.x + c.x) * 0.5, mz = (a.z + c.z) * 0.5;
-  cost += Math.hypot(x - mx, z - mz) * 0.05;            // hug the line between neighbours → smoothness
-  return cost;
-}
-// route one edge: trunks & branches take the A* engine (valley-seeking, wall-averse, pass-finding);
-// lanes, streets & spurs take the cheap seeded relaxation. Cached per region, keyed by the EXACT endpoints
-// so a re-assigned gate or street mouth can never serve a stale polyline.
-// a gate's APRON: a point a few strides straight out from the doors. The wild route runs to the apron,
-// then the last leg apron→gate is dead straight along the gate's outward bearing — every road enters its
-// gate square-on (90° to the wall), swinging beforehand instead of grazing in sideways.
-function _gateApron(g, tier) {
-  if (!g || g.bearing == null) return null;
-  const ap = tier === 'major' ? 7 : tier === 'medium' ? 5 : 3.2;
-  return { x: g.x + Math.cos(g.bearing) * ap, z: g.z + Math.sin(g.bearing) * ap };
-}
-// does the straight chord clip a walled hold it doesn't belong to? (then the lane must A* around it)
-function _chordHitsHold(A, B, skip) {
-  for (const t of _routeAvoid) {
-    if (skip && skip.has(t.key)) continue;
-    const vx = B.x - A.x, vz = B.z - A.z, L2 = vx * vx + vz * vz || 1;
-    let u = ((t.x - A.x) * vx + (t.z - A.z) * vz) / L2; u = u < 0 ? 0 : u > 1 ? 1 : u;
-    if ((t.x - (A.x + vx * u)) ** 2 + (t.z - (A.z + vz * u)) ** 2 < t.r2) return true;
-  }
-  return false;
-}
-function roadRoute(edge) {
-  const A = edge.aGate || edge.a, B = edge.bGate || edge.b;
-  const ck = edge.key + '|' + Math.round(A.x * 2) + ',' + Math.round(A.z * 2) + '~' + Math.round(B.x * 2) + ',' + Math.round(B.z * 2);
-  const cached = roadRouteCache.get(ck); if (cached) return cached;
-  const skip = new Set([edge.a.key, edge.b.key]);
-  const apA = _gateApron(A, edge.tier), apB = _gateApron(B, edge.tier);
-  // the wild leg aims at a FAR apron; the last stretch swings through a smoothed elbow onto the straight
-  // doorway leg — the road CURVES into its gate instead of kinking
-  const fFork = edge.tier === 'major' ? 3.6 : 2.6;          // trunk forks split well clear of the gatehouse
-  const farA = apA ? { x: A.x + (apA.x - A.x) * fFork, z: A.z + (apA.z - A.z) * fFork } : null;
-  const farB = apB ? { x: B.x + (apB.x - B.x) * fFork, z: B.z + (apB.z - B.z) * fFork } : null;
-  const RA = farA || A, RB = farB || B;
-  // the gate rays: the one legal channel through each endpoint's own wall
-  const rays = [];
-  for (const g of [A, B]) if (g && g.bearing != null) rays.push({ x: g.x, z: g.z, dx: Math.cos(g.bearing), dz: Math.sin(g.bearing) });
-  let pts = null;
-  if (edge.tier === 'major' || edge.tier === 'medium' || (edge.tier === 'small' && _chordHitsHold(RA, RB, skip))) {
-    const avoid = _avoidNear(RA, RB);
-    const len = Math.hypot(RB.x - RA.x, RB.z - RA.z);
-    if (len > 16) pts = hexAStar(RA.x, RA.z, RB.x, RB.z, (x, z) => _roadBuildCost(x, z, avoid, rays), 1.7, Math.min(1900, 340 + len * 3), len > 380 ? 3 : len > 180 ? 2 : 1); // weighted A* + coarse stride on the long hauls
-  }
-  if (!pts && _chordHitsHold(RA, RB, skip)) {                    // never fall back THROUGH a hold — search harder first
-    const avoid2 = _avoidNear(RA, RB);
-    const len2 = Math.hypot(RB.x - RA.x, RB.z - RA.z);
-    pts = hexAStar(RA.x, RA.z, RB.x, RB.z, (x, z) => _roadBuildCost(x, z, avoid2, rays), 1.7, Math.min(6400, 1000 + len2 * 12), len2 > 220 ? 2 : 1);
-  }
-  if (!pts) pts = _roadRouteRelax(RA, RB, null);            // the fallback gets NO wall exemption — aprons carry the gate legs
-  if (apA) pts.unshift({ x: A.x, z: A.z }, { x: apA.x, z: apA.z });
-  if (apB) pts.push({ x: apB.x, z: apB.z }, { x: B.x, z: B.z });
-  for (let pass = 0; pass < 2; pass++) {                    // round the elbows (gate points stay pinned)
-    if (apA) for (const k of [2, 3]) if (k < pts.length - 1) pts[k] = { x: pts[k - 1].x * 0.25 + pts[k].x * 0.5 + pts[k + 1].x * 0.25, z: pts[k - 1].z * 0.25 + pts[k].z * 0.5 + pts[k + 1].z * 0.25 };
-    if (apB) for (const k of [pts.length - 3, pts.length - 4]) if (k > 0 && k < pts.length - 1) pts[k] = { x: pts[k - 1].x * 0.25 + pts[k].x * 0.5 + pts[k + 1].x * 0.25, z: pts[k - 1].z * 0.25 + pts[k].z * 0.5 + pts[k + 1].z * 0.25 };
-  }
-  roadRouteCache.set(ck, pts);
-  return pts;
-}
-// the light router: seeded S-curve + terrain relaxation (used for lanes/paths and as the A* fallback)
-function _roadRouteRelax(A, B, skip) {
-  const ax = A.x, az = A.z, bx = B.x, bz = B.z;
-  const dx = bx - ax, dz = bz - az, len = Math.hypot(dx, dz) || 1;
-  const n = Math.max(2, Math.round(len / ROAD.segStep));
-  const ux = dx / len, uz = dz / len, perpx = -uz, perpz = ux;
-  const rng = WorldSim.mulberry32((WorldSim.chunkHash(Math.round(ax), Math.round(az), worldSeed()) ^ Math.round(bx * 13 + bz * 7)) >>> 0);
-  const amp = Math.min(len * 0.16, 20), ph1 = rng() * 6.283, ph2 = rng() * 6.283, f1 = 1 + rng() * 1.4, f2 = 2 + rng() * 2.2;
-  const pts = [];
-  for (let i = 0; i <= n; i++) {
-    const t = i / n, env = Math.sin(Math.PI * t);
-    const off = env * amp * (0.6 * Math.sin(ph1 + f1 * Math.PI * t) + 0.4 * Math.sin(ph2 + f2 * Math.PI * t));
-    pts.push({ x: ax + dx * t + perpx * off, z: az + dz * t + perpz * off });
-  }
-  for (let pass = 0; pass < ROAD.relaxPasses; pass++) {
-    for (let i = 1; i < n; i++) {
-      const a = pts[i - 1], c = pts[i + 1], m = pts[i];
-      const lx = -(c.z - a.z), lz = (c.x - a.x), ll = Math.hypot(lx, lz) || 1, nx = lx / ll, nz = lz / ll;
-      let best = m, bc = _roadSegCost(m.x, m.z, a, c, skip);
-      for (const o of [-9, -6, -3, 3, 6, 9]) {
-        const cx = m.x + nx * o, cz = m.z + nz * o, cc = _roadSegCost(cx, cz, a, c, skip);
-        if (cc < bc) { bc = cc; best = { x: cx, z: cz }; }
-      }
-      pts[i] = best;
-    }
-  }
-  return pts;
-}
 function _roadGridAdd(seg) {
   const minx = Math.min(seg.x1, seg.x2), maxx = Math.max(seg.x1, seg.x2);
   const minz = Math.min(seg.z1, seg.z2), maxz = Math.max(seg.z1, seg.z2);
@@ -4556,57 +3871,11 @@ function _roadGridAdd(seg) {
       const k = gx + ',' + gz; let b = roadGrid.get(k); if (!b) roadGrid.set(k, b = []); b.push(seg);
     }
 }
-// THE WALL RULE, enforced at draw time: a road may cross a walled hold's ring ONLY at a gate. The checker
-// carries the EXACT model ring (the same Rfit·fp the gates + wall builder share, memoised per hold per
-// rebuild) and culls any edge whose segment crosses it away from a gate — the router failed there
-// (water-pinched corridor, exhausted budget), and no road beats a road through stone.
-const _wallRingMemo = new Map();
-function _holdRing(key) {
-  let v = _wallRingMemo.get(key);
-  if (v === undefined) {
-    const h = _avoidNodes.get(key);
-    v = null;
-    if (h && h.tier && h.tier !== 'village' && SG_SPEC[h.tier] && SG_SPEC[h.tier].wall) {
-      const spec = SG_SPEC[h.tier], p = sgProbe(h.x, h.z, spec);
-      const fp = sgFootprint({ r: _mulberry32((h.seed || 0) >>> 0), T: p });
-      const margin = spec.wall === 'stone' ? 2.6 : 1.5;
-      const Rfit = Math.max(spec.R * 0.5, spec.R + margin / 0.8);
-      const g = nodeGates(h);
-      v = { x: h.x, z: h.z, Rfit, fp, gates: g.big.concat(g.small) };
-    }
-    _wallRingMemo.set(key, v);
-  }
-  return v;
-}
-function _edgeWallSafe(e, pts) {
-  for (const t of _routeAvoid) {
-    const w = _holdRing(t.key);
-    if (!w) continue;                                      // open villages don't cull roads
-    if ((pts[0].x - w.x) ** 2 + (pts[0].z - w.z) ** 2 > t.r2 * 4 && (pts[pts.length - 1].x - w.x) ** 2 + (pts[pts.length - 1].z - w.z) ** 2 > t.r2 * 4) {
-      let near = false;                                    // cheap reject: does the polyline even come close?
-      for (let i = 0; i < pts.length; i += 3) { const dx = pts[i].x - w.x, dz = pts[i].z - w.z; if (dx * dx + dz * dz < t.r2 * 1.3) { near = true; break; } }
-      if (!near) continue;
-    }
-    for (let i = 1; i < pts.length; i++) {
-      const p = pts[i], q = pts[i - 1];
-      const dP = Math.hypot(p.x - w.x, p.z - w.z), dQ = Math.hypot(q.x - w.x, q.z - w.z);
-      const aP = Math.atan2(p.z - w.z, p.x - w.x), wallR = w.Rfit * w.fp(aP);
-      if ((dP - wallR) * (dQ - wallR) < 0 || Math.abs(dP - wallR) < 1.8) {   // the segment crosses (or rides) the ring
-        let legal = false;
-        for (const g of w.gates) if ((g.x - p.x) ** 2 + (g.z - p.z) ** 2 < 100) { legal = true; break; }   // …at a gate: fine
-        if (!legal) return false;
-      }
-    }
-  }
-  return true;
-}
 // (re)build the whole in-view network: hierarchy → routed polylines → splat repaint + rocks + query grid
 function roadRebuild(pcx, pcz) {
-  // keep the region-scoped caches from growing without bound on a very long ride (they refill lazily)
-  if (roadRouteCache.size > 4000) roadRouteCache.clear();
-  if (roadSiteCache.size > 2000) roadSiteCache.clear();
-  const nodes = roadGatherNodes(pcx, pcz);
-  const edges = roadBuildNetwork(nodes);
+  const T9 = terra();                 // the kernel knits the network (and bounds its own caches)
+  const nodes = T9.roadGatherNodes(pcx, pcz);
+  const edges = T9.roadBuildNetwork(nodes);
   _roadEdges = edges;
   roadGrid = new Map();
   const rockPts = [], jobs = [];
@@ -4615,12 +3884,12 @@ function roadRebuild(pcx, pcz) {
   for (const e of edges) {
     const mx = (e.a.x + e.b.x) * 0.5, mz = (e.a.z + e.b.z) * 0.5;
     if (Math.hypot(mx - cxw, mz - czw) > renderR + Math.hypot(e.a.x - e.b.x, e.a.z - e.b.z) * 0.5) continue;
-    const pts = e.pts || (e.pts = roadRoute(e));
+    const pts = e.pts || (e.pts = T9.roadRoute(e));
     if (!pts || pts.length < 2) continue;
     let wet = 0, run = 0, maxRun = 0;
     for (let w = 0; w < pts.length; w++) { if (isWater(pts[w].x, pts[w].z)) { wet++; run++; if (run > maxRun) maxRun = run; } else run = 0; }
     if (wet / pts.length > 0.18 || maxRun >= 3) continue; // no bridges yet — a road never fords open water
-    if (!e.key.startsWith('city:') && !e.key.startsWith('street:') && !_edgeWallSafe(e, pts)) continue; // a road NEVER crosses a wall away from a gate — better no road than a breach
+    if (!e.key.startsWith('city:') && !e.key.startsWith('street:') && !T9.edgeWallSafe(e, pts)) continue; // a road NEVER crosses a wall away from a gate — better no road than a breach
     const T = ROAD_TIER[e.tier];
     drawn++;
     // per-JOINT grading, same spirit as the old mitered ribbon: the stroke narrows and its tone
@@ -4648,7 +3917,7 @@ function roadRebuild(pcx, pcz) {
   }
   _roadSplatPaint(jobs, cxw, czw, renderR);            // the roads themselves are brushed INTO the terrain (see _roadSplatPaint)
   if (roadMesh) { if (mapTerrain) mapTerrain.remove(roadMesh); disposeGroup(roadMesh); roadMesh = null; }
-  // (the wall-safety cull lives in _edgeWallSafe below — see the draw loop)
+  // (the wall-safety cull lives in the kernel's edgeWallSafe — see the draw loop)
   if (rockPts.length && mapTerrain) {
     const grp = new THREE.Group();
     {                                                  // seeded roadside stones (deterministic from position)
@@ -4772,11 +4041,9 @@ function ensureRoads(force) {
 // a fresh region wipes the network (terrain teardown disposes the mesh) — clear caches so it regenerates
 function roadResetRegion() {
   roadMesh = null; roadGrid = null; _roadChunk = '';
-  roadRouteCache.clear(); roadSiteCache.clear();
   if (_roadCtx) { _roadCtx.setTransform(1, 0, 0, 1, 0, 0); _roadCtx.clearRect(0, 0, ROAD_SPLAT.size, ROAD_SPLAT.size); _roadTex.needsUpdate = true; }
   _roadWinU.value.set(0, 0, 0);                   // gates the shader mix off until the next rebuild paints
-  _terraMemo.clear(); _seatMemo.clear();          // both key off worldSeed-derived terrain — a new region invalidates them
-  _routeAvoid = [];
+  _terraInst = null;                              // a new region = a fresh kernel instance (all its memos drop with it)
   partyStamina = 100;
   clearMarch();
 }
@@ -4957,145 +4224,16 @@ function settlePalette(b) {
 // per-tier knobs.  houses/bailey are [base, randomRange] (count = base + r()*range|0).
 // castles is [base, +1 chance]: village none; town one (occasionally a second); city 3-4; capital 4-5.
 // A town is 3-4x a village's houses; a city 3-4x a town's, with a sparse castle-district centre.
-const SG_SPEC = {
-  village: { castle: false, R: 7,  houses: [10, 6],   castles: [0, 0],   wall: null,       centerClear: 0,    lbl: 3.8, top: 4.2,  gap: 2.0 },
-  town:    { castle: true,  R: 15, houses: [38, 12],  castles: [1, 0.4], castleR: 6, bailey: [3, 3], wallH: 1.2, wall: 'palisade', centerClear: 0,    lbl: 5.4, top: 7.0,  gap: 2.0 },
-  city:    { castle: true,  R: 38, houses: [280, 80], castles: [3, 0], castleR: 8, bailey: [4, 3], wallH: 1.8, wall: 'stone',    centerClear: 0.30, lbl: 10.5, top: 15.0, gap: 2.0 },
-  capital: { castle: true,  R: 46, houses: [380, 90], castles: [3, 0], castleR: 9, bailey: [6, 4], wallH: 2.1, wall: 'stone',    centerClear: 0.32, bigKeep: true, lbl: 12.5, top: 18.0, gap: 2.1 },
-};
-
-// --- read the landform: a center gradient (local+macro) plus a 16-spoke ring field ---
-function sgProbe(X, Z, spec) {
-  const cache = new Map();
-  const Y = (x, z) => { const k = (x * 4 | 0) + ',' + (z * 4 | 0); let v = cache.get(k); if (v === undefined) { v = mapElevY(x, z); cache.set(k, v); } return v; };
-  const refY = mapElevY(X, Z), R = spec.R, e = HEX_R;
-  // blend a tight local gradient with a footprint-wide one, so a bumpy patch on a big hill still reads the hill's fall-line
-  const gx = 0.5 * (Y(X + e, Z) - Y(X - e, Z)) / (2 * e) + 0.5 * (Y(X + R, Z) - Y(X - R, Z)) / (2 * R);
-  const gz = 0.5 * (Y(X, Z + e) - Y(X, Z - e)) / (2 * e) + 0.5 * (Y(X, Z + R) - Y(X, Z - R)) / (2 * R);
-  const slope = Math.hypot(gx, gz), downhill = Math.atan2(gz, gx), uphill = downhill + Math.PI;
-  const NS = 16, rim = []; let minY = 1e9, maxY = -1e9, sum = 0, wet = 0, hiK = 0, hiY = -1e9;
-  for (let k = 0; k < NS; k++) {
-    const a = k / NS * TAU, rx = X + Math.cos(a) * R, rz = Z + Math.sin(a) * R, y = Y(rx, rz);
-    rim.push({ a, y }); minY = Math.min(minY, y); maxY = Math.max(maxY, y); sum += y;
-    if (y > hiY) { hiY = y; hiK = k; }
-    if (isWater(rx, rz)) wet++;
-  }
-  const rimMean = sum / NS, relief = maxY - minY, prom = refY - rimMean, wetFrac = wet / NS;
-  let cls;
-  if (wetFrac > 0.12) cls = 'COASTAL';
-  else if (prom > 1.5) cls = 'KNOLL';
-  else if (prom < -1.0) cls = 'VALLEY';
-  else if (slope < 0.14 && relief < 2.0) cls = 'PLAIN';     // genuinely flat → nucleated green village
-  else cls = (relief > 2.5 && sgIsRidge(rim)) ? 'RIDGE' : 'HILLSIDE'; // a ridge needs real relief, else it's just a slope
-  return { Y, refY, R, slope, downhill, uphill, rim, rimMean, relief, prom, wetFrac, cls, spineAz: rim[hiK].a };
-}
-function sgIsRidge(rim) {                                                // two opposite rim spokes high, the perpendicular pair low
-  const n = rim.length; let hi = 0; for (let k = 1; k < n; k++) if (rim[k].y > rim[hi].y) hi = k;
-  const mean = rim.reduce((s, p) => s + p.y, 0) / n, hiY = rim[hi].y;
-  const opp = rim[(hi + n / 2) % n].y, pa = rim[(hi + n / 4) % n].y, pb = rim[(hi + 3 * n / 4) % n].y;
-  return opp > mean && Math.min(pa, pb) < mean - (hiY - mean) * 0.4;
-}
-// World-positions + outward bearings of a walled hold's GATES, derived (deterministically, no mesh) from the
-// same terrain probe the wall builder uses: the main gate faces downhill (matches sgPickGates/sgCityWall),
-// cities add two flanking gates ~120° apart, a capital adds a second on its lowest wall point. Open villages
-// (no wall) return [] so a road just runs to the centre. Used by the road engine to land roads at real gates.
-// big-gate + postern BEARINGS for a stone-walled hold — shared by the wall builder (sgCityWall) and the
-// road engine, so wall openings and road endpoints always agree. Posterns draw from an independent rng
-// off the site seed (NOT the builder's stream), so both sides derive them without replaying the build.
-function cityGateBearings(T, seed, x, z) {
-  // a gate that opens onto open water is useless — rotate it around the ring until its approach is dry
-  const dryAt = b => x == null || (!isWater(x + Math.cos(b) * T.R * 0.9, z + Math.sin(b) * T.R * 0.9) && !isWater(x + Math.cos(b) * T.R * 1.4, z + Math.sin(b) * T.R * 1.4));
-  const taken = [];
-  const dry = b0 => {
-    for (let t = 0; t < 13; t++) {
-      const b = b0 + (t % 2 ? -1 : 1) * Math.ceil(t / 2) * 0.42;
-      if (dryAt(b) && taken.every(g => _angD(b, g) > 0.5)) { taken.push(b); return b; }
-    }
-    taken.push(b0); return b0;
-  };
-  // the MAIN gate faces the highway that serves the hold (falls back to the gentle downhill approach)
-  const roadward = (x != null && typeof _roadwardBearing === 'function') ? _roadwardBearing(x, z) : null;
-  const base = roadward != null ? roadward : T.downhill;
-  const big = [dry(base), dry(base + TAU / 3), dry(base - TAU / 3)];
-  const rr = _mulberry32((((seed || 0) >>> 0) ^ 0x9A7E5) >>> 0), small = [];
-  const n = 2 + (rr() * 2 | 0);                                              // 2-3 posterns for the small roads
-  for (let i = 0; i < n; i++) for (let t = 0; t < 10; t++) {
-    const b = rr() * TAU;
-    if (dryAt(b) && big.every(g => _angD(b, g) > 0.55) && small.every(g => _angD(b, g) > 0.6)) { small.push(b); break; }
-  }
-  return { big, small };
-}
-// The INTERIOR STREET PLAN of a walled hold, in WORLD coords — the arteries run from the castle plaza
-// straight out of every big gate (so through-traffic crosses the centre: in one gate, past the plaza,
-// out another), ring veins arc between them carving the neighbourhoods. Pure function of (x,z,tier,seed):
-// the ROAD ENGINE draws these as real draped roadbeds (and armies march them), while the house-builder
-// uses the same plan for corridors + frontages — the city's map IS its road map.
-// the two lesser keeps of a stone hold, PURE from the site seed and clear of the gate bearings — shared
-// by the castle builder AND the street plan, so ring veins never pierce a curtain wall.
-function cityFlankerCastles(T, seed, spec, gateBearings) {
-  if (!spec || spec.wall !== 'stone') return [];
-  const rr = _mulberry32((((seed || 0) >>> 0) ^ 0xCA57E) >>> 0), out = [];
-  const cR = (spec.castleR || spec.R * 0.42) * 0.68;
-  let base = rr() * TAU;
-  for (let t = 0; t < 8 && gateBearings.some(g => _angD(base, g) < 0.5 || _angD(base + Math.PI, g) < 0.5); t++) base = rr() * TAU;
-  for (let i = 0; i < 2; i++) {
-    const a = base + i * Math.PI + (rr() - 0.5) * 0.4, d = spec.R * (0.56 + rr() * 0.08);
-    out.push({ cx: Math.cos(a) * d, cz: Math.sin(a) * d, cR });
-  }
-  return out;
-}
-function settlementStreetPlan(x, z, tier, seed) {
-  const spec = SG_SPEC[tier]; if (!spec || !spec.wall) return [];
-  const p = sgProbe(x, z, spec);
-  const fp = sgFootprint({ r: _mulberry32((seed || 0) >>> 0), T: p });
-  const margin = spec.wall === 'stone' ? 2.6 : 1.5;
-  const Rfit = Math.max(spec.R * 0.5, spec.R + margin / 0.8);
-  const R = spec.R, r0 = (spec.castleR || R * 0.42) + 2.2;               // the plaza ring hugs the chief castle
-  const gbAll = cityGateBearings(p, seed, x, z);
-  const bearings = spec.wall === 'stone' ? gbAll.big : [gbAll.big[0]];
-  const st = [];
-  for (const b of bearings) st.push({ w: 2.0, art: true, pts: [           // artery: plaza edge → THROUGH the gate
-    { x: x + Math.cos(b) * r0, z: z + Math.sin(b) * r0 },
-    { x: x + Math.cos(b) * Rfit * fp(b), z: z + Math.sin(b) * Rfit * fp(b) }] });
-  const plaza = { w: 1.5, art: false, pts: [] };
-  for (let k = 0; k <= 12; k++) { const a = k / 12 * TAU; plaza.pts.push({ x: x + Math.cos(a) * r0, z: z + Math.sin(a) * r0 }); }
-  st.push(plaza);                                                         // the plaza ring joins the arteries
-  if (spec.wall === 'stone') {
-    const rr = _mulberry32((((seed || 0) >>> 0) ^ 0x57E37) >>> 0);
-    const flank = cityFlankerCastles(p, seed, spec, bearings);            // the veins bow around the lesser keeps
-    const blocked = (px, pz) => flank.some(c => (px - (x + c.cx)) ** 2 + (pz - (z + c.cz)) ** 2 < (c.cR * 1.5 + 1.5) ** 2);
-    const bs = bearings.slice().sort((a, b) => a - b);
-    for (const frac of [0.48, 0.76]) {                                    // ring veins between the arteries
-      for (let i = 0; i < bs.length; i++) {
-        if (rr() < 0.3) continue;                                         // a missing arc keeps it grown, not drawn
-        const a0 = bs[i], a1 = (i === bs.length - 1 ? bs[0] + TAU : bs[i + 1]);
-        const steps = Math.max(3, Math.round((a1 - a0) / 0.38));
-        let seg = null;
-        for (let k = 0; k <= steps; k++) {
-          const a = a0 + (a1 - a0) * k / steps, px = x + Math.cos(a) * R * frac * fp(a), pz = z + Math.sin(a) * R * frac * fp(a);
-          if (blocked(px, pz)) { if (seg && seg.pts.length >= 2) st.push(seg); seg = null; continue; } // the arc breaks at a castle wall
-          if (!seg) seg = { w: 1.1, art: false, pts: [] };
-          seg.pts.push({ x: px, z: pz });
-        }
-        if (seg && seg.pts.length >= 2) st.push(seg);
-      }
-    }
-  }
-  return st;
-}
-// world-positions + outward bearings of a hold's gates, on the TRUE (lumpy) wall ring. Cities & capitals:
-// 3 grand gatehouses + 2-3 posterns; towns: the one palisade gate; open villages: none (their street rules).
-function settlementGates(x, z, tier, seed) {
-  const spec = SG_SPEC[tier]; if (!spec || !spec.wall) return { big: [], small: [] };
-  const p = sgProbe(x, z, spec);
-  const fp = sgFootprint({ r: _mulberry32((seed || 0) >>> 0), T: p });       // the site's EXACT lumpy outline (same seed+probe as the builder)
-  const margin = spec.wall === 'stone' ? 2.6 : 1.5;                          // matches sgCityWall (2.6) / sgPalisade (1.5) envelopes
-  const Rfit = Math.max(spec.R * 0.5, spec.R + margin / 0.8);                // ≈ the builder's fitted wall radius scale
-  const at = b => { const RA = Rfit * fp(b); return { x: x + Math.cos(b) * RA, z: z + Math.sin(b) * RA, bearing: b }; };
-  const gb = cityGateBearings(p, seed, x, z);
-  if (spec.wall === 'stone') return { big: gb.big.map(at), small: gb.small.map(at) };
-  return { big: [at(gb.big[0])], small: [] };                              // town: the one (dry) palisade gate
-}
+// Per-tier spec + the whole probe/gates/streets family live in the Terra kernel — the road
+// engine (server-side later) and the wall/house builders here MUST share one source of truth,
+// or gates would drift off their roads. These shims keep the builders' call sites unchanged.
+const SG_SPEC = Terra.SG_SPEC;
+function sgProbe(X, Z, spec) { return terra().sgProbe(X, Z, spec); }
+function sgFootprint(P) { return Terra.sgFootprint(P); }
+function cityGateBearings(T, seed, x, z) { return terra().cityGateBearings(T, seed, x, z); }
+function cityFlankerCastles(T, seed, spec, gateBearings) { return terra().cityFlankerCastles(T, seed, spec, gateBearings); }
+function settlementStreetPlan(x, z, tier, seed) { return terra().settlementStreetPlan(x, z, tier, seed); }
+function settlementGates(x, z, tier, seed) { return terra().settlementGates(x, z, tier, seed); }
 
 // --- a building seated on its own grade, with a foundation plinth so it never floats/buries ---
 function sgHouse(P, lx, lz, opts) {
@@ -5233,23 +4371,6 @@ function sgBuildHold(P) {
 }
 // --- the organic footprint of a SETTLEMENT (town/city/village).  A castle's curtain is a tight planned
 //     ring (sgCurtainMarch keeps it round); a town/city, by contrast, ACCRETES over generations, so its
-//     outline is a lumpy, irregular polygon — never the same twice. A few seeded low harmonics give the
-//     lobes, and the terrain stretches the blob along its contour/ridge/shore. Returns fp(a) ∈ ~[0.6,1.4],
-//     a smooth radial multiplier the wall- and house-fill both share so the two always agree. ---
-function sgFootprint(P) {
-  const { r, T } = P;
-  const K = 3 + (r() * 3 | 0), harm = [];                                // 3-5 organic lobes
-  for (let i = 0; i < K; i++) harm.push({ m: 2 + (r() * 4 | 0), ph: r() * TAU, amp: 0.10 + r() * 0.15 });
-  const elongAng = (T.cls === 'RIDGE') ? T.spineAz                       // strung along the crest / contour / shore
-                 : (T.cls === 'HILLSIDE' || T.cls === 'COASTAL') ? T.downhill + Math.PI / 2
-                 : r() * TAU;                                            // on the flat it just leans a random way
-  const elong = 0.12 + r() * 0.32;
-  return a => {
-    let v = 1; for (const h of harm) v += h.amp * Math.cos(h.m * a + h.ph);
-    v *= 1 + elong * Math.cos(2 * (a - elongAng));
-    return clamp(v, 0.6, 1.4);
-  };
-}
 // smallest radius scale R so that, stretched by the footprint fp(a), the ring clears every placed
 // building by `margin`. Lets the town/city wall hug the irregular cluster instead of a fat circle.
 function sgWallEnvelope(P, margin, minR) {
@@ -5951,7 +5072,13 @@ function enterMap() {
   player.obj.scale.setScalar(1); player.obj.rotation.set(0, 0, 0); // full reset (field mode may have left it at FIELD_SCALE)
   cameraAngle = 0; // top-down map: W = up the screen (toward -Z), D = right
   mapSpawnT = 6;
-  if (advanceRegion || !parties.some(p => p.alive)) { advanceRegion = false; clearParties(); mapLevel++; placeCapitals(); if (isServerMap()) addServerArmies(); spawnMapParties(); } // server's named hosts first, then top up the ambient swarm
+  if (advanceRegion || !parties.some(p => p.alive)) {
+    advanceRegion = false; clearParties();
+    // a fresh region shifts worldSeed — but the SHARED world is ONE persistent map for every player,
+    // so its level stays pinned (the server generates and contests exactly this terrain forever)
+    if (!(typeof window !== 'undefined' && window.net && window.net.sharedWorld)) mapLevel++;
+    placeCapitals(); if (isServerMap()) addServerArmies(); spawnMapParties(); // server's named hosts first, then top up the ambient swarm
+  }
   applyServerWorldOnce(); // mirror the server's living world (capital owners) + show what changed while away
   // strategic worldmap dressing: biome terrain in, battle set-dressing out, neutral sky
   buildMapTerrain();
@@ -7717,8 +6844,11 @@ function showMuster() {
     musterInfo.textContent =
       `Battle won — slew ${waveKills}${heroBit}${lossBit}.  +${earned} XP (incl. +${bounty} bounty). Reinforce, then march on.`;
   }
-  // the picker lives wherever it's needed; pull it in front of the march button
-  musterOverlay.insertBefore(document.getElementById('warband-picker'), document.getElementById('next-wave-btn'));
+  // the picker lives wherever it's needed; pull it in front of the march button (and un-hide it —
+  // it starts hidden now that the title screen no longer asks you to compose a warband)
+  const _wp = document.getElementById('warband-picker');
+  _wp.classList.remove('hidden');
+  musterOverlay.insertBefore(_wp, document.getElementById('next-wave-btn'));
   renderWarbandPicker();
   if (document.exitPointerLock) document.exitPointerLock(); // free the cursor for the UI
   pointerLocked = false;
@@ -8199,8 +7329,8 @@ function doGameOver() {
   setTimeout(() => { gameoverOverlay.classList.remove('hidden'); }, 900);
 }
 
-// start screen keeps your composed army; Fight Again starts a fresh economy
-document.getElementById('start-btn').addEventListener('click', () => startGame());
+// "Enter the Vale" is gated on sign-in (see refreshAuthGate) and runs the full universe boot.
+document.getElementById('start-btn').addEventListener('click', () => { if (window.net && window.net.session) enterTheVale(); });
 document.getElementById('restart-btn').addEventListener('click', () => { resetEconomy(); startGame(); });
 
 // ---------- Warband picker (XP-driven) ----------
@@ -8652,6 +7782,34 @@ BV._land = (x, z, f = 28, s = 220) => bestLandSpot(x, z, f, s);          // debu
 BV._ls = (x, z, f = 28) => +landScore(x, z, f).toFixed(3);              // debug: land fraction of a footprint
 // roads: prove the network generated, connects the holds, and shapes the march
 BV.roads = () => { const t = {}; for (const e of _roadEdges) t[e.tier] = (t[e.tier] || 0) + 1; return { ..._roadStats, v2: ROAD.v2, tiers: t, chunk: _roadChunk, gridCells: roadGrid ? roadGrid.size : 0, splat: _roadWinU.value.z > 0, rocks: !!roadMesh, partyStamina: Math.round(partyStamina) }; };
+// kernel parity: fingerprint of the terrain fields at 256 seeded points — must equal the server's
+// `node -e "console.log(require('./sim/terra').hash(SEED))"` exactly (gates every migration phase)
+BV.terraHash = (s) => Terra.hash(s == null ? worldSeed() : s);
+BV.terraVersion = () => Terra.VERSION;
+// srv mode: chunk-store status + the Phase-1 acceptance test (server payload vs local kernel, in quanta)
+BV.srv = () => ({ on: SRV_ON, chunks: srvChunks.size, inflight: _srvInflight.size, seed: _srvSeed, built: mapChunks.size });
+BV.chunkParity = (cx, cz) => {
+  if (cx == null) { cx = Math.floor(player.pos.x / CHUNK); cz = Math.floor(player.pos.z / CHUNK); }
+  const e = srvChunks.get(cx + ',' + cz);
+  if (!e) return { error: 'chunk ' + cx + ',' + cz + ' not in store' };
+  const T = terra(), OFF = Terra.TOP_OFFSETS;
+  let mE = 0, mT = 0, mM = 0, mR = 0;
+  for (let i = 0; i < e.cells.length; i++) {
+    const xc = e.cells[i][2], zc = e.cells[i][3];
+    for (let v = 0; v < 13; v++) {
+      const px = xc + OFF[v][0], pz = zc + OFF[v][1], o = i * 13 + v;
+      mE = Math.max(mE, Math.abs(Math.round(T.elevationAt(px, pz) * 65535) - e.elev[o]));
+      mT = Math.max(mT, Math.abs(Math.round(T.tempAt(px, pz) * 255) - e.temp[o]));
+      mM = Math.max(mM, Math.abs(Math.round(T.moistureAt(px, pz) * 255) - e.moist[o]));
+    }
+    mR = Math.max(mR, Math.abs(Math.round(T.landRoughAt(xc, zc) * 255) - e.rough[i]));
+  }
+  const local = T.settlementSites(cx, cz).filter(s => !T.isWater(s.x, s.z) && !nearCapital(s.x, s.z, s.tier === 'city' ? 100 : 58));
+  const holdsMatch = local.length === e.holds.length && local.every((s, i2) =>
+    e.holds[i2] && s.idx === e.holds[i2].idx && s.tier === e.holds[i2].tier &&
+    Math.abs(s.x - e.holds[i2].x) < 1e-6 && Math.abs(s.z - e.holds[i2].z) < 1e-6);
+  return { cells: e.cells.length, maxElevQ: mE, maxTempQ: mT, maxMoistQ: mM, maxRoughQ: mR, holds: e.holds.length, holdsMatch };
+};
 // inspect the road graph: per-node degree (variable degree proof) + edge list with tiers + gate flags
 BV.roadGraph = () => {
   const deg = {}, edges = _roadEdges.map(e => { deg[e.a.key] = (deg[e.a.key] || 0) + 1; deg[e.b.key] = (deg[e.b.key] || 0) + 1; return { a: e.a.key, b: e.b.key, tier: e.tier, gated: !!(e.aGate || e.bGate) }; });
@@ -8875,6 +8033,7 @@ function toggleCharsheet(force) {
   else charsheetOverlay.classList.add('hidden');
 }
 document.addEventListener('keydown', (e) => {
+  if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return; // typing a name/password, not commanding
   if (e.code === 'KeyV') { e.preventDefault(); toggleCharsheet(); }
   else if (e.code === 'Escape' && charsheetOverlay && !charsheetOverlay.classList.contains('hidden')) toggleCharsheet(false);
 });
@@ -8966,17 +8125,23 @@ function addServerArmies() {
 function syncPartiesFromServer() { clearParties(); addServerArmies(); }
 let otherPlayerTokens = [];
 function clearOtherPlayers() { for (const t of otherPlayerTokens) { scene.remove(t); disposeGroup(t); } otherPlayerTokens.length = 0; }
-function makeOtherPlayerToken(name, size) {
-  const g = makePartyToken(size || 1, { color: 0x39d0ff }); // cyan banner = another living player
+function makeOtherPlayerToken(name, size, opts) {
+  const g = makePartyToken(size || 1, { color: (opts && opts.color) || 0x39d0ff }); // cyan banner = another living player
   if (g.userData.label) { g.remove(g.userData.label); if (g.userData.label.material) { if (g.userData.label.material.map) g.userData.label.material.map.dispose(); g.userData.label.material.dispose(); } }
-  const label = makeNameSprite('☆ ' + name);
+  const label = makeNameSprite(((opts && opts.prefix) || '☆ ') + name);
   label.scale.set(4.4, 0.56, 1); label.position.y = 4.3; g.add(label); g.userData.label = label;
   return g;
 }
 function renderOtherPlayers() {
   clearOtherPlayers();
   const ps = (window.net && window.net.world && window.net.world.players) || [];
-  for (const p of ps) { const g = makeOtherPlayerToken(p.name, p.size); const px = clamp(p.x, -MAP_HALF + 1, MAP_HALF - 1), pz = clamp(p.z, -MAP_HALF + 1, MAP_HALF - 1); g.position.set(px, mapElevY(px, pz), pz); scene.add(g); otherPlayerTokens.push(g); }
+  for (const p of ps) {
+    // idle = a signed-in rival's character waiting where its player left it (camped banner)
+    const g = makeOtherPlayerToken(p.name + (p.idle ? ' (camp)' : ''), p.size, p.idle ? { color: 0x2f7ea0, prefix: '☾ ' } : null);
+    const px = clamp(p.x, -MAP_HALF + 1, MAP_HALF - 1), pz = clamp(p.z, -MAP_HALF + 1, MAP_HALF - 1);
+    g.position.set(px, mapElevY(px, pz), pz); scene.add(g); otherPlayerTokens.push(g);
+  }
+  renderMyChars(); // your own waiting banners refresh on the same beat
 }
 let presenceT = 0;
 // the shared world's settlements are server-authoritative: reflect who currently holds each
@@ -8998,6 +8163,8 @@ function sendPresenceMaybe(dt) {
   presenceT -= dt; if (presenceT > 0) return;
   presenceT = 1.5;
   window.net.sendPresence({ name: playerChar ? playerChar.name : 'A Wanderer', faction: PLAYER_REALM.name, x: player.pos.x, z: player.pos.z, size: warbandTotal(), renown: playerChar ? playerChar.renown : 0 });
+  ensureCharAdopted(); // signed in: your live hero becomes (or reports as) your active character
+  if (window.net.session && (++_charsTick % 4) === 0) window.net.loadChars().then(() => { if (mode === 'map') renderMyChars(); }); // ~6s: waiting banners follow transfers
   if (window.net.sharedWorld) {
     window.net.loadWorld().then(() => { if (mode === 'map') renderOtherPlayers(); }); // refresh rivals in MP
     if ((++_holdsTick % 3) === 0 && window.net.loadHolds) window.net.loadHolds(player.pos.x, player.pos.z, 160).then(applyServerHolds); // ~every 4.5s: reflect frontier contests
@@ -9005,6 +8172,292 @@ function sendPresenceMaybe(dt) {
 }
 BV.serverBands = () => parties.filter(p => p.alive && p.serverId).map(p => ({ name: p.leader && p.leader.name, faction: p.faction.name, size: p.size, serverId: p.serverId }));
 BV.otherPlayers = () => otherPlayerTokens.length;
+
+// ============================================================================
+//  MULTIPLE CHARACTERS (signed-in accounts) — one banner rides, the rest wait
+// ----------------------------------------------------------------------------
+//  Username/password auth (client-net keeps the session; its token rides the
+//  X-Player-Token seam). A signed-in account fields several characters ON THE
+//  SAME MAP: the active one is the hero you play; the others wait where you
+//  left them (gold ◆ banners). The U panel switches banners — parking the live
+//  warband into the outgoing character's state bundle and restoring the incoming
+//  one's — splits men off under a brand-new character, and trades men when two
+//  of your characters stand together (within CH_GIVE_RANGE paces, server-checked).
+const charsOverlay = document.getElementById('chars');
+const CH_GIVE_RANGE = 30;            // must match server/chars.js GIVE_RANGE
+let activeCharId = null;
+let charsAdopted = false;
+let _charsTick = 0;
+const myCharTokens = [];
+
+function escHtml(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch])); }
+function bundleCharState() {
+  return { hero: playerChar ? serChar(playerChar) : null,
+    comp: Object.assign({}, warbandComp),
+    roster: warbandRoster.filter(c => !c.fallen).map(serChar) };
+}
+// rebuild the composition counts from the roster (and refresh the lead column's label)
+function recountComp() {
+  for (const k of WARBAND_KEYS) warbandComp[k] = 0;
+  for (const c of warbandRoster) if (!c.fallen) warbandComp[classKeyOf(c.archetype)]++;
+  if (player.mapToken) setColumnLabel(player.mapToken, '★ ' + warbandTotal());
+}
+// take n men out of the live warband (the greenest leave first) — returns them serialized,
+// so they can ride on under another of your banners with their names and careers intact
+function takeMenLocal(n) {
+  const pool = warbandRoster.filter(c => !c.fallen).sort((a, b) => (a.xp + a.renown * 5) - (b.xp + b.renown * 5));
+  const out = [];
+  for (const c of pool.slice(0, n)) {
+    out.push(serChar(c));
+    warbandNameSet.delete(c.name);
+    const i = warbandRoster.indexOf(c); if (i >= 0) warbandRoster.splice(i, 1);
+  }
+  recountComp();
+  return out;
+}
+// add men to the live warband — the actual soldiers when we have their records, else fresh recruits
+function addMenLocal(n, sers) {
+  for (let i = 0; i < n; i++) {
+    const c = (sers && sers[i]) ? deserChar(sers[i])
+      : makeChar(i % 4 === 3 ? 'archer' : i % 4 === 2 ? 'thrower' : 'sword', { team: 'ally', nameSet: warbandNameSet });
+    warbandRoster.push(c); warbandNameSet.add(c.name);
+  }
+  recountComp();
+}
+// become the given character: restore its parked hero + warband and stand where it waited
+function applyActiveChar(c) {
+  const st = c.state || {};
+  warbandRoster.length = 0; warbandNameSet.clear();
+  playerChar = st.hero ? deserChar(st.hero)
+    : makeChar(c.archetype || 'sword', { team: 'ally', name: c.name, notability: 3, isPlayer: true });
+  playerChar.isPlayer = true;
+  if (!st.hero) playerChar.renown = c.renown || 0;
+  player.char = playerChar;
+  if (st.roster) for (const o of st.roster) { const rc = deserChar(o); warbandRoster.push(rc); warbandNameSet.add(rc.name); }
+  let maxId = charIdSeq;
+  if (playerChar.id) maxId = Math.max(maxId, playerChar.id);
+  for (const rc of warbandRoster) maxId = Math.max(maxId, rc.id);
+  charIdSeq = maxId;
+  // the server's men count is the truth — transfers may have landed while this banner waited
+  const have = warbandRoster.length;
+  if (have < c.men) addMenLocal(c.men - have);
+  else if (have > c.men) takeMenLocal(have - c.men);
+  else recountComp();
+  activeCharId = c.charId;
+  // stand where the character was waiting
+  player.pos.set(c.x, 0, c.z); player.vel.set(0, 0, 0);
+  if (player.mapToken) { player.mapToken.position.copy(player.pos); player.mapToken.position.y = mapElevY(c.x, c.z); }
+  presenceT = 0;    // report the takeover right away
+  saveCareers();
+  renderMyChars();
+}
+// your own WAITING banners on the map (gold ◆) — the active one is your normal ★ column
+function clearMyChars() { for (const t of myCharTokens) { scene.remove(t); disposeGroup(t); } myCharTokens.length = 0; }
+function renderMyChars() {
+  clearMyChars();
+  if (!(window.net && window.net.session)) return;
+  for (const c of (window.net.charsList || [])) {
+    if (c.active) { activeCharId = c.charId; continue; }
+    const g = makeOtherPlayerToken(c.name + ' · ' + c.men, c.men, { color: 0xffcf5b, prefix: '◆ ' });
+    const px = clamp(c.x, -MAP_HALF + 1, MAP_HALF - 1), pz = clamp(c.z, -MAP_HALF + 1, MAP_HALF - 1);
+    g.position.set(px, mapElevY(px, pz), pz);
+    scene.add(g); myCharTokens.push(g);
+  }
+}
+// On entering: adopt the freshly-dealt warband as character #1 the FIRST time, OR — for a
+// returning account that already has an active character — restore that saved character (its
+// warband + where it was left), discarding the throwaway starter band startStationGame dealt.
+function ensureCharAdopted() {
+  if (charsAdopted || !(window.net && window.net.session && window.net.online) || !playerChar) return;
+  charsAdopted = true;
+  window.net.adoptChar({ name: playerChar.name, archetype: classKeyOf(playerChar.archetype),
+    x: player.pos.x, z: player.pos.z, men: warbandTotal(), renown: playerChar.renown, state: bundleCharState() })
+    .then(r => {
+      if (!(r && r.ok && r.active)) { charsAdopted = false; return; }
+      activeCharId = r.active.charId;
+      // returning player (server didn't just create char #1): restore the saved band + position,
+      // discarding the throwaway starter band startStationGame dealt this session
+      if (!r.created && r.active.state && r.active.state.hero) applyActiveChar(r.active);
+      renderMyChars();
+    });
+}
+
+// ----- the U panel: switch / split / trade -----
+function chMsg(t, good) { const el = document.getElementById('ch-msg'); if (el) { el.textContent = t || ''; el.style.color = good ? '#9aff6b' : '#ff9a9a'; } }
+function chCard(c) {
+  const d = Math.round(Math.hypot(c.x - player.pos.x, c.z - player.pos.z));
+  const near = d <= CH_GIVE_RANGE;
+  return '<div class="ch-card' + (c.active ? ' you' : '') + '" data-ch="' + c.charId + '">' +
+    '<div class="ch-name">' + (c.active ? '★ ' : '◆ ') + escHtml(c.name) + (c.active ? ' <em>RIDING</em>' : '') + '</div>' +
+    '<div class="ch-meta">' + c.men + ' men · renown ' + Math.round(c.renown) + (c.active ? '' : ' · ' + d + ' paces away') + '</div>' +
+    (c.active ? '' :
+      '<div class="ch-row">' +
+        '<button data-act="switch">Take command</button>' +
+        '<button data-act="give"' + (near ? '' : ' disabled title="march within ' + CH_GIVE_RANGE + ' paces to trade men"') + '>Give men…</button>' +
+        '<button data-act="take"' + (near && c.men > 0 ? '' : ' disabled title="march within ' + CH_GIVE_RANGE + ' paces to trade men"') + '>Take men…</button>' +
+      '</div>') +
+    '</div>';
+}
+function renderCharsPanel() {
+  const body = document.getElementById('ch-body'); if (!body) return;
+  if (!(window.net && window.net.session)) {
+    body.innerHTML = '<div class="cs-empty">Sign in on the title screen to keep several characters on the map.</div>';
+    return;
+  }
+  body.innerHTML = '<div class="cs-empty">Riding out…</div>';
+  window.net.loadChars().then(list => {
+    if (!list) return void (body.innerHTML = '<div class="cs-empty">The server is out of reach.</div>');
+    body.innerHTML = list.map(chCard).join('') || '<div class="cs-empty">No characters yet — ride on, one will be sworn in.</div>';
+    renderMyChars();
+  });
+}
+function toggleCharsPanel(force) {
+  if (!charsOverlay) return;
+  const willShow = force !== undefined ? force : charsOverlay.classList.contains('hidden');
+  if (!willShow) return void charsOverlay.classList.add('hidden');
+  if (mode !== 'map') return; // switching banners mid-battle would be desertion
+  chMsg('');
+  renderCharsPanel();
+  charsOverlay.classList.remove('hidden');
+  if (document.exitPointerLock) document.exitPointerLock();
+}
+function doSwitchChar(id) {
+  if (mode !== 'map' || encounter) return chMsg('finish what you are doing first');
+  window.net.switchChar(id, { x: player.pos.x, z: player.pos.z, men: warbandTotal(),
+    renown: playerChar ? playerChar.renown : 0, state: bundleCharState() })
+    .then(r => {
+      if (!r || !r.ok) return chMsg((r && r.error) || 'switch failed');
+      applyActiveChar(r.active);
+      chMsg('You now ride as ' + r.active.name + ' — your old banner waits where you left it.', true);
+      renderCharsPanel();
+    });
+}
+function doGiveMen(fromId, toId, promptTxt) {
+  if (fromId == null || toId == null) return;
+  const n = parseInt(prompt(promptTxt, '5') || '0', 10);
+  if (!(n > 0)) return;
+  window.net.giveMen(fromId, toId, n).then(r => {
+    if (!r || !r.ok) return chMsg((r && r.error) || 'transfer failed');
+    if (fromId === activeCharId) takeMenLocal(n);       // the men leave your live column…
+    else if (toId === activeCharId) addMenLocal(n);     // …or fall in with it
+    presenceT = 0; saveCareers();
+    chMsg(n + ' men changed banners.', true);
+    renderCharsPanel();
+  });
+}
+// raise a brand-new INDEPENDENT character: a random person with their own random band, dropped
+// somewhere random on the map (known or unknown terrain). Draws nothing from your current warband.
+function doCreateRandomChar() {
+  const men = 3 + ((Math.random() * 10) | 0);            // a random handful: 3–12
+  const tmpNames = new Set();
+  const hero = makeChar('sword', { team: 'ally', notability: 3, nameSet: tmpNames });
+  const kinds = ['sword', 'sword', 'sword', 'archer', 'thrower', 'long'];
+  const roster = [], comp = { sword: 0, long: 0, archer: 0, thrower: 0 };
+  for (let i = 0; i < men; i++) {
+    const c = makeChar(kinds[(Math.random() * kinds.length) | 0], { team: 'ally', nameSet: tmpNames });
+    roster.push(serChar(c)); comp[classKeyOf(c.archetype)]++;
+  }
+  const x = rand(-MAP_HALF + 4, MAP_HALF - 4), z = rand(-MAP_HALF + 4, MAP_HALF - 4); // anywhere in the vale
+  chMsg('raising a banner…', true);
+  window.net.createChar({ name: hero.name, archetype: 'sword', men: men, x: x, z: z, renown: 0,
+    state: { hero: serChar(hero), comp: comp, roster: roster } })
+    .then(r => {
+      if (!r || !r.ok) return chMsg((r && r.error) || 'could not raise a new banner');
+      chMsg(hero.name + ' now leads ' + men + ' men, camped somewhere in the vale — take command to ride out as them.', true);
+      renderCharsPanel();
+    });
+}
+function doSplitChar() {
+  const nameEl = document.getElementById('ch-new-name'), menEl = document.getElementById('ch-new-men');
+  const name = ((nameEl && nameEl.value) || '').trim();
+  const n = parseInt((menEl && menEl.value) || '0', 10);
+  if (!name) return chMsg('name the new character');
+  if (!(n > 0)) return chMsg('send at least 1 man');
+  if (n > warbandTotal()) return chMsg('you only have ' + warbandTotal() + ' men riding with you');
+  const moved = takeMenLocal(n);                        // the actual soldiers ride under the new banner
+  const hero = makeChar('sword', { team: 'ally', name: name, notability: 3 });
+  const comp = { sword: 0, long: 0, archer: 0, thrower: 0 };
+  for (const s of moved) comp[classKeyOf(s.archetype)]++;
+  window.net.splitChar({ name: name, archetype: 'sword', men: n, x: player.pos.x + 3, z: player.pos.z + 3,
+    state: { hero: serChar(hero), comp: comp, roster: moved } })
+    .then(r => {
+      if (!r || !r.ok) { addMenLocal(moved.length, moved); return chMsg((r && r.error) || 'split failed'); } // put them back
+      presenceT = 0; saveCareers();
+      if (nameEl) nameEl.value = '';
+      chMsg(name + ' now waits beside you with ' + n + ' men.', true);
+      renderCharsPanel();
+    });
+}
+if (charsOverlay) {
+  document.addEventListener('keydown', (e) => {
+    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+    if (e.code === 'KeyU' && (mode === 'map' || !charsOverlay.classList.contains('hidden'))) { e.preventDefault(); toggleCharsPanel(); }
+    else if (e.code === 'Escape' && !charsOverlay.classList.contains('hidden')) toggleCharsPanel(false);
+  });
+  const chClose = document.getElementById('ch-close');
+  if (chClose) chClose.addEventListener('click', () => toggleCharsPanel(false));
+  const chSplit = document.getElementById('ch-split');
+  if (chSplit) chSplit.addEventListener('click', doSplitChar);
+  const chRandom = document.getElementById('ch-random');
+  if (chRandom) chRandom.addEventListener('click', doCreateRandomChar);
+  for (const id of ['ch-new-name', 'ch-new-men']) {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('keydown', (e) => e.stopPropagation()); // typing a name must not move the hero / open panels
+  }
+  const chBody = document.getElementById('ch-body');
+  if (chBody) chBody.addEventListener('click', (e) => {
+    const btn = e.target.closest && e.target.closest('button[data-act]');
+    if (!btn || btn.disabled) return;
+    const card = e.target.closest('.ch-card');
+    const id = card && parseInt(card.getAttribute('data-ch'), 10);
+    if (!id) return;
+    const act = btn.getAttribute('data-act');
+    if (act === 'switch') doSwitchChar(id);
+    else if (act === 'give') doGiveMen(activeCharId, id, 'Give how many men to that banner?');
+    else if (act === 'take') doGiveMen(id, activeCharId, 'Take how many men from that banner?');
+  });
+}
+// ----- sign-in gate on the title screen: sign in / create account, THEN "Enter the Vale" -----
+// Login is required — the game does not enter until an account is signed in. A successful
+// login/register reloads the page (client-net), so on return net.session is set and this shows
+// the Enter button instead of the form.
+function refreshAuthGate() {
+  const form = document.getElementById('auth-form'), who = document.getElementById('auth-who');
+  const note = document.getElementById('auth-note'), startBtn = document.getElementById('start-btn');
+  if (!form || !window.net) return;
+  const sess = window.net.session;
+  if (sess) {
+    form.style.display = 'none';
+    who.classList.remove('hidden');
+    document.getElementById('auth-name').textContent = sess.username;
+    if (note) note.innerHTML = 'Ready. <b>Enter the Vale</b> to take command — press <b>U</b> in game to switch or raise new characters.';
+    if (startBtn) startBtn.classList.remove('hidden');
+  } else {
+    form.style.display = '';
+    who.classList.add('hidden');
+    if (startBtn) startBtn.classList.add('hidden');
+  }
+}
+(function wireAuth() {
+  const msg = document.getElementById('auth-msg');
+  const user = document.getElementById('auth-user'), pass = document.getElementById('auth-pass');
+  if (!user || !window.net) return;
+  function go(fn) {
+    if (!user.value.trim()) { msg.textContent = 'enter a username'; msg.style.color = '#ff9a9a'; return; }
+    msg.textContent = 'one moment…'; msg.style.color = '#9fb2cc';
+    fn(user.value.trim(), pass.value).then(r => { if (r && !r.ok) { msg.textContent = r.error || 'failed'; msg.style.color = '#ff9a9a'; } }); // success reloads the page under the new identity
+  }
+  document.getElementById('auth-login').addEventListener('click', () => go(window.net.login));
+  document.getElementById('auth-register').addEventListener('click', () => go(window.net.register));
+  const out = document.getElementById('auth-logout');
+  if (out) out.addEventListener('click', () => window.net.logout());
+  user.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') go(window.net.login); });
+  pass.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') go(window.net.login); });
+})();
+BV.chars = () => ({ active: activeCharId, list: (window.net && window.net.charsList || []).slice(), waitingTokens: myCharTokens.length });
+BV.switchChar = doSwitchChar;
+BV.splitChar = (name, men) => { const n = document.getElementById('ch-new-name'), m = document.getElementById('ch-new-men'); if (n) n.value = name; if (m) m.value = men; doSplitChar(); };
+BV.toggleChars = toggleCharsPanel;
 
 // ============================================================================
 //  STARTING STATIONS — "what you are" calculates "what you have"
@@ -9158,6 +8611,7 @@ function startStationGame(s) {
     // Roam, pick winnable battles, recruit — raise the band from here.
     enterMap();
     updateStationReadout(s);
+    ensureCharAdopted(); // signed in: adopt char #1, or restore the saved active character
     return;
   }
 
@@ -9167,6 +8621,7 @@ function startStationGame(s) {
   enterBattle({ size: s.enemy, level: mapLevel, alive: true, raider: s.enemy <= 5,
     pos, group: makePartyToken(s.enemy, rivalNation), faction: rivalNation, alliedBands: null });
   updateStationReadout(s);
+  ensureCharAdopted(); // signed in: adopt char #1, or restore the saved active character
 }
 
 // Deal a universe. With no seed → a fresh random one. Refresh defaults to a NEW universe;
@@ -9183,6 +8638,10 @@ function bootUniverse(seed, forceKey) {
     for (let i = 0; i < tok.length; i++) h = Math.imul(h ^ tok.charCodeAt(i), 16777619) >>> 0;
     mpSpawnJitter = h >>> 0;
     const st = rollStation((SHARED_WORLD_SEED ^ h) >>> 0, 'drifter'); // gentle start, distinct realm per player
+    // ONE map for everyone: the shared world is pinned to region 0 (mapLevel feeds worldSeed, so a
+    // station-rolled region would hand this player DIFFERENT terrain than the server + other players
+    // — the frontier's distance scaling supplies the difficulty curve instead)
+    st.region = 0;
     mpHomeIdx = st.homeIdx;
     startStationGame(st);
     return;
@@ -9470,18 +8929,22 @@ BV.editSeed = (n) => editApply({ ...EDIT.spec, seed: n >>> 0 });
 BV.editFrameCam = () => { editFrameCam(); return 'framed'; };
 BV.editStatus = editStatus;
 
-// Boot. ?edit=<kind> (or window.BV_EDIT) opens the object editor; otherwise deal a universe.
-// DEFAULT universe is the humble 'drifter' — begin on the overworld (MAP) with a small warband.
-// A PINNED #u=<seed> reproduces a dramatic station; the "New Universe" reroll deals a fresh one.
+// Boot. ?edit=<kind> (or window.BV_EDIT) opens the object editor; otherwise show the sign-in gate
+// and DEFER the universe boot until the player clicks "Enter the Vale". The game no longer auto-
+// enters: you sign in (or create an account) first, and entering loads your active character.
 const _editQ = (typeof location !== 'undefined') ? new URLSearchParams(location.search) : null;
 const _editWord = (_editQ && _editQ.get('edit')) ||
   ((typeof location !== 'undefined' && location.hash || '').match(/edit=([^&]+)/) || [])[1];
+// the deferred universe boot: a PINNED #u=<seed> reproduces a dramatic station, else the humble drifter
+function enterTheVale() {
+  const m = (typeof location !== 'undefined' && location.hash || '').match(/u=(\d+)/);
+  if (m) bootUniverse(parseInt(m[1], 10) >>> 0);
+  else bootUniverse(undefined, 'drifter');
+}
 if (window.BV_EDIT || _editWord) {
   editorBoot(window.BV_EDIT || parseEditSpec(_editWord, _editQ));
 } else {
-  const _bootMatch = (typeof location !== 'undefined' && location.hash || '').match(/u=(\d+)/);
-  if (_bootMatch) bootUniverse(parseInt(_bootMatch[1], 10) >>> 0);
-  else bootUniverse(undefined, 'drifter');
+  refreshAuthGate(); // show login vs. signed-in Enter button (the sim idles behind the overlay)
 }
 
 })();

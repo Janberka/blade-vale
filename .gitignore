@@ -5,6 +5,7 @@ node_modules/
 server/world.db
 server/world.db-shm
 server/world.db-wal
+server/world.db.bak-*
 server/launchd.log
 server/run.log
 .backup/

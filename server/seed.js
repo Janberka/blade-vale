@@ -11,6 +11,10 @@ function ensureAccount(handle) {
     const r = db.prepare('INSERT INTO accounts(handle) VALUES (?)').run(handle);
     acct = { id: r.lastInsertRowid, handle };
   }
+  return { acct, world: ensureWorldFor(acct) };
+}
+// an account's own (solo) world — created on first touch (also the seam session-auth accounts use)
+function ensureWorldFor(acct) {
   let world = db.prepare('SELECT * FROM worlds WHERE account_id = ?').get(acct.id);
   if (!world) {
     const seed = (Date.now() % 1000000000) | 0;
@@ -18,7 +22,7 @@ function ensureAccount(handle) {
     world = db.prepare('SELECT * FROM worlds WHERE id = ?').get(r.lastInsertRowid);
     tick.seedWorld(world.id);
   }
-  return { acct, world };
+  return world;
 }
 function ensureLocal() { return ensureAccount('local'); }
 
@@ -37,7 +41,7 @@ function ensureSharedWorld() {
   return world;
 }
 
-module.exports = { ensureLocal, ensureAccount, ensureSharedWorld };
+module.exports = { ensureLocal, ensureAccount, ensureWorldFor, ensureSharedWorld };
 
 if (require.main === module) {
   migrate();

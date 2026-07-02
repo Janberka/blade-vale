@@ -9,6 +9,7 @@ const WorldSim = require('../sim/world-sim.js');
 const D = require('./diplomacy');
 const Destiny = require('./destiny');
 const validate = require('./validate');
+const Chunks = require('./chunks');
 
 const TICK_SECONDS = 20;
 const MAX_CATCHUP_TICKS = 300;
@@ -184,61 +185,32 @@ function nearestRival(armies, a, relMap) {
   return best ? { o: best, d2: bd } : null;
 }
 // ---------- Whole-world settlement generation + persistence + contest ----------
-// A world's terrain seed: the shared world's is FIXED to match the client (so its holds line up
-// with what a player draws); solo worlds derive one deterministically from their own row seed.
-const _seedCache = new Map();
+// A world's terrain seed follows the CLIENT's exact formula — tseed = ((map_level*1000+7) ^
+// (universe_seed*2654435761))>>>0 — via the chunk store (server/chunks.js). The shared world is
+// pinned to SHARED_TERRAIN_SEED; a solo world has no terrain until its client claims a universe.
+// (The old solo formula (^0x9E3779B9) never matched any client's terrain — that bug dies here.)
 function worldSeedFor(worldId) {
-  if (_seedCache.has(worldId)) return _seedCache.get(worldId);
-  const w = db.prepare('SELECT seed, kind FROM worlds WHERE id=?').get(worldId);
-  const ws = (w && w.kind === 'shared') ? SHARED_TERRAIN_SEED : (((((w ? w.seed : 0) | 0) * 1000 + 7) ^ 0x9E3779B9) >>> 0);
-  _seedCache.set(worldId, ws); return ws;
+  const tp = Chunks.tseedParams(worldId);
+  return tp ? tp.tseed : null;
 }
-// the heartland Voronoi runs over the server's capital positions; ownership maps a capital's
-// FOUNDING nation → its CURRENT owner, so a conquered capital pulls its hinterland holds with it.
-function capsFor(worldId) {
-  const out = []; for (let i = 0; i < NATIONS.length; i++) { const p = capPos(i); out.push({ name: NATIONS[i], x: p.x, z: p.z }); }
-  return out;
-}
-function nationOwnerMap(worldId) {
-  const m = {}; for (const c of db.prepare('SELECT idx, owner_name FROM capitals WHERE world_id=?').all(worldId)) m[NATIONS[c.idx]] = c.owner_name;
-  return n => m[n] || n;
-}
-// generate-on-navigate: for every not-yet-generated chunk within radiusChunks of (x,z), compute its
-// settlements via the shared kernel and INSERT them idempotently. Marks each chunk in the ledger so
-// re-navigating the same ground never duplicates. Most chunks yield 0 holds (cheap ledger row only).
+// generate-on-navigate now rides the chunk store: full terrain payloads + reseated holds, one
+// transaction per chunk, idempotent forever (the chunks table is the ledger).
 const CHUNK = WorldSim.CHUNK;
 function ensureRegion(worldId, x, z, radiusChunks) {
-  // prepared lazily (better-sqlite3 caches by SQL) so requiring this module before migrate() is safe —
-  // index.js requires ./tick before it runs migrate(), and these statements touch Step-9 tables (007)
-  const insHold = db.prepare(`INSERT OR IGNORE INTO holds(world_id, cx, cz, idx, name, tier, x, z, owner_name, garrison, generated_tick)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
-  const insRegion = db.prepare('INSERT OR IGNORE INTO hold_regions(world_id, cx, cz, generated_tick) VALUES (?,?,?,?)');
-  const haveRegion = db.prepare('SELECT 1 FROM hold_regions WHERE world_id=? AND cx=? AND cz=?');
-  const R = radiusChunks == null ? HOLD_GEN_RADIUS : radiusChunks | 0;
-  const ws = worldSeedFor(worldId), caps = capsFor(worldId), ownerOf = nationOwnerMap(worldId);
-  const tick = db.prepare('SELECT sim_tick FROM worlds WHERE id=?').get(worldId).sim_tick;
-  const pcx = Math.floor(x / CHUNK), pcz = Math.floor(z / CHUNK);
-  let gen = 0, holds = 0;
-  db.transaction(() => {
-    for (let cx = pcx - R; cx <= pcx + R; cx++) for (let cz = pcz - R; cz <= pcz + R; cz++) {
-      if (haveRegion.get(worldId, cx, cz)) continue;                 // already generated this ground
-      insRegion.run(worldId, cx, cz, tick); gen++;
-      for (const s of WorldSim.settlementSites(cx, cz, ws)) {
-        const owner = WorldSim.settlementOwner(s, ws, caps, ownerOf);
-        insHold.run(worldId, cx, cz, s.idx, WorldSim.settlementName(s, ws), s.tier, s.x, s.z, owner, WorldSim.settlementGarrison(s, ws, 0), tick);
-        holds++;
-      }
-    }
-  })();
-  return { chunksGenerated: gen, holdsCreated: holds };
+  const tp = Chunks.tseedParams(worldId);
+  if (!tp) return { chunksEnsured: 0 };              // solo world before its client claimed a universe
+  return Chunks.ensureChunks(worldId, tp.level, tp.useed, x, z, radiusChunks == null ? HOLD_GEN_RADIUS : radiusChunks | 0, 12);
 }
 function holdKeyOf(h) { return h.cx + ',' + h.cz + ',' + h.idx; }
 // holds near a point (for /world serving + the contest scan). Bounded by a coordinate box.
+// Scoped to the world's CURRENT terrain — holds from old universes/regions stay dormant rows.
 function nearbyHolds(worldId, x, z, radius) {
+  const ts = worldSeedFor(worldId);
+  if (ts == null) return [];
   const r = radius == null ? 0 : radius;
-  if (!r) return db.prepare('SELECT * FROM holds WHERE world_id=?').all(worldId);
-  return db.prepare('SELECT * FROM holds WHERE world_id=? AND x BETWEEN ? AND ? AND z BETWEEN ? AND ?')
-    .all(worldId, x - r, x + r, z - r, z + r);
+  if (!r) return db.prepare('SELECT * FROM holds WHERE world_id=? AND tseed=?').all(worldId, ts);
+  return db.prepare('SELECT * FROM holds WHERE world_id=? AND tseed=? AND x BETWEEN ? AND ? AND z BETWEEN ? AND ?')
+    .all(worldId, ts, x - r, x + r, z - r, z + r);
 }
 // shape the client consumes for a server-owned settlement (siteKey = the holdings key)
 function holdWorldView(h) {
@@ -251,12 +223,14 @@ function getHolds(worldId, x, z, radius) { return nearbyHolds(worldId, x, z, rad
 // flips its owner_name (and any mirrored economy row), emits an event, and feeds recomputePower via
 // diplomacy's relation shock — so the war spreads across the frontier instead of orbiting 5 capitals.
 function contestHolds(worldId, tick, armies, relMap, busy) {
-  const sel = db.prepare('SELECT * FROM holds WHERE world_id=? AND x BETWEEN ? AND ? AND z BETWEEN ? AND ?');
+  const ts = worldSeedFor(worldId);
+  if (ts == null) return;                       // no claimed terrain yet — nothing to contest
+  const sel = db.prepare('SELECT * FROM holds WHERE world_id=? AND tseed=? AND x BETWEEN ? AND ? AND z BETWEEN ? AND ?');
   const flip = db.prepare('UPDATE holds SET owner_name=?, garrison=? WHERE id=?');
   const taken = new Set();    // one hold can't be taken twice in a tick
   for (const a of armies) {
     if (busy && busy.has(a.id)) continue;
-    const cand = sel.all(worldId, a.x - HOLD_SCAN_RADIUS, a.x + HOLD_SCAN_RADIUS, a.z - HOLD_SCAN_RADIUS, a.z + HOLD_SCAN_RADIUS);
+    const cand = sel.all(worldId, ts, a.x - HOLD_SCAN_RADIUS, a.x + HOLD_SCAN_RADIUS, a.z - HOLD_SCAN_RADIUS, a.z + HOLD_SCAN_RADIUS);
     let best = null, bd = HOLD_CONTEST_RANGE * HOLD_CONTEST_RANGE;
     for (const h of cand) {
       if (taken.has(h.id) || h.owner_name === a.faction) continue;     // already ours / already flipped this tick
@@ -319,7 +293,7 @@ function claimHolding(worldId, tick, body) {
   // freshly conquered settlement to its old NPC owner, so the player can never start ruling it.
   // Capitals ("cap:<idx>") live in the `capitals` table and flip via reportCapital, not here.
   const m = /^(-?\d+),(-?\d+),(\d+)$/.exec(v.holdKey);
-  if (m) db.prepare('UPDATE holds SET owner_name=? WHERE world_id=? AND cx=? AND cz=? AND idx=?').run(PLAYER, worldId, +m[1], +m[2], +m[3]);
+  if (m) { const ts = worldSeedFor(worldId); if (ts != null) db.prepare('UPDATE holds SET owner_name=? WHERE world_id=? AND tseed=? AND cx=? AND cz=? AND idx=?').run(PLAYER, worldId, ts, +m[1], +m[2], +m[3]); }
   const existing = holdRow(worldId, v.holdKey);
   if (existing) {
     if (existing.owner_name !== PLAYER) db.prepare('UPDATE holdings SET owner_name=?, last_econ_tick=?, updated_at=unixepoch() WHERE id=?').run(PLAYER, tick, existing.id);

@@ -271,6 +271,14 @@ const server = http.createServer(async (req, res) => {
       const r = chars.giveMen(viewWorldId, acct.id, await readBody(req));
       return send(res, r.ok ? 200 : 400, r);
     }
+    if (req.method === 'POST' && p === '/api/v1/chars/merge') {      // fold one character into another as a member (rally / join)
+      const r = chars.mergeChar(viewWorldId, acct.id, await readBody(req));
+      return send(res, r.ok ? 200 : 400, r);
+    }
+    if (req.method === 'POST' && p === '/api/v1/chars/detach') {     // re-split a member back out with some men
+      const r = chars.detachMember(viewWorldId, acct.id, await readBody(req));
+      return send(res, r.ok ? 200 : 400, r);
+    }
 
     if (req.method === 'POST' && p === '/api/v1/_advance') { // dev/test: force N world ticks immediately
       const b = await readBody(req);

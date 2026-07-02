@@ -200,6 +200,8 @@
   net.splitChar = function (body) { return charsCall('/split', body); };
   net.createChar = function (body) { return charsCall('/create', body); };
   net.giveMen = function (fromId, toId, men) { return charsCall('/give', { fromId: fromId, toId: toId, men: men }); };
+  net.mergeChar = function (fromId, intoId) { return charsCall('/merge', { fromId: fromId, intoId: intoId }); };
+  net.detachMember = function (memberId, men, x, z) { return charsCall('/detach', { memberId: memberId, men: men, x: x, z: z }); };
 
   // pre-fetch the world alongside the profile so the digest is ready when the player starts
   net.worldReady = net.loadWorld();

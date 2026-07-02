@@ -11,7 +11,8 @@ const MAX_CHARS = 8;     // per account per world — plenty for now
 function charView(r, withState) {
   const v = {
     charId: r.id, name: r.name, archetype: r.archetype, x: r.x, z: r.z,
-    men: r.men, renown: r.renown, active: !!r.is_active
+    men: r.men, renown: r.renown, active: !!r.is_active,
+    memberOf: r.member_of || null   // non-null = this character rides inside that party (no banner of its own)
   };
   if (withState) v.state = JSON.parse(r.state_json || '{}');
   return v;
@@ -50,6 +51,7 @@ function switchChar(worldId, accountId, body) {
   const to = myChar(worldId, accountId, body.toId);
   if (!to) return { ok: false, error: 'no such character' };
   if (to.is_active) return { ok: false, error: 'already playing that character' };
+  if (to.member_of) return { ok: false, error: 'that character rides in a party — re-split them out first' };
   const from = activeChar(worldId, accountId);
   db.transaction(() => {
     if (from) {
@@ -132,9 +134,47 @@ function trackActive(worldId, accountId, info) {
 // (Their active characters show through live presence instead, so no double banner.)
 function idleCharsOf(worldId, exceptAccount) {
   return db.prepare(`SELECT p.*, a.handle FROM player_chars p JOIN accounts a ON a.id=p.account_id
-    WHERE p.world_id=? AND p.account_id!=? AND p.is_active=0 AND p.status='alive'`)
+    WHERE p.world_id=? AND p.account_id!=? AND p.is_active=0 AND p.status='alive' AND p.member_of IS NULL`)
     .all(worldId, exceptAccount == null ? -1 : exceptAccount)
     .map(r => ({ name: r.name, faction: 'Banner of ' + r.handle, x: r.x, z: r.z, size: r.men, renown: r.renown, idle: true }));
 }
 
-module.exports = { adopt, switchChar, splitChar, createChar, giveMen, trackActive, roster, idleCharsOf, GIVE_RANGE, MAX_CHARS };
+// fold one of your characters into another as a MEMBER: its men join the target's headcount and it
+// shows no banner of its own, but it KEEPS its full career (name, renown, state_json) — member_of
+// records which party it rides in. A deliberate "rally / join" order, so (unlike giveMen) no proximity
+// requirement. Later you can detachMember() to re-split it back out with some men.
+function mergeChar(worldId, accountId, body) {
+  const into = myChar(worldId, accountId, body.intoId);
+  const src = myChar(worldId, accountId, body.fromId);
+  if (!into || !src) return { ok: false, error: 'unknown character' };
+  if (into.id === src.id) return { ok: false, error: 'cannot fold a character into itself' };
+  if (src.is_active) return { ok: false, error: 'cannot fold the character you are leading' };
+  if (src.member_of) return { ok: false, error: src.name + ' already rides in a party' };
+  const leaderId = into.member_of || into.id;  // fold into the party's actual leader, never a fellow member
+  const men = Math.max(0, src.men | 0);
+  db.transaction(() => {
+    db.prepare('UPDATE player_chars SET men=men+?, updated_at=unixepoch() WHERE id=?').run(men, leaderId);
+    db.prepare('UPDATE player_chars SET men=0, member_of=?, is_active=0, updated_at=unixepoch() WHERE id=?').run(leaderId, src.id);
+  })();
+  return { ok: true, merged: src.name, men: men, into: charView(myChar(worldId, accountId, leaderId)) };
+}
+
+// re-split a member back out of its party under its OWN banner, taking `men` from the party leader.
+// The member keeps its career; it stands beside the leader with the men you hand it.
+function detachMember(worldId, accountId, body) {
+  const mem = myChar(worldId, accountId, body.memberId);
+  if (!mem) return { ok: false, error: 'unknown character' };
+  if (!mem.member_of) return { ok: false, error: mem.name + ' already leads their own banner' };
+  const leader = myChar(worldId, accountId, mem.member_of);
+  if (!leader) return { ok: false, error: 'that party is gone' };
+  const men = Math.max(0, body.men | 0);
+  if (men > leader.men) return { ok: false, error: leader.name + ' has only ' + leader.men + ' men to spare' };
+  db.transaction(() => {
+    db.prepare('UPDATE player_chars SET men=men-?, updated_at=unixepoch() WHERE id=?').run(men, leader.id);
+    db.prepare('UPDATE player_chars SET men=?, member_of=NULL, x=?, z=?, updated_at=unixepoch() WHERE id=?')
+      .run(men, num(body.x, leader.x + 3), num(body.z, leader.z + 3), mem.id);
+  })();
+  return { ok: true, name: mem.name, men: men, member: charView(myChar(worldId, accountId, mem.id), true), leader: charView(myChar(worldId, accountId, leader.id)) };
+}
+
+module.exports = { adopt, switchChar, splitChar, createChar, giveMen, mergeChar, detachMember, trackActive, roster, idleCharsOf, GIVE_RANGE, MAX_CHARS };

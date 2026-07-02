@@ -203,27 +203,45 @@
   #auth-note { opacity: .6; font-size: 12px; margin-top: 10px; text-align: center; line-height: 1.5; }
   #auth-note b { color: #ffcf5b; }
 
-  /* ===== Characters (press U) — switch banners / split / trade men ===== */
-  #chars { z-index: 11; background: radial-gradient(ellipse at center, rgba(16,14,28,.985), rgba(6,5,11,.995)); }
-  #chars h1 { font-size: 38px; }
-  #ch-body { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; max-width: 940px; max-height: 52vh; overflow-y: auto; padding: 6px; }
-  .ch-card { pointer-events: auto; width: 265px; text-align: left; padding: 12px 14px; border-radius: 10px;
-    background: rgba(255,255,255,.05); border: 1px solid rgba(214,163,255,.25); }
-  .ch-card.you { border-color: rgba(255,207,91,.6); background: rgba(255,207,91,.08); }
-  .ch-name { font-size: 17px; font-weight: 700; color: #eaf2ff; }
-  .ch-name em { font-style: normal; font-size: 11px; color: #ffcf5b; letter-spacing: 1px; }
-  .ch-meta { font-size: 12px; opacity: .75; margin: 5px 0 9px; }
-  .ch-row { display: flex; gap: 6px; flex-wrap: wrap; }
+  /* ===== Characters (press U) — a right-side DRAWER: select, command, switch banners ===== */
+  #chars { position: fixed; top: 0; right: 0; bottom: 0; width: 380px; max-width: 94vw;
+    display: flex; flex-direction: column; text-align: left; z-index: 11;
+    background: linear-gradient(180deg, rgba(18,15,28,.975), rgba(9,7,14,.985));
+    border-left: 1px solid rgba(214,163,255,.28); box-shadow: -16px 0 48px rgba(0,0,0,.55); }
+  #chars > * { flex: 0 0 auto; }
+  .ch-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 11px; border-bottom: 1px solid rgba(255,255,255,.08); }
+  .ch-head h1 { font-size: 20px; margin: 0; letter-spacing: 1px; color: #eaf2ff; text-transform: none; background: none; -webkit-text-fill-color: currentColor; text-shadow: none; }
+  .ch-x { cursor: pointer; background: none; border: 1px solid rgba(255,255,255,.2); color: #cdd6e6; border-radius: 7px; width: 30px; height: 30px; font-size: 15px; line-height: 1; }
+  .ch-x:hover { background: rgba(255,255,255,.1); }
+  .ch-tools { display: flex; align-items: center; gap: 12px; padding: 9px 16px; font-size: 12px; color: #b9c4d8; border-bottom: 1px solid rgba(255,255,255,.06); }
+  .ch-tools label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  #ch-bulk { display: none; flex-wrap: wrap; gap: 6px; align-items: center; padding: 10px 14px; background: rgba(125,200,255,.09); border-bottom: 1px solid rgba(125,200,255,.22); }
+  #ch-bulk.on { display: flex; }
+  #ch-bulk .ch-bulk-n { font-size: 12px; color: #bfe0ff; font-weight: 700; margin-right: 2px; }
+  #ch-bulk button { cursor: pointer; border: 1px solid rgba(155,220,120,.45); background: rgba(155,220,120,.14); color: #e7ffd8; border-radius: 6px; padding: 6px 10px; font-size: 12px; }
+  #ch-bulk button:hover { background: rgba(155,220,120,.28); }
+  #ch-body { display: flex; flex-direction: column; gap: 8px; padding: 10px 14px; overflow-y: auto; flex: 1 1 auto; }
+  .ch-card { pointer-events: auto; position: relative; text-align: left; padding: 10px 12px 10px 36px; border-radius: 10px;
+    background: rgba(255,255,255,.045); border: 1px solid rgba(214,163,255,.22); cursor: pointer; }
+  .ch-card.you { border-color: rgba(255,207,91,.55); background: rgba(255,207,91,.07); cursor: default; }
+  .ch-card.sel { border-color: rgba(125,200,255,.85); background: rgba(125,200,255,.13); }
+  .ch-card.member { border-color: rgba(180,170,255,.28); background: rgba(150,140,220,.06); padding-left: 12px; cursor: default; }
+  .ch-check { position: absolute; left: 12px; top: 12px; width: 16px; height: 16px; cursor: pointer; accent-color: #6bb8ff; }
+  .ch-name { font-size: 15px; font-weight: 700; color: #eaf2ff; }
+  .ch-name em { font-style: normal; font-size: 10px; color: #ffcf5b; letter-spacing: 1px; }
+  .ch-order { font-style: normal; font-size: 10px; color: #8fd0ff; letter-spacing: .5px; text-transform: uppercase; border: 1px solid rgba(125,200,255,.4); border-radius: 4px; padding: 0 4px; margin-left: 4px; }
+  .ch-meta { font-size: 11.5px; opacity: .72; margin: 4px 0 8px; }
+  .ch-row { display: flex; gap: 5px; flex-wrap: wrap; }
   .ch-row button { cursor: pointer; border: 1px solid rgba(125,200,255,.4); background: rgba(125,200,255,.12);
-    color: #dcebff; border-radius: 6px; padding: 6px 10px; font-size: 12px; }
+    color: #dcebff; border-radius: 6px; padding: 5px 9px; font-size: 11.5px; }
   .ch-row button:hover { background: rgba(125,200,255,.26); }
-  .ch-row button:disabled { opacity: .35; cursor: default; }
-  #ch-new { pointer-events: auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: center;
-    border: 1px solid rgba(255,207,91,.3); border-radius: 8px; padding: 10px 14px; background: rgba(0,0,0,.25); }
+  .ch-row button:disabled { opacity: .34; cursor: default; }
+  #ch-new { pointer-events: auto; display: flex; gap: 7px; align-items: center; flex-wrap: wrap;
+    border-top: 1px solid rgba(255,255,255,.08); padding: 11px 14px; background: rgba(0,0,0,.22); }
   #ch-new input { background: rgba(0,0,0,.4); border: 1px solid rgba(255,207,91,.35); border-radius: 6px;
-    color: #e9eef5; padding: 7px 10px; font-size: 13px; outline: none; }
-  #ch-new .ch-lbl { font-size: 12px; letter-spacing: 1px; text-transform: uppercase; color: #ffe2a8; opacity: .85; }
-  #ch-msg { min-height: 16px; font-size: 13px; color: #ff9a9a; }
+    color: #e9eef5; padding: 6px 9px; font-size: 12.5px; outline: none; }
+  #ch-new .ch-lbl { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: #ffe2a8; opacity: .8; }
+  #ch-msg { padding: 7px 16px 0; min-height: 15px; font-size: 12px; color: #ff9a9a; }
 
   #gameover h1 { background: linear-gradient(180deg,#ff9a9a,#ff3d3d); -webkit-background-clip: text; background-clip: text; }
   #damage-flash { position: fixed; inset: 0; background: radial-gradient(ellipse at center, transparent 35%, rgba(190,0,0,.75)); opacity: 0; pointer-events: none; z-index: 5; will-change: opacity; }
@@ -495,21 +513,31 @@
   <button class="btn" id="cs-close">Close</button>
 </div>
 
-<div id="chars" class="overlay hidden">
-  <h1>Your Characters</h1>
-  <p style="opacity:.7;font-size:14px">One banner rides, the rest wait where you left them. Trade men when two of yours stand together (within 30 paces), or split off a fresh banner from the men you have.</p>
+<div id="chars" class="hidden">
+  <div class="ch-head">
+    <h1>Your Characters</h1>
+    <button class="ch-x" id="ch-close" title="Close (U)">✕</button>
+  </div>
+  <div class="ch-tools">
+    <label><input type="checkbox" id="ch-all"> Select all</label>
+    <span id="ch-selcount" style="opacity:.6"></span>
+  </div>
+  <div id="ch-bulk">
+    <span class="ch-bulk-n" id="ch-bulk-n">0 selected</span>
+    <button data-bulk="rally" title="Ride inside your party as members — keeps their career, re-split later">Join my party</button>
+    <button data-bulk="follow" title="March with your banner">Follow me</button>
+    <button data-bulk="patrol" title="Circle their post">Patrol</button>
+    <button data-bulk="halt" title="Stand where they are">Halt</button>
+  </div>
   <div id="ch-msg"></div>
   <div id="ch-body"></div>
   <div id="ch-new">
-    <button id="ch-random" class="auth-btn" style="flex:0 0 auto">✦ New random character</button>
-    <span style="opacity:.4">·</span>
-    <span class="ch-lbl">or split off</span>
-    <input id="ch-new-name" placeholder="character name" maxlength="24" style="width:150px">
-    <input id="ch-new-men" type="number" min="1" value="5" style="width:64px">
-    <span style="font-size:12px;opacity:.7">men</span>
-    <button id="ch-split" class="auth-btn" style="flex:0 0 auto">Split off</button>
+    <button id="ch-random" class="auth-btn">✦ New</button>
+    <span class="ch-lbl">or split</span>
+    <input id="ch-new-name" placeholder="name" maxlength="24" style="width:104px">
+    <input id="ch-new-men" type="number" min="1" value="5" style="width:52px">
+    <button id="ch-split" class="auth-btn">Split off</button>
   </div>
-  <button class="btn" id="ch-close">Close</button>
 </div>
 
 <div id="town" class="overlay hidden">

@@ -1505,21 +1505,28 @@ let pointerLocked = false;
 const TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0 || /[?&]touch=1/.test(location.search);
 let touchMove = { f: 0, s: 0, active: false };
 
-// third-person mouse look: pointer lock on the canvas, mouse steers the camera
+// third-person mouse look: pointer lock on the canvas, mouse steers the camera.
+// requestPointerLock returns a promise in modern browsers and REJECTS (async, so a
+// try/catch can't see it) when the call isn't tied to a live user gesture — swallow it.
+function grabPointer() {
+  if (!canvas.requestPointerLock) return;
+  try { const p = canvas.requestPointerLock(); if (p && p.catch) p.catch(() => {}); } catch (e) { /* needs a user gesture */ }
+}
 canvas.addEventListener('click', () => {
   SFX.init(); // browsers gate WebAudio behind a user gesture — this is the reliable one
-  // don't re-grab the cursor while the mid-battle command deck is open (it would vanish mid-order)
-  if (gameRunning && !commandPanelOpen && !pointerLocked && canvas.requestPointerLock) canvas.requestPointerLock();
+  // pointer lock rides with gameRunning: a real battle OR action mode (both are 3rd-person mouse-aim).
+  // Map/overworld leave gameRunning false, so their cursor stays free to click-march.
+  if (gameRunning && !commandPanelOpen && !pointerLocked) grabPointer();
 });
 document.addEventListener('pointerlockchange', () => {
   pointerLocked = document.pointerLockElement === canvas;
   // losing the cursor mid-battle (Esc / alt-tab) surfaces the command deck instead of stranding the player
   if (!pointerLocked && mode === 'battle' && gameRunning && !commandPanelOpen) openCommandDeck();
-  // in field mode there's no deck — tell the player how to re-aim (click) or pull back out (scroll/T)
-  else if (!pointerLocked && fieldSimOn() && !mapCmdMode) showCmdToast('Cursor freed — click to re-aim · scroll out or T to pull back to the map');
+  // in action mode there's no deck — tell the player how to re-aim (click) or pull back out (P)
+  else if (!pointerLocked && fieldSimOn() && !mapCmdMode) showCmdToast('Cursor freed — click to re-aim · P to pull back to the map');
 });
 addEventListener('mousemove', (e) => {
-  if (!pointerLocked || !gameRunning) return;
+  if (!pointerLocked || !gameRunning) return;   // mouse-look in battle + action mode; map/overworld stay north-up
   cameraAngle -= e.movementX * 0.0035;
   cameraHeight = clamp(cameraHeight + e.movementY * 0.02, 2.2, 10);
 });
@@ -1530,7 +1537,8 @@ addEventListener('keydown', (e) => {
   if (mode === 'plan' || commandPanelOpen) { handlePlanKey(e); return; } // commanding: keys order troops, not the fighter
   if (mode === 'battle' && gameRunning && handleBattleOrderKey(e)) return; // real-time squad orders WHILE you fight (no deck, no slow)
   if (e.code === 'Space') { e.preventDefault(); requestDodge(); }
-  if (e.code === 'KeyF') toggleWeapon();
+  // F draws the weapon in a fight — but on the strategic (top-down) map it's the Find-parties locator
+  if (e.code === 'KeyF' && !(mode === 'map' && !mapFieldMode && !encounter)) toggleWeapon();
 });
 addEventListener('keyup', (e) => { keys[e.code] = false; });
 canvas.addEventListener('mousedown', (e) => {
@@ -1598,7 +1606,7 @@ if (TOUCH) {
     if (moveId === null && lookId === null) return; // not steering -> let menus scroll
     for (const t of e.changedTouches) {
       if (t.identifier === moveId) setStick(t.clientX, t.clientY);
-      else if (t.identifier === lookId) {
+      else if (t.identifier === lookId && gameRunning) { // drag-look in battle + action mode; map/overworld stay north-up
         cameraAngle -= (t.clientX - lookLast.x) * 0.005;
         cameraHeight = clamp(cameraHeight + (t.clientY - lookLast.y) * 0.03, 2.2, 10);
         lookLast = { x: t.clientX, y: t.clientY };
@@ -2813,7 +2821,7 @@ function disposeGroup(g) {
 // ---------- Camera ----------
 const camBase = new THREE.Vector3(0, 12, 16); // smoothed follow position, pre-shake
 function updateCamera(dt) {
-  if (!pointerLocked) { // keyboard orbit fallback when the mouse isn't captured
+  if (!pointerLocked) { // keyboard orbit fallback when the mouse isn't captured (battle + action mode)
     if (keys['KeyQ']) cameraAngle -= dt * 2;
     if (keys['KeyE']) cameraAngle += dt * 2;
   }
@@ -2860,15 +2868,29 @@ function updateCamera(dt) {
   }
 }
 // strategic overview: a high, steeply-tilted camera looking down on the warband token
+// or discovery mode: very high, looking down on the entire explored world
+// A short-lived override that frames a spot on the strategic map (one of your other characters,
+// say) instead of your own banner. Ticks down in updateMapCamera, then the camera drifts back to you.
+let mapCamFocus = null;   // { x, z, t }
+function focusMapOn(x, z, secs) { mapCamFocus = { x: x, z: z, t: secs || 5 }; }
+function clearMapFocus() { mapCamFocus = null; }
+// MAP and OVERWORLD are the SAME north-looking rig, centered on the character — the overworld just
+// sits farther out along the SAME view ray (lift and pull-back scaled by one multiplier). Because the
+// look target and the direction are identical at both rungs, switching is a pure dolly: the camera
+// glides out/in along one line and never rotates. (Action mode is the separate 3rd-person camera.)
+const OVERWORLD_ZOOM = 3;  // how much farther the overworld eye sits vs map mode
 function updateMapCamera(dt) {
   const k = clamp(dt * 4, 0, 1);
-  const gy = mapElevY(player.pos.x, player.pos.z); // ride the relief so the cam clears hills and peaks
-  // the vista zooms the eye-in-the-sky out as the world is explored — smoothed by the same lerp
-  camBase.x = lerp(camBase.x, player.pos.x, k);
-  camBase.y = lerp(camBase.y, gy + vlerp(VISTA.camLift), k);
-  camBase.z = lerp(camBase.z, player.pos.z + vlerp(VISTA.camBack), k); // south offset = tilt, not pure top-down
+  if (mapCamFocus) { mapCamFocus.t -= dt; if (mapCamFocus.t <= 0) mapCamFocus = null; }
+  const fx = mapCamFocus ? mapCamFocus.x : player.pos.x;   // frame a focused spot, else your own banner
+  const fz = mapCamFocus ? mapCamFocus.z : player.pos.z;
+  const gy = mapElevY(fx, fz); // ride the relief so the cam clears hills and peaks
+  const mul = discoveryMode ? OVERWORLD_ZOOM : 1;          // overworld = same ray, just farther out
+  camBase.x = lerp(camBase.x, fx, k);
+  camBase.y = lerp(camBase.y, gy + vlerp(VISTA.camLift) * mul, k);
+  camBase.z = lerp(camBase.z, fz + vlerp(VISTA.camBack) * mul, k);
   camera.position.copy(camBase);
-  camera.lookAt(player.pos.x, gy, player.pos.z);
+  camera.lookAt(fx, gy, fz);
 }
 
 // ---------- Field mode: zoom into the overworld and play as your character (battle controls) ----------
@@ -2927,12 +2949,15 @@ function setFieldMode(on, opts) {
     spawnFieldCompany();                              // your company falls in behind you
     if (player.mapToken) player.mapToken.visible = false; // hide the strategic banner...
     setDetVisible(false);                             // ...and any detachment columns
+    if (typeof clearFindFlares === 'function') clearFindFlares(); // locator flares are a top-down aid
     player.obj.visible = true;
     gameRunning = true;                              // unlocks pointer-lock + mouse-aim + attack/dodge/weapon
-    cameraAngle = player.facing + Math.PI;            // start the camera behind the hero
+    cameraAngle = player.facing + Math.PI;            // 3rd person: start behind the hero (rotation is welcome here)
     cameraDist = 9 * FIELD_SCALE; cameraHeight = 5 * FIELD_SCALE; // frame the small hero so the walls tower over him
-    if (canvas.requestPointerLock) { try { canvas.requestPointerLock(); } catch (e) { /* needs a user gesture */ } }
-    showCmdToast('Field view — lead the company on foot · mouse aim · click attack · scroll out / T to pull back');
+    // ACTION MODE locks the mouse for aim-look. Entered via the L keydown (a real user gesture), so the
+    // pointer-lock request is allowed — unlike the old scroll-wheel path browsers rejected.
+    grabPointer();
+    showCmdToast('Action — mouse aim · click attack · WASD move · P back to the map');
   } else {
     clearAllies();                                   // the on-foot escort folds back into the banner
     clearAllFieldArmies();                           // nearby hosts go back to being banner tokens
@@ -2941,9 +2966,9 @@ function setFieldMode(on, opts) {
     if (player.mapToken) player.mapToken.visible = true;
     setDetVisible(true);
     gameRunning = false;
-    cameraAngle = 0;                                  // strategic: W = up the screen again
+    cameraAngle = 0;                                  // stay north-up (it already is; keep it explicit)
     if (document.exitPointerLock) document.exitPointerLock();
-    showCmdToast('Strategic view — scroll in (or T) to drop down and lead on foot');
+    showCmdToast('Strategic view — press L to drop into action, P for the wide overview');
   }
   if (TOUCH && window.updateTouchHud) window.updateTouchHud();
 }
@@ -3382,6 +3407,22 @@ let mapVista = mapMiles / (mapMiles + VISTA.k); // 0..1 derived survey reach
 let _mileSaveT = 0;       // throttles persistence of the running total
 const vlerp = (pair) => pair[0] + (pair[1] - pair[0]) * mapVista;
 
+// ---------- Discovery overview: shows previously visited areas + other characters at extreme zoom ----------
+let discoveryMode = false;              // true = showing discovery overview (extreme zoom-out)
+const discoveredChunks = new Set();     // chunk keys ("cx,cz") of visited areas
+try {
+  const saved = localStorage.getItem('bv-discovered-chunks');
+  if (saved) saved.split(',').forEach(k => discoveredChunks.add(k));
+} catch (e) { /* private mode */ }
+
+function markChunkDiscovered(cx, cz) {
+  const key = `${cx},${cz}`;
+  if (!discoveredChunks.has(key)) {
+    discoveredChunks.add(key);
+    try { localStorage.setItem('bv-discovered-chunks', Array.from(discoveredChunks).join(',')); } catch (e) {}
+  }
+}
+
 // ---------- Hex lattice: the overworld is a honeycomb, not a pixel grid ----------
 // Terrain and the political overlay both live on ONE global hex lattice (pointy-top, odd-r
 // offset). A cell is addressed by integer (q, r); its world centre is a pure function of (q, r),
@@ -3616,6 +3657,7 @@ function buildChunk(cx, cz) {
   }
   mapTerrain.add(group);
   mapChunks.set(key, { group, holds, terr });
+  markChunkDiscovered(cx, cz);  // track this area as visited
   paintChunkTerritory(mapChunks.get(key));           // show it immediately, before the first generation
 }
 function disposeChunk(key) {
@@ -3630,23 +3672,32 @@ function clearChunks() { for (const key of Array.from(mapChunks.keys())) dispose
 function updateChunks(force) {
   if (!mapTerrain) return;
   const pcx = Math.floor(player.pos.x / CHUNK), pcz = Math.floor(player.pos.z / CHUNK), pk = pcx + ',' + pcz;
-  if (!force && pk === _lastPlayerChunk) return;   // only re-stream when the player crosses a chunk line
+  if (!force && pk === _lastPlayerChunk && !discoveryMode) return;   // only re-stream when the player crosses a chunk line (disabled in discovery mode)
   _lastPlayerChunk = pk;
-  if (SRV_ON) {
-    const ws = worldSeed();
-    if (ws !== _srvSeed) { srvChunks.clear(); _srvInflight.clear(); _srvSeed = ws; }  // reroll/region → fresh store
-    const want = [];                               // mesh ring + one prefetch ring so riding never waits
-    for (let dx = -VIEW - 1; dx <= VIEW + 1; dx++) for (let dz = -VIEW - 1; dz <= VIEW + 1; dz++) want.push((pcx + dx) + ',' + (pcz + dz));
-    srvRequest(want);
-  }
-  for (let dx = -VIEW; dx <= VIEW; dx++) for (let dz = -VIEW; dz <= VIEW; dz++) buildChunk(pcx + dx, pcz + dz);
-  for (const key of Array.from(mapChunks.keys())) {
-    const c = key.indexOf(','), kx = +key.slice(0, c), kz = +key.slice(c + 1);
-    if (Math.abs(kx - pcx) > VIEW + 1 || Math.abs(kz - pcz) > VIEW + 1) disposeChunk(key);
-  }
-  if (SRV_ON) for (const key of Array.from(srvChunks.keys())) {   // the store holds ONLY the rings (user rule: viewport memory)
-    const c = key.indexOf(','), kx = +key.slice(0, c), kz = +key.slice(c + 1);
-    if (Math.abs(kx - pcx) > VIEW + 2 || Math.abs(kz - pcz) > VIEW + 2) srvChunks.delete(key);
+  if (discoveryMode) {
+    // in discovery mode, only show already-discovered chunks (no new terrain generation)
+    for (const key of Array.from(mapChunks.keys())) {
+      const c = key.indexOf(','), kx = +key.slice(0, c), kz = +key.slice(c + 1);
+      // keep discovered chunks even if far away; dispose undiscovered ones to save memory
+      if (!discoveredChunks.has(key)) disposeChunk(key);
+    }
+  } else {
+    if (SRV_ON) {
+      const ws = worldSeed();
+      if (ws !== _srvSeed) { srvChunks.clear(); _srvInflight.clear(); _srvSeed = ws; }  // reroll/region → fresh store
+      const want = [];                             // mesh ring + one prefetch ring so riding never waits
+      for (let dx = -VIEW - 1; dx <= VIEW + 1; dx++) for (let dz = -VIEW - 1; dz <= VIEW + 1; dz++) want.push((pcx + dx) + ',' + (pcz + dz));
+      srvRequest(want);
+    }
+    for (let dx = -VIEW; dx <= VIEW; dx++) for (let dz = -VIEW; dz <= VIEW; dz++) buildChunk(pcx + dx, pcz + dz);
+    for (const key of Array.from(mapChunks.keys())) {
+      const c = key.indexOf(','), kx = +key.slice(0, c), kz = +key.slice(c + 1);
+      if (Math.abs(kx - pcx) > VIEW + 1 || Math.abs(kz - pcz) > VIEW + 1) disposeChunk(key);
+    }
+    if (SRV_ON) for (const key of Array.from(srvChunks.keys())) {   // the store holds ONLY the rings (user rule: viewport memory)
+      const c = key.indexOf(','), kx = +key.slice(0, c), kz = +key.slice(c + 1);
+      if (Math.abs(kx - pcx) > VIEW + 2 || Math.abs(kz - pcz) > VIEW + 2) srvChunks.delete(key);
+    }
   }
 }
 
@@ -4062,6 +4113,7 @@ function clearMarch(msg) {
   if (msg) showCmdToast(msg);
 }
 function orderMarch(tx, tz) {
+  if (typeof clearMapFocus === 'function') clearMapFocus(); // a fresh march order pulls the camera back to you
   const land = nearestLand(tx, tz), lx = land[0], lz = land[1];
   const t = travelPath(player.pos.x, player.pos.z, lx, lz);
   if (!t) { showCmdToast('No route — the land bars the way'); return false; }
@@ -5437,36 +5489,51 @@ function updateActiveCall(dt) {
   updateRallyBanner();
 }
 addEventListener('keydown', (e) => { if (e.code === 'KeyG' && mode === 'map' && !encounter) { e.preventDefault(); raiseCall(); } });
-// T: swap the overworld between the strategic eye-in-the-sky and the 3rd-person ride-along
-addEventListener('keydown', (e) => { if (e.code === 'KeyT' && mode === 'map' && !encounter && !mapCmdMode && !commandPanelOpen) { e.preventDefault(); setFieldMode(!mapFieldMode); } });
-// mouse wheel zooms the overworld: scroll IN drops you to field mode (then zooms the chase cam closer);
-// scroll OUT pulls the chase cam back, and once it's all the way out, lifts you to the strategic view
-addEventListener('wheel', (e) => {
+// Overworld zoom is keyboard-only (L in / P out). The mouse wheel is intentionally NOT bound: a wheel
+// event can't hold the transient activation the browser requires to grant pointer lock, so entering
+// action mode from a scroll would land you locked-out. A keydown can — hence L/P below.
+// L / P step the overworld zoom from the keyboard — always available, no mouse gesture needed.
+// Three rungs, out -> in: 0 = discovery overview · 1 = strategic banner · 2 = action ride-along.
+// Only the action rung locks the mouse, and since L is a keydown (a real gesture) that lock is allowed.
+function overworldZoom(dir) {                           // dir: +1 = zoom in (L), -1 = zoom out (P)
   if (mode !== 'map' || encounter || mapCmdMode || commandPanelOpen) return;
+  clearMapFocus();                                      // changing zoom re-centres on your own banner
+  const rung = mapFieldMode ? 2 : discoveryMode ? 0 : 1;
+  const to = clamp(rung + dir, 0, 2);
+  if (to === rung) return;
+  if (to === 2) { discoveryMode = false; setFieldMode(true); }        // -> action (setFieldMode grabs the pointer + toasts)
+  else if (to === 1) {                                                // -> strategic banner
+    if (mapFieldMode) setFieldMode(false);                           // from action: setFieldMode releases the lock + toasts
+    else { discoveryMode = false; showCmdToast('Strategic view — L to lead on foot, P for the wide overview'); }
+  } else { if (mapFieldMode) setFieldMode(false); discoveryMode = true; showCmdToast('Overview — every land you\'ve seen · L to return'); } // -> discovery
+}
+addEventListener('keydown', (e) => {
+  if (e.code !== 'KeyL' && e.code !== 'KeyP') return;
+  if (mode !== 'map' || encounter || mapCmdMode || commandPanelOpen) return;
+  const el = document.activeElement;                   // don't steal the key while typing (sign-in fields, etc.)
+  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
   e.preventDefault();
-  // field cameraDist lives at FIELD_SCALE (the hero is small), so the zoom band scales with it
-  const step = 1.2 * FIELD_SCALE, near = 4 * FIELD_SCALE, far = 16 * FIELD_SCALE, popOut = 15 * FIELD_SCALE;
-  if (e.deltaY < 0) {                          // zoom in
-    if (!mapFieldMode) setFieldMode(true);
-    else cameraDist = clamp(cameraDist - step, near, far);
-  } else {                                      // zoom out
-    if (mapFieldMode) { if (cameraDist >= popOut) setFieldMode(false); else cameraDist = clamp(cameraDist + step, near, far); }
-  }
-}, { passive: false });
+  overworldZoom(e.code === 'KeyL' ? 1 : -1);
+});
 
 // Fold the distance just ridden into the running survey reach, then push fog / stream-radius to match.
 // (The camera lift+pullback is read from mapVista in updateMapCamera so the zoom-out stays smoothed.)
 function applyVista(moved, dt) {
-  if (moved > 0) {
+  if (moved > 0 && !discoveryMode) {  // don't move the player in discovery mode
     mapMiles += moved;
     mapVista = mapMiles / (mapMiles + VISTA.k);
     _mileSaveT += dt;
     if (_mileSaveT > 5) { _mileSaveT = 0; try { localStorage.setItem('bv-map-miles', String(Math.round(mapMiles))); } catch (e) {} }
   }
-  scene.fog.near = vlerp(VISTA.fogNear);
-  scene.fog.far = vlerp(VISTA.fogFar);
+  if (discoveryMode) {
+    scene.fog.near = 500;  // far fog for overview
+    scene.fog.far = 1500;
+  } else {
+    scene.fog.near = vlerp(VISTA.fogNear);
+    scene.fog.far = vlerp(VISTA.fogFar);
+  }
   const wantView = Math.round(vlerp(VISTA.view));
-  if (wantView !== VIEW) {
+  if (wantView !== VIEW && !discoveryMode) {
     const grew = wantView > VIEW;
     VIEW = wantView;
     updateChunks(true); // re-stream at the new radius right away
@@ -5476,7 +5543,7 @@ function applyVista(moved, dt) {
 
 function updateMap(dt) {
   const opx = player.pos.x, opz = player.pos.z;   // ground reference BEFORE movement (hero or banner)
-  if (encounter) return; // a parley/siege prompt is open — the whole map (and the character) holds until you choose
+  if (encounter || discoveryMode) return; // a parley/siege prompt is open — the whole map (and the character) holds until you choose; discovery mode is view-only
   const serverDriven = isServerMap(); // when online, the server owns the macro war (clashes/conquests)
   tickMapDiplomacy(dt, serverDriven); // evolve faction relations: server truth online, shared kernel in solo
   _pathBudget = 1;                    // one road-route plan per frame across all bands/detachments — no hitches
@@ -5669,8 +5736,10 @@ function updateMap(dt) {
     while (add-- > 0) { reinforceMap(); aliveParties++; }
   }
   if (activeCall) updateActiveCall(dt); // advance a standing Call to Arms / Crusade
+  updateFindFlares(dt);                 // pulse & retire any locator flares from a Find command
   if (aliveParties === 0 && !serverDriven) enterMap(); // somehow emptied → next, bigger region
   sendPresenceMaybe(dt); // multiplayer: heartbeat your banner + refresh rivals
+  updateMyCharAgents(dt); // your own waiting characters march out their follow/patrol orders
   enemyCountEl.textContent = 'Army ' + armyTotal() + (detachments.length ? ' (with you ' + warbandTotal() + ', ' + detachments.length + ' detached)' : '') + ' · Foes nearby: ' + aliveParties;
   if (partyStamEl) {                                   // the column's marching condition (drains in the hills, rests on the roads)
     const st = Math.round(partyStamina);
@@ -5767,6 +5836,7 @@ function enterBattle(band) {
   coopMult = clamp(1 + 0.05 * muster.banners, 1, 1.5); // working together: harder hits, more grit (up to +50%)
   for (const c of muster.contributors) { for (const it of buildAllyReinforcement(c.size, c.level, c.faction && c.faction.name)) playerReserve.push(it); battleReinforced += c.size; }
   if (activeCall) clearCall(); // the muster is led into battle — the call is answered and lowered
+  clearFindFlares();           // locator flares belong to the strategic map — drop them for the fight
   enemyReserve = buildEnemyRoster(band.size, band.level);
   enemiesRemaining = enemyReserve.length;
   // big hosts overflow the field cap: shuffle both reserves so the OPENING line is a
@@ -6525,7 +6595,7 @@ function beginBattle() {
   player.pos.set(0, 0, 0); player.vel.set(0, 0, 0); player.obj.position.set(0, 0, 0);
   player.alive = true; player.hp = player.maxHp; player.stamina = player.maxStam;
   showWaveBanner('Clash!', 'Hold the line! · command live: 1–9/G pick · H hold · T charge · R regroup · B free · Z/X pace');
-  if (canvas.requestPointerLock) canvas.requestPointerLock();
+  grabPointer();
   obBattleStart(); // first-battle onboarding: aim/attack/block/dodge (reliable fallback; windup poll may pre-empt)
 }
 function openCommandDeck() { // mid-battle: cursor freed (pointer-lock lost) -> tactical command
@@ -6540,7 +6610,7 @@ function resumeBattle() {
   commandPanelOpen = false; timeScale = 1;
   cmdDeck.classList.remove('open');
   clearSelection();
-  if (canvas.requestPointerLock) canvas.requestPointerLock();
+  grabPointer();
 }
 // a high, tilted overview of the field — your side near, the enemy host beyond
 function updatePlanCamera(dt) {
@@ -7870,6 +7940,8 @@ BV.vista = (miles) => {
   return { miles: Math.round(mapMiles), vista: +mapVista.toFixed(3), view: VIEW,
     fog: [Math.round(scene.fog.near), Math.round(scene.fog.far)], camLift: +vlerp(VISTA.camLift).toFixed(1) };
 };
+// discovery overview: toggle and inspect visited areas
+BV.discovery = (on) => { if (on !== undefined) discoveryMode = !!on; return { mode: discoveryMode, chunks: discoveredChunks.size, list: Array.from(discoveredChunks).slice(0, 20) }; };
 // ride-along view: read/set the 3rd-person overworld camera (automated-test + console hook)
 BV.rideView = (on) => { if (mode === 'map' && on !== undefined) setFieldMode(!!on); return mapFieldMode; };
 BV.fieldMode = BV.rideView; // alias: the real name for the on-foot character roam
@@ -8174,6 +8246,108 @@ BV.serverBands = () => parties.filter(p => p.alive && p.serverId).map(p => ({ na
 BV.otherPlayers = () => otherPlayerTokens.length;
 
 // ============================================================================
+//  FIND PARTIES — a locator command so parties can find each other on the map.
+//  On the shared world a banner is a speck in a wide land; press F on the
+//  strategic map and every OTHER party (other living players, their camps, and
+//  your own waiting characters) raises a bright flare + a compass entry you can
+//  march straight to. It's symmetric — anyone can call it — so parties find one
+//  another. Purely client-side: it reads the presence positions already synced.
+// ----------------------------------------------------------------------------
+// world bearing to an 8-point compass glyph (-z is North on the overworld).
+function compassGlyph(dx, dz) {
+  const a = Math.atan2(dx, -dz);                       // 0 = North, +→East
+  const i = ((Math.round(a / (Math.PI / 4)) % 8) + 8) % 8;
+  return ['↑', '↗', '→', '↘', '↓', '↙', '←', '↖'][i];
+}
+// the parties you'd want to find: fellow players (live + camped) and your own
+// waiting characters — the same banners renderOtherPlayers / renderMyChars draw.
+function findablePartyList() {
+  const out = [];
+  for (const p of (window.net && window.net.world && window.net.world.players) || [])
+    out.push({ name: p.name, x: p.x, z: p.z, kind: p.idle ? 'camp' : 'player', men: p.size || 0 });
+  if (window.net && window.net.session)
+    for (const c of (window.net.charsList || [])) { if (c.active) continue; out.push({ name: c.name, x: c.x, z: c.z, kind: 'own', men: c.men || 0 }); }
+  for (const e of out) { const dx = e.x - player.pos.x, dz = e.z - player.pos.z; e.dist = Math.hypot(dx, dz); e.dir = compassGlyph(dx, dz); }
+  out.sort((a, b) => a.dist - b.dist);
+  return out;
+}
+// a tall pulsing beam raised over a party so it pops out of a crowded map
+const findFlares = [];               // { group, life }
+const FIND_FLARE_LIFE = 12;          // seconds a flare burns before fading out
+function makeFindFlare(color) {
+  const g = new THREE.Group();
+  const beam = boxMesh(0.5, 26, 0.5, mat(color, { shared: false, emissive: color, emissiveI: 0.8 }));
+  beam.position.y = 13; beam.material.transparent = true; g.add(beam); g.userData.beam = beam;
+  const ring = new THREE.Mesh(cachedGeo('findRing', () => { const c = new THREE.RingGeometry(3.4, 4.4, 36); c.rotateX(-Math.PI / 2); return c; }),
+    mat(color, { shared: false, emissive: color, emissiveI: 0.6 }));
+  ring.material.transparent = true; ring.position.y = 0.3; g.add(ring); g.userData.ring = ring;
+  scene.add(g); return g;
+}
+function clearFindFlares() { for (const f of findFlares) { scene.remove(f.group); disposeGroup(f.group); } findFlares.length = 0; }
+function raiseFindFlare(x, z, color) {
+  const g = makeFindFlare(color);
+  g.position.set(x, mapElevY(x, z), z);
+  findFlares.push({ group: g, life: FIND_FLARE_LIFE });
+}
+// tick from updateMap: pulse the live flares and retire the burnt-out ones
+function updateFindFlares(dt) {
+  if (!findFlares.length) return;
+  for (let i = findFlares.length - 1; i >= 0; i--) {
+    const f = findFlares[i]; f.life -= dt;
+    if (f.life <= 0) { scene.remove(f.group); disposeGroup(f.group); findFlares.splice(i, 1); continue; }
+    const fade = Math.min(1, f.life / 2);              // fade the last 2s out
+    const pulse = 0.5 + 0.5 * Math.sin(rtNow * 6);
+    f.group.userData.beam.material.opacity = (0.32 + 0.28 * pulse) * fade;
+    f.group.userData.ring.material.opacity = (0.4 + 0.35 * pulse) * fade;
+  }
+}
+let findPanel = null;
+function ensureFindPanel() {
+  if (findPanel) return findPanel;
+  findPanel = document.createElement('div');
+  findPanel.id = 'find-panel';
+  findPanel.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);min-width:340px;max-width:80vw;' +
+    'background:rgba(16,12,24,.95);border:1px solid #39d0ff;border-radius:14px;padding:20px 22px;z-index:60;color:#f3ead8;' +
+    'box-shadow:0 10px 40px rgba(0,0,0,.6);display:none;font-family:inherit';
+  document.body.appendChild(findPanel);
+  return findPanel;
+}
+const FIND_ICON = { player: '☆', camp: '☾', own: '◆' };
+const FIND_TINT = { player: 0x39d0ff, camp: 0x2f7ea0, own: 0xffcf5b };
+// F on the strategic map: flare every other party and open a compass you can march by
+function findParties() {
+  if (mode !== 'map' || encounter || mapCmdMode || commandPanelOpen) return;
+  const list = findablePartyList();
+  clearFindFlares();
+  if (!list.length) {
+    showWaveBanner('No Parties in Sight', (window.net && window.net.sharedWorld)
+      ? 'No other players or waiting bands are on the map right now.'
+      : 'Ride the shared world (add ?mp) or field more characters to find company.');
+    return;
+  }
+  for (const e of list) raiseFindFlare(e.x, e.z, FIND_TINT[e.kind] || 0x39d0ff);
+  const p = ensureFindPanel();
+  p.innerHTML = '<h2 style="margin:0 0 4px;color:#39d0ff;font-size:22px">Parties on the Map</h2>' +
+    '<div style="font-size:12px;opacity:.65;margin-bottom:10px">Flares raised — pick one to march to it.</div>' +
+    list.map((e, i) =>
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;border-top:1px solid #2c3648">' +
+      '<span style="font-size:14px">' + (FIND_ICON[e.kind] || '☆') + ' <b>' + escHtml(e.name) + '</b>' +
+      (e.kind === 'own' ? ' <span style="opacity:.6">· your banner</span>' : e.kind === 'camp' ? ' <span style="opacity:.6">· camped</span>' : '') +
+      '<br><span style="opacity:.7;font-size:12px">' + e.dir + ' ' + Math.round(e.dist) + ' paces' + (e.men ? ' · ' + e.men + ' men' : '') + '</span></span>' +
+      '<button data-find="' + i + '" style="background:#2a6fd0;color:#fff;border:none;border-radius:8px;padding:7px 14px;cursor:pointer;white-space:nowrap">March ⚑</button></div>').join('') +
+    '<div style="margin-top:14px;text-align:right"><button id="find-close" style="background:#2a2233;color:#f3ead8;border:1px solid #6b5e7a;border-radius:8px;padding:7px 14px;cursor:pointer">Close</button></div>';
+  p.style.display = 'block';
+  document.getElementById('find-close').onclick = () => { p.style.display = 'none'; };
+  for (const btn of p.querySelectorAll('[data-find]')) btn.onclick = () => {
+    const e = list[+btn.getAttribute('data-find')]; p.style.display = 'none';
+    orderMarch(e.x, e.z); showCmdToast('Marching to find ' + e.name);
+  };
+  showCmdToast(list.length + ' part' + (list.length === 1 ? 'y' : 'ies') + ' on the map — flares raised');
+}
+addEventListener('keydown', (e) => { if (e.code === 'KeyF' && mode === 'map' && !mapFieldMode && !encounter && !mapCmdMode && !commandPanelOpen) { e.preventDefault(); findParties(); } });
+BV.findParties = () => findablePartyList();
+
+// ============================================================================
 //  MULTIPLE CHARACTERS (signed-in accounts) — one banner rides, the rest wait
 // ----------------------------------------------------------------------------
 //  Username/password auth (client-net keeps the session; its token rides the
@@ -8189,6 +8363,35 @@ let activeCharId = null;
 let charsAdopted = false;
 let _charsTick = 0;
 const myCharTokens = [];
+const chSelected = new Set();        // charIds ticked in the drawer for a bulk order
+// client-side orders driving your OWN waiting characters on the map: charId -> live agent
+// { kind:'follow'|'patrol'|'hold', x, z, cx, cz, phase }. Movement is a live client visualisation
+// (positions aren't persisted server-side yet — a page reload returns each banner to where it waits).
+const charOrders = new Map();
+function charAgent(c) {
+  let a = charOrders.get(c.charId);
+  if (!a) { a = { kind: 'hold', x: c.x, z: c.z, cx: c.x, cz: c.z, phase: rand(0, Math.PI * 2) }; charOrders.set(c.charId, a); }
+  return a;
+}
+function setCharOrder(c, kind) { const a = charAgent(c); a.kind = kind; if (kind === 'patrol') { a.cx = a.x; a.cz = a.z; } return a; }
+// step the ordered banners each map frame: followers home on your active banner, patrols circle their post
+function updateMyCharAgents(dt) {
+  if (mode !== 'map' || !charOrders.size || !(window.net && window.net.charsList)) return;
+  const spd = 8;
+  for (const c of window.net.charsList) {
+    if (c.active || c.memberOf) continue;
+    const a = charOrders.get(c.charId); if (!a || a.kind === 'hold') continue;
+    if (a.kind === 'follow') {
+      const dx = player.pos.x - a.x, dz = player.pos.z - a.z, d = Math.hypot(dx, dz) || 1;
+      if (d > 7) { const s = Math.min(spd * dt, d - 7); a.x += dx / d * s; a.z += dz / d * s; }
+    } else if (a.kind === 'patrol') {
+      a.phase += dt * 0.55; a.x = a.cx + Math.cos(a.phase) * 8; a.z = a.cz + Math.sin(a.phase) * 8;
+    }
+    c.x = a.x; c.z = a.z;                                // keep the drawer distance + tokens on the live spot
+    const tok = myCharTokens.find(t => t.userData && t.userData.charId === c.charId);
+    if (tok) tok.position.set(a.x, mapElevY(a.x, a.z), a.z);
+  }
+}
 
 function escHtml(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch])); }
 function bundleCharState() {
@@ -8258,9 +8461,13 @@ function renderMyChars() {
   if (!(window.net && window.net.session)) return;
   for (const c of (window.net.charsList || [])) {
     if (c.active) { activeCharId = c.charId; continue; }
+    if (c.memberOf) continue;                            // a member rides inside a party — no banner of its own
+    const a = charOrders.get(c.charId);                  // a moving character rides its live agent spot
+    const cx = a && a.kind !== 'hold' ? a.x : c.x, cz = a && a.kind !== 'hold' ? a.z : c.z;
     const g = makeOtherPlayerToken(c.name + ' · ' + c.men, c.men, { color: 0xffcf5b, prefix: '◆ ' });
-    const px = clamp(c.x, -MAP_HALF + 1, MAP_HALF - 1), pz = clamp(c.z, -MAP_HALF + 1, MAP_HALF - 1);
+    const px = clamp(cx, -MAP_HALF + 1, MAP_HALF - 1), pz = clamp(cz, -MAP_HALF + 1, MAP_HALF - 1);
     g.position.set(px, mapElevY(px, pz), pz);
+    g.userData.charId = c.charId;
     scene.add(g); myCharTokens.push(g);
   }
 }
@@ -8285,18 +8492,55 @@ function ensureCharAdopted() {
 // ----- the U panel: switch / split / trade -----
 function chMsg(t, good) { const el = document.getElementById('ch-msg'); if (el) { el.textContent = t || ''; el.style.color = good ? '#9aff6b' : '#ff9a9a'; } }
 function chCard(c) {
-  const d = Math.round(Math.hypot(c.x - player.pos.x, c.z - player.pos.z));
+  if (c.memberOf) {                                      // rides inside a party — no banner, but keeps its career
+    const lead = (window.net && window.net.charsList || []).find(x => x.charId === c.memberOf);
+    return '<div class="ch-card member" data-ch="' + c.charId + '">' +
+      '<div class="ch-name">◈ ' + escHtml(c.name) + ' <span class="ch-order">in party</span></div>' +
+      '<div class="ch-meta">rides with ' + escHtml(lead ? lead.name : 'your banner') + ' · renown ' + Math.round(c.renown) + '</div>' +
+      '<div class="ch-row"><button data-act="detach">Re-split…</button></div>' +
+    '</div>';
+  }
+  const a = c.active ? null : charOrders.get(c.charId);
+  const px = a && a.kind !== 'hold' ? a.x : c.x, pz = a && a.kind !== 'hold' ? a.z : c.z;
+  const d = Math.round(Math.hypot(px - player.pos.x, pz - player.pos.z));
   const near = d <= CH_GIVE_RANGE;
-  return '<div class="ch-card' + (c.active ? ' you' : '') + '" data-ch="' + c.charId + '">' +
-    '<div class="ch-name">' + (c.active ? '★ ' : '◆ ') + escHtml(c.name) + (c.active ? ' <em>RIDING</em>' : '') + '</div>' +
-    '<div class="ch-meta">' + c.men + ' men · renown ' + Math.round(c.renown) + (c.active ? '' : ' · ' + d + ' paces away') + '</div>' +
+  const sel = chSelected.has(c.charId);
+  const order = a && a.kind !== 'hold' ? a.kind : null;
+  return '<div class="ch-card' + (c.active ? ' you' : '') + (sel ? ' sel' : '') + '" data-ch="' + c.charId + '"' + (c.active ? '' : ' title="click to frame on the map"') + '>' +
+    (c.active ? '' : '<input type="checkbox" class="ch-check"' + (sel ? ' checked' : '') + '>') +
+    '<div class="ch-name">' + (c.active ? '★ ' : '◆ ') + escHtml(c.name) + (c.active ? ' <em>RIDING</em>' : '') +
+      (order ? ' <span class="ch-order">' + order + '</span>' : '') + '</div>' +
+    '<div class="ch-meta">' + c.men + ' men · renown ' + Math.round(c.renown) + (c.active ? '' : ' · ' + d + ' paces') + '</div>' +
     (c.active ? '' :
       '<div class="ch-row">' +
-        '<button data-act="switch">Take command</button>' +
-        '<button data-act="give"' + (near ? '' : ' disabled title="march within ' + CH_GIVE_RANGE + ' paces to trade men"') + '>Give men…</button>' +
-        '<button data-act="take"' + (near && c.men > 0 ? '' : ' disabled title="march within ' + CH_GIVE_RANGE + ' paces to trade men"') + '>Take men…</button>' +
+        '<button data-act="focus">Focus</button>' +
+        '<button data-act="goto">Go there</button>' +
+        '<button data-act="switch">Command</button>' +
+        '<button data-act="give"' + (near ? '' : ' disabled title="within ' + CH_GIVE_RANGE + ' paces to trade men"') + '>Give…</button>' +
+        '<button data-act="take"' + (near && c.men > 0 ? '' : ' disabled title="within ' + CH_GIVE_RANGE + ' paces to trade men"') + '>Take…</button>' +
       '</div>') +
     '</div>';
+}
+// paint the cards from the last-loaded roster (no network round-trip) — used after selection/order changes
+function paintCharCards() {
+  const body = document.getElementById('ch-body'); if (!body) return;
+  const list = (window.net && window.net.charsList) || [];
+  body.innerHTML = list.map(chCard).join('') || '<div class="cs-empty">No characters yet — ride on, one will be sworn in.</div>';
+  updateChBulk();
+}
+// keep the bulk bar + select-all box in sync with the current selection
+function updateChBulk() {
+  const others = (window.net && window.net.charsList || []).filter(c => !c.active && !c.memberOf);
+  for (const id of [...chSelected]) if (!others.some(c => c.charId === id)) chSelected.delete(id); // drop stale picks
+  const bar = document.getElementById('ch-bulk'); if (bar) bar.classList.toggle('on', chSelected.size > 0);
+  const n = document.getElementById('ch-bulk-n'); if (n) n.textContent = chSelected.size + ' selected';
+  const cnt = document.getElementById('ch-selcount'); if (cnt) cnt.textContent = chSelected.size ? chSelected.size + ' of ' + others.length : '';
+  const all = document.getElementById('ch-all'); if (all) all.checked = others.length > 0 && others.every(c => chSelected.has(c.charId));
+}
+function toggleChSel(id, on) {
+  if (on) chSelected.add(id); else chSelected.delete(id);
+  const card = document.querySelector('.ch-card[data-ch="' + id + '"]'); if (card) card.classList.toggle('sel', on);
+  updateChBulk();
 }
 function renderCharsPanel() {
   const body = document.getElementById('ch-body'); if (!body) return;
@@ -8307,8 +8551,52 @@ function renderCharsPanel() {
   body.innerHTML = '<div class="cs-empty">Riding out…</div>';
   window.net.loadChars().then(list => {
     if (!list) return void (body.innerHTML = '<div class="cs-empty">The server is out of reach.</div>');
-    body.innerHTML = list.map(chCard).join('') || '<div class="cs-empty">No characters yet — ride on, one will be sworn in.</div>';
+    paintCharCards();
     renderMyChars();
+  });
+}
+// bulk order the ticked characters. join = fold their men into your active party (server merge);
+// follow/patrol = live march orders; halt = stand down.
+function doBulkOrder(kind) {
+  if (mode !== 'map' || encounter) return chMsg('finish what you are doing first');
+  const list = (window.net && window.net.charsList) || [];
+  const picked = [...chSelected].map(id => list.find(c => c.charId === id)).filter(c => c && !c.active && !c.memberOf);
+  if (!picked.length) return;
+  if (kind === 'rally') {
+    let folded = 0, pending = picked.length;
+    for (const c of picked) {
+      window.net.mergeChar(c.charId, activeCharId).then(r => {
+        if (r && r.ok) { folded++; if (r.men) addMenLocal(r.men); charOrders.delete(c.charId); chSelected.delete(c.charId); }
+        if (--pending === 0) {
+          presenceT = 0; saveCareers();
+          chMsg(folded + ' banner' + (folded === 1 ? '' : 's') + ' folded into your party.', true);
+          window.net.loadChars().then(() => { renderMyChars(); paintCharCards(); });
+        }
+      });
+    }
+    return;
+  }
+  for (const c of picked) { if (kind === 'halt') charOrders.delete(c.charId); else setCharOrder(c, kind); }
+  const verb = { follow: 'follow your banner', patrol: 'patrol their post', halt: 'stand down' }[kind] || kind;
+  chMsg(picked.length + ' ordered to ' + verb + '.', true);
+  renderMyChars(); paintCharCards();
+}
+// re-split a member back out of its party under its own banner, taking some men from the leader
+function doDetachMember(id) {
+  if (mode !== 'map' || encounter) return chMsg('finish what you are doing first');
+  const list = (window.net && window.net.charsList) || [];
+  const mem = list.find(c => c.charId === id); if (!mem || !mem.memberOf) return;
+  const lead = list.find(c => c.charId === mem.memberOf);
+  const cap = lead ? lead.men : 0;
+  if (cap < 1) return chMsg('no men to spare — the party is empty');
+  const n = parseInt(prompt('Give how many men to ' + mem.name + '? (' + cap + ' available)', String(Math.min(5, cap))) || '0', 10);
+  if (!(n > 0)) return;
+  window.net.detachMember(id, n).then(r => {
+    if (!r || !r.ok) return chMsg((r && r.error) || 'could not re-split');
+    if (mem.memberOf === activeCharId) takeMenLocal(n);   // the men leave your live column under the re-split banner
+    presenceT = 0; saveCareers();
+    chMsg(mem.name + ' rides out again with ' + n + ' men.', true);
+    window.net.loadChars().then(() => { renderMyChars(); paintCharCards(); });
   });
 }
 function toggleCharsPanel(force) {
@@ -8331,6 +8619,27 @@ function doSwitchChar(id) {
       chMsg('You now ride as ' + r.active.name + ' — your old banner waits where you left it.', true);
       renderCharsPanel();
     });
+}
+// look up one of your characters (from the last-loaded roster) by its id
+function charById(id) { return (window.net && window.net.charsList || []).find(c => c.charId === id) || null; }
+// close the panel and swing the strategic camera onto that character, marking them with a flare
+function doFocusChar(id) {
+  const c = charById(id); if (!c) return;
+  toggleCharsPanel(false);
+  if (mapFieldMode) setFieldMode(false);        // the flare + framing live on the strategic map
+  focusMapOn(c.x, c.z, 6);
+  if (typeof clearFindFlares === 'function') { clearFindFlares(); raiseFindFlare(c.x, c.z, 0xffcf5b); }
+  showCmdToast('Framing ' + c.name + ' · ' + Math.round(Math.hypot(c.x - player.pos.x, c.z - player.pos.z)) + ' paces away');
+}
+// close the panel and march YOUR banner to that character's camp
+function doGoToChar(id) {
+  const c = charById(id); if (!c) return;
+  if (mode !== 'map' || encounter) return chMsg('finish what you are doing first');
+  toggleCharsPanel(false);
+  if (mapFieldMode) setFieldMode(false);
+  clearMapFocus();                               // the camera rides with you as you set off
+  if (typeof clearFindFlares === 'function') { clearFindFlares(); raiseFindFlare(c.x, c.z, 0xffcf5b); }
+  if (orderMarch(c.x, c.z)) showCmdToast('Marching to ' + c.name);
 }
 function doGiveMen(fromId, toId, promptTxt) {
   if (fromId == null || toId == null) return;
@@ -8406,15 +8715,30 @@ if (charsOverlay) {
   }
   const chBody = document.getElementById('ch-body');
   if (chBody) chBody.addEventListener('click', (e) => {
-    const btn = e.target.closest && e.target.closest('button[data-act]');
-    if (!btn || btn.disabled) return;
-    const card = e.target.closest('.ch-card');
+    const card = e.target.closest && e.target.closest('.ch-card');
     const id = card && parseInt(card.getAttribute('data-ch'), 10);
     if (!id) return;
+    if (e.target.classList && e.target.classList.contains('ch-check')) { toggleChSel(id, e.target.checked); return; } // tick for a bulk order
+    const btn = e.target.closest('button[data-act]');
+    if (!btn) { if (!card.classList.contains('you')) doFocusChar(id); return; } // a bare click on the card frames it on the map
+    if (btn.disabled) return;
     const act = btn.getAttribute('data-act');
-    if (act === 'switch') doSwitchChar(id);
+    if (act === 'focus') doFocusChar(id);
+    else if (act === 'goto') doGoToChar(id);
+    else if (act === 'switch') doSwitchChar(id);
+    else if (act === 'detach') doDetachMember(id);
     else if (act === 'give') doGiveMen(activeCharId, id, 'Give how many men to that banner?');
     else if (act === 'take') doGiveMen(id, activeCharId, 'Take how many men from that banner?');
+  });
+  const chAll = document.getElementById('ch-all');
+  if (chAll) chAll.addEventListener('change', () => {
+    const others = (window.net && window.net.charsList || []).filter(c => !c.active && !c.memberOf);
+    if (chAll.checked) others.forEach(c => chSelected.add(c.charId)); else chSelected.clear();
+    paintCharCards();
+  });
+  const chBulk = document.getElementById('ch-bulk');
+  if (chBulk) chBulk.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-bulk]'); if (b) doBulkOrder(b.getAttribute('data-bulk'));
   });
 }
 // ----- sign-in gate on the title screen: sign in / create account, THEN "Enter the Vale" -----
@@ -8456,6 +8780,12 @@ function refreshAuthGate() {
 })();
 BV.chars = () => ({ active: activeCharId, list: (window.net && window.net.charsList || []).slice(), waitingTokens: myCharTokens.length });
 BV.switchChar = doSwitchChar;
+BV.focusChar = doFocusChar;   // frame one of your characters on the map
+BV.goToChar = doGoToChar;     // march your banner to one of your characters
+BV.selectChar = (id, on) => { toggleChSel(id, on !== false); }; // tick a character for a bulk order
+BV.bulkOrder = doBulkOrder;   // 'rally' | 'follow' | 'patrol' | 'halt' on the ticked characters
+BV.detachMember = doDetachMember; // re-split a member back out under their own banner
+BV.charOrders = () => [...charOrders.entries()].map(([id, a]) => ({ id: id, kind: a.kind, x: Math.round(a.x), z: Math.round(a.z) }));
 BV.splitChar = (name, men) => { const n = document.getElementById('ch-new-name'), m = document.getElementById('ch-new-men'); if (n) n.value = name; if (m) m.value = men; doSplitChar(); };
 BV.toggleChars = toggleCharsPanel;
 

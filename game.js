@@ -3742,7 +3742,7 @@ function buildChunkTerrainHex(group, cells) {
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   geo.setIndex(new THREE.BufferAttribute(indices, 1));
   geo.computeVertexNormals();
-  const mesh = new THREE.Mesh(geo, new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: true, shininess: 3 }));
+  const mesh = new THREE.Mesh(geo, terraMat());
   mesh.receiveShadow = true; mesh.castShadow = false;
   group.add(mesh);
   return { colorAttr: geo.attributes.color, base, items, tvc, topIdx };
@@ -3926,7 +3926,8 @@ function paintChunkTerritory(rec) {
 //   • tiny foot-PATHs spur off into the countryside.
 // Every edge is ROUTED, not drawn straight: a seeded S-curve plus a few relaxation passes that
 // pull the polyline off water and around steep ground, so roads bend through valleys and skirt
-// peaks. The whole in-view network bakes into ONE ribbon mesh draped on the relief (mapElevY).
+// peaks. The whole in-view network is BRUSHED into the terrain itself: strokes on a world-aligned
+// splat canvas that the terrain shader composites over its vertex colours (see _roadSplatPaint).
 // Roads also drive movement feel: roadInfoAt() + landRoughAt() let parties march fast & rested on
 // a road and slow & tired through the mountains, and bias enemy hosts toward the roads.
 // Pure function of (worldSeed, settlement lattice) — no Math.random, so it matches run-to-run.
@@ -3940,18 +3941,18 @@ const ROAD = {
   kNearest: 3,          // legacy/minor: each node links to its K nearest neighbours (symmetric union)
   trunkK: 2,            // legacy: cities/capitals additionally link to their nearest big neighbours
   hubDegCap: 4,         // v2: cap a hub's trunk fan-out so a central capital doesn't become a hairball
-  segStep: 5,           // polyline sample spacing, world units (denser = the ribbon hugs the relief, fewer chord gaps)
+  segStep: 5,           // polyline sample spacing, world units (denser = smoother curves in the painted stroke)
   relaxPasses: 3,       // terrain-following relaxation iterations per edge
   fall: 2.6,            // how far (u) the road's movement benefit fades past its edge
 };
 // per-tier look + width; tier is set by the humbler of the two endpoints (a road is only as grand as its lesser town).
-// Colours are a deep packed-earth so the roads read against bright grass AND blown-out highland glare; the
-// material carries a small emissive floor (see roadMat) so they never wash fully white under the strong map sun.
+// Colours are a deep packed-earth so the roads read against bright grass; they're painted into the terrain's own
+// diffuse (see _roadSplatPaint / terraMat), so they shade WITH the land instead of fighting its glare.
 const ROAD_TIER = {
-  major:  { w: 3.4, lift: 0.50, col: 0x9a9ba0, str: 1.00 }, // grey stone highway between cities & capitals
-  medium: { w: 2.2, lift: 0.46, col: 0x85868b, str: 0.82 }, // town road — dressed gravel
-  small:  { w: 1.4, lift: 0.42, col: 0x737470, str: 0.62 }, // village lane — packed grit
-  path:   { w: 0.7, lift: 0.38, col: 0x7a6a50, str: 0.40 }, // a tiny foot-trail stays bare earth
+  major:  { w: 3.4, col: 0x9a9ba0, str: 1.00 }, // grey stone highway between cities & capitals
+  medium: { w: 2.2, col: 0x85868b, str: 0.82 }, // town road — dressed gravel
+  small:  { w: 1.4, col: 0x737470, str: 0.62 }, // village lane — packed grit
+  path:   { w: 0.7, col: 0x7a6a50, str: 0.40 }, // a tiny foot-trail stays bare earth
 };
 // movement feel — terrain slows & tires, roads speed & rest
 const MOVE = {
@@ -3966,7 +3967,7 @@ const MOVE = {
   fatigueSlow: 0.45,    // exhausted (0%) march is this much slower
 };
 let partyStamina = 100;          // the warband's marching condition on the overworld (separate from combat player.stamina)
-let roadMesh = null;             // the single merged ribbon for the loaded region
+let roadMesh = null;             // roadside decoration (waymarker stones) for the loaded region — the roadbeds themselves are painted into the terrain splat
 let roadGrid = null;             // Map "gx,gz" -> [segment] spatial hash for O(1) roadInfoAt queries
 const ROAD_GRID = 14;            // spatial-hash cell size (u)
 const roadRouteCache = new Map();// edgeKey -> routed polyline [{x,z}], region-scoped (kept across chunk crossings)
@@ -4205,7 +4206,7 @@ function travelPath(sx, sz, tx, tz, maxExpand) {
   return { pts, seconds: secs, roadFrac: total ? road / total : 0 };
 }
 
-// ---- the road network: nodes → edges → routed polylines → one ribbon mesh ----
+// ---- the road network: nodes → edges → routed polylines → brush strokes on the terrain splat ----
 function _roadSites(cx, cz) {
   const k = cx + ',' + cz; let s = roadSiteCache.get(k);
   if (!s) { s = settlementSites(cx, cz); roadSiteCache.set(k, s); }
@@ -4599,7 +4600,7 @@ function _edgeWallSafe(e, pts) {
   }
   return true;
 }
-// (re)build the whole in-view network: hierarchy → routed ribbons → one merged mesh + rocks + query grid
+// (re)build the whole in-view network: hierarchy → routed polylines → splat repaint + rocks + query grid
 function roadRebuild(pcx, pcz) {
   // keep the region-scoped caches from growing without bound on a very long ride (they refill lazily)
   if (roadRouteCache.size > 4000) roadRouteCache.clear();
@@ -4608,7 +4609,7 @@ function roadRebuild(pcx, pcz) {
   const edges = roadBuildNetwork(nodes);
   _roadEdges = edges;
   roadGrid = new Map();
-  const pos = [], col = [], rc = new THREE.Color(), rockPts = [];
+  const rockPts = [], jobs = [];
   const cxw = (pcx + 0.5) * CHUNK, czw = (pcz + 0.5) * CHUNK, renderR = (ROAD.renderChunkR + 0.5) * CHUNK;
   let drawn = 0, segs = 0;
   for (const e of edges) {
@@ -4621,52 +4622,36 @@ function roadRebuild(pcx, pcz) {
     if (wet / pts.length > 0.18 || maxRun >= 3) continue; // no bridges yet — a road never fords open water
     if (!e.key.startsWith('city:') && !e.key.startsWith('street:') && !_edgeWallSafe(e, pts)) continue; // a road NEVER crosses a wall away from a gate — better no road than a breach
     const T = ROAD_TIER[e.tier];
-    rc.setHex(T.col);
     drawn++;
-    // MITERED ribbon: each JOINT gets one shared pair of offset verts (normal = the average of its two
-    // segment normals), so consecutive quads share edges — a continuous laid road, no cracks or wedge
-    // gaps at the bends. Width/tone still graded per joint by the land.
-    const J = pts.length, jx1 = new Float64Array(J), jz1 = new Float64Array(J), jx2 = new Float64Array(J), jz2 = new Float64Array(J),
-          jy1 = new Float64Array(J), jy2 = new Float64Array(J), jr = new Float64Array(J), jg = new Float64Array(J), jb = new Float64Array(J), jhw = new Float64Array(J);
+    // per-JOINT grading, same spirit as the old mitered ribbon: the stroke narrows and its tone
+    // dirties on rough ground, and a low-frequency jitter keeps a long haul from reading machine-laid.
+    const J = pts.length, jhw = new Float64Array(J), jt = new Float64Array(J);
     for (let i = 0; i < J; i++) {
-      const p = pts[i], pPrev = pts[Math.max(0, i - 1)], pNext = pts[Math.min(J - 1, i + 1)];
-      let tx = pNext.x - pPrev.x, tz = pNext.z - pPrev.z;                // joint tangent (central difference)
-      const tl = Math.hypot(tx, tz) || 1; tx /= tl; tz /= tl;
-      const nx = -tz, nz = tx;
-      const rgh = landRoughAt(p.x, p.z);
-      const hw = T.w * 0.5 * (1.12 - rgh * 0.62);
-      const jit = (0.95 + _vnoise(p.x * 0.3, p.z * 0.3, worldSeed() + 51) * 0.12) * (1 - rgh * 0.16);
-      jr[i] = rc.r * jit; jg[i] = rc.g * jit; jb[i] = rc.b * jit; jhw[i] = hw;
-      jx1[i] = p.x + nx * hw; jz1[i] = p.z + nz * hw; jx2[i] = p.x - nx * hw; jz2[i] = p.z - nz * hw;
-      jy1[i] = mapElevY(jx1[i], jz1[i]) + T.lift; jy2[i] = mapElevY(jx2[i], jz2[i]) + T.lift;
+      const p = pts[i], rgh = landRoughAt(p.x, p.z);
+      jhw[i] = T.w * 0.5 * (1.12 - rgh * 0.62);
+      jt[i] = (0.95 + _vnoise(p.x * 0.3, p.z * 0.3, worldSeed() + 51) * 0.12) * (1 - rgh * 0.16);
     }
     for (let i = 0; i < J - 1; i++) {
       const p = pts[i], q = pts[i + 1];
-      pos.push(jx1[i], jy1[i], jz1[i], jx2[i], jy2[i], jz2[i], jx1[i + 1], jy1[i + 1], jz1[i + 1],
-               jx2[i], jy2[i], jz2[i], jx2[i + 1], jy2[i + 1], jz2[i + 1], jx1[i + 1], jy1[i + 1], jz1[i + 1]);
-      col.push(jr[i], jg[i], jb[i], jr[i], jg[i], jb[i], jr[i + 1], jg[i + 1], jb[i + 1],
-               jr[i], jg[i], jb[i], jr[i + 1], jg[i + 1], jb[i + 1], jr[i + 1], jg[i + 1], jb[i + 1]);
       _roadGridAdd({ x1: p.x, z1: p.z, x2: q.x, z2: q.z, w: jhw[i] * 2, str: T.str });
       if (e.tier === 'major' && (i % 3 === 1)) {       // waymarker stones line the great roads
-        const side = (i % 6 === 1) ? 1 : -1, nx = (jx1[i] - p.x) / (jhw[i] || 1), nz = (jz1[i] - p.z) / (jhw[i] || 1);
+        const pPrev = pts[Math.max(0, i - 1)], pNext = pts[Math.min(J - 1, i + 1)];
+        let tx = pNext.x - pPrev.x, tz = pNext.z - pPrev.z;              // joint tangent (central difference)
+        const tl = Math.hypot(tx, tz) || 1, nx = -tz / tl, nz = tx / tl;
+        const side = (i % 6 === 1) ? 1 : -1;
         const ox = p.x + nx * side * (jhw[i] + 0.9), oz = p.z + nz * side * (jhw[i] + 0.9);
         if (!isWater(ox, oz)) rockPts.push({ x: ox, z: oz });
       }
       segs++;
     }
+    jobs.push({ pts, T, jhw, jt });
   }
+  _roadSplatPaint(jobs, cxw, czw, renderR);            // the roads themselves are brushed INTO the terrain (see _roadSplatPaint)
   if (roadMesh) { if (mapTerrain) mapTerrain.remove(roadMesh); disposeGroup(roadMesh); roadMesh = null; }
   // (the wall-safety cull lives in _edgeWallSafe below — see the draw loop)
-  if (pos.length && mapTerrain) {
+  if (rockPts.length && mapTerrain) {
     const grp = new THREE.Group();
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
-    geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(col), 3));
-    geo.computeVertexNormals();
-    const ribbon = new THREE.Mesh(geo, roadMat());
-    ribbon.receiveShadow = true; ribbon.renderOrder = 1;
-    grp.add(ribbon); grp.userData.ribbon = ribbon;
-    if (rockPts.length) {                              // seeded roadside stones (deterministic from position)
+    {                                                  // seeded roadside stones (deterministic from position)
       const rm = new THREE.InstancedMesh(cachedGeo('mapRock', () => new THREE.IcosahedronGeometry(1, 0)), mat(0x8d8f95), rockPts.length);
       const m4 = new THREE.Matrix4(), qq = new THREE.Quaternion(), ee = new THREE.Euler(), vv = new THREE.Vector3(), sv = new THREE.Vector3();
       rockPts.forEach((p, i) => {
@@ -4682,12 +4667,99 @@ function roadRebuild(pcx, pcz) {
   }
   _roadStats = { nodes: nodes.length, edges: edges.length, drawn, segs };
 }
-let _ROAD_MAT = null;
-function roadMat() {
-  // UNLIT so the ribbons keep their packed-earth tone everywhere — they never wash to white in the
-  // blown-out highland glare the way a lit material does. polygonOffset keeps them off the relief cleanly.
-  if (!_ROAD_MAT) { _ROAD_MAT = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }); _ROAD_MAT.userData.cached = true; _ROAD_MAT.userData.noTint = true; }
-  return _ROAD_MAT;
+// ---------- Road splat: the network is PAINTED into the terrain, like a brush ----------
+// The old ribbons were separate meshes floated `lift` units above the relief — between hex vertices
+// the two surfaces disagreed, so roads read as blocks hovering on the land. Now the routed polylines
+// are STROKED into one top-down canvas (soft worn-shoulder pass + opaque core pass, round caps,
+// per-segment width/tone), and the terrain material samples that canvas by world XZ in its fragment
+// shader. The road IS the terrain surface: it hugs every hex top, takes the same sun and shadows as
+// the grass, and its anti-aliased alpha edge feathers into the land like a brush stroke.
+const ROAD_SPLAT = {
+  size: 2048,      // canvas resolution (px) — ~2.8 px per world unit over the render window
+  pad: 30,         // world-margin past the road render window so strokes never clip at the rim
+  tone: 0.90,      // painted tint of the tier colour (terrain lighting brings it back up)
+  vergeW: 2.2,     // worn shoulder width, × the core width
+  vergeA: 0.28,    // shoulder opacity — packed earth bleeding into the grass
+};
+let _roadCv = null, _roadCtx = null, _roadTex = null, _roadDbg = false;
+const _roadWinU = { value: new THREE.Vector3(0, 0, 0) };  // (window centre x, z, 1/span) — one uniform shared by all terrain
+function _roadSplatInit() {
+  if (_roadCv) return;
+  _roadCv = document.createElement('canvas');
+  _roadCv.width = _roadCv.height = ROAD_SPLAT.size;
+  _roadCtx = _roadCv.getContext('2d');
+  _roadTex = new THREE.CanvasTexture(_roadCv);
+  _roadTex.flipY = false;                                  // uv.y runs with +z, same as the canvas rows
+  _roadTex.wrapS = _roadTex.wrapT = THREE.ClampToEdgeWrapping;
+  _roadTex.anisotropy = 4;                                 // keeps the strokes crisp under the shallow map tilt
+}
+// ONE shared material for every terrain chunk, patched to composite the road splat over the vertex
+// colours: sample by world XZ, clip to the splat window, and mask to up-facing ground (the derivative
+// normal) so a cliff wall under a road's edge never smears grey down its face. The mix runs after
+// color_fragment, so roads override the political tint exactly like the old noTint ribbons did.
+let TERRA_MAT = null;
+function terraMat() {
+  if (TERRA_MAT) return TERRA_MAT;
+  _roadSplatInit();
+  const m = new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: true, shininess: 3 });
+  m.onBeforeCompile = (sh) => {
+    sh.uniforms.uRoadTex = { value: _roadTex };
+    sh.uniforms.uRoadWin = _roadWinU;
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vRoadWP;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRoadWP = (modelMatrix * vec4(position, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform sampler2D uRoadTex;\nuniform vec3 uRoadWin;\nvarying vec3 vRoadWP;')
+      .replace('#include <color_fragment>', '#include <color_fragment>\n' + [
+        // sampled OUTSIDE any branch (mip derivatives stay defined), then masked: inside the splat
+        // window, window active (z>0), and up-facing ground only — cliff walls keep pure terrain.
+        'vec2 rUv = (vRoadWP.xz - uRoadWin.xy) * uRoadWin.z + 0.5;',
+        'vec4 rd = texture2D(uRoadTex, rUv);',
+        'rd.a = min(1.0, rd.a * 1.5);',   // mip levels average the stroke with empty canvas — pull the core back up so roads hold at distance
+        'vec2 rIn = step(abs(rUv - 0.5), vec2(0.5));',
+        'float rUp = smoothstep(0.25, 0.55, abs(normalize(cross(dFdx(vRoadWP), dFdy(vRoadWP))).y));',
+        'diffuseColor.rgb = mix(diffuseColor.rgb, rd.rgb, rd.a * rUp * rIn.x * rIn.y * step(0.0001, uRoadWin.z));',
+      ].join('\n'));
+  };
+  m.userData.cached = true; m.userData.noTint = true;
+  TERRA_MAT = m;
+  return m;
+}
+// stroke the routed edges into the splat canvas: first every edge's soft worn shoulder, then every
+// opaque core (cores always cross junctions clean), foot-trails as a dashed hairline. setTransform
+// maps world→canvas, so widths and dash lengths below are in world units.
+function _roadSplatPaint(jobs, cxw, czw, renderR) {
+  _roadSplatInit();
+  const S = ROAD_SPLAT.size, half = renderR + ROAD_SPLAT.pad, span = half * 2, k = S / span, ctx = _roadCtx;
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, S, S);
+  ctx.setTransform(k, 0, 0, k, (half - cxw) * k, (half - czw) * k);
+  ctx.lineCap = ctx.lineJoin = 'round';
+  const css = (hex, m, a) => 'rgba(' + Math.min(255, ((hex >> 16) & 255) * m | 0) + ',' + Math.min(255, ((hex >> 8) & 255) * m | 0) + ',' + Math.min(255, (hex & 255) * m | 0) + ',' + a + ')';
+  const trace = (pts) => { ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].z); for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].z); };
+  for (const j of jobs) {                              // pass 1: shoulders (one stroke per edge — a single path never double-blends with itself)
+    if (j.T === ROAD_TIER.path) continue;              // a foot-trail has no built shoulder
+    ctx.strokeStyle = _roadDbg ? 'rgba(255,90,42,0.5)' : css(j.T.col, ROAD_SPLAT.tone * 0.72, ROAD_SPLAT.vergeA);
+    ctx.lineWidth = j.T.w * ROAD_SPLAT.vergeW;
+    trace(j.pts); ctx.stroke();
+  }
+  for (const j of jobs) {                              // pass 2: cores
+    const pts = j.pts;
+    if (j.T === ROAD_TIER.path) {                      // trail: a worn dashed hairline
+      ctx.setLineDash([2.4, 2.0]);
+      ctx.strokeStyle = _roadDbg ? '#ff5a2a' : css(j.T.col, ROAD_SPLAT.tone, 0.8);
+      ctx.lineWidth = j.T.w;
+      trace(pts); ctx.stroke();
+      ctx.setLineDash([]);
+      continue;
+    }
+    for (let i = 0; i < pts.length - 1; i++) {         // opaque per-segment strokes keep the per-joint width & tone grading (round caps weld them seamless)
+      ctx.strokeStyle = _roadDbg ? '#ff5a2a' : css(j.T.col, ROAD_SPLAT.tone * (j.jt[i] + j.jt[i + 1]) * 0.5, 1);
+      ctx.lineWidth = j.jhw[i] + j.jhw[i + 1];
+      ctx.beginPath(); ctx.moveTo(pts[i].x, pts[i].z); ctx.lineTo(pts[i + 1].x, pts[i + 1].z); ctx.stroke();
+    }
+  }
+  _roadTex.needsUpdate = true;
+  _roadWinU.value.set(cxw, czw, 1 / span);
 }
 // rebuild the network only when the player crosses into a new chunk (cheap, routes are cached)
 function ensureRoads(force) {
@@ -4701,6 +4773,8 @@ function ensureRoads(force) {
 function roadResetRegion() {
   roadMesh = null; roadGrid = null; _roadChunk = '';
   roadRouteCache.clear(); roadSiteCache.clear();
+  if (_roadCtx) { _roadCtx.setTransform(1, 0, 0, 1, 0, 0); _roadCtx.clearRect(0, 0, ROAD_SPLAT.size, ROAD_SPLAT.size); _roadTex.needsUpdate = true; }
+  _roadWinU.value.set(0, 0, 0);                   // gates the shader mix off until the next rebuild paints
   _terraMemo.clear(); _seatMemo.clear();          // both key off worldSeed-derived terrain — a new region invalidates them
   _routeAvoid = [];
   partyStamina = 100;
@@ -5201,6 +5275,38 @@ function sgPalisade(P) {                                                 // a ti
     sgCone8(S, lx, y - 0.3 + 3.1, lz, 0.68, 0.7, sgRgb(pal.stoneDk, 1));
   }
 }
+// GRAND GATEHOUSE — stone arch over tall timber doors, twin flanking watchtowers. ONE recipe shared by
+// the city wall ring (sgCityWall) and the editor's standalone ?edit=gate stage, so an edit shows in both.
+// towerAt(sgn) supplies each watchtower's ground spot — the ring curves, a lone gate's wall runs straight.
+function sgGatehouse(S, lx, lz, ang, seat, wallH, thick, pal, towerAt) {
+  const stone = sgRgb(pal.stone, 1), stoneDk = sgRgb(pal.stoneDk, 1), woodD = sgRgb(pal.wood, 0.72);
+  const y = seat(lx, lz), doorH = wallH + 1.6, doorW = 2.8;
+  sgBox(S, lx, y + wallH + 0.7, lz, doorW + 1.0, 0.95, thick * 1.8, ang, stoneDk);
+  sgBox(S, lx, y + doorH / 2, lz, doorW, doorH, 0.5, ang, woodD);
+  for (const sgn of [-1, 1]) {
+    const [tx, tz] = towerAt(sgn), ty = seat(tx, tz), th2 = wallH + 3.8;
+    sgPrism(S, tx, ty - 0.7, tz, 1.34, th2 + 0.7, stone);
+    sgCone8(S, tx, ty - 0.7 + th2 + 0.7, tz, 1.6, 1.5, stoneDk);
+  }
+}
+// a lone city gate for the object editor (?edit=gate): a straight stretch of the great stone wall —
+// bays + level parapet + end drum towers — broken by the grand gatehouse, so the gate is the subject.
+function buildCityGate() {
+  const pal = settlePalette(biomeAt(0, 0)), S = { pos: [], col: [] };
+  const wallH = (SG_SPEC.city.wallH || 1.7) + 0.4, thick = 0.7, seat = () => 0;
+  const stone = sgRgb(pal.stone, 1), stoneDk = sgRgb(pal.stoneDk, 1);
+  const L = 13, gap = 3.4;                                               // the ring leaves this same ±3.4 opening at a gate
+  for (const sgn of [-1, 1]) {
+    const mx = sgn * (gap + L) / 2, len = L - gap, top = wallH, bot = -0.9;
+    sgBox(S, mx, (top + bot) / 2, 0, len, top - bot, thick, 0, stone);
+    sgBox(S, mx, top + 0.16, 0, len, 0.3, thick * 1.15, 0, stoneDk);     // level parapet cap
+    const th = wallH + 1.0;                                              // a drum tower bookends each stretch
+    sgPrism(S, sgn * L, -0.7, 0, 0.8, th + 0.7, stone);
+    sgCone8(S, sgn * L, -0.7 + th + 0.7, 0, 0.94, 0.85, stoneDk);
+  }
+  sgGatehouse(S, 0, 0, 0, seat, wallH, thick, pal, sgn => [sgn * 2.95, 0]);
+  const g = new THREE.Group(); g.add(sgMesh(S, settleVCMat())); return g;
+}
 // A great stone city wall ringing the whole footprint: terrain-seated bays with a level parapet,
 // drum towers round the ring, and three gatehouses (downhill + two flanks) so the city can be entered.
 function sgCityWall(P) {
@@ -5240,17 +5346,12 @@ function sgCityWall(P) {
     const y = seat(lx, lz), th = wallH + 1.0;
     sgPrism(S, lx, y - 0.7, lz, 0.8, th + 0.7, stone); sgCone8(S, lx, y - 0.7 + th + 0.7, lz, 0.94, 0.85, stoneDk);
   }
-  for (const ga of gateAngs) {                                          // GRAND GATEHOUSE: arch + tall doors + twin watchtowers
+  for (const ga of gateAngs) {                                          // GRAND GATEHOUSE on the ring (recipe: sgGatehouse)
     const d = 0.06, ax = Math.cos(ga - d) * RA(ga - d), az = Math.sin(ga - d) * RA(ga - d), bx = Math.cos(ga + d) * RA(ga + d), bz = Math.sin(ga + d) * RA(ga + d);
-    const R = RA(ga), lx = Math.cos(ga) * R, lz = Math.sin(ga) * R, y = seat(lx, lz), ang = Math.atan2(-(bz - az), bx - ax), doorH = wallH + 1.6, doorW = 2.8;
-    sgBox(S, lx, y + wallH + 0.7, lz, doorW + 1.0, 0.95, thick * 1.8, ang, stoneDk);
-    sgBox(S, lx, y + doorH / 2, lz, doorW, doorH, 0.5, ang, woodD);
-    const dt = (doorW * 0.5 + 1.55) / Math.max(4, R);                    // the two watchtowers flank the opening
-    for (const sgn of [-1, 1]) {
-      const a2 = ga + sgn * dt, R2 = RA(a2), tx = Math.cos(a2) * R2, tz = Math.sin(a2) * R2, ty = seat(tx, tz), th2 = wallH + 3.8;
-      sgPrism(S, tx, ty - 0.7, tz, 1.34, th2 + 0.7, stone);
-      sgCone8(S, tx, ty - 0.7 + th2 + 0.7, tz, 1.6, 1.5, stoneDk);
-    }
+    const R = RA(ga), lx = Math.cos(ga) * R, lz = Math.sin(ga) * R, ang = Math.atan2(-(bz - az), bx - ax);
+    const dt = 2.95 / Math.max(4, R);                                    // watchtower arc offset: doorW/2 + 1.55
+    sgGatehouse(S, lx, lz, ang, seat, wallH, thick, pal,
+      sgn => { const a2 = ga + sgn * dt, R2 = RA(a2); return [Math.cos(a2) * R2, Math.sin(a2) * R2]; });
   }
   for (const pa of postAngs) {                                          // POSTERN: a narrow door with flanking posts for the small roads
     const d = 0.03, ax = Math.cos(pa - d) * RA(pa - d), az = Math.sin(pa - d) * RA(pa - d), bx = Math.cos(pa + d) * RA(pa + d), bz = Math.sin(pa + d) * RA(pa + d);
@@ -8550,7 +8651,7 @@ BV.cityAudit = (radius = 700) => {
 BV._land = (x, z, f = 28, s = 220) => bestLandSpot(x, z, f, s);          // debug: solid-land search
 BV._ls = (x, z, f = 28) => +landScore(x, z, f).toFixed(3);              // debug: land fraction of a footprint
 // roads: prove the network generated, connects the holds, and shapes the march
-BV.roads = () => { const t = {}; for (const e of _roadEdges) t[e.tier] = (t[e.tier] || 0) + 1; return { ..._roadStats, v2: ROAD.v2, tiers: t, chunk: _roadChunk, gridCells: roadGrid ? roadGrid.size : 0, mesh: !!roadMesh, partyStamina: Math.round(partyStamina) }; };
+BV.roads = () => { const t = {}; for (const e of _roadEdges) t[e.tier] = (t[e.tier] || 0) + 1; return { ..._roadStats, v2: ROAD.v2, tiers: t, chunk: _roadChunk, gridCells: roadGrid ? roadGrid.size : 0, splat: _roadWinU.value.z > 0, rocks: !!roadMesh, partyStamina: Math.round(partyStamina) }; };
 // inspect the road graph: per-node degree (variable degree proof) + edge list with tiers + gate flags
 BV.roadGraph = () => {
   const deg = {}, edges = _roadEdges.map(e => { deg[e.a.key] = (deg[e.a.key] || 0) + 1; deg[e.b.key] = (deg[e.b.key] || 0) + 1; return { a: e.a.key, b: e.b.key, tier: e.tier, gated: !!(e.aGate || e.bGate) }; });
@@ -8559,11 +8660,16 @@ BV.roadGraph = () => {
 };
 BV.roadAt = (x, z) => { const r = roadInfoAt(x, z), rough = landRoughAt(x, z); return { factor: +r.factor.toFixed(3), tangent: [+r.dx.toFixed(2), +r.dz.toFixed(2)], rough: +rough.toFixed(3), speedMul: +terrainSpeedMul(r.factor, rough, false).toFixed(3), water: isWater(x, z) }; };
 BV.partyStamina = (set) => { if (typeof set === 'number') partyStamina = clamp(set, 0, 100); return Math.round(partyStamina); };
-BV.roadDebug = (on) => { // lift + recolor the ribbons bright for a clear screenshot (debug only)
-  const rb = roadMesh && roadMesh.userData && roadMesh.userData.ribbon; if (!rb) return false;
-  if (on) { if (!BV._dbgMat) BV._dbgMat = new THREE.MeshBasicMaterial({ color: 0xff5a2a, side: THREE.DoubleSide }); rb.material = BV._dbgMat; roadMesh.position.y = 2.6; }
-  else { rb.material = roadMat(); roadMesh.position.y = 0; }
-  return true;
+BV.roadDebug = (on) => { // repaint the splat in bright orange for a clear screenshot (debug only)
+  _roadDbg = !!on; ensureRoads(true);
+  return _roadStats.segs > 0;
+};
+BV.splatProbe = (x, z) => { // sample the splat canvas at a world point (debug: is there ink here?)
+  if (!_roadCv || !_roadWinU.value.z) return null;
+  const w = _roadWinU.value, u = (x - w.x) * w.z + 0.5, v = (z - w.y) * w.z + 0.5;
+  if (u < 0 || u > 1 || v < 0 || v > 1) return { inWindow: false, win: [w.x, w.y, 1 / w.z] };
+  const px = _roadCtx.getImageData(Math.floor(u * ROAD_SPLAT.size), Math.floor(v * ROAD_SPLAT.size), 1, 1).data;
+  return { inWindow: true, rgba: [...px], win: [w.x, w.y, 1 / w.z] };
 };
 BV.travelTo = (x, z) => { const ok = orderMarch(x, z); return ok && marchInfo ? { seconds: Math.round(marchInfo.seconds), waypoints: marchPath.length, roadFrac: +marchInfo.roadFrac.toFixed(2) } : null; };
 BV.march = () => marchPath ? { left: marchPath.length, eta: marchInfo ? Math.round(marchInfo.seconds) : null } : null;
@@ -9223,6 +9329,7 @@ const EDIT_KINDS = {
   warrior: { kind: 'humanoid', weapon: 'sword' }, swordsman: { kind: 'humanoid', weapon: 'sword' },
   archer: { kind: 'humanoid', weapon: 'bow' }, humanoid: { kind: 'humanoid', weapon: 'sword' },
   fighter: { kind: 'humanoid', weapon: 'sword' }, banner: { kind: 'banner' },
+  gate: { kind: 'gate' }, gatehouse: { kind: 'gate' }, citygate: { kind: 'gate' },
 };
 function parseEditSpec(word, q) {
   const spec = { seed: 3, spin: true, ...(EDIT_KINDS[(word || 'house').toLowerCase()] || { kind: 'house' }) };
@@ -9248,6 +9355,7 @@ function editBuild(spec) {
     return { obj: h.group || h, seated: false };
   }
   if (spec.kind === 'banner') return { obj: makeBanner(spec.color || 0xffcf5b), seated: false };
+  if (spec.kind === 'gate') return { obj: buildCityGate(), seated: false };
   if (spec.kind === 'settlement') {
     const at = spec.at || [0, 0], tier = spec.tier || 'village';
     return { obj: buildSettlementGroup(at[0], at[1], tier, tier.toUpperCase(), spec.color || 0xffcf5b, seed),
@@ -9274,7 +9382,8 @@ function editGround(spec, built) {
     const m = new THREE.Mesh(geo, mat(biomeAt(X, Z).ground || 0x6f8f4a, { smooth: false }));
     m.position.set(X, 0, Z); m.receiveShadow = true; return m;
   }
-  const geo = new THREE.CircleGeometry(7, 56); geo.rotateX(-Math.PI / 2);
+  const bs = new THREE.Box3().setFromObject(built.obj).getSize(tmpV);     // the disc grows with the subject (a gate span, a long wall)
+  const geo = new THREE.CircleGeometry(Math.max(7, Math.max(bs.x, bs.z) * 0.72), 56); geo.rotateX(-Math.PI / 2);
   const m = new THREE.Mesh(geo, mat(0x5f7a44, { smooth: false }));
   m.position.y = -0.26; m.receiveShadow = true; return m;
 }

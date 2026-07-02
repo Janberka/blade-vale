@@ -4123,6 +4123,7 @@ function _smoothPath(pts) {
 function _angD(a, b) { return Math.abs(((a - b + Math.PI) % TAU + TAU) % TAU - Math.PI); }
 // walled holds that roads (and marching armies) flow AROUND, not through — rebuilt with the network
 let _routeAvoid = [];
+let _avoidNodes = new Map();   // hold key → its node (gate lookups for the wall-safety cull)
 // terrain cost per unit for LAYING a road: rough² so valleys are cheap, climbs dear, and A* threads the
 // lowest saddle of a range (the pass) instead of climbing over; walls block outright (no bridges either).
 // elevation-band ruggedness only — 1 noise sample instead of landRoughAt's ~8 (slope+biome). Valleys read
@@ -4322,6 +4323,8 @@ function roadBuildNetwork(nodes) {
     edges.push(e); return e;
   };
   // roads (and marching armies) flow AROUND walled holds, never through them
+  _avoidNodes = new Map(nodes.filter(n => n.tier && n.tier !== 'village').map(n => [n.key, n]));
+  _wallRingMemo.clear();
   _routeAvoid = nodes.filter(n => n.tier)
     .map(n => {
       let R;
@@ -4453,7 +4456,7 @@ function _roadSegCost(x, z, a, c, skip) {
     const t = _routeAvoid[i];
     if (skip && skip.has(t.key)) continue;
     const dx = x - t.x, dz = z - t.z;
-    if (dx * dx + dz * dz < t.r2) { cost += 25; break; } // walls push even the small lanes aside
+    if (dx * dx + dz * dz < t.r2) { cost += 45; break; } // walls push even the small lanes aside
   }
   const mx = (a.x + c.x) * 0.5, mz = (a.z + c.z) * 0.5;
   cost += Math.hypot(x - mx, z - mz) * 0.05;            // hug the line between neighbours → smoothness
@@ -4488,8 +4491,9 @@ function roadRoute(edge) {
   const apA = _gateApron(A, edge.tier), apB = _gateApron(B, edge.tier);
   // the wild leg aims at a FAR apron; the last stretch swings through a smoothed elbow onto the straight
   // doorway leg — the road CURVES into its gate instead of kinking
-  const farA = apA ? { x: A.x + (apA.x - A.x) * 2.6, z: A.z + (apA.z - A.z) * 2.6 } : null;
-  const farB = apB ? { x: B.x + (apB.x - B.x) * 2.6, z: B.z + (apB.z - B.z) * 2.6 } : null;
+  const fFork = edge.tier === 'major' ? 3.6 : 2.6;          // trunk forks split well clear of the gatehouse
+  const farA = apA ? { x: A.x + (apA.x - A.x) * fFork, z: A.z + (apA.z - A.z) * fFork } : null;
+  const farB = apB ? { x: B.x + (apB.x - B.x) * fFork, z: B.z + (apB.z - B.z) * fFork } : null;
   const RA = farA || A, RB = farB || B;
   // the gate rays: the one legal channel through each endpoint's own wall
   const rays = [];
@@ -4505,7 +4509,7 @@ function roadRoute(edge) {
     const len2 = Math.hypot(RB.x - RA.x, RB.z - RA.z);
     pts = hexAStar(RA.x, RA.z, RB.x, RB.z, (x, z) => _roadBuildCost(x, z, avoid2, rays), 1.7, Math.min(6400, 1000 + len2 * 12), len2 > 220 ? 2 : 1);
   }
-  if (!pts) pts = _roadRouteRelax(RA, RB, skip);
+  if (!pts) pts = _roadRouteRelax(RA, RB, null);            // the fallback gets NO wall exemption — aprons carry the gate legs
   if (apA) pts.unshift({ x: A.x, z: A.z }, { x: apA.x, z: apA.z });
   if (apB) pts.push({ x: apB.x, z: apB.z }, { x: B.x, z: B.z });
   for (let pass = 0; pass < 2; pass++) {                    // round the elbows (gate points stay pinned)
@@ -4551,6 +4555,50 @@ function _roadGridAdd(seg) {
       const k = gx + ',' + gz; let b = roadGrid.get(k); if (!b) roadGrid.set(k, b = []); b.push(seg);
     }
 }
+// THE WALL RULE, enforced at draw time: a road may cross a walled hold's ring ONLY at a gate. The checker
+// carries the EXACT model ring (the same Rfit·fp the gates + wall builder share, memoised per hold per
+// rebuild) and culls any edge whose segment crosses it away from a gate — the router failed there
+// (water-pinched corridor, exhausted budget), and no road beats a road through stone.
+const _wallRingMemo = new Map();
+function _holdRing(key) {
+  let v = _wallRingMemo.get(key);
+  if (v === undefined) {
+    const h = _avoidNodes.get(key);
+    v = null;
+    if (h && h.tier && h.tier !== 'village' && SG_SPEC[h.tier] && SG_SPEC[h.tier].wall) {
+      const spec = SG_SPEC[h.tier], p = sgProbe(h.x, h.z, spec);
+      const fp = sgFootprint({ r: _mulberry32((h.seed || 0) >>> 0), T: p });
+      const margin = spec.wall === 'stone' ? 2.6 : 1.5;
+      const Rfit = Math.max(spec.R * 0.5, spec.R + margin / 0.8);
+      const g = nodeGates(h);
+      v = { x: h.x, z: h.z, Rfit, fp, gates: g.big.concat(g.small) };
+    }
+    _wallRingMemo.set(key, v);
+  }
+  return v;
+}
+function _edgeWallSafe(e, pts) {
+  for (const t of _routeAvoid) {
+    const w = _holdRing(t.key);
+    if (!w) continue;                                      // open villages don't cull roads
+    if ((pts[0].x - w.x) ** 2 + (pts[0].z - w.z) ** 2 > t.r2 * 4 && (pts[pts.length - 1].x - w.x) ** 2 + (pts[pts.length - 1].z - w.z) ** 2 > t.r2 * 4) {
+      let near = false;                                    // cheap reject: does the polyline even come close?
+      for (let i = 0; i < pts.length; i += 3) { const dx = pts[i].x - w.x, dz = pts[i].z - w.z; if (dx * dx + dz * dz < t.r2 * 1.3) { near = true; break; } }
+      if (!near) continue;
+    }
+    for (let i = 1; i < pts.length; i++) {
+      const p = pts[i], q = pts[i - 1];
+      const dP = Math.hypot(p.x - w.x, p.z - w.z), dQ = Math.hypot(q.x - w.x, q.z - w.z);
+      const aP = Math.atan2(p.z - w.z, p.x - w.x), wallR = w.Rfit * w.fp(aP);
+      if ((dP - wallR) * (dQ - wallR) < 0 || Math.abs(dP - wallR) < 1.8) {   // the segment crosses (or rides) the ring
+        let legal = false;
+        for (const g of w.gates) if ((g.x - p.x) ** 2 + (g.z - p.z) ** 2 < 100) { legal = true; break; }   // …at a gate: fine
+        if (!legal) return false;
+      }
+    }
+  }
+  return true;
+}
 // (re)build the whole in-view network: hierarchy → routed ribbons → one merged mesh + rocks + query grid
 function roadRebuild(pcx, pcz) {
   // keep the region-scoped caches from growing without bound on a very long ride (they refill lazily)
@@ -4571,6 +4619,7 @@ function roadRebuild(pcx, pcz) {
     let wet = 0, run = 0, maxRun = 0;
     for (let w = 0; w < pts.length; w++) { if (isWater(pts[w].x, pts[w].z)) { wet++; run++; if (run > maxRun) maxRun = run; } else run = 0; }
     if (wet / pts.length > 0.18 || maxRun >= 3) continue; // no bridges yet — a road never fords open water
+    if (!e.key.startsWith('city:') && !e.key.startsWith('street:') && !_edgeWallSafe(e, pts)) continue; // a road NEVER crosses a wall away from a gate — better no road than a breach
     const T = ROAD_TIER[e.tier];
     rc.setHex(T.col);
     drawn++;
@@ -4607,6 +4656,7 @@ function roadRebuild(pcx, pcz) {
     }
   }
   if (roadMesh) { if (mapTerrain) mapTerrain.remove(roadMesh); disposeGroup(roadMesh); roadMesh = null; }
+  // (the wall-safety cull lives in _edgeWallSafe below — see the draw loop)
   if (pos.length && mapTerrain) {
     const grp = new THREE.Group();
     const geo = new THREE.BufferGeometry();

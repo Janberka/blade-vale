@@ -434,6 +434,37 @@
     return Math.round(g[0] + r() * (g[1] - g[0]) + frontierLevel(s.x, s.z, mapLevel) * scale);
   }
 
+  // ---------- territory kernel: the political heat-map's influence math ----------
+  // The border layer is a weighted influence field over the hex lattice: capitals, holds and
+  // marching hosts each project their faction outward with linear falloff; a cell flies the
+  // strongest banner, and its heat is how decisively that banner beats the runner-up. The server
+  // GENERATES + STORES the field from live ownership (holds/capitals/warlords tables) and serves
+  // it per chunk; the client renders it and eases toward it. ONE weight table + ONE resolver here,
+  // so the two sides can never disagree about where a border falls.
+  var TERRITORY = {
+    CAP_W: 1.0, CAP_R: 66,        // a capital: strong, reaches across its realm
+    SET_W: 0.6, SET_R: 30,        // a town/city/village: a local anchor
+    BAND_W: 0.8, BAND_R: 16,      // a marching host: a moving bulge that dents fronts
+    PLR_W: 0.85, PLR_R: 16        // a player banner: carves a little realm where it rides
+  };
+  // resolve one cell (x,z) against sources [{x,z,f,W,R}] → {o: faction-name|null, s: 0..1 heat}
+  function territoryCell(x, z, sources) {
+    var bf = null, bi = 0, sf = null, si = 0;
+    for (var i = 0; i < sources.length; i++) {
+      var sc = sources[i]; if (!sc.f) continue;
+      var dx = x - sc.x, dz = z - sc.z, d = Math.sqrt(dx * dx + dz * dz);
+      if (d >= sc.R) continue;
+      var inf = sc.W * (1 - d / sc.R); if (inf <= 0) continue;
+      if (bf === sc.f) { if (inf > bi) bi = inf; }
+      else if (inf > bi) { sf = bf; si = bi; bf = sc.f; bi = inf; }
+      else if (sf === sc.f) { if (inf > si) si = inf; }
+      else if (inf > si) { sf = sc.f; si = inf; }
+    }
+    if (!bf || bi <= 0.02) return { o: null, s: 0 };
+    var s = 0.4 + (bi - si) * 1.3; if (s > 1) s = 1;
+    return { o: bf, s: s };
+  }
+
   return {
     SKILL_SCALE: SKILL_SCALE, SKILL_CAP: SKILL_CAP,
     effSkill: effSkill, mulberry32: mulberry32,
@@ -444,6 +475,8 @@
     chunkHash: chunkHash, frontierLevel: frontierLevel, settlementSites: settlementSites,
     siteKey: siteKey, settlementName: settlementName, settlementOwner: settlementOwner,
     settlementGarrison: settlementGarrison,
+    // territory kernel
+    TERRITORY: TERRITORY, territoryCell: territoryCell,
     // diplomacy kernel
     stanceFromOpinion: stanceFromOpinion, rawStance: rawStance,
     areEnemies: areEnemies, areAllies: areAllies, areNonAggression: areNonAggression,

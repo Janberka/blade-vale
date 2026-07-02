@@ -70,6 +70,41 @@
   #onboard .ob-x { position: absolute; top: 8px; right: 10px; cursor: pointer; pointer-events: auto; color: #9fb2cc; background: none; border: none; font-size: 17px; line-height: 1; opacity: .8; }
   #onboard .ob-x:hover { opacity: 1; color: #fff; }
 
+  /* ===== The realm/hold card (click a hold on the map) + the border-hover tip ===== */
+  #realm { position: fixed; top: 64px; left: 14px; width: 292px; max-width: 88vw; z-index: 11;
+    text-align: left; color: #dfeaff; border-radius: 10px; overflow: hidden;
+    background: linear-gradient(180deg, rgba(14,18,30,.96), rgba(8,10,18,.97));
+    border: 1px solid rgba(125,200,255,.22); box-shadow: 0 14px 44px rgba(0,0,0,.5); pointer-events: auto; }
+  .rm-head { display: flex; align-items: center; gap: 10px; padding: 11px 12px 9px; border-bottom: 1px solid rgba(255,255,255,.08); }
+  .rm-head h1 { font-size: 17px; margin: 0; flex: 1; letter-spacing: .5px; color: #eaf2ff; text-transform: none;
+    background: none; -webkit-text-fill-color: currentColor; text-shadow: none; }
+  #rm-flag { width: 14px; height: 14px; border-radius: 4px; border: 1px solid rgba(255,255,255,.35); flex: 0 0 auto; }
+  .rm-x { cursor: pointer; background: none; border: 1px solid rgba(255,255,255,.2); color: #cdd6e6; border-radius: 7px;
+    width: 26px; height: 26px; font-size: 13px; line-height: 1; flex: 0 0 auto; }
+  .rm-x:hover { background: rgba(255,255,255,.1); }
+  #rm-body { padding: 4px 12px 12px; max-height: 62vh; overflow-y: auto; }
+  .rm-sec { padding: 8px 0 2px; }
+  .rm-sec + .rm-sec { border-top: 1px solid rgba(255,255,255,.07); margin-top: 8px; }
+  .rm-row { display: flex; align-items: baseline; gap: 8px; font-size: 13px; margin: 5px 0; }
+  .rm-row > span:first-child { color: #9fb2cc; }
+  .rm-row b { color: #eaf2ff; font-weight: 700; }
+  .rm-dim { color: #8894ab; font-size: 11.5px; margin-left: auto; }
+  .rm-tier { text-transform: uppercase; letter-spacing: 1.4px; font-size: 11px; color: #ffe2a8 !important; }
+  .rm-sub { margin-top: 9px; font-size: 11px; letter-spacing: 1.4px; text-transform: uppercase; color: #ffe2a8; }
+  .rm-btn { cursor: pointer; margin-top: 8px; width: 100%; padding: 8px 0; font-size: 12px; letter-spacing: 1.2px;
+    text-transform: uppercase; font-weight: 700; border: 1px solid #ffcf5b; border-radius: 6px;
+    background: rgba(255,180,80,.14); color: #ffe2a8; }
+  .rm-btn:hover { background: rgba(255,180,80,.3); }
+  .rm-st { text-transform: capitalize; }
+  .rm-st-war, .rm-st-hostile { color: #ff8d7a !important; }
+  .rm-st-alliance, .rm-st-nonaggression { color: #9fe6a0 !important; }
+  #terrtip { position: fixed; z-index: 12; pointer-events: none; padding: 6px 10px; border-radius: 7px;
+    font-size: 12.5px; color: #eaf2ff; white-space: nowrap;
+    background: rgba(10,14,24,.92); border: 1px solid rgba(125,200,255,.25); box-shadow: 0 6px 18px rgba(0,0,0,.4); }
+  #terrtip .tt-dot { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 7px;
+    border: 1px solid rgba(255,255,255,.4); vertical-align: baseline; }
+  #terrtip .tt-dim { color: #8894ab; font-size: 11px; }
+
   .overlay {
     position: fixed; inset: 0; display: flex; flex-direction: column;
     align-items: center; justify-content: center; text-align: center;
@@ -540,6 +575,12 @@
   </div>
 </div>
 
+<div id="realm" class="hidden">
+  <div class="rm-head"><span id="rm-flag"></span><h1 id="rm-title">—</h1><button class="rm-x" id="rm-close" title="Close">✕</button></div>
+  <div id="rm-body"></div>
+</div>
+<div id="terrtip" class="hidden"></div>
+
 <div id="town" class="overlay hidden">
   <h1>Manage Holding</h1>
   <p id="town-sub" style="opacity:.75;font-size:14px">Develop your town to strengthen your realm.</p>
@@ -548,10 +589,10 @@
 </div>
 
 <script src="vendor/three.min.js?v=r128"></script>
-<script src="sim/world-sim.js?v=6"></script>
-<script src="sim/terra.js?v=1"></script>
-<script src="client-net.js?v=5"></script>
+<script src="sim/world-sim.js?v=7"></script>
+<script src="sim/terra.js?v=2"></script>
+<script src="client-net.js?v=6"></script>
 <script src="net-battle.js?v=1"></script>
-<script src="game.js?v=48"></script>
+<script src="game.js?v=49"></script>
 </body>
 </html>

@@ -234,6 +234,9 @@ and the selection rings fade after a couple of seconds.)*
 | Key | Action |
 |---|---|
 | **WASD** | roam the map |
+| **L / P** | **zoom rungs**: L steps *in* (overworld → strategic map → **action mode**, 3rd-person hero with full battle controls), P steps *out* toward the wide overview. *(The old T / mouse-wheel zoom is removed.)* |
+| **F** | **flare every party** on the map (yours + allies') and open a compass you can march by; flares burn ~12s |
+| **U** | **characters drawer**: switch between your characters, split/give troops, multi-select for bulk join/follow/patrol orders |
 | **C** | toggle **command mode** (split & order detachments); **Esc** to leave |
 | **1–9** | (command mode) select detachment 1–9 |
 | **P** | (command mode, detachment selected) draw a patrol route — **Enter / right-click** to set |
@@ -243,7 +246,14 @@ and the selection rings fade after a couple of seconds.)*
 | **V** | warband charsheet |
 
 *(`G` is context-sensitive: on the map it sounds the call; in a battle/plan it selects all soldiers.
-`C` is overworld-only — in a battle it's crouch.)*
+`C` is overworld-only — in a battle it's crouch. `F` and `P` are likewise contextual: outside command
+mode they are flares / zoom-out, inside it they are Follow / patrol.)*
+
+### Touch devices
+On phones/tablets (or with `?touch=1` on desktop) the full control set is mirrored to a touch HUD:
+a floating left-thumb stick for movement, drag-anywhere-else to look, and context-sensitive button
+clusters that swap per mode (combat verbs in a fight, kingdom/map verbs on the overworld). Panels
+that would cover the left thumb start collapsed to a chip — tap to expand.
 
 ### Reading the field
 - **Green ring** — selected soldier.

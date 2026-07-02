@@ -125,6 +125,32 @@
       return r.json();
     });
   };
+  // the street-level DETAIL tier (action zoom rung): server-persisted scatter + grove rows
+  net.loadDetail = function (level, u, keys) {
+    var path = '/chunks/detail?level=' + (level | 0) + '&u=' + (u >>> 0) + '&list=' + keys.join(',');
+    var opts = { method: 'GET', headers: Object.assign({ 'Content-Type': 'application/json', 'X-Player-Token': PLAYER_TOKEN }, worldHeaders()) };
+    return withTimeout(fetch(BASE + path, opts), 20000).then(function (r) {
+      if (!r.ok) throw new Error('http ' + r.status);
+      net.online = true;
+      return r.json();
+    });
+  };
+  // the political heat-map layer: per-hex owner + heat for a chunk batch, generated + stored
+  // server-side from live ownership (the border layer eases toward THIS truth)
+  net.loadTerritory = function (level, u, keys) {
+    var path = '/territory?level=' + (level | 0) + '&u=' + (u >>> 0) + '&list=' + keys.join(',');
+    var opts = { method: 'GET', headers: Object.assign({ 'Content-Type': 'application/json', 'X-Player-Token': PLAYER_TOKEN }, worldHeaders()) };
+    return withTimeout(fetch(BASE + path, opts), 20000).then(function (r) {
+      if (!r.ok) throw new Error('http ' + r.status);
+      net.online = true;
+      return r.json();
+    });
+  };
+  // one realm's live card (capital, holds by tier, relations, posture) — the click-info panel
+  net.loadNation = function (name) {
+    return jfetch('/nation?name=' + encodeURIComponent(name), { method: 'GET', headers: worldHeaders() })
+      .catch(function () { return null; });
+  };
   net.reportCapital = function (idx, owner, summary) {
     return jfetch('/world/capital', { method: 'POST', headers: worldHeaders(), body: JSON.stringify({ idx: idx, owner: owner, summary: summary }) }).catch(function () { return null; });
   };

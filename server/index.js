@@ -201,7 +201,7 @@ const server = http.createServer(async (req, res) => {
     // Shared world: level/universe are pinned server-side. Solo: the client passes its mapLevel +
     // universeSeed; the first call CLAIMS that universe on the world row (the background tick then
     // contests that terrain). Chunks are generated at most once and persist forever.
-    if (req.method === 'GET' && p === '/api/v1/chunks') {
+    if (req.method === 'GET' && (p === '/api/v1/chunks' || p === '/api/v1/chunks/detail' || p === '/api/v1/territory')) {
       const q = url.searchParams;
       const w = db.prepare('SELECT kind, map_level, universe_seed FROM worlds WHERE id=?').get(viewWorldId);
       let level, useed;
@@ -215,6 +215,12 @@ const server = http.createServer(async (req, res) => {
       }
       const list = String(q.get('list') || '').split(',').filter(Boolean).slice(0, 81);
       if (!list.length) return send(res, 400, { error: 'empty chunk list' });
+      // /chunks/detail = the street-level tier: scatter rows + expanded groves, generated once and
+      // saved (chunk_detail) — the action zoom rung's persisted "zoomed-in" version of the ground
+      if (p === '/api/v1/chunks/detail') return sendZ(req, res, 200, chunks.serveDetailBatch(viewWorldId, level, useed, list));
+      // /territory = the political heat-map layer: per-hex owner + heat, generated from live
+      // ownership (holds/capitals/warlords/presence), persisted in `territory`, served per chunk
+      if (p === '/api/v1/territory') return sendZ(req, res, 200, chunks.serveTerritoryBatch(viewWorldId, level, useed, list));
       return sendZ(req, res, 200, chunks.serveBatch(viewWorldId, level, useed, list));
     }
 
@@ -225,6 +231,26 @@ const server = http.createServer(async (req, res) => {
       const q = url.searchParams, hasBox = q.has('x') && q.has('z');
       const holds = hasBox ? tick.getHolds(viewWorldId, +q.get('x') || 0, +q.get('z') || 0, +q.get('r') || 150) : tick.getHolds(viewWorldId);
       return send(res, 200, { holds });
+    }
+
+    // one realm's card, aggregated live: capital, holdings by tier, relations, posture —
+    // the map's click-for-details panel reads THIS, so what it shows is the server's truth.
+    if (req.method === 'GET' && p === '/api/v1/nation') {
+      const name = String(url.searchParams.get('name') || '').slice(0, 48);
+      if (!name) return send(res, 400, { error: 'pass ?name=<faction>' });
+      const NATIONS = require('../sim/terra.js').NATION_HOMES.map(n => n.name);
+      const capRow = db.prepare('SELECT idx, def_name, owner_name, garrison FROM capitals WHERE world_id=?')
+        .all(viewWorldId).find(c => NATIONS[c.idx] === name || c.owner_name === name);
+      const capital = capRow ? Object.assign({ idx: capRow.idx, defName: capRow.def_name, owner: capRow.owner_name, garrison: capRow.garrison, founder: NATIONS[capRow.idx] }, tick.capPos(capRow.idx)) : null;
+      const tp = chunks.tseedParams(viewWorldId);
+      const holdCounts = { village: 0, town: 0, city: 0, total: 0 };
+      if (tp) for (const r of db.prepare('SELECT tier, COUNT(*) n FROM holds WHERE world_id=? AND tseed=? AND owner_name=? GROUP BY tier').all(viewWorldId, tp.tseed, name)) {
+        holdCounts[r.tier] = r.n; holdCounts.total += r.n;
+      }
+      const relations = diplomacy.relationsForApi(viewWorldId).filter(r => r.a === name || r.b === name);
+      const state = diplomacy.factionStateForApi(viewWorldId).find(s => s.faction === name) || null;
+      const armies = tick.getArmies(viewWorldId).filter(a => a.faction === name).length;
+      return send(res, 200, { name, capital, holds: holdCounts, relations, state, armies });
     }
 
     // ----- town management: player holdings (server-backed economy) -----

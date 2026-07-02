@@ -162,6 +162,7 @@
   var TRAVEL_BASE_SPEED = 12.2;   // steady-state banner march on open flat ground, world-units/s
 
   // ---------- Settlement spec (radii/walls — the mesh-building knobs ride along, they're plain data) ----------
+  var SCATTER_DENSITY = 0.28;   // multiplier on biome tree/rock chance — thins features so tiles read clean
   var SG_SPEC = {
     village: { castle: false, R: 7,  houses: [10, 6],   castles: [0, 0],   wall: null,       centerClear: 0,    lbl: 3.8, top: 4.2,  gap: 2.0 },
     town:    { castle: true,  R: 15, houses: [38, 12],  castles: [1, 0.4], castleR: 6, bailey: [3, 3], wallH: 1.2, wall: 'palisade', centerClear: 0,    lbl: 5.4, top: 7.0,  gap: 2.0 },
@@ -789,6 +790,75 @@
       if (spec.wall === 'stone') return { big: gb.big.map(at), small: gb.small.map(at) };
       return { big: [at(gb.big[0])], small: [] };
     }
+    // the WALL RING as a plain point list — the exact polygon sgCityWall/sgPalisade seat their
+    // bays on (probe + seeded footprint + kernel-pinned radius + wet-vertex pull-ashore). The
+    // rung-0 hold icon traces THIS ring and the server persists it in the chunk payload, so the
+    // overworld border IS the real wall, not a stand-in circle. Returns [[lx,lz],...] local
+    // offsets from the seat (0.1u quantised, JSON-friendly), or null for unwalled tiers.
+    function wallRingPts(x, z, tier, siteSeed) {
+      var spec = SG_SPEC[tier]; if (!spec || !spec.wall) return null;
+      var p = sgProbe(x, z, spec);
+      var fp = sgFootprint({ r: mulberry32((siteSeed || 0) >>> 0), T: p });
+      var margin = spec.wall === 'stone' ? 2.6 : 1.5;
+      var Rfit = Math.max(spec.R * 0.5, spec.R + margin / 0.8);
+      var N = Math.max(30, Math.round(Rfit * 1.4 * 1.3));
+      var pts = [];
+      for (var k = 0; k < N; k++) {
+        var a = k / N * TAU, RA = Rfit * fp(a), R = RA;
+        var lx = Math.cos(a) * R, lz = Math.sin(a) * R;
+        while (isWater(x + lx, z + lz) && R > RA * 0.45) { R -= 1.2; lx = Math.cos(a) * R; lz = Math.sin(a) * R; }
+        pts.push([Math.round(lx * 10) / 10, Math.round(lz * 10) / 10]);
+      }
+      return pts;
+    }
+
+    // ---------- per-chunk decoration: trees + rocks, deterministic from the chunk seed ----------
+    // The PLACEMENT kernel behind the client's scatter meshes AND the server's persisted street
+    // detail — both sides derive the identical list from (cx, cz, tseed). One roll per hex cell
+    // (at most one feature, on its centre); water cells draw nothing. Roads are NOT considered
+    // here: the roadbed-clearing filter is a render-time concern (the client knows its drawn
+    // roads), so placement stays pure. Returns compact rows, JSON-friendly for chunk_detail:
+    //   trees: [x, z, colorHex, sc, trunkH, rotY]      rocks: [x, z, r, e1, e2, e3, squash]
+    function chunkScatter(cx, cz) {
+      var rng = mulberry32((chunkHash(cx, cz, seed) ^ 0x5EED) >>> 0);
+      var cells = hexCellsInChunk(cx, cz), picks = [], trees = [], rocks = [];
+      for (var i = 0; i < cells.length; i++) {
+        var jx = cells[i][2], jz = cells[i][3];
+        if (isWater(jx, jz)) continue;                                  // no roll — matches the client stream
+        var b = biomeAt(jx, jz), roll = rng();
+        var tc = b.treeChance * SCATTER_DENSITY, rc = b.rockChance * SCATTER_DENSITY;
+        if (roll < tc) picks.push([1, jx, jz, b.tree]);
+        else if (roll < tc + rc) picks.push([0, jx, jz]);
+      }
+      for (i = 0; i < picks.length; i++) if (picks[i][0]) {             // trees first, then rocks — the client's draw order
+        var sc = 0.8 + rng() * 0.7, th = (2 + rng()) * sc, rot = rng() * Math.PI;
+        trees.push([picks[i][1], picks[i][2], picks[i][3], sc, th, rot]);
+      }
+      for (i = 0; i < picks.length; i++) if (!picks[i][0]) {
+        var rr = 0.6 + rng() * 1.0, e1 = rng(), e2 = rng(), e3 = rng(), sq = 0.6 + rng() * 0.4;
+        rocks.push([picks[i][1], picks[i][2], rr, e1, e2, e3, sq]);
+      }
+      return { trees: trees, rocks: rocks };
+    }
+    // Street-level groves: every map tree becomes a small stand of 3-5. The satellites are pure
+    // from the chunk seed (salt 0x66E5) so the server persists exactly what the client grows.
+    // Water rejection happens AFTER the draws — the stream stays stable near coastlines.
+    function chunkGroves(cx, cz, base) {
+      var sc0 = base || chunkScatter(cx, cz);
+      var rng = mulberry32((chunkHash(cx, cz, seed) ^ 0x66E5) >>> 0);
+      var out = [];
+      for (var i = 0; i < sc0.trees.length; i++) {
+        var t = sc0.trees[i], n = 2 + (rng() * 3 | 0);                  // 2-4 satellites → a 3-5 tree stand
+        for (var k = 0; k < n; k++) {
+          var ang = rng() * TAU, d = 2.2 + rng() * 3.6;
+          var sc = t[3] * (0.7 + rng() * 0.55), rot = rng() * Math.PI, thM = 0.85 + rng() * 0.3;
+          var x = t[0] + Math.cos(ang) * d, z = t[1] + Math.sin(ang) * d;
+          if (isWater(x, z)) continue;
+          out.push([x, z, t[2], sc, (t[4] / t[3]) * sc * thM, rot]);
+        }
+      }
+      return out;
+    }
 
     // ---------- the road network: nodes → hierarchy → routed polylines ----------
     function roadGatherNodes(pcx, pcz) {
@@ -1156,6 +1226,9 @@
     T.cityFlankerCastles = cityFlankerCastles;
     T.settlementStreetPlan = settlementStreetPlan;
     T.settlementGates = settlementGates;
+    T.wallRingPts = wallRingPts;
+    T.chunkScatter = chunkScatter;
+    T.chunkGroves = chunkGroves;
     T.roadGatherNodes = roadGatherNodes;
     T.nodeGates = nodeGates;
     T.villageRoadAxis = villageRoadAxis;
@@ -1199,7 +1272,7 @@
     TOP_OFFSETS: TOP_OFFSETS,
     nHash: nHash, vnoise: vnoise, fbm: fbm, ridge: ridge,
     ROAD: ROAD, ROAD_TIER: ROAD_TIER, MOVE: MOVE, TRAVEL_BASE_SPEED: TRAVEL_BASE_SPEED,
-    SG_SPEC: SG_SPEC, NATION_HOMES: NATION_HOMES,
+    SG_SPEC: SG_SPEC, NATION_HOMES: NATION_HOMES, SCATTER_DENSITY: SCATTER_DENSITY,
     angD: angD, thinPath: thinPath, smoothPath: smoothPath,
     classifyBiome: classifyBiome, elevToY: elevToY, groundColorFromFields: groundColorFromFields,
     gabrielEdge: gabrielEdge, segIndex: segIndex, nearestSegPoint: nearestSegPoint, gateApron: gateApron,

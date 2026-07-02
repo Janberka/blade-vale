@@ -1,247 +1,177 @@
-# Blade Vale — Release Roadmap
+# Blade Vale — Systems Roadmap
 
-**Working title:** Blade Vale · **Target:** free web funnel → $4.99 Steam release
-**Budget assumption:** ~12–15 focused hours/week, solo dev with AI assistance. At that pace, 1.0 lands in **~10–12 months**; at 8–10 h/week it's 12–14 months. When behind: stretch phases, cut content — never skip gates.
+**Working title:** Blade Vale · **Ambition:** a persistent living-war RPG played by millions — free web funnel → Steam → mobile.
+**What it is now:** a Mount & Blade–like: an always-on server simulates a five-nation war on a procedurally generated hex world; players ride it together, command warbands in real-time 3D battles, and every soldier has a name and a career.
 
----
-
-## Vision: Why This Will Be Addictive
-
-Blade Vale already has the hardest thing to build: a great thirty-second experience — hit-stop, trauma shake, pose-snap swordplay, guard breaks, dodge i-frames, wolf-pack AI that genuinely flanks, and a warband that fights beside you. What it lacks is everything that turns thirty seconds into thirty hours: **memory** (a best score to beat), **variance** (a reason run #5 differs from run #1), **arc** (bosses and a winnable climax), and **stakes** (a multiplier to protect, allies who can fall).
-
-The thesis: **don't add more combat — wrap the existing combat** in persistence, between-wave drafts, bosses, and a daily seed; deliver it through a zero-friction browser funnel (sub-2MB, zero assets, loads in seconds); convert the funnel into a Steam release. "Addictive" is defined by gate metrics (retry rate, runs/session, session length), not vibes — and **never by dark patterns** (see *We Will NOT Do*).
-
-Positioning line for every store page: **"Lead your warband. Hold the line. One more wave."**
+This roadmap is organized **by mechanism**, not by week. Each section records where the system stands today, what its known limits are, and the improvement ladder that takes it from "works for ten testers" to "works for millions." Dates matter less than order: the next milestone is always explicit.
 
 ---
 
-## Phase 0 — Safety Net (week 1, ~2 days of work)
+## Next milestone — M1: Mobile LAN playtest
 
-**Goal:** the game can't be lost and runs offline. **Exit:** repo pushed; plays with network unplugged; a stranger can play via URL.
+> **Goal:** testers on the same Wi-Fi open a URL on their phones and play the shared world together, giving feedback the same evening. No app store, no accounts friction beyond sign-in, no cables.
 
-- [ ] `git init` + first commit + push to a **private GitHub remote** — *before any other edit* (one bad refactor of an untracked `game.js` destroys the only copy of hand-tuned feel)
-- [ ] Vendor three.js r128 locally — kill the CDN dependency, keep the version
-- [ ] 2-line fix: `blur` listener clears the `keys{}` object (stuck-key bug = future #1 report)
-- [ ] `window.onerror` → on-screen overlay now, telemetry pipe in Phase 1
-- [ ] Upload as-is to an **unlisted itch.io page** (skip GitHub Pages — unavailable on free private repos; itch is enough, Cloudflare Pages if a second mirror is wanted)
-- [ ] Claim the name: itch page draft + social handles; post the first raw combat GIF
-- [ ] Write down the weekly hours budget and treat it as hard
+This is the highest-leverage move available: the touch layer already exists, the client already derives the backend from `location.hostname`, and the server already binds all interfaces. What remains is glue, phone-class performance, and a repeatable host procedure.
 
-## Phase 1 — Shippable Skeleton (weeks 2–4)
+**Already in place (verified in code):**
+- Touch controls: full layer (floating stick, combat/kingdom buttons, drag-look), auto-enabled on touch devices (`TOUCH` detection in `game.js:1505`), `?touch=1` desktop preview.
+- Network topology: `client-net.js:8` and `net-battle.js:11` build the API/WS base from `location.hostname:8787` — a phone loading `http://<host-ip>:8099` automatically talks to `http://<host-ip>:8787`. `server/index.js` listens on all interfaces.
+- Shared world: distinct `X-Player-Token` per account; presence, armies, co-op relay (`/coop`) all live.
 
-**Goal:** persistence + pause + observability. **Exit:** a stranger plays 3+ runs unprompted; **best score survives a reload inside the itch.io iframe in Safari**; telemetry shows their death wave.
+**Work list:**
+- [ ] **One-command host script** (`npm run lan` or similar): start the backend, start the static server on `0.0.0.0:8099`, print a QR code / URL with the Mac's LAN IP. Zero-thought session start for the host.
+- [ ] **Phone performance tier:** auto-detect mobile → drop shadow map size, cap pixel ratio at ~1.5, halve scatter density, disable street-tier tessellation (rung 2 stays at canonical hexes), reduce fog distance. Target: 30fps sustained on a mid-range Android; 60 on recent iPhones. Add an FPS readout behind `?debug=1`.
+- [ ] **iOS Safari audit:** AudioContext unlock on first touch (procedural SFX are silent until a gesture), `viewport-fit=cover` + safe-area insets for the notch, prevent double-tap zoom / pull-to-refresh, `touch-action: none` on the canvas, home-screen PWA manifest so it launches fullscreen.
+- [ ] **Touch parity for the new systems:** zoom rungs (P/L) as pinch or on-screen buttons, F-flares and U-drawer reachable from the touch HUD, battle command (order × pace) usable with thumbs — audit every keyboard-only feature added since the touch layer shipped.
+- [ ] **Session resilience on phones:** backgrounding a tab kills timers/WS — reconnect cleanly on `visibilitychange`, resume the world snapshot, never lose the character. Test lock-screen → return.
+- [ ] **Feedback channel:** an in-game "!" button that posts a note + auto-attached state (position, mode, fps, device) to the server — testers report without leaving the game.
+- [ ] **The dry run:** two real phones (one iOS, one Android) + one desktop in the same world, 20 minutes, no host intervention. Fix everything that broke; repeat until boring.
 
-- [ ] **Telemetry first** (load-bearing for every later gate): PostHog free tier *or* a 20-line Cloudflare Worker → KV. Fixed event schema before integrating: `run_start, wave_reached, death(wave,cause), retry, block, dodge, settings_open`. Route `window.onerror` into the same pipe. **Verify events fire from inside the itch iframe** (ad-blockers/CSP eat third-party analytics — measure the loss). *Not GoatCounter — pageview counters can't measure retry rate or session funnels.*
-- [ ] **Persistence as a storage facade** from day one: versioned schema behind one interface, localStorage backend now — CrazyGames SDK data module and Steam Cloud slot in later without rewrites (itch/portal iframes partition or evict localStorage; plan for it, don't discover it)
-- [ ] Best score + best wave persisted; **death recap with near-miss framing**: "NEW BEST!" (gold banner + shake) or "Only 800 short of your best" — the cheapest, strongest retention mechanic in this plan
-- [ ] Death screen run stats (wave, kills, best combo) + one-key instant retry — restart speed is sacred
-- [ ] Esc pause + auto-pause on `visibilitychange` — bolted onto the existing flags; the full state-machine refactor waits for the Phase 3 tech window
-- [ ] Keyboard attack alternative (mouse-only attack locks out keyboard players)
-- [ ] Recruit 5–10 strangers (playtest Discords, r/playmygame); watch 2 over screen share
-
-## Phase 2 — Sound and the First Minute (weeks 5–8)
-
-**Goal:** a 10-minute run feels finished; nobody quits confused. **Exit:** engaged retry rate >40%; 3 fresh testers learn block/dodge/combo unprompted and retry after dying.
-
-- [ ] **Procedural WebAudio SFX** (~100-line oscillator/noise helper, zero assets, zero licensing): swing whoosh per combo step, steel clang on block, guard-break crunch, kill thump **pitch-shifted by combo count**, low-HP heartbeat, wave horn. Hook points already exist (`damageEnemy`/`killEnemy`/`damagePlayer`/block branch/`showWaveBanner`). AudioContext init on the start click
-- [ ] One combat loop with an intensity layer tied to wave/HP — **verifiably CC0, commissioned (~$50–200), or procedural**; record provenance now (Steam's AI-content disclosure is mandatory and this plan uses AI assistance — disclose honestly, late discovery is a review-bomb)
-- [ ] Settings overlay off the pause menu, persisted: volumes, screen-shake/vignette intensity, quality toggle (shadow size, pixel ratio, torch count), colorblind-safe faction cues (shape/outline, not just red-vs-green)
-- [ ] Contextual onboarding, no tutorial level: wave 1 shrinks to 3 grunts; just-in-time one-time prompts ("Hold SHIFT — block!" on first enemy windup, "SPACE — dodge!" on first flank)
-- [ ] **Banked score multiplier**: grows on kills-without-being-hit, big HUD element that visibly shatters on damage; blocks preserve it, guard break halves it (~80 lines that convert existing combat into continuous tension)
-- [ ] Difficulty pass on waves 1–10 from the Phase 1 wave-at-death histogram (waves 1–3 winnable by a first-timer)
-
-## Phase 3 — Tech Window + Soft Beta (weeks 9–13)
-
-**Goal:** codebase ready to grow 3×; performance proven **before** traffic; soft-public. **Exit:** 100+ tracked plays; engaged retry >45%; 60fps with 45 actors on an integrated-GPU laptop.
-
-- [ ] **Tech window, timeboxed 1 week, own branch:** Vite + npm, split `game.js` into ES modules along its existing section comments, unify `damageEnemy`/`damageAlly` into one combatant path. **No three.js engine upgrade pre-1.0** — r128 vendored locally is a safe runtime; a ~30-major-version jump relights every hand-tuned material for zero player payoff. Icebox it.
-- [ ] **Desktop-wrapper spike (2–3 days, months before it can hurt):** stand up Tauri+steamworks-rs *and* Electron+steamworks.js skeletons; verify **Steam overlay, achievements, controller input on Windows**; pick the winner (Electron is the proven path — Vampire Survivors shipped on it; binary size is irrelevant for a $4.99 game)
-- [ ] Crowd performance pass against measured wave-10 numbers: shared materials per palette, shadow-caster budget, live actor cap, pooled sparks/popups *if profiling demands*, FPS counter, potato mode
-- [ ] WebGL **context-loss handler**: `webglcontextlost/restored` → save score, "Graphics reset — click to reload" overlay; log occurrences to telemetry (integrated GPUs + long sessions = real resets; `onerror` won't catch them)
-- [ ] First boss: scaled brute at wave 5 with a boss bar and one new move from the existing MOVES table
-- [ ] itch page **public** + web presentation (favicon, OpenGraph unfurls, loading state, fullscreen toggle); feedback link; low-touch Discord
-- [ ] **Soft channels only**: r/playmygame, playtest servers. **Do NOT spend Show HN / r/WebGames yet** — one-shot channels wait for the proven loop (Phase 4 exit)
-- [ ] Allies keep respawning for now — permadeath lands *with* its counterplay in Phase 4
-
-## Phase 4 — The Addiction Loop (weeks 14–20, then one full week off)
-
-**Goal:** variance, arc, stakes, meta. **Exit (engaged cohort = finished wave 1, segmented by source):** retry >50%; runs/session ≥3; engaged median session ≥8–10 min; testers unprompted ask when the full version ships.
-
-- [ ] **Between-wave draft**: pick 1 of 3 boons — 15–20 upgrades tweaking existing constants (HP, speed, stamina costs, combo window, lifesteal, dodge i-frames, ally buffs), rarity tiers. The dead 3-second timer becomes the most anticipated moment of the run
-- [ ] **Run arc**: boss every 5 waves, milestone banners, **victory at wave 15**, endless mode after; difficulty steepens past 10
-- [ ] **Wave mutators + elite affixes** ("BERSERK — 30% faster, 2× score"; shielded/frenzied tints): N enemies × M affixes is the honest content multiplier
-- [ ] **Mortal, named allies + the tools to care**: permadeath, names on bars, "Warband 3/4" HUD, surviving names on the recap — shipped *together with* draft options that touch it ("Recruit: a new ally joins", "Field medic: revive at half HP"). Loss only works when the player had a say
-- [ ] **Daily challenge**: seeded PRNG (mulberry32; route `Math.random` call sites through it), date-seeded run, one rotating modifier, Wordle-style share string ("Blade Vale #142 — Wave 9 — 24,350") on the death screen
-- [ ] **Meta progression v1**: Valor earned every run (even wave-2 deaths pay out), unlock board — weapon variants (greatsword/daggers as stat+geometry tweaks), ally types, starting boons. *Options and variety, never baseline power*
-- [ ] Local top-10 run history; juice pass 2 (kill-streak slow-mo, shatter deaths, score tally count-up)
-- [ ] Weekly playtest; fix the top rage-quit point (death with no retry) every week
-- [ ] **Phase-exit marketing beat — the big one, now that the loop is real:** Show HN, r/WebGames, and the "procedural low-poly rigs in one JS file" devlog, all pointing at the daily-seed build
-
-## Phase 5 — CrazyGames + Steam Page (weeks 21–26)
-
-**Goal:** first revenue channel live; wishlist clock starts. **Exit:** live on CrazyGames; Steam page public with trailer; demo submitted; web funnel intact.
-
-- [ ] **Write the paid-delta decision before the Steam page exists** (or launch reviews write "it's free in your browser" for you): web/portal builds = waves 1–10 + daily seed (the funnel and viral loop); **Steam 1.0 exclusively** = endless mode, bosses past the first, full unlock board, leaderboards, offline play, achievements, cloud saves
-- [ ] **Steam page in week 1 of this phase** — wishlists compound: $100 Steam Direct, capsule art, 5 screenshots, 45-second GIF-paced trailer; **complete the AI-content disclosure honestly** (AI-assisted code/localization, music provenance)
-- [ ] CrazyGames submission: SDK integration (ad breaks **only** at wave/death boundaries via the pause system — never mid-combat, never revive-for-ad), **SDK data module as the save backend** (fixes iframe-storage eviction), self-hosted bundle, store assets. CrazyGames is the lead portal: desktop-keyboard accepted, ~60/70% revshare, no exclusivity. Poki waits for touch controls post-1.0 (its web-exclusivity preference conflicts anyway)
-- [ ] Desktop wrapper build-out on the Phase 3 spike winner: achievements, cloud save of unlocks/highscores
-- [ ] Controller support + key rebinding + settings completion (Steam reviews punish missing options)
-- [ ] **Save export/import code** (base64 of the versioned schema) in settings — doubles as itch→CrazyGames→Steam progress migration
-- [ ] Demo build = waves 1–10 + boss, ending on a wishlist CTA; same CTA on the itch death screen
-- [ ] One email to Armor Games — accept whatever sponsorship it yields, block nothing on it
-
-## Phase 6 — Next Fest + 1.0 (anchored to fest dates, ~weeks 27–40)
-
-**Goal:** ride one Next Fest well, then ship. **Exit:** fest completed with measurable wishlist bump; 1.0 live on Steam ($4.99, 10% launch discount) + itch; week-1 hotfix shipped; public post-launch roadmap.
-
-- [ ] **Anchor to real dates now**: Next Fests run ~Feb / June / Oct with registration deadlines weeks earlier and a 2-week minimum page age + Valve review (2–5 business days) before. Back-schedule from the chosen fest. **Pre-committed decision date:** if <2k wishlists at the registration deadline, skip to the next fest and spend the slack on content polish — you get one fest per game; never enter underpowered, never float the fest
-- [ ] **1.0 content lock — sized to what this calendar actually funds**: 2 arena looks (palette/prop/lighting variants of the existing arena), 2 weapons/stances, 5 enemy types (3 base + shielded + ranged harasser, multiplied by the affix system), 2 bosses, endless + daily seed. Everything else: icebox, one-in-one-out
-- [ ] Accessibility completion: reduce-motion, photosensitivity-safe vignette, remappable everything
-- [ ] UI localization to FR/DE/PT-BR/zh-CN (AI-assisted, disclosed)
-- [ ] Fest week: looped broadcast on the page, daily GIFs, reply to every demo comment; one post-fest week to act on the top 3 findings, nothing more
-- [ ] Launch: balance freeze 2 weeks out, Discord bug bash, min-spec certification (integrated GPU), press kit + emails to ~20 Vampire-Survivors-likes YouTubers 2 weeks out, day-1 Reddit/itch/Discord posts
-- [ ] Reserve the full week after launch for hotfixes — zero planned work
-- [ ] Global daily leaderboard (Cloudflare Worker + KV, plausibility-cap anti-cheat) ships **post-launch** once traffic exists — an empty leaderboard is anti-retention
+**Exit criteria:** a tester who has never seen the game joins from their phone via QR code, signs in, rides the map, fights one battle with touch controls, and their feedback note arrives server-side. Host setup under 60 seconds.
 
 ---
 
-## Distribution: a funnel, not a launch
+## The mechanisms
 
-1. **itch.io** (P0 unlisted → P3 public) — validation, not revenue: a few hundred plays, 4.0+ rating, proof the loop retains
-2. **CrazyGames** (P5) — lead commercial portal (~30M MAU; their algorithm pays for exactly the D1/D7 retention Phase 4 builds). Mid-tier = 50k–500k plays, hundreds/month; a category hit = millions of plays
-3. **Steam** (P6) — the real-money test: $4.99 wrapped build with real paid delta. Good = 500–2,000 copies; breakout is streamer-driven. Wishlist drivers in order: **Next Fest demo, the GIF habit, the web funnel** (portal players convert to Steam poorly — treat those wishlists as bonus)
-4. **Armor Games** — one email, modest license fee, zero engineering
-5. **Poki, mobile stores — strictly post-1.0**, only if metrics justify building touch controls
-6. **Marketing cadence (budgeted, ~2–3 h/week from the same hour budget):** one *good* GIF per week (flank kills, guard breaks, warband charges), batch-captured monthly, cross-posted; devlog at P2 exit; the daily-seed share string is the built-in viral channel; Discord stays low-touch until P5
+### 1. Server-authoritative procedural worldgen
 
-## Metrics (decisions follow stranger telemetry, not Discord veterans)
+**Where it stands.** Terrain, settlements, and roads are generated by a shared deterministic kernel (`sim/terra.js`) that runs identically on client and server. The server owns the canonical world: chunks are generated on first visit, persisted in SQLite (`server/chunks.js`, `chunk` + `chunk_detail` tables), and served in batches (`/api/v1/chunks`, `/chunks/detail`). The client's local kernel produces byte-identical output, so the server payload is persistence, not a correctness dependency — offline play degrades gracefully. Detail is tiered: strategic pictograms at map zoom, persisted street-level rows (tree stands, boulders, groves) at action zoom. Worldgen versioning (`Terra.VERSION`) is stamped on every stored chunk so a kernel change never silently regenerates someone's saved ground.
 
-Segment every metric by source (itch embed / direct / portal). Gates are measured on the **engaged cohort** — players who finish wave 1 — so portal drive-by bounce doesn't poison the numbers.
+**Why this design scales.** Determinism means the server never streams geometry — only compact seed-derived rows — so bandwidth per player is tiny and the client can always fall back to local generation. Generate-on-first-visit means storage grows with *explored* world, not world size.
 
-| Metric (engaged cohort) | P2 gate | P3 gate | P4 gate |
-|---|---|---|---|
-| Retry rate (death → new run) | >40% | >45% | >50% |
-| Runs per session | — | 2+ | ≥3 |
-| Median session | — | >6 min | ≥8–10 min |
-| Wave-at-death histogram | tunes 1–10 | no cliff < wave 3 | smooth to 15 |
-| Rage-quits (death, no retry) | identified | top one fixed weekly | trending down |
-| FPS @ 45 actors, integrated GPU | measured | 60fps locked | regression-checked |
-| D1 return rate | — | — | tracked once CrazyGames is live |
-| Steam wishlists | — | — | 2k at fest registration = go |
+**Improvement ladder:**
+- **Chunk payload budget:** measure real bytes/chunk at each tier; gzip is in place, but add a hard payload-size regression test so a worldgen change can't quietly 10× the wire cost.
+- **Kernel migration story:** today a `Terra.VERSION` bump orphans old rows. Define the policy — regenerate lazily per chunk vs. world "seasons" (new version = new world, old worlds read-only archives). Seasons are the industry-proven answer at scale.
+- **Server generation cost:** chunk generation is synchronous in the request path. Move to a worker thread + generation queue before any public traffic; pre-warm the ring around each active player.
+- **Edit layer on top of determinism:** player/world *changes* to terrain (razed villages, built forts) need a sparse delta table over the deterministic base — design it before any feature needs it, because retrofitting deltas under a deterministic kernel is painful.
+- **Long term:** region servers each owning a world-space shard of chunk generation, coordinated by chunk key — the deterministic kernel makes this embarrassingly parallel.
 
-Every phase gate also requires watching 2–3 fresh first-timers play.
+### 2. Living-world simulation (tick, careers, diplomacy, destiny)
+
+**Where it stands.** A bounded time-driven tick (`server/tick.js`) advances the world 24/7 under `launchd`. Inside it: character careers (every soldier named, skill from real fighting, deeds persisted), the diplomacy/intent engine (faction relations, Phase A live), and the destiny engine (per-character fated arcs + a world "age," chronicle-only by design). Off-map battles resolve through the shared character-weighted resolver (`sim/world-sim.js`), deterministic per seed. "While You Were Away" digests summarize the elapsed war on login.
+
+**Why this design scales.** The sim kernel is pure and shared — the same code that resolves a battle server-side can predict it client-side, which is the foundation for both trust (verifiable outcomes) and latency-hiding (client anticipates, server confirms).
+
+**Improvement ladder:**
+- **Tick cost profiling:** instrument per-system tick time (diplomacy, destiny, battles, careers) and per-world row counts. Establish the budget *now*: the tick must stay under N ms at 10× current population or the always-on promise breaks.
+- **Interest management:** the tick currently touches every character. Move to activity buckets — characters in active regions tick every beat, garrisons and distant warlords tick coarsely (every Nth beat with catch-up math). This is the single biggest headroom win.
+- **Diplomacy Phases B–D** (personality-driven intents, war weariness, betrayals) — already planned; each phase must land with its own drift guard (the all-neutral-peace bug of the crowded-map fix is the cautionary tale: a living world that converges to stasis reads as dead).
+- **Chronicle as a product surface:** the event log is currently flavor. At scale it becomes the social object — shareable world histories, "this week in your world" digests, famous-character pages. Cheap to build on what exists; enormous retention value.
+- **Determinism testing:** byte-identical-per-seed is verified for destiny; extend the same golden-seed regression harness to every tick system so no refactor silently forks the sim.
+
+### 3. Combat & battle AI
+
+**Where it stands.** The core 30-second loop is the game's strongest asset: pose-snap swordplay, hit-stop, trauma shake, guard breaks, dodge i-frames, poise/heavy/finisher layer, procedural WebAudio SFX (combat-feel Phases 1–2 shipped; Phase 3 telegraphs+parry pending). Enemy AI flanks in packs. The command layer is Orders × Pace (charge/hold/hold-zone/regroup/free × march/rush) issued live mid-fight or from the slowed command deck; squads persist between battles. Battle fighters are pinned to y=0 (terrain relief is backdrop).
+
+**Improvement ladder:**
+- **Combat-feel Phase 3** (telegraphs + parry) — finishes the planned arc; readable enemy wind-ups are also the accessibility story.
+- **Terrain in battle:** the y=0 pin was the right simplification, but battles fought on the actual streets/walls the street tier now renders is the obvious next fidelity jump — start with *flat but furnished* arenas (real buildings as obstacles) before attempting slopes.
+- **AI officer layer:** enemy hosts currently fight as one mass with pack behavior. Give enemy armies the *same* Orders × Pace system the player has, driven by a simple commander policy (hold chokepoints, commit reserves, retreat when broken) — symmetric systems are cheaper to maintain and make enemy behavior legible.
+- **Determinism & replay:** route all battle randomness through the seeded PRNG; a battle then becomes a (seed, orders-timeline) tuple — replays, spectating, and server-side verification of co-op outcomes all fall out of this one refactor.
+- **Scale ceiling:** profile the actor cap honestly on phone-class hardware (M1 work); instanced crowd rendering + LOD'd fighter logic (distant soldiers run cheap steering, not full combat) buys the "avalanche" sieges the crusade system promises.
+
+### 4. Multiplayer & networking
+
+**Where it stands.** Shared worlds: every account has a token, presence and armies render on the common map, ambient swarm keeps the map alive. Real-time co-op (J): host-authoritative WebSocket relay (`server/ws.js`, `/coop`), guests hand their warband to the host's arena and watch snapshots; verified headlessly, needs real two-device testing (M1 delivers exactly this). Map-level war (marches, clashes, reinforcement) is server-resolved in shared worlds.
+
+**Improvement ladder:**
+- **M1 is the real test** — two phones + a desktop in one world is the first honest multi-device shakeout of presence, co-op, and reconnect.
+- **Guest agency in co-op:** v1 guests spectate their handed-over troops. Next: direct guest-avatar control (sword in hand in the host's arena) — snapshot codec exists, needs input forwarding + client prediction for the guest's own body only (everything else stays host-authoritative).
+- **Protocol discipline:** define versioned message schemas for `/coop` and the REST surface now, while the client count is one. Every future client (mobile wrapper, bot, Steam build) holds the protocol stable.
+- **Anti-cheat posture:** host-authoritative co-op means a malicious host owns the battle. Acceptable for friends-on-LAN; before open matchmaking, the deterministic-battle work in §3 enables server-side outcome verification (replay the seed+orders, compare results) — vastly cheaper than running battles server-side.
+- **Scale ladder:** single relay → rooms pinned to worker processes → regional relay fleet. The relay is dependency-free and stateless-ish by design; keep it that way. Presence/map state at large N needs interest management (only stream what's near each player's view) — same principle as the tick, same win.
+
+### 5. Accounts, identity & persistence
+
+**Where it stands.** Username/password sessions ride `X-Player-Token`; multiple characters per account per map; the U drawer switches/splits/gives between them with multi-select bulk orders; merge preserves careers via `member_of`. SQLite via better-sqlite3, migrations numbered (011 as of today). Client has offline fallback for everything.
+
+**Improvement ladder:**
+- **Password security audit before any non-LAN exposure:** hashing (argon2/scrypt), rate limiting, session expiry/rotation, HTTPS. LAN testers don't need it; the first internet-reachable deployment absolutely does — do it *at* that boundary, not after.
+- **Account recovery & abuse surface:** email-optional recovery codes; per-account request quotas (the validation caps exist — formalize them per endpoint).
+- **SQLite's honest ceiling:** better-sqlite3 on one box serves thousands of concurrent players fine (reads dominate, writes are tick-batched). The scale plan is *not* "switch to Postgres day one" — it's (a) Litestream/WAL backup replication immediately (a dead disk must not kill a world), (b) world sharding (one SQLite file per world — already nearly true structurally), (c) Postgres only when a single world outgrows a box.
+- **GDPR/deletion path:** named persistent characters mean personal data. Account-delete that scrubs or anonymizes (character becomes an NPC with a generated name — fits the fiction perfectly) — design this early, it's cheap now and mandatory later.
+- **Save export codes** (base64 of versioned state) remain the cross-platform migration story from the original plan — still right.
+
+### 6. Rendering, LOD & performance
+
+**Where it stands.** Zero-asset procedural everything (the strategic edge: ~2MB, instant load, free variants). Hex-prism terrain on a global lattice; detail tiers by zoom rung (chart → miniature → street level) with budgeted, distance-aware re-tessellation so rung changes never hitch; vista system ties fog/camera to explored miles; roads painted into terrain via canvas splats (no ribbon meshes); settlements generated from the landform; instanced scatter with server-persisted street rows. three.js r128 vendored.
+
+**Improvement ladder:**
+- **Phone tier (M1):** the quality-toggle work lands here first — pixel-ratio cap, shadow budget, scatter density, tessellation lock. Make the tier system explicit (`QUALITY.low/med/high`) rather than scattered constants.
+- **Frame budget instrumentation:** a permanent lightweight profiler (per-system ms: terrain, scatter, fighters, CA overlay, UI) behind `?debug=1` — every performance conversation should start from its numbers, not vibes.
+- **Draw-call discipline at street tier:** street settlements rebuild per-hold; audit material/geometry sharing across holds (one material per palette globally, geometry caches already exist — verify nothing per-instance slipped in).
+- **The r128 question, re-answered:** still no engine upgrade before the loop is proven — but the *reason* has shifted from "no player payoff" to "phone WebGL2 support is what matters, and r128 handles it." Revisit only if a phone-class rendering feature (e.g. proper instanced color on old iOS GPUs) forces it.
+- **Long term:** WebGPU is icebox; the zero-asset pipeline means a renderer swap touches materials/instancing only, which is the payoff of never adopting glTF.
+
+### 7. Overworld structure: roads, settlements, territory
+
+**Where it stands.** Hierarchical road network (Gabriel trunks, branches, streets, gated walls — a road crosses a wall only at a gate), hex-A* routing, click-to-march ETA, armies travel by road. Terrain-aware settlements (contour-marched curtain walls fit the hills). Territory as a breathing cellular-automaton influence field drawn as hex caps. Starting-station system deals a scaled opening scenario.
+
+**Improvement ladder:**
+- **Settlements as gameplay, not scenery:** the street tier renders real towns — the next systems (garrisons you walk through, recruitment inside walls, markets, siege objectives tied to actual gates) should consume the geometry that now exists. Every settlement feature from here on should work *at street level first*.
+- **Territory consequences:** the CA border is visual; wire it to the sim (tax/recruit pools by held hexes, supply attrition outside friendly territory) so the map's breathing matters.
+- **Road economy:** roads already shape travel; let them shape the *war* — supply lines that can be cut, patrol routes that matter, richer settlements on trunk roads. All reads of existing data, no new generators.
+
+### 8. Game feel, audio & onboarding
+
+**Where it stands.** Procedural WebAudio SFX layer shipped (FEEL/AUDIO/SFX systems); combat juice pass 1–2 done. No music yet. Onboarding is the starting-station drop-in; no tutorialization of the deeper systems (command layer, map war, diplomacy).
+
+**Improvement ladder:**
+- Contextual just-in-time prompts (from the original plan — still exactly right) extended to the *map* verbs: first pact, first call-to-arms, first zoom rung change.
+- Procedural or CC0 music with an intensity layer; provenance recorded (Steam AI-disclosure requirement stands).
+- The retention mechanics from the original plan (best-score memory, near-miss framing, death recap) remain valid and mostly unbuilt — they move to the milestone ladder below rather than being lost.
+
+---
+
+## Milestone ladder after M1
+
+Order, not dates. Each milestone ends with something a stranger can play and a written verdict on its exit metric.
+
+1. **M1 — Mobile LAN playtest** (above). *Exit: phones in the living room, feedback flowing.*
+2. **M2 — Feedback → feel:** burn down the top 10 tester findings; combat-feel Phase 3 (telegraphs + parry); touch-control iteration from real thumbs. *Exit: the same testers voluntarily return.*
+3. **M3 — Retention loop:** persistence of progress across sessions surfaced properly (best runs, career milestones, chronicle digest), death/defeat recap with near-miss framing, instant retry. Telemetry pipe (event schema from the original plan) — decisions from data, not Discord. *Exit: measured D1 return on the tester cohort.*
+4. **M4 — Internet-reachable alpha:** the §5 security boundary work (hashing, HTTPS, rate limits, backups via Litestream), deploy on a VPS, invite-code gate. *Exit: 50 remote accounts, zero data loss, tick under budget.*
+5. **M5 — The public funnel:** itch/CrazyGames build with graceful offline degradation; the persistent shared world becomes the platform delta (this replaces the original paid-delta split — the living world is the thing you can't get from a copy of the client). *Exit: engaged retry >45%, runs/session ≥3.*
+6. **M6 — Steam:** page + wishlist clock, Next Fest anchoring, desktop wrapper spike (Electron + steamworks.js as the proven path), $4.99 with the always-on world + cloud characters as the paid pillar. The original plan's fest discipline (pre-committed skip rule at <2k wishlists) stands unchanged.
+7. **M7 — Mobile stores:** the M1 touch layer + performance tier graduate to Capacitor wrappers once the loop is proven on web. LAN testing (M1) is deliberately the cheap rehearsal for this.
+
+## Metrics
+
+Unchanged in spirit from the original: decisions follow stranger telemetry, segmented by source, measured on the engaged cohort. The gate table (retry >40/45/50%, runs/session ≥3, median session ≥8–10 min, no wave-cliff, 60fps on integrated GPU) now applies per-milestone rather than per-phase, plus two new ones:
+
+| New metric | Gate |
+|---|---|
+| Tick time at 10× population (synthetic) | < 250ms sustained |
+| Phone FPS (mid-range Android, action mode) | ≥ 30 sustained |
+| Co-op battle desync reports | zero tolerated — every one root-caused |
+| Time from `git clone` to hosted LAN session | < 5 min |
 
 ## We Will NOT Do
 
-- **Energy systems, real-time timers, recharging lives, login streaks, escalate-and-reset rewards** — the appeal is "one more run RIGHT NOW"; the daily seed is an invitation, never a punishment for absence
-- **Pay-to-win, paid stat boosts, loot boxes** — one purchasable +10% invalidates every "NEW BEST" and every leaderboard
-- **Ads inside the core loop** — boundaries only on portals; no revive-for-ad (death must matter); Steam/itch ad-free
-- **Hidden rubber-banding / pity-loss difficulty** — deaths must be legible and the player's fault or near-miss framing collapses
-- **Power-gating core verbs** — dodge, block, combos are in run #1 forever; unlocks add options, never baseline fun
-- **Fake social proof, nag-share dialogs, notification spam** — one clean share button that never interrupts the restart flow
-- **Asset pipeline / glTF** — zero-asset procedural characters are the strategic edge (tiny payload, instant load, free variants)
-- **Replacing pose-snap animation with skeletal blends** — the snappy guard-to-guard transitions ARE the signature feel
-- **Pre-1.0 three.js engine upgrade, ECS/TypeScript rewrites, WebGPU, multiplayer, servers before traction**
-- **Premature optimization** — pool/spatial-hash only when profiling demands it
+Unchanged and still binding — with one line formally retired:
 
-## Risks
+- **Energy systems, timers, streaks, escalate-and-reset rewards** — the daily rhythm is an invitation, never a punishment.
+- **Pay-to-win, paid stat boosts, loot boxes** — one purchasable +10% invalidates every career and leaderboard.
+- **Ads inside the core loop; no revive-for-ad** — death must matter.
+- **Hidden rubber-banding** — outcomes stay legible (the destiny engine is chronicle-only for exactly this reason).
+- **Power-gating core verbs** — dodge, block, combos, command are in session #1 forever.
+- **Fake social proof, nag-share, notification spam.**
+- **Asset pipeline / glTF** — zero-asset procedural generation is the strategic edge.
+- **Replacing pose-snap animation with skeletal blends** — the snap IS the signature.
+- **Premature optimization** — the profiler (§6) decides, not intuition.
+- ~~No multiplayer/servers before traction~~ — **retired 2026-06-28 by owner direction**; the living-world server is now a core pillar, and this roadmap is built around it.
 
-1. **Scope creep** ("most addicting ever" is unfalsifiable): ship when gates pass; written content lock at P6; icebox everything else
-2. **Crowd performance** (the most shareable feature is the most expensive): quality settings P2, measured optimization + caps + potato mode P3, 60fps-on-integrated treated as a feature with regression checks
-3. **Burnout**: hard weekly hour budget *including* marketing hours; every phase ends with something public; cut P6 content rather than extend; off-weeks after P4 and after the fest
-4. **Web→Steam cannibalization**: solved structurally by the paid-delta split in P5 — decided before the page exists
-5. **Wishlist shortfall**: page up months early, GIF habit from week 1, pre-committed fest skip rule
-6. **Wrapper tech bet**: Steam overlay over OS webviews is notoriously flaky — de-risked by the P3 spike, months before it can sink the fest
-7. **Save integrity in iframes**: storage facade + portal SDK backend + export codes — best scores must never silently vanish on the platforms where validation happens
-8. **Feedback distortion**: regulars stop representing new players; fresh-stranger tests gate every phase and anonymous telemetry outranks veteran opinion
+## Risks (updated)
 
-## Icebox (post-1.0, in rough order)
-
-Modern three.js migration · Poki + touch controls · global leaderboards at scale · mobile wrappers (Capacitor) · new biomes/weapons beyond the lock · ascension difficulty tiers · localization beyond the first four · community features
+1. **Scope breadth** — eight live mechanisms is a lot for a solo dev. Mitigation: the milestone ladder forces convergence; each mechanism's improvement ladder is *ordered*, and only the top item of each is ever in flight.
+2. **The tick outgrows the box** — mitigated by interest management (§2) and the profiling gate; measured before it's felt.
+3. **Phone performance sinks M1** — mitigated by the explicit quality-tier work; if a mid-range Android can't hold 30fps in action mode, street tier stays desktop-only and the milestone still ships.
+4. **Security debt at the M4 boundary** — the LAN phase is deliberately security-light; the M4 checklist is the wall, and nothing internet-facing ships before it.
+5. **Host-authoritative trust** — fine for friends, wrong for strangers; deterministic-battle verification (§3/§4) is the planned answer, not server-side battle simulation.
+6. **Solo-dev burnout** — unchanged: hard weekly hour budget, every milestone ends public, cut content not gates.
 
 ---
 
-## Addendum — Persistent NPC Careers & Living-World Server (added 2026-06-28)
+## Appendix — historical addenda
 
-> **This section deliberately overrides the "We Will NOT Do: multiplayer, servers before traction" line above**, on the owner's explicit direction. It records a new pillar that turns Blade Vale from a tight arena game into a Mount & Blade–like persistent war-RPG. Treat it as intended scope, not creep to be cut.
-
-**What it is:** every soldier — even a rank-and-file swordsman — has a **unique name** and a **career** that grows from *actual* fighting (skill → stronger hits, hardier guard), from the group/nation they serve, and from the wars they march in (renown, rank). Kills and leadership are recorded. **Battles the player never attends are simulated from the characters who fight them** (character-weighted resolution), and a **Node + SQLite backend** runs an **always-on living world** that keeps warring while the player is offline. The player character uses the same system. Multiplayer-forward (per-token accounts/worlds), single-player today.
-
-**Status (built & preview-verified): Steps 1–5 done.**
-1. Client named-career layer (names, skill-from-combat, kill attribution, charsheet on **V**).
-2. Shared `sim/world-sim.js` resolver + character-weighted off-map clashes with named warlords.
-3. Node + better-sqlite3 backend (`server/`); careers + deeds persisted server-side; `client-net.js` with offline fallback.
-4. Always-on world tick (time-driven, bounded); "While You Were Away" digest on login; capital ownership mirrored.
-5. Per-token auth seam, server-side validation caps, `launchd` 24/7 agent, docs.
-
-**Run:** `npm install && npm run server` (:8787). See `server/README.md`. Detailed design + per-step verification: `~/.claude/plans/i-want-to-bring-golden-grove.md`.
-
-**Deferred (future):** full client-map-as-pure-view (snapshot + dead-reckoning + WS) reconciliation; real multiplayer auth + shared worlds. The headline ("a living world that evolves while you're away") is delivered; these are correctness/scale refinements.
-
-**Roadmap interaction:** this changes the distribution math (a backend is no longer "post-traction"). The free web funnel can still ship the client with graceful offline degradation; the persistent world + cross-device saves become the Steam/CrazyGames delta. Revisit Phase 5's paid-delta split with this in mind.
-
----
-
-## Addendum — Allied Co-op, Living Battles & Crusades (added 2026-06-29)
-
-> Owner-directed pillar on top of the living world: **allies fighting together is a central
-> mechanism.** Extends (and partly overrides toward) real multiplayer co-op.
-
-**What it is:**
-1. **Living, timed overworld battles.** Off-map clashes no longer resolve instantly — rival hosts
-   lock together and fight over a *calculated* duration (a 1v1 of swordsmen ≈ 3s, scaling ~`size^0.4`
-   to a ~70s siege), rendered "in battle mode" on the map (contested disc, strength bar, dwindling
-   counts). Reinforcements can swing a fight mid-clash. *(Client-side in solo worlds; the
-   server-driven shared-world macro war still resolves on the backend — bringing timed visibility to
-   that path is the remaining piece.)*
-2. **Alliances & pacts.** Forge pacts with AI nations (parley → Propose Pact, renown-gated); other
-   players in a shared world are allies. Allied bands turn friendly (✦) and answer your calls.
-3. **Call to Arms / Crusade (G).** Rally allied bands to your banner, or call a map-wide crusade on
-   an enemy castle — they converge and storm it together.
-4. **Reinforcement & coordination.** Nearby pacted bands / answered banners / a host you rode in to
-   aid join *your* side (borrowed troops — they fight beside you, then go home; never absorbed into
-   your roster). Each banner grants a coordination buff (up to +50%): **working together is a real,
-   large advantage.**
-5. **Real-time co-op (J), host-authoritative.** A dependency-free WebSocket relay (`server/ws.js`,
-   `/coop`) + client transport (`net-battle.js`, `window.coop`): discover an ally's live battle, join
-   it, hand over your warband, watch the shared arena and split the spoils.
-
-**Status:** 1–4 built & preview-verified (offline path; calibration confirmed: 1v1 = 3.17s). 5: relay
-+ transport + beacon discovery + snapshot codec + guest render **verified headlessly**; the live
-two-browser arena and direct guest-avatar sword control still need real two-device testing.
-
-**Files:** all overworld/co-op logic in `game.js`; new `server/ws.js` (relay) and `net-battle.js`
-(client). Reuses the shared resolver (`sim/world-sim.js`). Offline single-player is fully gated off
-from every co-op path. Controls + dev map: `BATTLE_CONTROLS.md` (overworld/co-op section).
-
----
-
-## Addendum — Global Destiny Engine (added 2026-06-29)
-
-> Owner-directed server-pillar step on top of the living world: every life should feel like it's
-> *going somewhere*. Built as the exact sibling of the diplomacy engine.
-
-**What it is:** each world tick the server reads **every character in the world** — NPC warlords *and*
-the player + warband — and scores each toward a **fated arc** (Conqueror, Champion of the Vale,
-Kingslayer, The Bulwark, Founder of a Line, The Faithless, The Doomed, The Unremembered), advancing a
-`fate` 0→1. It rolls the whole population up into a world-level **"age"** (Age of Ambition / Age of
-Blood / The Uniting / The Long Dusk / The Long Peace) with a generated prophecy, and records milestones
-in the chronicle ("*A fate settles on …*", "*The prophecy holds …*", "*The age turns: The Uniting*").
-
-**Chronicle-only by design:** nothing in combat / marching / conquest / diplomacy reads
-`destiny`/`fate`/`age` — it is purely descriptive (keeps outcomes legible; aligns with *no hidden
-rubber-banding*).
-
-**Status: built & verified.** Engine over 300 ticks (varied destinies + correct age + chronicle);
-determinism (byte-identical per seed); live `/api/v1/world` `destiny` block; real-browser digest +
-charsheet render.
-
-**Files:** pure kernel `computeDestiny()` in `sim/world-sim.js` (deterministic, shared client+server;
-plus `destinyTitle()`/`ageTitle()`); server authority `server/destiny.js` (`tickDestiny()` runs inside
-the tick transaction, after diplomacy, self-gated to every 3rd tick); schema `server/migrations/005_destiny.sql`
-(`destiny/fate/destiny_tick` on `warlords`+`characters`, `world_destiny` table); wiring in `server/tick.js`
-+ `server/index.js`; client thin read in `game.js` (digest age/prophecy/fated pills + `✦ Destiny` on the
-V charsheet). `spawnWarlord` now seeds the Phase-B `personality_json`/`loyalty` so fates diverge.
-
-**Deferred:** "fate sealed" lines when a doomed/conqueror actually falls; optionally letting destiny
-*nudge* the sim — both kept out so this build stays purely descriptive.
+The three dated addenda (Persistent NPC Careers & Living-World Server, 2026-06-28 · Allied Co-op & Crusades, 2026-06-29 · Global Destiny Engine, 2026-06-29) that previously lived at the bottom of this file are now folded into §2–§4 above. Their full text survives in git history (`git log --follow ROADMAP.md`) and their implementation detail lives in `BATTLE_CONTROLS.md`, `server/README.md`, and the plan files under `~/.claude/plans/`.

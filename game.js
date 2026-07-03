@@ -1697,12 +1697,13 @@ function isFinisherEligible(e) {
 function finisherTarget() {
   if (player.weapon !== 'sword') return null;
   const fdir = new THREE.Vector3(Math.sin(player.facing), 0, Math.cos(player.facing));
+  const cs = fieldSimOn() ? FIELD_SCALE : 1;
   let best = null, bd = Infinity;
   for (const e of enemies) {
     if (!isFinisherEligible(e)) continue;
     tmpV.subVectors(e.pos, player.pos); tmpV.y = 0;
     const d = tmpV.length();
-    if (d > PLAYER_ATK_RANGE + 0.7 + (e.def.scale - 1)) continue;
+    if (d > (PLAYER_ATK_RANGE + 0.7 + (e.def.scale - 1)) * cs) continue;
     if (d > 0.001) tmpV.normalize();
     if (fdir.dot(tmpV) < 0.2) continue; // roughly in front
     if (d < bd) { bd = d; best = e; }
@@ -1776,7 +1777,7 @@ function startAttack() {
   for (const e of enemies) {
     if (!e.alive) continue;
     const d = e.pos.distanceTo(player.pos);
-    if (d > 7.5) continue;
+    if (d > 7.5 * (fieldSimOn() ? FIELD_SCALE : 1)) continue; // assist radius shrinks with the miniature fight
     const yaw = Math.atan2(e.pos.x - player.pos.x, e.pos.z - player.pos.z);
     const score = d + Math.abs(angleDelta(player.facing, yaw)) * 0.8;
     if (score < bestScore) { bestScore = score; player.aimTarget = e; }
@@ -1824,35 +1825,39 @@ const PLAYER_ATK_ARC = 0.35; // cos threshold of frontal arc
 function playerHitCheck() {
   const baseDmg = 26;
   const dmg = baseDmg + player.combo * 4 + (player.char ? player.char.dmgBonus : 0); // combos + earned skill
+  const cs = fieldSimOn() ? FIELD_SCALE : 1; // the hero's sword is miniature too in a field fight
   const fdir = new THREE.Vector3(Math.sin(player.facing), 0, Math.cos(player.facing));
   for (const e of enemies) {
     if (!e.alive) continue;
     tmpV.subVectors(e.pos, player.pos); tmpV.y = 0;
     const dist = tmpV.length();
-    if (dist > PLAYER_ATK_RANGE + (e.def.scale - 1)) continue;
+    if (dist > (PLAYER_ATK_RANGE + (e.def.scale - 1)) * cs) continue;
     tmpV.normalize();
     if (fdir.dot(tmpV) < PLAYER_ATK_ARC) continue;
     damageEnemy(e, dmg, fdir, true, player); // player blow: full juice
   }
+  fieldExtraHitCheck(PLAYER_ATK_RANGE * cs, PLAYER_ATK_ARC, fdir); // a swing into a passing host STARTS the fight
 }
 
 // heavy: a wide, slow cleave that hits the whole front cluster, shoves them outward
 // radially, and drains a big chunk of poise (one good heavy staggers a knot of grunts).
 function heavyHitCheck() {
   const dmg = FEEL.heavyDmg + player.combo * 4 + (player.char ? player.char.dmgBonus : 0);
+  const cs = fieldSimOn() ? FIELD_SCALE : 1;
   const fdir = new THREE.Vector3(Math.sin(player.facing), 0, Math.cos(player.facing));
   let hits = 0;
   for (const e of enemies) {
     if (!e.alive) continue;
     tmpV.subVectors(e.pos, player.pos); tmpV.y = 0;
     const dist = tmpV.length();
-    if (dist > FEEL.heavyRange + (e.def.scale - 1)) continue;
+    if (dist > (FEEL.heavyRange + (e.def.scale - 1)) * cs) continue;
     const radial = tmpV.clone();
     if (radial.lengthSq() > 1e-6) radial.normalize(); else radial.copy(fdir);
     if (fdir.dot(radial) < FEEL.heavyArc) continue; // wide ~200° frontal arc
     damageEnemy(e, dmg, radial, true, player, true); // heavy=true → big radial knock + poise break
     hits++;
   }
+  fieldExtraHitCheck(FEEL.heavyRange * cs, FEEL.heavyArc, fdir); // a cleave into a host opens the battle too
   if (hits) { // one big camera burst for the whole cleave (per-enemy juice is suppressed when heavy)
     addShake(FEEL.killShake); addHitstop(0.07);
     addKick(fdir, FEEL.kickKill); addFovPunch(FEEL.fovPunchHit * 1.6);
@@ -2158,14 +2163,15 @@ function fighterStrike(f) {
   spawnSlashArc(f.pos, f.facing, mv, f.def.scale, f.team === 'ally' ? 0xcfe8ff : 0xffb09a);
   SFX.swing(f.pos); // distance-gated whoosh from the surrounding melee
   const fdir = new THREE.Vector3(Math.sin(f.facing), 0, Math.cos(f.facing));
-  const reach = f.def.range + f.def.scale * 0.6;
+  const scs = fieldSimOn() ? FIELD_SCALE : 1; // miniature-scale reach in a field fight
+  const reach = (f.def.range + f.def.scale * 0.6) * scs;
   // cleave: hit every opposing combatant in the frontal arc
   const foes = f.team === 'ally' ? enemies : opposingPlayerSide;
   for (const t of foes) {
     if (!t.alive) continue;
     const to = new THREE.Vector3().subVectors(t.pos, f.pos).setY(0);
     const d = to.length();
-    if (d > reach + ((t.def ? t.def.scale : 1) - 1)) continue;
+    if (d > reach + ((t.def ? t.def.scale : 1) - 1) * scs) continue;
     if (d > 0.001) to.normalize();
     if (fdir.dot(to) < 0.2) continue;
     damageCombatant(t, f.aura ? Math.round(f.def.dmg * f.aura.dmgMul) : f.def.dmg, f);
@@ -2192,7 +2198,9 @@ function stepFighter(f, dt) {
   f.moving = false;
   // poise recovers while not reeling — so accumulated chip-stagger needs sustained pressure
   if (!f.staggered && f.poise < f.maxPoise) f.poise = Math.min(f.maxPoise, f.poise + FEEL.poiseRegen * dt);
-  const atkRange = f.def.range + f.def.scale * 0.4;
+  // field-mode fights happen at miniature scale — every reach shrinks with the bodies (cs = combat scale)
+  const cs = fieldSimOn() ? FIELD_SCALE : 1;
+  const atkRange = (f.def.range + f.def.scale * 0.4) * cs;
   const isPlayerPack = f.team === 'enemy' && tgt === player;
 
   if (f.state === 'hurt') {
@@ -2222,7 +2230,7 @@ function stepFighter(f, dt) {
       } else {
         const foe = nearestOpponentOf(f), R = f.def.ranged;
         if (foe) {
-          const fd = f.pos.distanceTo(foe.pos), reach = R ? R.range : atkRange;
+          const fd = f.pos.distanceTo(foe.pos), reach = R ? R.range * cs : atkRange;
           f.facing = angleLerp(f.facing, Math.atan2(foe.pos.x - f.pos.x, foe.pos.z - f.pos.z), dt * 6);
           if (fd <= reach && f.cd <= 0) {
             f.target = foe;
@@ -2236,7 +2244,7 @@ function stepFighter(f, dt) {
       // weapon range without leaving the zone; melee engage only what enters it, then fall back in.
       const z = f.zone, R = f.def.ranged;
       const foe = R ? nearestOpponentOf(f) : nearestFoeInRect(f, z, ZONE_LEASH);
-      const reach = R ? R.range : atkRange;
+      const reach = R ? R.range * cs : atkRange;
       const fd = foe ? f.pos.distanceTo(foe.pos) : Infinity;
       if (foe && fd <= reach) {
         // in range — face the foe and strike (ranged units shoot from where they stand)
@@ -2275,12 +2283,28 @@ function stepFighter(f, dt) {
         f.facing = angleLerp(f.facing, BATTLE_FRONT, dt * 6);
         f.walkPhase += dt * f.def.speed * 1.6; f.moving = true;
       } else if (f.team === 'ally' && player.alive) {
-        const pd = f.pos.distanceTo(player.pos);
-        if (pd > (fieldSimOn() ? 4.5 * FIELD_SCALE : 4.5)) { // a tight escort at the small field scale
-          const mv = new THREE.Vector3().subVectors(player.pos, f.pos).setY(0);
-          if (mv.lengthSq() > 1e-6) mv.normalize(); else mv.set(1, 0, 0); // guard: never normalize a zero vector (stacked on the player)
-          f.vel.addScaledVector(mv, f.def.speed * 0.7 * dt * 6);
-          f.walkPhase += dt * f.def.speed * 1.4; f.moving = true;
+        if (fieldSimOn() && f.formSlot) {
+          // marching formation: seek the assigned slot — at a run when trailing, at a walk when close
+          const sdx = f.formSlot.x - f.pos.x, sdz = f.formSlot.z - f.pos.z, pd = Math.hypot(sdx, sdz);
+          if (pd > 0.25 * FIELD_SCALE) {
+            const mv = sfA.set(sdx / pd, 0, sdz / pd)
+              .addScaledVector(separation(f), pd < 1.6 * FIELD_SCALE ? 0.25 : 0.8); // ranks pack tighter than a crowd
+            if (mv.lengthSq() > 1e-6) mv.normalize();
+            const urgency = clamp(pd / (3 * FIELD_SCALE), 0.6, 1.5); // fall in briskly, settle gently
+            f.vel.addScaledVector(mv, f.def.speed * urgency * dt * 6);
+            f.facing = angleLerp(f.facing, Math.atan2(sdx, sdz), dt * 8);
+            f.walkPhase += dt * f.def.speed * 1.5; f.moving = true;
+          } else {
+            f.facing = angleLerp(f.facing, f.formDir != null ? f.formDir : player.facing, dt * 6); // dressed ranks face the line of march
+          }
+        } else {
+          const pd = f.pos.distanceTo(player.pos);
+          if (pd > 4.5) { // battle: the loose escort of old
+            const mv = new THREE.Vector3().subVectors(player.pos, f.pos).setY(0);
+            if (mv.lengthSq() > 1e-6) mv.normalize(); else mv.set(1, 0, 0); // guard: never normalize a zero vector (stacked on the player)
+            f.vel.addScaledVector(mv, f.def.speed * 0.7 * dt * 6);
+            f.walkPhase += dt * f.def.speed * 1.4; f.moving = true;
+          }
         }
       }
       if (!f.moving) restLegs(f.parts, dt, true);
@@ -2300,7 +2324,7 @@ function stepFighter(f, dt) {
       if (R) {
         // skirmisher: advance only until the shot is there, kite anyone who closes in
         const threatD = nearestOpponentDist(f);
-        const meleeRange = f.def.range + f.def.scale * 0.4;
+        const meleeRange = atkRange; // same reach as the melee path, already at combat scale
         if (threatD <= meleeRange + 0.8) {
           // cornered: draw the sidearm and fight in melee instead of fleeing
           setRangedMode(f, false);
@@ -2317,7 +2341,7 @@ function stepFighter(f, dt) {
             f.vel.addScaledVector(mv, f.def.speed * dt * 6);
             f.walkPhase += dt * f.def.speed * 1.6; f.moving = true;
           }
-        } else if (threatD < R.minRange) {
+        } else if (threatD < R.minRange * cs) {
           // a melee threat is closing but not yet on us — kite back to shooting range
           setRangedMode(f, true);
           const away = sfA.subVectors(f.pos, nearestOpponentOf(f).pos).setY(0);
@@ -2325,7 +2349,7 @@ function stepFighter(f, dt) {
           away.addScaledVector(separation(f), 0.8).normalize();
           f.vel.addScaledVector(away, f.def.speed * 0.9 * dt * 6);
           f.walkPhase += dt * f.def.speed * 1.4; f.moving = true;
-        } else if (setRangedMode(f, true), dist > R.range) {
+        } else if (setRangedMode(f, true), dist > R.range * cs) {
           // close to firing range — no further
           const mv = sfA.subVectors(tgt.pos, f.pos).setY(0);
           if (mv.lengthSq() > 0) mv.normalize();
@@ -2363,7 +2387,7 @@ function stepFighter(f, dt) {
         }
       } else if (isPlayerPack) {
         // flank: orbit toward the assigned rear slot around the player
-        const radius = 3.6 * f.def.scale;
+        const radius = 3.6 * f.def.scale * cs;
         const fromP = tmpV2.subVectors(f.pos, player.pos).setY(0);
         const distP = fromP.length();
         if (distP > 0.001) fromP.normalize();
@@ -2378,7 +2402,7 @@ function stepFighter(f, dt) {
         f.walkPhase += dt * f.def.speed * 1.4; f.moving = true;
       } else {
         // waiting on a full duel: hold a slow standoff orbit around it until a slot frees
-        const radius = 3.4 * f.def.scale;
+        const radius = 3.4 * f.def.scale * cs;
         const fromT = tmpV2.subVectors(f.pos, tgt.pos).setY(0);
         const distT = fromT.length();
         if (distT > 0.001) fromT.normalize();
@@ -2965,6 +2989,7 @@ function setFieldMode(on, opts) {
     grabPointer();
     showCmdToast('Action — mouse aim · click attack · WASD move · P back to the map');
   } else {
+    abortFieldBattle();                              // pulling out mid-fight is a retreat — survivors re-form
     clearAllies();                                   // the on-foot escort folds back into the banner
     clearAllFieldArmies();                           // nearby hosts go back to being banner tokens
     player.obj.visible = false;
@@ -3057,6 +3082,7 @@ function updateFieldArmies(dt) {
   const px = player.pos.x, pz = player.pos.z;
   for (const band of parties) {
     if (!band.alive) continue;
+    if (fieldBattle && band === fieldBattle.band) continue; // its men are REAL fighters right now, not extras
     const d = Math.hypot(band.pos.x - px, band.pos.z - pz);
     const has = fieldArmies.get(band);
     if (!has && d <= FIELD_ARMY.showR && total < FIELD_ARMY.capTotal) total += materialiseBand(band, FIELD_ARMY.capTotal - total);
@@ -3069,6 +3095,165 @@ function updateFieldArmies(dt) {
   for (const bt of mapBattles) {
     if (!bt.marker) continue;
     bt.marker.visible = !(bt.sideA.bands.some(b => fieldArmies.has(b)) || bt.sideB.bands.some(b => fieldArmies.has(b)));
+  }
+}
+
+// ---------- Marching formation: the company shapes itself to the ground it crosses ----------
+// On a road the company folds into marching blocks sized to the roadbed — a broad highway takes
+// 6-wide blocks, a medium road 4-wide, a narrow lane two abreast; open country marches in loose
+// 4-wide blocks on the hero's heading. Big companies split into several blocks, one behind the
+// other with a gap. Each soldier owns a slot; stepFighter's follow branch walks them onto it.
+const FORM = { rows: 4, rankSp: 1.35, fileSp: 1.25, blockGap: 3.0, lead: 2.6 }; // in FIELD_SCALE units
+let _formShape = '';                 // last announced shape — toast only when the ground changes it
+function updateCompanyFormation() {
+  if (!fieldSimOn()) return;
+  let n = 0;
+  for (const a of allies) if (a.alive && a.order === 'free' && !(a.target && a.target.alive)) n++;
+  if (!n) return;
+  const ri = roadInfoAt(player.pos.x, player.pos.z);
+  const onRoad = ri.factor > 0.45 && (ri.dx !== 0 || ri.dz !== 0);
+  const W = onRoad ? ri.w * STREET.roadWMul : 0;                  // painted street-level roadbed width
+  const files = onRoad ? (W >= 6.5 ? 6 : W >= 4 ? 4 : 2) : 4;     // large road 6×4 · medium 4×4 · lane 2×4
+  let dx, dz;
+  if (onRoad) {
+    dx = ri.dx; dz = ri.dz;                                       // march along the road...
+    if (dx * Math.sin(player.facing) + dz * Math.cos(player.facing) < 0) { dx = -dx; dz = -dz; } // ...the way the hero is headed
+  } else { dx = Math.sin(player.facing); dz = Math.cos(player.facing); }
+  const px = -dz, pz = dx;                                        // right of the line of march
+  const fs = FIELD_SCALE;
+  const fileSp = onRoad ? Math.min(FORM.fileSp * fs, (Math.max(W, 1.4) * 0.8) / files) : FORM.fileSp * fs; // never spill off the roadbed
+  const rankSp = FORM.rankSp * fs, block = files * FORM.rows;
+  const formDir = Math.atan2(dx, dz);
+  let i = 0;
+  for (const a of allies) {
+    if (!a.alive || a.order !== 'free' || (a.target && a.target.alive)) continue;
+    const b = (i / block) | 0, k = i % block, row = (k / files) | 0, col = k % files;
+    const back = FORM.lead * fs + b * (FORM.rows * rankSp + FORM.blockGap * fs) + row * rankSp;
+    const side = (col - (files - 1) / 2) * fileSp;
+    if (!a.formSlot) a.formSlot = { x: 0, z: 0 };
+    a.formSlot.x = player.pos.x - dx * back + px * side;
+    a.formSlot.z = player.pos.z - dz * back + pz * side;
+    a.formDir = formDir;
+    i++;
+  }
+  const shape = onRoad
+    ? files + '×' + FORM.rows + (n > block ? ' blocks' : '') + ' — ' + (files === 6 ? 'the high road' : files === 4 ? 'the road' : 'a narrow lane')
+    : 'open order';
+  if (shape !== _formShape) { _formShape = shape; if (n >= 4) showCmdToast('The company forms ' + shape); }
+}
+
+// ---------- FIELD BATTLE: attack a passing host and fight it RIGHT WHERE YOU STAND ----------
+// No encounter prompt, no plan phase, no teleport to the flat arena — the stretch of overworld you're
+// on IS the battlefield. Your swing landing in a materialised crowd converts that band's visual extras
+// into real FIELD_SCALE fighters with full combat AI, your company (order 'free') wades in beside you,
+// and both sides trickle reinforcements from their true rosters. Victory breaks the band on the map;
+// pulling back to the strategic view (P) is a retreat — the survivors re-form as a smaller band.
+let fieldBattle = null;          // { band, reserve } — the in-place fight now raging around the hero
+const FIELD_BATTLE_CAP = 24;     // enemy bodies on the ground at once (rest of the host trickles in)
+function startFieldBattle(band) {
+  if (fieldBattle || !fieldSimOn() || !band || !band.alive) return;
+  clearFieldArmy(band);                       // the decorative crowd gives way to real fighters
+  if (band.group) band.group.visible = false; // no banner token hovering over a live melee
+  band.clashCd = 9999;                        // frozen out of the ambient clash system while it fights YOU
+  band.parleyCd = 9999;
+  battleParty = band;
+  wave++; waveKills = waveHeroKills = waveLosses = 0;
+  if (!playerChar) loadCareers();
+  ensureWarbandRoster();
+  beginBattleCareers();
+  // the rest of your warband (beyond the escort cap) queues as reinforcements, exactly like a real battle
+  const fielded = new Set(); for (const a of allies) if (a.char) fielded.add(a.char);
+  playerReserve = warbandRoster.filter(c => !c.fallen && !fielded.has(c))
+    .map(c => ({ def: ALLY_DEF_BY_CLASS[classKeyOf(c.archetype)], char: c }));
+  const reserve = buildEnemyRoster(band.size, band.level);
+  shuffleInPlace(reserve); shuffleInPlace(playerReserve);
+  fieldBattle = { band, reserve };
+  enemiesRemaining = reserve.length;
+  fieldBattleBatch();
+  showWaveBanner('⚔ Steel Rings Out', (band.faction ? band.faction.name : 'The enemy') + ' — ' +
+    band.size + ' strong — turns on you right here. No quarter!');
+}
+// trickle both sides up to their field caps from their true rosters — continuous reinforcement
+function fieldBattleBatch() {
+  const fb = fieldBattle; if (!fb) return;
+  const band = fb.band;
+  let eAlive = 0; for (const e of enemies) if (e.alive) eAlive++;
+  while (eAlive < FIELD_BATTLE_CAP && fb.reserve.length) {
+    const r = fb.reserve.pop();
+    const a = rand(0, Math.PI * 2), rr = rand(0.4, 3.4) * FIELD_SCALE;
+    const [ex, ez] = landStep(band.pos.x, band.pos.z, Math.sin(a) * rr, Math.cos(a) * rr);
+    const echar = makeChar(r.type, { team: 'enemy', hero: r.hero, name: r.hero ? r.hero.name : undefined,
+      nameSet: enemyNameSet, renown: r.hero ? 200 : 0, notability: r.hero ? 3 : 1 });
+    const e = spawnEnemy(r.type, ex, ez, r.hero, echar);
+    e.obj.scale.multiplyScalar(FIELD_SCALE);          // person-vs-city scale, like everyone out here
+    e.obj.position.y = mapElevY(ex, ez);
+    e.facing = Math.atan2(player.pos.x - ex, player.pos.z - ez);
+    eAlive++;
+  }
+  let aAlive = 0; for (const a of allies) if (a.alive) aAlive++;
+  while (aAlive < FIELD_COMPANY_CAP && playerReserve.length) {
+    const it = playerReserve.pop();
+    const ang = player.facing + Math.PI + rand(-0.7, 0.7);          // they run in from behind you
+    const rr = rand(4, 7) * FIELD_SCALE;
+    const [lx, lz] = landStep(player.pos.x, player.pos.z, Math.sin(ang) * rr, Math.cos(ang) * rr);
+    const a = spawnAlly(lx, lz, ALLY_PALETTES[(Math.random() * ALLY_PALETTES.length) | 0], it.def, it.char);
+    a.order = 'free'; a.facing = player.facing;
+    a.obj.scale.multiplyScalar(FIELD_SCALE);
+    a.obj.position.y = mapElevY(lx, lz);
+    aAlive++;
+  }
+}
+function updateFieldBattle(dt) {
+  const fb = fieldBattle; if (!fb) return;
+  if (!fb.band.alive) { endFieldBattle(); return; } // died to something else mid-fight — call it won
+  fieldBattleBatch();
+  let eAlive = 0; for (const e of enemies) if (e.alive) eAlive++;
+  if (!fb.reserve.length && eAlive === 0) endFieldBattle();
+}
+// the last of them falls: break the band on the map, fold every survivor's deeds into their career
+function endFieldBattle() {
+  const fb = fieldBattle; if (!fb) return;
+  const band = fb.band; fieldBattle = null;
+  applyBattleGrowth(true); // survivors carry their kills/renown forward; the fallen are gone for good
+  lastBattle = { size: band.size, raider: band.raider };
+  if (band.serverId && typeof window !== 'undefined' && window.net) window.net.reportArmyDefeat(band.serverId);
+  band.alive = false;
+  const bi = parties.indexOf(band); if (bi >= 0) parties.splice(bi, 1);
+  if (band.group) { scene.remove(band.group); disposeGroup(band.group); }
+  battleParty = null;
+  if (battlePromotions.length) showWaveBanner(battlePromotions[0] + ' is now a Champion!',
+    battlePromotions.length > 1 ? battlePromotions.length + ' soldiers rose to lead' : 'They can lead a squad — assign them in the Command Deck');
+  else showWaveBanner('The Host Is Broken', 'The last of them falls. Your company re-forms and the road is yours.');
+}
+// the player pulls back to the strategic map mid-fight: a RETREAT — the enemy survivors re-form as a band
+function abortFieldBattle() {
+  const fb = fieldBattle; if (!fb) return;
+  fieldBattle = null;
+  applyBattleGrowth(false); // you leave with what you won — and what it cost you
+  const band = fb.band;
+  let survivors = fb.reserve.length;
+  for (const e of enemies) if (e.alive) survivors++;
+  band.size = Math.max(1, survivors);
+  band.clashCd = 3; band.parleyCd = 6; // brief truce so pulling out doesn't instantly re-trigger anything
+  if (band.group) band.group.visible = true;
+  battleParty = null;
+  for (const e of enemies) { scene.remove(e.obj); disposeGroup(e.obj); }
+  enemies.length = 0;
+  showWaveBanner('You Break Off', band.size + ' of them re-form and march on.');
+}
+// the player's swing lands in a materialised (decorative) crowd → that's the declaration of war
+function fieldExtraHitCheck(range, arcCos, fdir) {
+  if (!fieldSimOn() || fieldBattle) return;
+  for (const [band, fa] of fieldArmies) {
+    if (!band.alive || band.inBattle || isAllyFaction(band.faction)) continue; // clashes & pacted hosts: not by a stray swing
+    for (const b of fa.bodies) {
+      const dx = band.pos.x + b.ox - player.pos.x, dz = band.pos.z + b.oz - player.pos.z;
+      const d = Math.hypot(dx, dz);
+      if (d > range + 0.3) continue;
+      if (d > 0.001 && (fdir.x * dx + fdir.z * dz) / d < arcCos) continue;
+      startFieldBattle(band);
+      return;
+    }
   }
 }
 
@@ -4403,13 +4588,14 @@ function landRoughAt(x, z) {
   if (SRV_ON) { const r = srvRoughAt(x, z); if (r !== null) return r; }
   return terra().landRoughAt(x, z);
 }
-// nearest road influence at a point: { factor 0..1, dx, dz } where (dx,dz) is the road's tangent there.
-const _riOut = { factor: 0, dx: 0, dz: 0 };
+// nearest road influence at a point: { factor 0..1, dx, dz, w } where (dx,dz) is the road's tangent
+// there and w is the winning segment's base width (formation logic sizes marching blocks from it).
+const _riOut = { factor: 0, dx: 0, dz: 0, w: 0 };
 function roadInfoAt(x, z) {
-  _riOut.factor = 0; _riOut.dx = 0; _riOut.dz = 0;
+  _riOut.factor = 0; _riOut.dx = 0; _riOut.dz = 0; _riOut.w = 0;
   if (!roadGrid) return _riOut;
   const gx = Math.floor(x / ROAD_GRID), gz = Math.floor(z / ROAD_GRID);
-  let bestF = 0, btx = 0, btz = 0;
+  let bestF = 0, btx = 0, btz = 0, bw = 0;
   for (let ax = -1; ax <= 1; ax++) for (let az = -1; az <= 1; az++) {
     const bucket = roadGrid.get((gx + ax) + ',' + (gz + az)); if (!bucket) continue;
     for (let i = 0; i < bucket.length; i++) {
@@ -4419,10 +4605,10 @@ function roadInfoAt(x, z) {
       const cx = s.x1 + vx * t, cz = s.z1 + vz * t, d = Math.hypot(x - cx, z - cz);
       const core = s.w * 0.5;
       const f = s.str * (d <= core ? 1 : clamp(1 - (d - core) / ROAD.fall, 0, 1));
-      if (f > bestF) { bestF = f; const il = 1 / Math.sqrt(L2); btx = vx * il; btz = vz * il; }
+      if (f > bestF) { bestF = f; bw = s.w; const il = 1 / Math.sqrt(L2); btx = vx * il; btz = vz * il; }
     }
   }
-  _riOut.factor = bestF; _riOut.dx = btx; _riOut.dz = btz;
+  _riOut.factor = bestF; _riOut.dx = btx; _riOut.dz = btz; _riOut.w = bw;
   return _riOut;
 }
 function roadFactorAt(x, z) { return roadInfoAt(x, z).factor; }
@@ -5854,6 +6040,7 @@ function reinforceMap() {
 function enterMap() {
   mode = 'map'; gameRunning = false;
   mapFieldMode = false; clearAllFieldArmies(); // start strategic; clear any stale materialised-host crowds (fieldPref re-enters below)
+  fieldBattle = null; battleParty = null;     // a fresh map drops any in-place fight cold (clearBattlefield sweeps the bodies)
   encounter = null; siegeCapital = null;
   if (typeof clearCall === 'function' && activeCall) clearCall(); // no stale call/beacon carries into a (new) region
   const encEl = document.getElementById('encounter'); if (encEl) encEl.classList.add('hidden');
@@ -6308,7 +6495,13 @@ function updateMap(dt) {
     // FIELD MODE: you ARE the hero on the ground — full battle controls, the company follows as soldiers
     updatePlayer(dt);     // mouse-aim + WASD + attack/heavy/block/dodge, confined to land + riding terrain
     rebuildSepGrid();     // so the escort spreads instead of stacking
+    if (fieldBattle) resolveTargets();    // a live field battle: pair off the two sides, pack the player
+    updateCompanyFormation();             // shape the marching blocks to the ground you're crossing
     updateAllies(dt);     // the warband company (order 'free') trails the hero
+    if (fieldBattle || enemies.length) {  // enemies exist only mid-fight (plus fading corpses after)
+      updateEnemies(dt);
+      updateFieldBattle(dt);              // trickle reinforcements + call the victory
+    }
     updateProjectiles(dt); // arrows you loose still fly
     updateFieldArmies(dt); // nearby hosts render as real soldier crowds (clashing ones fight) instead of flags
     updateStreetHolds();   // nearby settlements rebuild at street scale, one per frame, nearest first
@@ -6370,6 +6563,7 @@ function updateMap(dt) {
   for (const band of parties) {
     if (!band.alive) continue;
     aliveParties++;
+    if (fieldBattle && band === fieldBattle.band) continue; // its men are on the ground around you — the banner holds
     if (band.clashCd > 0) band.clashCd -= dt;
     if (band.parleyCd > 0) band.parleyCd -= dt;
     const to = tmpV.subVectors(player.pos, band.pos); to.y = 0;
@@ -6377,7 +6571,7 @@ function updateMap(dt) {
     if (band.inBattle) {
       // locked in a living clash — its banner is driven by the battle system. Hold here, but let
       // the player ride in to join the fray (a bigger token, so a slightly wider reach).
-      if (d < 4.2 && band.parleyCd <= 0 && -(player.vel.x * to.x + player.vel.z * to.z) > 0.3) { openEncounter(band); return; }
+      if (d < 4.2 && band.parleyCd <= 0 && !fieldSimOn() && -(player.vel.x * to.x + player.vel.z * to.z) > 0.3) { openEncounter(band); return; } // on foot, no prompt — attack to fight
       continue;
     }
     // The hosts wage their OWN war and pay the unaligned player no mind — they
@@ -6423,7 +6617,7 @@ function updateMap(dt) {
     band.group.position.copy(band.pos);
     band.group.position.y = mapElevY(band.pos.x, band.pos.z);
     // ride into a band (moving toward it) to meet it — then choose: attack, or just hail
-    if (d < 3.4 && band.parleyCd <= 0 && -(player.vel.x * to.x + player.vel.z * to.z) > 1) { openEncounter(band); return; }
+    if (d < 3.4 && band.parleyCd <= 0 && !fieldSimOn() && -(player.vel.x * to.x + player.vel.z * to.z) > 1) { openEncounter(band); return; } // on foot the world doesn't stop you — swing to start the fight
   }
 
   updateDetachments(dt); // the player's own columns roam under their standing orders
@@ -6436,7 +6630,7 @@ function updateMap(dt) {
     if (cap.conquerCd > 0) cap.conquerCd -= dt;
     const dx = player.pos.x - cap.x, dz = player.pos.z - cap.z;
     const reach = cap.tier === 'city' ? 5.0 : cap.tier === 'town' ? 4.2 : cap.tier === 'village' ? 3.4 : 4.6;
-    if (dx * dx + dz * dz < reach * reach && cap.parleyCd <= 0 && -(player.vel.x * dx + player.vel.z * dz) > 1) { openSiege(cap); return; }
+    if (dx * dx + dz * dz < reach * reach && cap.parleyCd <= 0 && !fieldBattle && -(player.vel.x * dx + player.vel.z * dz) > 1) { openSiege(cap); return; } // no siege prompts over a live melee
   }
 
   // rival hosts that collide LOCK INTO a living battle (or reinforce one already raging). This runs
@@ -8145,6 +8339,10 @@ function doGameOver() {
   if (coopRole === 'host') coopHostEnd(false); // the host fell — release any joined ally
   if (playerChar) playerChar.deaths++;
   applyBattleGrowth(false); // the fight is lost, but the survivors keep what they learned
+  if (fieldBattle) { // you fell in an in-place field fight: stand the band back up (growth is already folded above)
+    const b = fieldBattle.band; fieldBattle = null; battleParty = null;
+    b.parleyCd = 6; b.clashCd = 3; if (b.group) b.group.visible = true;
+  }
   gameRunning = false;
   commandPanelOpen = false; timeScale = 1; // clear tactical-slow/command state behind the overlay
   if (cmdDeck) cmdDeck.classList.remove('open');
@@ -8682,6 +8880,22 @@ BV.plan = { selectType, deploySelected, beginBattle, selCount: () => selected.si
   battlePace: (pace) => { ensureSelection(); commandPace(pace); },           // 'march'|'rush'
   selLabel: () => fieldSelLabel() };
 BV.siege = (i) => { const c = nations[i]; if (c) openSiege(c); };
+// in-place field battle + marching-formation test hooks
+BV.fieldBattle = () => fieldBattle ? { faction: fieldBattle.band.faction && fieldBattle.band.faction.name, size: fieldBattle.band.size,
+  reserve: fieldBattle.reserve.length, enemiesUp: enemies.filter(e => e.alive).length, alliesUp: allies.filter(a => a.alive).length } : null;
+BV.pickFight = () => { // start an in-place fight with the nearest materialised hostile crowd
+  let best = null, bd = Infinity;
+  for (const band of fieldArmies.keys()) {
+    if (!band.alive || band.inBattle || isAllyFaction(band.faction)) continue;
+    const d = Math.hypot(band.pos.x - player.pos.x, band.pos.z - player.pos.z);
+    if (d < bd) { bd = d; best = band; }
+  }
+  if (best) startFieldBattle(best);
+  return best ? { faction: best.faction && best.faction.name, size: best.size, dist: +bd.toFixed(1) } : null;
+};
+BV.formation = () => { const ri = roadInfoAt(player.pos.x, player.pos.z);
+  return { road: +ri.factor.toFixed(2), w: ri.w, streetW: +(ri.w * STREET.roadWMul).toFixed(1), shape: _formShape,
+    slotted: allies.filter(a => a.alive && a.formSlot).length }; };
 BV.advance = (secs, dt = 0.016) => { // deterministic battle stepping for headless timing tests
   const n = Math.round(secs / dt);
   for (let i = 0; i < n && mode === 'battle' && gameRunning; i++) {

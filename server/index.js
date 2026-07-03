@@ -20,6 +20,15 @@ for (const w of db.prepare('SELECT id FROM worlds').all()) tick.seedWorld(w.id);
 setInterval(() => { try { tick.tickInactiveWorlds(); } catch (e) { console.error('tick error:', e.message); } }, tick.TICK_SECONDS * 1000);
 const PORT = process.env.BV_PORT || 8787;
 
+// ----- runtime feature flags: client-tunable knobs served at boot (GET /api/v1/config). Change them
+// HERE (or via the BV_* env overrides) to retune the live client without a redeploy. The client keeps
+// matching defaults, so an unreachable server just leaves the built-in feel in place. -----
+const FLAGS = {
+  // camera settle/transition speed when switching combat<->map (1 = snappy, lower = slower glide; 0.6 = a
+  // gentler-than-original settle, the shipped default)
+  modeXfadeSpeed: process.env.BV_MODE_XFADE_SPEED ? +process.env.BV_MODE_XFADE_SPEED : 0.6,
+};
+
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'Content-Type, X-Player-Token, X-World',
@@ -92,6 +101,11 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ok: true, ts: Date.now() });
     }
 
+    // client-tunable feature flags (camera feel, etc.) — fetched once at boot
+    if (req.method === 'GET' && p === '/api/v1/config') {
+      return send(res, 200, { ok: true, flags: FLAGS });
+    }
+
     // ----- auth: super-simple username/password (before the account seam — no token needed) -----
     if (req.method === 'POST' && p === '/api/v1/auth/register') {
       const b = await readBody(req);
@@ -155,15 +169,29 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && p === '/api/v1/world') {
       const since = parseInt(url.searchParams.get('since') || '0', 10);
       const wid = viewWorldId;
-      if (!tick.isActive(wid)) tick.advanceWorld(wid); // catch up the away gap on return
-      tick.markActive(wid);                            // freeze the tick for this live session (no double-sim)
-      const armies = tick.getArmies(wid);
-      const warlords = armies.slice().sort((a, b) => b.renown - a.renown).slice(0, 8);
+      const isShared = req.headers['x-world'] === 'shared';
+      if (isShared) {
+        // the SHARED world never sleeps: live players are pure VIEWERS of it, so it keeps ticking
+        // under them — patrols ride their circuits, campaigns march, battles bleed in real time.
+        tick.advanceWorld(wid);
+        tick.touchActive(wid);                         // presence marker only — does NOT freeze the tick
+      } else {
+        if (!tick.isActive(wid)) tick.advanceWorld(wid); // catch up the away gap on return
+        tick.markActive(wid);                            // solo: the live client owns motion (no double-sim)
+      }
+      // the viewer's position scopes which patrols ship (every host + anyone in a battle/campaign
+      // always ships); an old client that sends no coords gets the legacy hosts-only list
+      const px = url.searchParams.get('x'), pz = url.searchParams.get('z');
+      const armies = (px != null && pz != null)
+        ? tick.getArmiesNear(wid, +px || 0, +pz || 0, url.searchParams.get('r'))
+        : tick.getArmies(wid);
+      const warlords = armies.filter(a => a.role !== 'patrol').sort((a, b) => b.renown - a.renown).slice(0, 8);
       const events = db.prepare('SELECT tick, type, summary FROM world_events WHERE world_id=? AND tick>? ORDER BY id DESC LIMIT 40').all(wid, since);
       const simTick = db.prepare('SELECT sim_tick FROM worlds WHERE id=?').get(wid).sim_tick;
-      return send(res, 200, {
+      return sendZ(req, res, 200, {
         worldId: wid, shared: wid !== world.id, account: acct.id, simTick,
         capitals: tick.getCapitals(wid), armies, warlords, holdings: tick.getHoldings(wid),
+        battles: tick.getBattles(wid), campaigns: tick.getCampaigns(wid), // the visible war: ⚔ markers + muster beacons
         players: tick.getPresence(wid, acct.id).concat(chars.idleCharsOf(wid, acct.id)), // live banners + camped characters
         chars: chars.roster(wid, acct.id), events,
         relations: diplomacy.relationsForApi(wid), factionState: diplomacy.factionStateForApi(wid),
@@ -306,9 +334,9 @@ const server = http.createServer(async (req, res) => {
       return send(res, r.ok ? 200 : 400, r);
     }
 
-    if (req.method === 'POST' && p === '/api/v1/_advance') { // dev/test: force N world ticks immediately
+    if (req.method === 'POST' && p === '/api/v1/_advance') { // dev/test: force N world ticks immediately (X-World: shared targets the shared world)
       const b = await readBody(req);
-      return send(res, 200, { ok: true, advanced: tick.forceTicks(world.id, Math.min(1000, (b.n | 0) || 50)) });
+      return send(res, 200, { ok: true, advanced: tick.forceTicks(viewWorldId, Math.min(1000, (b.n | 0) || 50)) });
     }
 
     return send(res, 404, { error: 'not found' });

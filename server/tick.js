@@ -10,6 +10,7 @@ const D = require('./diplomacy');
 const Destiny = require('./destiny');
 const validate = require('./validate');
 const Chunks = require('./chunks');
+const Warfare = require('./warfare'); // settlement patrols + conquest campaigns + timed visible battles
 
 const TICK_SECONDS = 20;
 const MAX_CATCHUP_TICKS = 300;
@@ -117,7 +118,7 @@ function seedWorld(worldId) {
     const ins = db.prepare('INSERT INTO capitals(world_id, idx, def_name, owner_name, garrison) VALUES (?,?,?,?,?)');
     for (let i = 0; i < NATIONS.length; i++) ins.run(worldId, i, NATIONS[i], NATIONS[i], 20 + ((Math.random() * 12) | 0));
   }
-  let have = db.prepare("SELECT count(*) n FROM warlords WHERE world_id=? AND status='alive'").get(worldId).n;
+  let have = db.prepare("SELECT count(*) n FROM warlords WHERE world_id=? AND status='alive' AND role='host'").get(worldId).n;
   for (; have < TARGET_ARMIES; have++) spawnWarlord(worldId, pick(NATIONS), 0);
   D.seedDiplomacy(worldId);   // relation matrix + faction posture (idempotent)
   Destiny.seedDestiny(worldId); // world destiny / "age" row (idempotent)
@@ -150,22 +151,8 @@ function maybeRebirth(worldId, tick) {
            : 'rallies a host in the homeland'));
 }
 
-function band(w) { return { size: w.size, quality: 1.05, leader: { skills: JSON.parse(w.skills_json || '{}'), renown: w.renown } }; }
-function doClash(worldId, tick, a, b) {
-  const r = WorldSim.resolveClash(band(a), band(b), Math.random);
-  const win = r.aWins ? a : b, los = r.aWins ? b : a;
-  const winSize = Math.max(1, win.size - r.winnerLoss), losSize = Math.max(0, los.size - r.loserLoss);
-  const winRenown = win.renown + 3 + 0.12 * los.size;
-  db.prepare('UPDATE warlords SET size=?, renown=?, battles_won=battles_won+1, kills=kills+? WHERE id=?').run(winSize, winRenown, r.loserLoss, win.id);
-  if (win.renown < 100 && winRenown >= 100) ev(worldId, tick, 'warlord_rose', win.name + ' of ' + win.faction + ' is now a name spoken across the vale');
-  if (r.leaderFell || losSize <= 0) {
-    db.prepare("UPDATE warlords SET status='fallen', died_tick=?, size=? WHERE id=?").run(tick, losSize, los.id);
-    ev(worldId, tick, 'leader_fell', los.name + ' of ' + los.faction + ' fell to ' + win.name);
-    if (Math.random() < 0.7) spawnWarlord(worldId, los.faction, tick);
-  } else {
-    db.prepare('UPDATE warlords SET size=? WHERE id=?').run(losSize, los.id);
-  }
-}
+// (instant doClash is gone — meeting armies now lock into a TIMED battle via warfare.js, so the
+// map shows the fight happening instead of teleporting straight to the outcome)
 function nearestEnemyCap(worldId, faction, x, z, relMap) {
   const caps = db.prepare('SELECT * FROM capitals WHERE world_id=? AND owner_name!=?').all(worldId, faction);
   let best = null, bd = 1e18;
@@ -245,6 +232,7 @@ function contestHolds(worldId, tick, armies, relMap, busy) {
     const loser = best.owner_name;
     taken.add(best.id);
     flip.run(a.faction, Math.max(2, Math.round(best.garrison * 0.6)), best.id);          // a garrison is installed
+    Warfare.orphanPatrols(worldId, holdKeyOf(best), a.faction);                          // the old watch takes to the field
     db.prepare('UPDATE warlords SET renown=renown+4, size=? WHERE id=?').run(Math.max(2, a.size - Math.round(best.garrison * 0.3)), a.id);
     // keep the economy satellite coherent if this hold has a holdings row
     db.prepare('UPDATE holdings SET owner_name=?, updated_at=unixepoch() WHERE world_id=? AND hold_key=?').run(a.faction, worldId, holdKeyOf(best));
@@ -354,11 +342,14 @@ function levyHolding(worldId, body) {
 
 function runTick(worldId, tick) {
   const armies = db.prepare("SELECT * FROM warlords WHERE world_id=? AND status='alive'").all(worldId);
-  if (armies.length < 2) { seedWorld(worldId); return; }
+  if (armies.filter(a => a.role === 'host').length < 2) { seedWorld(worldId); return; }
   const relMap = D.relationsFor(worldId);   // who is at war with whom this tick (drives every target choice)
   const upd = db.prepare('UPDATE warlords SET x=?, z=?, tx=?, tz=? WHERE id=?');
-  // 1. march toward a rival, else an enemy hold, else wander
+  const lockedPre = Warfare.busySet(worldId);            // armies mid-battle hold their ground
+  const steered = Warfare.campaignSteered(worldId);      // campaign members march to the banners instead
+  // 1. free HOSTS march toward a rival, else an enemy hold, else wander (patrols/campaigns are warfare's)
   for (const a of armies) {
+    if (a.role !== 'host' || lockedPre.has(a.id) || steered.has(a.id)) continue;
     const rv = nearestRival(armies, a, relMap);
     const cap = nearestEnemyCap(worldId, a.faction, a.x, a.z, relMap);
     let tx, tz;
@@ -370,16 +361,12 @@ function runTick(worldId, tick) {
     a.z = clamp(a.z + dz / d * step + rand(-1, 1), -MAP_HALF, MAP_HALF);
     upd.run(a.x, a.z, tx, tz, a.id);
   }
-  // 2. positional clashes between rival armies that have met
-  const clashed = new Set();
-  for (let i = 0; i < armies.length; i++) for (let j = i + 1; j < armies.length; j++) {
-    const a = armies[i], b = armies[j];
-    if (!WorldSim.areEnemies(D.stanceBetween(relMap, a.faction, b.faction)) || clashed.has(a.id) || clashed.has(b.id)) continue; // allies & truces don't fight
-    if ((a.x - b.x) * (a.x - b.x) + (a.z - b.z) * (a.z - b.z) <= CLASH_RANGE * CLASH_RANGE) { clashed.add(a.id); clashed.add(b.id); doClash(worldId, tick, a, b); }
-  }
+  // 2. the living war: patrols ride their circuits, campaigns muster/march/besiege, meeting rivals
+  //    lock into TIMED battles that bleed over ticks (returns everyone still locked in a fight)
+  const clashed = Warfare.tickWarfare(worldId, tick, armies, relMap);
   // 3. conquests: an army on an enemy hold, strong enough, takes it. A player hold's watchtowers
   //    stiffen its effective garrison, so a developed capital genuinely resists offline reconquest.
-  for (const a of db.prepare("SELECT * FROM warlords WHERE world_id=? AND status='alive'").all(worldId)) {
+  for (const a of db.prepare("SELECT * FROM warlords WHERE world_id=? AND status='alive' AND role='host'").all(worldId)) {
     if (clashed.has(a.id)) continue;
     const cap = nearestEnemyCap(worldId, a.faction, a.x, a.z, relMap);
     if (!cap || cap.d2 > CAP_RANGE * CAP_RANGE) continue;
@@ -388,6 +375,7 @@ function runTick(worldId, tick) {
     if (loser === PLAYER) { hold = holdRow(worldId, 'cap:' + cap.row.idx); if (hold) effGarr += watchtowerBonus(JSON.parse(hold.buildings_json || '{}')); }
     if (a.size < effGarr * 0.5) continue;
     db.prepare('UPDATE capitals SET owner_name=? WHERE id=?').run(a.faction, cap.row.id);
+    Warfare.orphanPatrols(worldId, 'cap:' + cap.row.idx, a.faction);   // the old watch takes to the field
     db.prepare('UPDATE warlords SET renown=renown+10, size=? WHERE id=?').run(Math.max(2, a.size - Math.round(effGarr * 0.4)), a.id);
     ev(worldId, tick, 'capital_taken', a.faction + ' seized ' + cap.row.def_name + ' under ' + a.name);
     D.bumpRelation(worldId, loser, a.faction, -D.CONQUEST_SHOCK, tick); // the wronged nation seethes (may tip into war)
@@ -399,7 +387,8 @@ function runTick(worldId, tick) {
   // 3b. factions contest the WHOLE map: armies storm nearby generated frontier holds, not just the
   //     five capitals (clashing armies sit it out this tick). Holds exist only where players have
   //     navigated (ensureRegion on presence), so this is bounded to the explored frontier.
-  contestHolds(worldId, tick, armies, relMap, clashed);
+  //     Hosts only — patrols guard, they don't conquer.
+  contestHolds(worldId, tick, armies.filter(a => a.role === 'host'), relMap, clashed);
   // 3c. player towns produce + grow (offline catch-up safe — see tickHoldings)
   tickHoldings(worldId, tick);
   // 4. diplomacy: drift relations + posture, then record any nation that has fallen
@@ -410,8 +399,9 @@ function runTick(worldId, tick) {
   // 4b. destiny: read the whole population + the macro state diplomacy just refreshed, and advance
   // each character's fated arc + the world "age" (chronicle-only; self-gated to a slow cadence)
   Destiny.tickDestiny(worldId, tick);
-  // 5. keep the war populated — only LIVING nations march in (a fallen banner stays fallen)
-  const alive = db.prepare("SELECT count(*) n FROM warlords WHERE world_id=? AND status='alive'").get(worldId).n;
+  // 5. keep the war populated — only LIVING nations march in (a fallen banner stays fallen).
+  //    Hosts only: the patrol ecology replenishes itself per-settlement via ensurePatrols.
+  const alive = db.prepare("SELECT count(*) n FROM warlords WHERE world_id=? AND status='alive' AND role='host'").get(worldId).n;
   if (alive < TARGET_ARMIES && Math.random() < 0.6) { const nat = D.aliveNations(worldId); if (nat.length) spawnWarlord(worldId, pick(nat), tick); }
 }
 
@@ -441,6 +431,12 @@ function markActive(worldId) {
   const now = Math.floor(Date.now() / 1000);
   db.prepare('UPDATE worlds SET active_until=?, last_tick_at=? WHERE id=?').run(now + ACTIVE_TTL, now, worldId);
 }
+// presence WITHOUT freezing: the shared world keeps ticking while players ride it (they're viewers).
+// active_until still moves so the heartbeat doesn't double-advance a world its players are polling.
+function touchActive(worldId) {
+  const now = Math.floor(Date.now() / 1000);
+  db.prepare('UPDATE worlds SET active_until=? WHERE id=?').run(now + ACTIVE_TTL, worldId);
+}
 function isActive(worldId) { return db.prepare('SELECT active_until FROM worlds WHERE id=?').get(worldId).active_until > Math.floor(Date.now() / 1000); }
 function tickInactiveWorlds() {
   const now = Math.floor(Date.now() / 1000);
@@ -449,9 +445,12 @@ function tickInactiveWorlds() {
 function forceTicks(worldId, n) { seedWorld(worldId); return runTicks(worldId, n); }
 
 // ----- positional reads + multiplayer presence -----
-function getArmies(worldId) {
-  return db.prepare("SELECT id, name, faction, archetype, x, z, size, renown, kills, battles_won, intent, intent_target_kind, intent_target_id, loyalty, personality_json, grudge_faction, destiny, fate FROM warlords WHERE world_id=? AND status='alive' ORDER BY id").all(worldId);
+function getArmies(worldId) { // legacy shape: the named HOSTS only (patrols ship via getArmiesNear)
+  return db.prepare("SELECT id, name, faction, archetype, x, z, size, renown, kills, battles_won, intent, intent_target_kind, intent_target_id, loyalty, personality_json, grudge_faction, destiny, fate FROM warlords WHERE world_id=? AND status='alive' AND role='host' ORDER BY id").all(worldId);
 }
+const getArmiesNear = Warfare.getArmiesNear; // hosts + patrols near the viewer + battle/campaign members
+const getBattles = Warfare.getBattles;
+const getCampaigns = Warfare.getCampaigns;
 function getCapitals(worldId) {
   return db.prepare('SELECT idx, def_name, owner_name, garrison FROM capitals WHERE world_id=? ORDER BY idx').all(worldId)
     .map(c => Object.assign(c, capPos(c.idx)));
@@ -476,8 +475,8 @@ function getPresence(worldId, exceptAccount) {
 }
 
 module.exports = {
-  advanceWorld, seedWorld, runTicks, markActive, isActive, tickInactiveWorlds, forceTicks,
-  getArmies, getCapitals, defeatArmy, updatePresence, getPresence, capPos,
+  advanceWorld, seedWorld, runTicks, markActive, touchActive, isActive, tickInactiveWorlds, forceTicks,
+  getArmies, getArmiesNear, getBattles, getCampaigns, getCapitals, defeatArmy, updatePresence, getPresence, capPos,
   getHoldings, claimHolding, buildHolding, assignJobs, levyHolding, TOWN,
   ensureRegion, getHolds,
   TICK_SECONDS, MAX_CATCHUP_TICKS, ACTIVE_TTL, MAP_HALF

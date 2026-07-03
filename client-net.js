@@ -92,6 +92,14 @@
 
   net.cachedProfile = function () { return net.profile; };
 
+  // ----- server feature flags: tunable knobs served at boot (camera feel, etc.). Defaults live here so
+  // solo/offline still works; the server can override any of them without a client push. net.config is
+  // filled IN PLACE when the fetch resolves, and net.configReady lets the game re-read once it lands.
+  net.config = { modeXfadeSpeed: 0.6 };
+  net.configReady = jfetch('/config', { method: 'GET' })
+    .then(function (r) { if (r && r.flags) { Object.assign(net.config, r.flags); } return net.config; })
+    .catch(function () { return net.config; });
+
   net.saveCareers = function (payload) {
     return jfetch('/careers', { method: 'POST', body: JSON.stringify(payload) })
       .then(function (r) { net.online = true; return r; })
@@ -109,8 +117,11 @@
 
   net.world = null;
   net.holdings = []; // the player's developed towns (last server view) — mirrored from /world and /holdings
-  net.loadWorld = function (since) {
-    return jfetch('/world?since=' + (since != null ? since : lastSeenTick()), { method: 'GET', headers: worldHeaders() })
+  net.loadWorld = function (since, x, z) {
+    // x/z (the player's map position) scope which settlement patrols the server ships — every
+    // named host and anything in a battle/campaign always comes down regardless
+    var pos = (x != null && z != null) ? '&x=' + Math.round(x) + '&z=' + Math.round(z) : '';
+    return jfetch('/world?since=' + (since != null ? since : lastSeenTick()) + pos, { method: 'GET', headers: worldHeaders() })
       .then(function (w) { net.online = true; net.world = w; if (w && w.holdings) net.holdings = w.holdings; return w; })
       .catch(function () { return null; });
   };

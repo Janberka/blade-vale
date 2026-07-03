@@ -42,6 +42,13 @@
   #combo { position: absolute; left: 50%; bottom: 90px; transform: translateX(-50%); font-size: 26px; font-weight: bold; color: #ffcf5b; text-shadow: 0 2px 6px #000; opacity: 0; transition: opacity .2s; }
   /* a quiet ticker confirming a real-time field order — sits above the combo, edged green like the selection ring */
   #cmd-toast { position: absolute; left: 50%; bottom: 128px; transform: translateX(-50%); font-size: 15px; font-weight: 600; letter-spacing: .3px; color: #cfe9ff; background: rgba(12,18,30,.72); border: 1px solid rgba(125,255,154,.55); border-radius: 999px; padding: 4px 14px; text-shadow: 0 1px 3px #000; white-space: nowrap; opacity: 0; transition: opacity .18s ease; pointer-events: none; z-index: 6; }
+  /* zone-strike prompt: shown when a squad's placed area overlaps an enemy party (action mode) */
+  #field-strike { position: absolute; left: 50%; top: 92px; transform: translateX(-50%); display: none; text-align: center; z-index: 12; pointer-events: none; max-width: 92vw; }
+  #field-strike .fs-head { display: inline-block; font-size: 15px; font-weight: 600; color: #ffe0b0; background: rgba(30,14,10,.82); border: 1px solid rgba(255,120,80,.8); border-radius: 10px; padding: 6px 16px; text-shadow: 0 1px 3px #000; box-shadow: 0 4px 18px rgba(0,0,0,.5); }
+  #field-strike .fs-btns { margin-top: 8px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; pointer-events: auto; }
+  #field-strike .fs-b { font: inherit; font-size: 14px; font-weight: 700; color: #fff; background: rgba(18,12,10,.86); border: 1.5px solid var(--gc, #ff7850); border-left: 5px solid var(--gc, #ff7850); border-radius: 8px; padding: 6px 13px; cursor: pointer; box-shadow: 0 3px 12px rgba(0,0,0,.45); transition: transform .08s ease, background .12s ease; }
+  #field-strike .fs-b:hover { background: rgba(40,22,16,.95); transform: translateY(-1px); }
+  #field-strike .fs-b.fs-all { border-color: #ff5a3c; border-left-color: #ff5a3c; color: #ffd0c0; }
 
   #controls-hint {
     position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%);
@@ -104,6 +111,9 @@
   #terrtip .tt-dot { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 7px;
     border: 1px solid rgba(255,255,255,.4); vertical-align: baseline; }
   #terrtip .tt-dim { color: #8894ab; font-size: 11px; }
+  #terrtip .tt-info { pointer-events: auto; cursor: pointer; margin-left: 7px; padding: 1px 5px; border-radius: 5px;
+    border: 1px solid rgba(125,200,255,.35); background: rgba(125,200,255,.12); font-size: 12px; line-height: 1.4; vertical-align: middle; }
+  #terrtip .tt-info:hover { background: rgba(125,200,255,.28); }
 
   .overlay {
     position: fixed; inset: 0; display: flex; flex-direction: column;
@@ -158,11 +168,29 @@
   #cd-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex: 0 0 auto; }
   #cd-header .cd-title { font-size: 14px; letter-spacing: 2px; text-transform: uppercase; color: #bfe0ff; }
   #cd-begin { padding: 8px 16px; font-size: 14px; }
-  #cd-roster { background: rgba(255,255,255,.03); border-radius: 8px; padding: 6px 8px; flex: 0 0 auto; }
   .cd-sec-label { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; opacity: .55; margin: 2px 0 4px; }
-  .rost-row { display: flex; align-items: center; gap: 8px; padding: 3px 4px; border-radius: 6px; font-size: 13px; }
-  .rost-row.empty { opacity: .32; }
-  .rost-row .pool-count { margin-left: auto; font-weight: 700; font-size: 16px; color: #cfe6ff; }
+  #cd-army { background: rgba(125,200,255,.06); border: 1px solid rgba(125,200,255,.16); border-radius: 8px; padding: 6px 8px; flex: 0 0 auto; }
+  #army-orders { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+  #army-orders button { cursor: pointer; padding: 6px 0; font-size: 12px; border-radius: 6px;
+    border: 1px solid rgba(125,200,255,.3); background: rgba(125,200,255,.12); color: #dcebff; }
+  #army-orders button:hover:not(:disabled) { background: rgba(125,200,255,.26); }
+  #army-orders button.pace { border-color: rgba(255,211,77,.3); background: rgba(255,211,77,.1); color: #ffe6a3; }
+  #army-orders button.pace:hover:not(:disabled) { background: rgba(255,211,77,.22); }
+  #army-orders button:disabled { opacity: .35; cursor: default; }
+  #cd-newgroup { background: rgba(255,255,255,.03); border-radius: 8px; padding: 6px 8px; flex: 0 0 auto; }
+  #ng-rows { display: flex; flex-direction: column; gap: 2px; }
+  .ng-row { display: flex; align-items: center; gap: 6px; font-size: 13px; padding: 1px 2px; }
+  .ng-row.empty { opacity: .34; }
+  .ng-row .ng-name { flex: 1; opacity: .9; }
+  .ng-row .ng-free { font-size: 11px; opacity: .5; min-width: 46px; text-align: right; }
+  .ng-row b { min-width: 16px; text-align: center; color: #ffd34d; }
+  .ng-row button { width: 22px; height: 22px; border-radius: 5px; cursor: pointer;
+    border: 1px solid rgba(125,200,255,.4); background: rgba(125,200,255,.12); color: #dcebff; font-size: 13px; line-height: 1; }
+  .ng-row button:disabled { opacity: .3; cursor: default; }
+  #ng-create { cursor: pointer; width: 100%; margin-top: 7px; padding: 8px; border-radius: 7px; font-size: 13px; font-weight: 600;
+    border: 1px solid rgba(125,255,154,.45); background: rgba(125,255,154,.14); color: #c8ffd6; }
+  #ng-create:hover:not(:disabled) { background: rgba(125,255,154,.26); }
+  #ng-create:disabled { opacity: .4; cursor: default; }
   #cd-tools { display: flex; gap: 8px; flex: 0 0 auto; }
   #cd-tools button { cursor: pointer; flex: 1; padding: 7px 8px; border-radius: 7px; font-size: 13px;
     border: 1px solid rgba(125,255,154,.4); background: rgba(125,255,154,.1); color: #c8ffd6; }
@@ -187,6 +215,11 @@
   .gc-head .gc-status { margin-left: auto; font-size: 11px; opacity: .8; color: var(--gc); }
   .gc-head .gc-del { opacity: .45; font-weight: bold; padding: 0 4px; cursor: pointer; }
   .gc-head .gc-del:hover { opacity: 1; color: #ff8a8a; }
+  .gc-head .gc-pos { min-width: 16px; height: 16px; border-radius: 4px; text-align: center; line-height: 16px;
+    font-size: 11px; font-weight: 700; background: rgba(255,255,255,.12); color: var(--gc); }
+  .gc-head .gc-move { opacity: .45; padding: 0 2px; cursor: pointer; font-size: 10px; }
+  .gc-head .gc-move:hover { opacity: 1; color: var(--gc); }
+  .gc-head .gc-move.off { opacity: .12; pointer-events: none; }
   .gc-rows { margin-top: 6px; display: flex; flex-direction: column; gap: 2px; }
   .gc-rows .stp { display: flex; align-items: center; gap: 6px; font-size: 12px; }
   .gc-rows .stp .stp-name { flex: 1; opacity: .85; }
@@ -217,8 +250,9 @@
     font-size: 12px; letter-spacing: 2px; color: #bfe0ff; }
   #cmd-deck.battle #cd-tab { display: block; }
   #cmd-deck.battle.open #cd-tab { display: none; }
-  /* in battle the deck is a command-only view: hide composition tools, keep cards' orders */
-  #cmd-deck.battle #cd-roster, #cmd-deck.battle #cd-tools, #cmd-deck.battle #split-pop,
+  /* the deck stays command-first: hide the bulk tools & per-card steppers, but the New Group
+     builder is always available (compose squads any time, in a fight or just roaming) */
+  #cmd-deck.battle #cd-tools, #cmd-deck.battle #split-pop,
   #cmd-deck.battle .gc-rows { display: none; }
 
   /* ===== Sign in (super-simple username/password) ===== */
@@ -377,18 +411,6 @@
   #tb-beacon  { bottom: 122px; border-color: rgba(125,200,255,.55); color: #cfe0ff; }
   #tb-warband { bottom: 66px;  border-color: rgba(214,163,255,.5);  color: #e6d3ff; }
   #tb-chars   { bottom: 10px;  border-color: rgba(255,207,91,.5);   color: #ffe2a8; }
-  /* the station/reroll panel lives bottom-left on desktop — on touch that's the thumb zone,
-     so dock it top-left and let it collapse to a small chip out of the way */
-  body.touch #station-panel { left: 8px !important; top: 104px !important; bottom: auto !important; width: 216px !important; }
-  body.touch #station-panel #sp-toggle { position: absolute; top: 8px; right: 8px; width: 34px; height: 30px;
-    border-radius: 8px; border: 1px solid #ffd34d; background: rgba(255,211,77,.15); color: #ffe089; font-size: 15px; cursor: pointer; line-height: 1; }
-  body.touch #station-panel.collapsed { width: auto !important; max-width: 62vw; padding: 7px 46px 7px 12px !important; }
-  body.touch #station-panel.collapsed #sp-reroll,
-  body.touch #station-panel.collapsed #sp-blurb,
-  body.touch #station-panel.collapsed #sp-stats,
-  body.touch #station-panel.collapsed #sp-stand,
-  body.touch #station-panel.collapsed #sp-fight,
-  body.touch #station-panel.collapsed > div:last-child { display: none !important; }
 </style>
 </head>
 <body>
@@ -413,6 +435,7 @@
   <div id="wave-sub"></div>
   <div id="combo"></div>
   <div id="cmd-toast"></div>
+  <div id="field-strike"><div class="fs-head" id="fs-text"></div><div class="fs-btns" id="fs-btns"></div></div>
   <div id="rally-banner" style="position:fixed; top:74px; left:50%; transform:translateX(-50%); display:none; padding:8px 18px; background:rgba(20,10,30,.80); border:1px solid #ffd34d; border-radius:10px; color:#ffe089; font-weight:700; letter-spacing:.4px; text-align:center; z-index:30; box-shadow:0 4px 18px rgba(0,0,0,.5); pointer-events:none; max-width:70vw"></div>
   <div id="controls-hint">MAP: CLICK a spot to march there by road · WASD roam · ride into a band to parley/pact · ride into a clash to join · ride into a stronghold to siege · <b>G</b> call to arms / crusade · <b>U</b> your characters · <b>SCROLL</b> in / <b>T</b> = walk the field on foot with your company · take every capital to win &nbsp;|&nbsp; BATTLE: MOUSE aim · CLICK attack · RIGHT-CLICK heavy · CLICK ▼ to execute · F sword/bow · SHIFT block · C crouch · SPACE dodge · V warband</div>
   <!-- one-time, just-in-time onboarding hint (populated by game.js) -->
@@ -512,20 +535,22 @@
     <span class="cd-title">Battle Plan</span>
     <button class="btn" id="cd-begin">Begin Battle ⚔</button>
   </div>
-  <div id="cd-roster">
-    <div class="cd-sec-label">Roster · unassigned</div>
-    <div class="rost-row" data-key="sword"><span>Swords</span><span class="pool-count" id="pool-sword">0</span></div>
-    <div class="rost-row" data-key="long"><span>Longswords</span><span class="pool-count" id="pool-long">0</span></div>
-    <div class="rost-row" data-key="archer"><span>Archers</span><span class="pool-count" id="pool-archer">0</span></div>
-    <div class="rost-row" data-key="thrower"><span>Throwers</span><span class="pool-count" id="pool-thrower">0</span></div>
+  <div id="cd-army">
+    <div class="cd-sec-label">Whole army · one tap commands everyone</div>
+    <div id="army-orders"></div>
+  </div>
+  <div id="cd-newgroup">
+    <div class="cd-sec-label">New group · pull from unassigned</div>
+    <div id="ng-rows"></div>
+    <button id="ng-create">Create group</button>
   </div>
   <div id="cd-tools">
-    <button id="grp-new">+ New Group</button>
+    <button id="grp-new">+ Empty Group</button>
     <button id="grp-split">Split into N ▾</button>
   </div>
   <div id="split-pop" class="hidden"></div>
   <div id="cd-cards"></div>
-  <div id="cd-hint">Pick a squad (click its card, a soldier, or <b>1–9</b>), then on the field: <b>click</b> = march there &amp; hold (flag marks it) · <b>drag a box</b> = hold that zone. <b>A</b> charge · <b>R</b> regroup · <b>F</b> free · <b>Z</b> march / <b>X</b> rush · <b>Esc</b> command mid-battle · squads carry over between battles</div>
+  <div id="cd-hint">Pick a squad (click its card, a soldier, or <b>1–9</b>) · <b>shift-click</b> cards to pick several · <b>G</b> = whole army. Then on the field: <b>click</b> = march there &amp; hold · <b>drag a box</b> = hold that zone. Orders: <b>T</b> charge · <b>Y</b> follow me · <b>H</b> hold · <b>R</b> regroup · <b>B</b> free · <b>Z</b> march / <b>X</b> rush · <b>O</b> column/line march order · <b>Esc</b> command · squads carry over between fights</div>
 </div>
 
 <div id="gameover" class="overlay hidden">
@@ -591,8 +616,8 @@
 <script src="vendor/three.min.js?v=r128"></script>
 <script src="sim/world-sim.js?v=7"></script>
 <script src="sim/terra.js?v=2"></script>
-<script src="client-net.js?v=6"></script>
+<script src="client-net.js?v=7"></script>
 <script src="net-battle.js?v=1"></script>
-<script src="game.js?v=49"></script>
+<script src="game.js?v=61"></script>
 </body>
 </html>

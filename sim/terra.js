@@ -16,7 +16,7 @@
 })(typeof self !== 'undefined' ? self : this, function (WorldSim) {
   'use strict';
 
-  var VERSION = 1;                       // bump on ANY math change (chunk payloads are stamped with it)
+  var VERSION = 2;                       // bump on ANY math change (chunk payloads are stamped with it)
   var TAU = Math.PI * 2;
   function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
   var mulberry32 = WorldSim.mulberry32;
@@ -44,10 +44,10 @@
     SHALLOW:  { name: 'Coast',     water: true, ground: 0x2b7aa6 },
     BEACH:    { name: 'Coast',     ground: 0xddd2a0, pad: 0xc8bd86, fog: 0xd6e6ea, sky: 0xe3eef2, tree: 0x7a9a55, treeChance: 0.02, rockChance: 0.06 },
     GRASS:    { name: 'Grassland', ground: 0x6f9e54, pad: 0x8a6a45, fog: 0x9fc6e8, sky: 0x9fc6e8, tree: 0x4f8a3f, treeChance: 0.10, rockChance: 0.04 },
-    SAVANNA:  { name: 'Savanna',   ground: 0x9a9c58, pad: 0x9a8a4f, fog: 0xcfd2a0, sky: 0xdcdca8, tree: 0x8a9a4a, treeChance: 0.06, rockChance: 0.10 },
-    FOREST:   { name: 'Forest',    ground: 0x3f6b34, pad: 0x5a6038, fog: 0x86a98e, sky: 0x93b89e, tree: 0x2f6a30, treeChance: 0.50, rockChance: 0.05 },
-    TAIGA:    { name: 'Taiga',     ground: 0x47675a, pad: 0x4f5f50, fog: 0xacc2c2, sky: 0xbcd0cc, tree: 0x356a52, treeChance: 0.42, rockChance: 0.10 },
-    DESERT:   { name: 'Desert',    ground: 0xc9a266, pad: 0xb8924f, fog: 0xe6d09c, sky: 0xeedaa6, tree: 0x9a8a4a, treeChance: 0.02, rockChance: 0.28 },
+    SAVANNA:  { name: 'Savanna',   ground: 0x9a9c58, pad: 0x9a8a4f, fog: 0xcfd2a0, sky: 0xdcdca8, tree: 0x8a9a4a, treeChance: 0.06, rockChance: 0.10, dry: true },
+    FOREST:   { name: 'Forest',    ground: 0x3f6b34, pad: 0x5a6038, fog: 0x86a98e, sky: 0x93b89e, tree: 0x2f6a30, treeChance: 0.22, rockChance: 0.05 },
+    TAIGA:    { name: 'Taiga',     ground: 0x47675a, pad: 0x4f5f50, fog: 0xacc2c2, sky: 0xbcd0cc, tree: 0x356a52, treeChance: 0.19, rockChance: 0.10 },
+    DESERT:   { name: 'Desert',    ground: 0xc9a266, pad: 0xb8924f, fog: 0xe6d09c, sky: 0xeedaa6, tree: 0x9a8a4a, treeChance: 0.02, rockChance: 0.28, dry: true },
     TUNDRA:   { name: 'Tundra',    ground: 0xdde7f0, pad: 0xc6d2dc, fog: 0xcfe0ee, sky: 0xdcebf6, tree: 0x6f8a7a, treeChance: 0.07, rockChance: 0.14 },
     MOUNTAIN: { name: 'Mountains', ground: 0x8c8c86, pad: 0x77756f, fog: 0xc8ccd2, sky: 0xd2d6dc, tree: 0x5a6a55, treeChance: 0.05, rockChance: 0.34 },
   };
@@ -347,6 +347,13 @@
       return clamp(e, 0, 1);
     }
     function moistureAt(x, z) { return fbm((x - 2200) * TERR_SCALE * 1.15, (z + 1700) * TERR_SCALE * 1.15, seed + 19); }
+    // Valleys: broad, slow-drifting patches (independent of biome) that read as clearings —
+    // green valleys over wet ground, olive-treed yellow valleys over dry ground. Cuts through
+    // forest too, so the same field that keeps grassland empty also glades a stand of firs.
+    var VALLEY_SCALE = 0.6, VALLEY_THRESH = 0.60;
+    var VALLEY_TREE_CHANCE = 0.0006, VALLEY_ROCK_MUL = 0.35;
+    var OLIVE_TREE = 0x6f7a3a;
+    function valleyAt(x, z) { return fbm((x + 3300) * TERR_SCALE * VALLEY_SCALE, (z - 3300) * TERR_SCALE * VALLEY_SCALE, seed + 53); }
     function tempAt(x, z) {
       var latBand = clamp((z + MAP_HALF) / (2 * MAP_HALF), 0, 1);
       var prov = fbm((x + 9000) * 0.0016, (z - 9000) * 0.0016, seed + 71);
@@ -826,8 +833,14 @@
         var jx = cells[i][2], jz = cells[i][3];
         if (isWater(jx, jz)) continue;                                  // no roll — matches the client stream
         var b = biomeAt(jx, jz), roll = rng();
-        var tc = b.treeChance * SCATTER_DENSITY, rc = b.rockChance * SCATTER_DENSITY;
-        if (roll < tc) picks.push([1, jx, jz, b.tree]);
+        var tc, rc, treeCol;
+        if (b !== B.MOUNTAIN && valleyAt(jx, jz) > VALLEY_THRESH) {     // an open valley cuts through, wet or dry
+          tc = VALLEY_TREE_CHANCE; rc = b.rockChance * SCATTER_DENSITY * VALLEY_ROCK_MUL;
+          treeCol = b.dry ? OLIVE_TREE : b.tree;
+        } else {
+          tc = b.treeChance * SCATTER_DENSITY; rc = b.rockChance * SCATTER_DENSITY; treeCol = b.tree;
+        }
+        if (roll < tc) picks.push([1, jx, jz, treeCol]);
         else if (roll < tc + rc) picks.push([0, jx, jz]);
       }
       for (i = 0; i < picks.length; i++) if (picks[i][0]) {             // trees first, then rocks — the client's draw order

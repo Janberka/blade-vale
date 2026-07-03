@@ -9,9 +9,14 @@
     "seed": "node server/seed.js",
     "server": "node server/index.js",
     "dev": "node --watch server/index.js",
-    "bot": "node bot/bot.js"
+    "bot": "node bot/bot.js",
+    "perf": "node perf/run.js",
+    "perf:update": "node perf/run.js --update"
   },
   "dependencies": {
     "better-sqlite3": "^11.8.1"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^24.43.1"
   }
 }

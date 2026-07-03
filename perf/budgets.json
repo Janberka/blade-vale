@@ -1,0 +1,36 @@
+{
+  "boot-map": {
+    "drawCalls": 6172,
+    "triangles": 525416,
+    "geometries": 450,
+    "fighters": 198
+  },
+  "map-overview-rung0": {
+    "drawCalls": 4654,
+    "triangles": 275450,
+    "geometries": 338
+  },
+  "action-street-rung2": {
+    "drawCalls": 5043,
+    "triangles": 456582,
+    "geometries": 365,
+    "fineTiles": 12,
+    "hyperTiles": 4,
+    "streets": 0
+  },
+  "action-battle-200": {
+    "drawCalls": 6175,
+    "triangles": 525442,
+    "geometries": 452,
+    "fighters": 220,
+    "simMsPerFrame": 13.069
+  },
+  "sim-map-offmap": {
+    "simMsPerFrame": 50.31
+  },
+  "mode-switch": {
+    "switchToStreetMs": 118.3,
+    "switchToStrategicMs": 612.5,
+    "switchToBattleMs": 1043.6
+  }
+}

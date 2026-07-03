@@ -8427,11 +8427,52 @@ function governFps(dt) {
   }
 }
 
+// ---------- Perf instrumentation (?debug=1 overlay + BV.frameStats for the perf harness) ----------
+// We record RAW frame time here, NOT the clamped `dt` above — the clamp is what keeps a hitch from
+// nuking the sim, but for perf measurement a hitch is exactly the thing we must be able to see.
+const PERF_N = 180; // ~3s of frames at 60fps
+const frameMs = new Float32Array(PERF_N);
+let frameMsI = 0, frameMsFilled = 0;
+function recordFrame(rawMs) {
+  frameMs[frameMsI] = rawMs;
+  frameMsI = (frameMsI + 1) % PERF_N;
+  if (frameMsFilled < PERF_N) frameMsFilled++;
+}
+function frameStats() {
+  const n = frameMsFilled;
+  if (!n) return { n: 0, avg: 0, p50: 0, p99: 0, worst: 0, fps: 0 };
+  const tmp = Array.prototype.slice.call(frameMs, 0, n).sort((a, b) => a - b);
+  let sum = 0; for (let i = 0; i < n; i++) sum += tmp[i];
+  const avg = sum / n;
+  const q = (p) => tmp[Math.min(n - 1, Math.floor(n * p))];
+  return { n, avg: +avg.toFixed(2), p50: +q(0.5).toFixed(2), p99: +q(0.99).toFixed(2),
+           worst: +tmp[n - 1].toFixed(2), fps: +(1000 / avg).toFixed(1) };
+}
+function resetPerf() { frameMsI = 0; frameMsFilled = 0; }
+const DEBUG_HUD = /[?&]debug=1/.test(location.search);
+let dbgEl = null;
+if (DEBUG_HUD) {
+  dbgEl = document.createElement('div');
+  dbgEl.id = 'perf-hud';
+  dbgEl.style.cssText = 'position:fixed;top:6px;left:6px;z-index:99999;font:11px/1.4 ui-monospace,monospace;' +
+    'color:#9fe6a0;background:rgba(0,0,0,.55);padding:4px 8px;border-radius:5px;pointer-events:none;white-space:pre;';
+  addEventListener('DOMContentLoaded', () => document.body.appendChild(dbgEl));
+  if (document.body) document.body.appendChild(dbgEl);
+}
+function updateDbgHud() {
+  if (!dbgEl) return;
+  const s = frameStats(), r = renderer.info.render;
+  dbgEl.textContent =
+    `${s.fps} fps · ${s.avg}ms avg · p99 ${s.p99} · worst ${s.worst}\n` +
+    `${r.calls} draws · ${(r.triangles / 1000).toFixed(1)}k tris · ${qualityTier} · ${mode}`;
+}
+
 // ---------- Main loop ----------
 let last = performance.now();
 let frameNo = 0;
 function loop(now) {
   if (EDIT.on) return editFrame(now);   // object-editor mode: orbit + render one model, skip the game sim
+  const rawMs = now - last;
   const dt = Math.min((now - last) / 1000, 0.05);
   last = now;
   rtNow = now / 1000;
@@ -8755,6 +8796,28 @@ BV.perf = () => ({
   programs: renderer.info.programs ? renderer.info.programs.length : -1,
 });
 BV.setQuality = applyQuality;
+BV.frameStats = frameStats;       // {avg,p50,p99,worst,fps,n} over the raw-frame ring — hitch-aware
+BV.resetPerf = resetPerf;         // clear the ring so the harness measures a clean window after setup
+BV.settle = () => {               // bring the world to a SETTLED fixed point so the harness samples the
+  let n = 0;                      // same scene every run — three subsystems otherwise stream over rAF
+  applyDetailTier(true);          // frames: (1) the detail-TIER transition (bootUniverse drops you into the
+  clearChunks();                  // street tier, but it applies across frames — force it fully NOW),
+  updateChunks(true);             // (2) the view-ring build (clear the pre-spawn drift, rebuild the exact
+  if (_appliedTier === 2) refreshDetailBubble(); // ring around the deterministic player), and (3) the
+  while (_terrRetessQ.length && n++ < 20000) processTerrainQueue(128); // tessellation drip — drain it dry.
+  // Pin the camera to a canonical, tier-scaled pose. renderer.info counts only what survives frustum
+  // culling, and the frozen follow-cam is otherwise left at a random smoothed point — so an IDENTICAL
+  // scene reports different draw/triangle counts run to run. A fixed pose makes the counters stable.
+  if (player && player.pos) {
+    const h = _appliedTier === 0 ? 360 : _appliedTier === 1 ? 110 : 16;
+    camera.position.set(player.pos.x, h, player.pos.z + h * 0.8);
+    camera.lookAt(player.pos.x, 0, player.pos.z);
+    camera.updateMatrixWorld();
+  }
+  return { tier: _appliedTier, terrQ: _terrRetessQ.length, chunks: mapChunks.size, passes: n };
+};
+BV.perfSample = () => ({ ...BV.perf(), frame: frameStats(), mode, mapLevel,
+  fighters: enemies.length + allies.length, gameRunning });
 BV.renderer = renderer;
 BV.debugKillAll = () => { for (const e of enemies) if (e.alive) killEnemy(e, false); };
 BV.showMuster = showMuster;

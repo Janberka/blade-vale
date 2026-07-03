@@ -153,108 +153,6 @@
   .btn:hover { background: rgba(255,180,80,.28); transform: translateY(-2px); box-shadow: 0 8px 24px rgba(255,150,60,.3); }
   .hidden { display: none !important; }
 
-  /* ===== Command Deck (battle plan + mid-battle squad command) ===== */
-  #sel-box { position: fixed; border: 1.5px solid #7dff9a; background: rgba(125,255,154,.12); pointer-events: none; z-index: 8; display: none; }
-  #zone-box { position: fixed; border: 2px dashed #ffd34d; background: rgba(255,211,77,.12); pointer-events: none; z-index: 8; display: none; }
-  #cmd-deck {
-    position: fixed; right: 0; top: 0; height: 100vh; width: 330px; z-index: 9;
-    display: flex; flex-direction: column; gap: 8px; padding: 12px 12px 10px;
-    background: linear-gradient(180deg, rgba(10,16,26,.93), rgba(8,12,20,.97));
-    border-left: 1px solid rgba(125,200,255,.18); box-shadow: -8px 0 26px rgba(0,0,0,.45);
-    color: #dfeaff; pointer-events: auto; transition: transform .18s ease;
-  }
-  #cmd-deck.battle { transform: translateX(316px); }          /* collapse to an edge tab in battle */
-  #cmd-deck.battle.open { transform: translateX(0); }
-  #cd-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex: 0 0 auto; }
-  #cd-header .cd-title { font-size: 14px; letter-spacing: 2px; text-transform: uppercase; color: #bfe0ff; }
-  #cd-begin { padding: 8px 16px; font-size: 14px; }
-  .cd-sec-label { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; opacity: .55; margin: 2px 0 4px; }
-  #cd-army { background: rgba(125,200,255,.06); border: 1px solid rgba(125,200,255,.16); border-radius: 8px; padding: 6px 8px; flex: 0 0 auto; }
-  #army-orders { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
-  #army-orders button { cursor: pointer; padding: 6px 0; font-size: 12px; border-radius: 6px;
-    border: 1px solid rgba(125,200,255,.3); background: rgba(125,200,255,.12); color: #dcebff; }
-  #army-orders button:hover:not(:disabled) { background: rgba(125,200,255,.26); }
-  #army-orders button.pace { border-color: rgba(255,211,77,.3); background: rgba(255,211,77,.1); color: #ffe6a3; }
-  #army-orders button.pace:hover:not(:disabled) { background: rgba(255,211,77,.22); }
-  #army-orders button:disabled { opacity: .35; cursor: default; }
-  #cd-newgroup { background: rgba(255,255,255,.03); border-radius: 8px; padding: 6px 8px; flex: 0 0 auto; }
-  #ng-rows { display: flex; flex-direction: column; gap: 2px; }
-  .ng-row { display: flex; align-items: center; gap: 6px; font-size: 13px; padding: 1px 2px; }
-  .ng-row.empty { opacity: .34; }
-  .ng-row .ng-name { flex: 1; opacity: .9; }
-  .ng-row .ng-free { font-size: 11px; opacity: .5; min-width: 46px; text-align: right; }
-  .ng-row b { min-width: 16px; text-align: center; color: #ffd34d; }
-  .ng-row button { width: 22px; height: 22px; border-radius: 5px; cursor: pointer;
-    border: 1px solid rgba(125,200,255,.4); background: rgba(125,200,255,.12); color: #dcebff; font-size: 13px; line-height: 1; }
-  .ng-row button:disabled { opacity: .3; cursor: default; }
-  #ng-create { cursor: pointer; width: 100%; margin-top: 7px; padding: 8px; border-radius: 7px; font-size: 13px; font-weight: 600;
-    border: 1px solid rgba(125,255,154,.45); background: rgba(125,255,154,.14); color: #c8ffd6; }
-  #ng-create:hover:not(:disabled) { background: rgba(125,255,154,.26); }
-  #ng-create:disabled { opacity: .4; cursor: default; }
-  #cd-tools { display: flex; gap: 8px; flex: 0 0 auto; }
-  #cd-tools button { cursor: pointer; flex: 1; padding: 7px 8px; border-radius: 7px; font-size: 13px;
-    border: 1px solid rgba(125,255,154,.4); background: rgba(125,255,154,.1); color: #c8ffd6; }
-  #cd-tools button:hover { background: rgba(125,255,154,.22); }
-  #split-pop { background: rgba(0,0,0,.4); border: 1px solid rgba(125,200,255,.25); border-radius: 8px; padding: 8px; flex: 0 0 auto; }
-  #split-pop .sp-row { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 2px 0; }
-  #split-pop .sp-row span { flex: 1; }
-  #split-pop .sp-row button { width: 22px; height: 22px; border-radius: 5px; cursor: pointer;
-    border: 1px solid rgba(125,200,255,.4); background: rgba(125,200,255,.12); color: #dcebff; }
-  #split-pop .sp-row b { min-width: 18px; text-align: center; color: #ffd34d; }
-  #split-pop .sp-prev { font-size: 12px; opacity: .8; margin: 6px 0; }
-  #split-pop .sp-short { color: #ffae5a; }
-  #split-pop #sp-create { width: 100%; padding: 8px; font-size: 14px; }
-  #cd-cards { flex: 1 1 auto; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-right: 2px; }
-  #cd-cards .cd-empty { font-size: 12px; opacity: .6; padding: 14px 6px; text-align: center; line-height: 1.6; }
-  .group-card { border-left: 4px solid var(--gc); border-radius: 8px; background: rgba(255,255,255,.045); padding: 8px; }
-  .group-card.active { box-shadow: 0 0 0 1px var(--gc), 0 0 16px -5px var(--gc); background: rgba(255,255,255,.08); }
-  .gc-head { display: flex; align-items: center; gap: 7px; cursor: pointer; font-size: 14px; }
-  .gc-head .gc-dot { width: 11px; height: 11px; border-radius: 50%; }
-  .gc-head .gc-name { font-weight: 600; }
-  .gc-head .gc-count { opacity: .6; font-size: 12px; }
-  .gc-head .gc-status { margin-left: auto; font-size: 11px; opacity: .8; color: var(--gc); }
-  .gc-head .gc-del { opacity: .45; font-weight: bold; padding: 0 4px; cursor: pointer; }
-  .gc-head .gc-del:hover { opacity: 1; color: #ff8a8a; }
-  .gc-head .gc-pos { min-width: 16px; height: 16px; border-radius: 4px; text-align: center; line-height: 16px;
-    font-size: 11px; font-weight: 700; background: rgba(255,255,255,.12); color: var(--gc); }
-  .gc-head .gc-move { opacity: .45; padding: 0 2px; cursor: pointer; font-size: 10px; }
-  .gc-head .gc-move:hover { opacity: 1; color: var(--gc); }
-  .gc-head .gc-move.off { opacity: .12; pointer-events: none; }
-  .gc-rows { margin-top: 6px; display: flex; flex-direction: column; gap: 2px; }
-  .gc-rows .stp { display: flex; align-items: center; gap: 6px; font-size: 12px; }
-  .gc-rows .stp .stp-name { flex: 1; opacity: .85; }
-  .gc-rows .stp b { min-width: 16px; text-align: center; color: #ffd34d; }
-  .gc-rows .stp button { width: 20px; height: 20px; border-radius: 4px; cursor: pointer;
-    border: 1px solid rgba(125,200,255,.35); background: rgba(125,200,255,.1); color: #dcebff; font-size: 13px; line-height: 1; }
-  .gc-rows .stp button:disabled { opacity: .3; cursor: default; }
-  .gc-orders { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-top: 7px; }
-  .gc-orders button { cursor: pointer; padding: 6px 0; font-size: 12px; border-radius: 6px;
-    border: 1px solid rgba(125,200,255,.3); background: rgba(125,200,255,.12); color: #dcebff; }
-  .gc-orders button:hover { background: rgba(125,200,255,.26); }
-  .gc-orders button.on { background: var(--gc); color: #0a0f18; font-weight: 700; border-color: var(--gc); }
-  .gc-pace { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-top: 5px; }
-  .gc-pace button { cursor: pointer; padding: 5px 0; font-size: 12px; border-radius: 6px;
-    border: 1px solid rgba(255,211,77,.28); background: rgba(255,211,77,.08); color: #ffe6a3; }
-  .gc-pace button:hover { background: rgba(255,211,77,.2); }
-  .gc-pace button.on { background: #ffd34d; color: #0a0f18; font-weight: 700; border-color: #ffd34d; }
-  .gc-head .gc-count.over { color: #ff8a8a; opacity: 1; font-weight: 700; }
-  .gc-lead { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 12px; }
-  .gc-lead .gc-lead-star { color: #ffd34d; }
-  .gc-lead .gc-lead-sel { flex: 1; background: rgba(0,0,0,.35); color: #e7eefc; border: 1px solid rgba(255,255,255,.18);
-    border-radius: 6px; padding: 4px 6px; font-size: 12px; cursor: pointer; }
-  .gc-lead .gc-lead-none { flex: 1; opacity: .5; font-style: italic; }
-  #cd-hint { flex: 0 0 auto; font-size: 11px; opacity: .55; line-height: 1.5; }
-  #cd-tab { display: none; position: absolute; left: -36px; top: 50%; transform: translateY(-50%) rotate(180deg);
-    writing-mode: vertical-rl; padding: 12px 7px; border-radius: 8px 0 0 8px; cursor: pointer;
-    background: rgba(10,16,26,.95); border: 1px solid rgba(125,200,255,.3); border-right: none;
-    font-size: 12px; letter-spacing: 2px; color: #bfe0ff; }
-  #cmd-deck.battle #cd-tab { display: block; }
-  #cmd-deck.battle.open #cd-tab { display: none; }
-  /* the deck stays command-first: hide the bulk tools & per-card steppers, but the New Group
-     builder is always available (compose squads any time, in a fight or just roaming) */
-  #cmd-deck.battle #cd-tools, #cmd-deck.battle #split-pop,
-  #cmd-deck.battle .gc-rows { display: none; }
-
   /* ===== Sign in (super-simple username/password) ===== */
   #auth-box { pointer-events: auto; margin-top: 4px; font-size: 13px; width: min(360px, 90vw);
     background: rgba(0,0,0,.32); border: 1px solid rgba(255,207,91,.35); border-radius: 12px; padding: 18px 20px; }
@@ -402,7 +300,6 @@
   #tb-block  { width: 66px; height: 66px; right: 120px; bottom: 100px; border-color: rgba(125,255,154,.55); color: #c8ffd6; }
   #tb-dodge  { width: 62px; height: 62px; right: 30px;  bottom: 154px; border-color: rgba(120,210,255,.6);  color: #cfeaff; }
   #tb-weapon { width: 52px; height: 52px; right: 96px;  bottom: 250px; font-size: 11px; }
-  #tb-cmd    { width: 54px; height: 54px; right: 30px;  bottom: 248px; border-color: rgba(125,200,255,.55); color: #cfe0ff; }
   /* map-mode kingdom actions — stacked pills, right side */
   #tmap .tbtn { border-radius: 12px; width: 116px; height: 48px; right: 22px; font-size: 12px; }
   #tb-ride    { bottom: 290px; border-color: rgba(255,211,77,.55);  color: #ffe089; }
@@ -461,7 +358,6 @@
     <button id="tb-block"  class="tbtn">BLOCK</button>
     <button id="tb-dodge"  class="tbtn">DODGE</button>
     <button id="tb-weapon" class="tbtn">SWAP</button>
-    <button id="tb-cmd"    class="tbtn">CMD</button>
   </div>
   <div id="tmap">
     <button id="tb-ride"    class="tbtn">🐎 View</button>
@@ -525,32 +421,6 @@
     <button class="btn" id="enc-ally" style="display:none">Propose Pact</button>
     <button class="btn" id="enc-hail">Say Hi</button>
   </div>
-</div>
-
-<div id="sel-box"></div>
-<div id="zone-box"></div>
-<div id="cmd-deck" class="hidden">
-  <div id="cd-tab">⚔ COMMAND</div>
-  <div id="cd-header">
-    <span class="cd-title">Battle Plan</span>
-    <button class="btn" id="cd-begin">Begin Battle ⚔</button>
-  </div>
-  <div id="cd-army">
-    <div class="cd-sec-label">Whole army · one tap commands everyone</div>
-    <div id="army-orders"></div>
-  </div>
-  <div id="cd-newgroup">
-    <div class="cd-sec-label">New group · pull from unassigned</div>
-    <div id="ng-rows"></div>
-    <button id="ng-create">Create group</button>
-  </div>
-  <div id="cd-tools">
-    <button id="grp-new">+ Empty Group</button>
-    <button id="grp-split">Split into N ▾</button>
-  </div>
-  <div id="split-pop" class="hidden"></div>
-  <div id="cd-cards"></div>
-  <div id="cd-hint">Pick a squad (click its card, a soldier, or <b>1–9</b>) · <b>shift-click</b> cards to pick several · <b>G</b> = whole army. Then on the field: <b>click</b> = march there &amp; hold · <b>drag a box</b> = hold that zone. Orders: <b>T</b> charge · <b>Y</b> follow me · <b>H</b> hold · <b>R</b> regroup · <b>B</b> free · <b>Z</b> march / <b>X</b> rush · <b>O</b> column/line march order · <b>Esc</b> command · squads carry over between fights</div>
 </div>
 
 <div id="gameover" class="overlay hidden">

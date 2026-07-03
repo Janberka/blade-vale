@@ -1663,9 +1663,6 @@ canvas.addEventListener('click', () => {
 });
 document.addEventListener('pointerlockchange', () => {
   pointerLocked = document.pointerLockElement === canvas;
-  // losing the cursor on foot (Esc / alt-tab) surfaces the command deck instead of stranding the player —
-  // fight or no fight: the deck is how you stage squads before a battle too
-  if (!pointerLocked && fieldSimOn() && !mapCmdMode && gameRunning && !commandPanelOpen && !musterOpen && !encounter) openCommandDeck(true);
 });
 addEventListener('mousemove', (e) => {
   if (!pointerLocked || !gameRunning) return;   // mouse-look in battle + action mode; map/overworld stay north-up
@@ -1787,7 +1784,6 @@ if (TOUCH) {
   bindBtn('tb-dodge', requestDodge);
   bindBtn('tb-block', () => { keys['ShiftLeft'] = true; }, () => { keys['ShiftLeft'] = false; });
   bindBtn('tb-weapon', toggleWeapon);
-  bindBtn('tb-cmd', () => { if (fieldSimOn() && !commandPanelOpen) openCommandDeck(); });
   bindBtn('tb-ride', () => { if (mode === 'map' && !encounter && !mapCmdMode) setFieldMode(!mapFieldMode); });
   bindBtn('tb-rally', () => { if (mode === 'map' && !encounter) raiseCall(); });
   bindBtn('tb-beacon', () => { if (mode === 'map' && !encounter) openBeaconPanel(); });
@@ -3230,11 +3226,9 @@ function setFieldMode(on, opts) {
     for (const g of planGroups) { g.order = 'free'; g.anchor = null; g.zone = null; } // anchors from another place/scale die here
     clearSelection();
     rebindGroupsToPool();
-    if (!cmdDeck) { cmdDeck = document.getElementById('cmd-deck'); selBox = document.getElementById('sel-box'); zoneBox = document.getElementById('zone-box'); }
-    cmdDeck.classList.remove('hidden', 'open'); cmdDeck.classList.add('battle');
     renderDeck();
     grabPointer();
-    showCmdToast('Action — mouse aim · click attack · WASD move · Esc command · P back to the map');
+    showCmdToast('Action — mouse aim · click attack · WASD move · K command · P back to the map');
     if (playerClash) dropIntoClash(); // your clash was simulating — settle it in person instead
   } else {
     abortFieldBattle();                              // pulling out mid-fight is a retreat — survivors re-form
@@ -3541,7 +3535,7 @@ function startFieldBattle(band) {
   renderDeck();
   showWaveBanner('⚔ Steel Rings Out', (band.faction ? band.faction.name : 'The enemy') + ' — ' +
     band.size + ' strong — turns on you right here. No quarter!');
-  showCmdToast('Orders — G whole army · 1–9 squads (shift = several) · T charge · Y follow · H hold · R regroup · B at-will · Z/X pace · O column/line · Esc deck');
+  showCmdToast('Orders — G whole army · 1–9 squads (shift = several) · T charge · Y follow · H hold · R regroup · B at-will · Z/X pace · O column/line · K command');
 }
 // leaving the ground view entirely: the command layer folds away with it
 function closeFieldDeck() {
@@ -8494,110 +8488,10 @@ function renderSplit() {
 }
 function renderAll() { renderDeck(); }
 // ----- phase transitions -----
-function openCommandDeck(viaEscape) { // on foot, any time: cursor freed (pointer-lock lost) -> tactical command
-  if (!fieldSimOn() || commandPanelOpen) return; // stage squads before a fight, steer them during one
-  if (!cmdDeck) { cmdDeck = document.getElementById('cmd-deck'); selBox = document.getElementById('sel-box'); zoneBox = document.getElementById('zone-box'); }
-  if (document.exitPointerLock) document.exitPointerLock(); pointerLocked = false;
-  deckAutoOpenedByEscape = !!viaEscape;
-  commandPanelOpen = true; timeScale = 0.18; // tactical slow while you give orders
-  cmdDeck.classList.remove('hidden');
-  cmdDeck.classList.add('battle', 'open');
-  document.getElementById('cd-begin').textContent = 'Resume ⚔';
-  const title = cmdDeck.querySelector('.cd-title'); if (title) title.textContent = 'Command';
-  renderAll();
-}
-function resumeBattle() {
-  commandPanelOpen = false; timeScale = 1;
-  deckAutoOpenedByEscape = false;
-  cmdDeck.classList.remove('open');
-  clearSelection();
-  grabPointer();
-}
-// a high, tilted overview of the field — your side near, the enemy host beyond
-function updatePlanCamera(dt) {
-  // a steep top-down tilt that FOLLOWS the player and looks forward up the field, so
-  // your line sits front-and-centre and the enemy marches into view as the lines close
-  const k = clamp(dt * 5, 0, 1);
-  // centre on the warband's mass so the camera rides the advance into the clash,
-  // not on the player (who may hang back to command)
-  let cx = player.pos.x, cz = player.pos.z, n = 0, sx = 0, sz = 0;
-  for (const a of allies) if (a.alive) { sx += a.pos.x; sz += a.pos.z; n++; }
-  if (n) { cx = sx / n; cz = sz / n; }
-  // in the field the men are miniature and the ground has real height — sit lower and ride the terrain
-  const field = fieldSimOn();
-  const ey = field ? mapElevY(cx, cz) : 0;
-  camBase.x = lerp(camBase.x, cx, k);
-  camBase.y = lerp(camBase.y, ey + (field ? 24 : 62), k);
-  camBase.z = lerp(camBase.z, cz - (field ? 17 : 48), k);
-  camera.position.copy(camBase);
-  camera.lookAt(cx, ey, cz + (field ? 5 : 14));
-}
-// tactical input — live in plan AND when the mid-battle command deck is open.
-// LEFT mouse is the one tool: with a squad selected, a CLICK marches it to the spot and a
-// DRAGGED box makes it hold that zone. With nothing selected, the same gestures SELECT
-// (click a soldier -> his squad, drag a box -> box-select). No right-click needed.
-addEventListener('mousedown', (e) => {
-  if (!planActive() || e.button !== 0 || (e.target && e.target.closest && e.target.closest('#cmd-deck'))) return;
-  planDrag = { sx: e.clientX, sy: e.clientY, moved: false, add: e.shiftKey, command: selected.size > 0 };
-});
-addEventListener('mousemove', (e) => {
-  if (!planActive() || !planDrag) return;
-  const x0 = planDrag.sx, y0 = planDrag.sy, x1 = e.clientX, y1 = e.clientY;
-  const box = planDrag.command ? zoneBox : selBox; // gold zone-box when commanding, green select-box otherwise
-  if (Math.abs(x1 - x0) + Math.abs(y1 - y0) > 5) { planDrag.moved = true; if (box) box.style.display = 'block'; }
-  if (box) {
-    box.style.left = Math.min(x0, x1) + 'px'; box.style.top = Math.min(y0, y1) + 'px';
-    box.style.width = Math.abs(x1 - x0) + 'px'; box.style.height = Math.abs(y1 - y0) + 'px';
-  }
-});
-addEventListener('mouseup', (e) => {
-  if (!planActive() || !planDrag) return;
-  if (selBox) selBox.style.display = 'none';
-  if (zoneBox) zoneBox.style.display = 'none';
-  const d = planDrag; planDrag = null;
-  if (d.moved) {
-    if (d.command) { // ordered the selected squad to hold a zone (a tiny scrub is really a move order)
-      const p0 = groundPointAt(d.sx, d.sy), p1 = groundPointAt(e.clientX, e.clientY);
-      if (p0 && p1) {
-        const rect = { minX: Math.min(p0.x, p1.x), maxX: Math.max(p0.x, p1.x), minZ: Math.min(p0.z, p1.z), maxZ: Math.max(p0.z, p1.z) };
-        if (rect.maxX - rect.minX < 4 && rect.maxZ - rect.minZ < 4) deploySelected(p1);
-        else commandZone(rect);
-      }
-    } else setSelection(alliesInBox(d.sx, d.sy, e.clientX, e.clientY), d.add); // box-select
-    return;
-  }
-  // a plain click
-  const a = allyAtPoint(e.clientX, e.clientY);
-  if (a) { // clicked a soldier -> select his whole squad (or just him if ungrouped)
-    const g = a.group != null ? planGroups.find(x => x.id === a.group) : null;
-    if (g) selectGroup(g, d.add); else setSelection([a], d.add);
-  } else if (d.command) { // clicked open ground with a squad selected -> march there & hold
-    const p = groundPointAt(e.clientX, e.clientY); if (p) deploySelected(p);
-  } else if (!d.add) setSelection([]);
-});
-addEventListener('contextmenu', (e) => { if (planActive()) e.preventDefault(); });
-function handlePlanKey(e) {
-  if (e.code === 'Enter') { resumeBattle(); return; }
-  if (e.code === 'Escape') {
-    // deck surfaced itself from losing pointer lock (first Esc) — a second Esc here is the
-    // user reaching for the browser's own fullscreen-exit; don't eat it by resuming+relocking
-    if (commandPanelOpen && deckAutoOpenedByEscape) { deckAutoOpenedByEscape = false; return; }
-    if (commandPanelOpen) resumeBattle();
-    return;
-  }
-  if (e.code === 'KeyH') return commandSelection('hold');     // Hold position
-  if (e.code === 'KeyA' || e.code === 'KeyT') return commandSelection('attack');   // Charge (T mirrors the in-fight key)
-  if (e.code === 'KeyY') return commandSelection('follow');   // Follow me (marching formation)
-  if (e.code === 'KeyB') return commandSelection('free');     // Free / at will (F is weapon-swap on foot)
-  if (e.code === 'KeyR') return commandSelection('regroup');  // Regroup on the player
-  if (e.code === 'KeyZ') return commandPace('march');         // March (slow, hold the line)
-  if (e.code === 'KeyX') return commandPace('rush');          // Rush (charge at full speed)
-  if (e.code === 'KeyG') return selectAllArmy();              // pick the whole army (then an order commands all)
-  if (e.code === 'KeyO') return toggleMarchOrient();          // blocks in column <-> blocks abreast
-  if (e.code === 'KeyN') return void newGroup();
-  const m = e.code.match(/^Digit([1-9])$/);
-  if (m) { const g = planGroups[(+m[1]) - 1]; if (g) selectGroup(g); }
-}
+// Command Deck removed (2026-07-04): the K-hotkey panel (renderDetPanel) already covers every
+// order these gave — squad orders/pace still work any time on foot via handleBattleOrderKey.
+function openCommandDeck() {}
+function resumeBattle() {}
 // ---- real-time field command: order squads WITHOUT leaving the fight (no deck, no time-slow) ----
 // A is strafe and F/V are taken mid-fight, so charge=T and free=B are remapped; the rest keep their
 // deck mnemonics. Pressing an order with nothing picked first selects the whole army, so a single tap
@@ -8613,7 +8507,7 @@ function fieldSelLabel() {
 }
 function handleBattleOrderKey(e) {
   const c = e.code;
-  if (c === 'KeyG') { selectAllArmy(); selIdle = 2.5; showCmdToast('Whole army — selected'); renderDeck(); return true; }
+  if (c === 'KeyG') { selectAllArmy(); selIdle = 2.5; showCmdToast('Whole army — selected'); return true; }
   const m = c.match(/^Digit([1-9])$/);
   if (m) { const g = planGroups[(+m[1]) - 1]; if (g) { selectGroup(g, e.shiftKey); selIdle = 2.5; showCmdToast((selGroups.size > 1 ? selGroups.size + ' squads' : g.name) + ' — selected'); } return true; }
   const ORDERS = { KeyH: ['hold', 'Hold'], KeyT: ['attack', 'Charge'], KeyY: ['follow', 'Follow'], KeyB: ['free', 'At will'], KeyR: ['regroup', 'Regroup'] };

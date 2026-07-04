@@ -11,7 +11,9 @@
     "dev": "node --watch server/index.js",
     "bot": "node bot/bot.js",
     "perf": "node perf/run.js",
-    "perf:update": "node perf/run.js --update"
+    "perf:update": "node perf/run.js --update",
+    "roads:determin": "node perf/roads-determin.js",
+    "settle:determin": "node perf/settle-determin.js"
   },
   "dependencies": {
     "better-sqlite3": "^11.8.1"

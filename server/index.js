@@ -12,6 +12,7 @@ const destiny = require('./destiny');
 const validate = require('./validate');
 const coop = require('./ws'); // real-time co-op battle relay (WebSocket, no external deps)
 const chunks = require('./chunks');
+const settlements = require('./settlements');
 const zlib = require('zlib');
 
 migrate();
@@ -259,6 +260,20 @@ const server = http.createServer(async (req, res) => {
       const q = url.searchParams, hasBox = q.has('x') && q.has('z');
       const holds = hasBox ? tick.getHolds(viewWorldId, +q.get('x') || 0, +q.get('z') || 0, +q.get('r') || 150) : tick.getHolds(viewWorldId);
       return send(res, 200, { holds });
+    }
+
+    // settlement LAYOUT descriptors: the client sends the (x,z,tier,seed) it will render and gets back
+    // the primitive list, so the ~160ms placement runs here, off the browser's frame budget. The layout
+    // is pure per (tseed,x,z,tier,seed) — the client falls back to computing it locally if this misses.
+    if (req.method === 'POST' && p === '/api/v1/settlements') {
+      const w = db.prepare('SELECT kind, map_level, universe_seed FROM worlds WHERE id=?').get(viewWorldId);
+      let level, useed;
+      if (w.kind === 'shared') { level = 0; useed = chunks.SHARED_WORLD_SEED; }
+      else { level = w.map_level | 0; useed = (w.universe_seed || 0) >>> 0; if (!useed) return send(res, 400, { error: 'no universe seed claimed' }); }
+      const b = await readBody(req);
+      const items = Array.isArray(b && b.items) ? b.items.slice(0, 64) : [];
+      if (!items.length) return send(res, 400, { error: 'empty items' });
+      return sendZ(req, res, 200, settlements.serveSettlements(level, useed, items));
     }
 
     // one realm's card, aggregated live: capital, holdings by tier, relations, posture —

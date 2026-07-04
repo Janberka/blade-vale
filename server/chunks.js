@@ -9,16 +9,19 @@
 //                     centre, 6 corners, 6 edge midpoints) — exactly the mesh's vertex lattice
 //   rough           — Uint8 at the cell centre (the march-speed model's landRoughAt)
 // plus the chunk's settlement identities (reseated positions — the fix for the old raw-position
-// holds) and, from Phase 3, its road polylines. Owners/garrisons are merged in LIVE at serve time.
+// holds) and its routed road polylines (server/roads.js). Owners/garrisons are merged in LIVE at
+// serve time; terrain + roads are static, generated once and persisted forever.
 const zlib = require('zlib');
 const { db } = require('./db');
 const WorldSim = require('../sim/world-sim.js');
 const Terra = require('../sim/terra.js');
+const Roads = require('./roads.js');
 
 const SHARED_WORLD_SEED = 0x51A3F00D;
 const NATIONS = Terra.NATION_HOMES.map(n => n.name);
-const PAYLOAD_V = 2;                 // payload SHAPE version (fields/encoding), separate from Terra.VERSION (math)
+const PAYLOAD_V = 3;                 // payload SHAPE version (fields/encoding), separate from Terra.VERSION (math)
                                      // v2: holds carry their wall RING polygon (Terra.wallRingPts)
+                                     // v3: roads[] carries the routed, culled, region-quantised road polylines
 
 // the client's exact seed mix — worldSeed() in game.js (plain multiply then ToInt32 via ^, not imul)
 function tseedOf(mapLevel, universeSeed) { return (((mapLevel | 0) * 1000 + 7) ^ (universeSeed * 2654435761)) >>> 0; }
@@ -100,7 +103,9 @@ function buildPayload(T, tseed, level, cx, cz, ownerOf) {
     v: PAYLOAD_V, kernel: Terra.VERSION, cx, cz, n: N,
     elev: elev.toString('base64'), temp: temp.toString('base64'), moist: moist.toString('base64'),
     rough: rough.toString('base64'),
-    holds, roads: [],                                  // roads arrive in Phase 3
+    // roads: region-quantised, routed + water/wall-culled polylines from the shared kernel — the
+    // client renders these (splat + rocks) instead of running the ~2.4s network build itself
+    holds, roads: Roads.roadsForChunk(tseed, cx, cz),
   };
 }
 

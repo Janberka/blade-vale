@@ -136,6 +136,16 @@
       return r.json();
     });
   };
+  // settlement LAYOUT descriptors (Phase 3): send the (x,z,tier,seed) the client will render, get back
+  // the primitive list so the ~160ms placement runs server-side. items = [{key,x,z,tier,seed}, ...].
+  net.loadSettlements = function (items) {
+    var opts = { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json', 'X-Player-Token': PLAYER_TOKEN }, worldHeaders()), body: JSON.stringify({ items: items }) };
+    return withTimeout(fetch(BASE + '/settlements', opts), 20000).then(function (r) {
+      if (!r.ok) throw new Error('http ' + r.status);
+      net.online = true;
+      return r.json();
+    });
+  };
   // the street-level DETAIL tier (action zoom rung): server-persisted scatter + grove rows
   net.loadDetail = function (level, u, keys) {
     var path = '/chunks/detail?level=' + (level | 0) + '&u=' + (u >>> 0) + '&list=' + keys.join(',');

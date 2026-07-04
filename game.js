@@ -3868,6 +3868,32 @@ const srvChunks = new Map();      // "cx,cz" -> decoded payload {cells, cellIdx,
 const _srvInflight = new Set();   // chunk keys currently on the wire
 let _srvSeed = -1;                // worldSeed the store was filled for (reroll/region change wipes it)
 let _srvKernelWarned = false;
+let _srvRoadsDirty = false;       // fresh server road chunks landed in the window → repaint the network
+// ----- server-computed settlement LAYOUT descriptors (Phase 3): the ~160ms city placement runs on the
+// server; the client emits geometry from the primitive list. Owner-agnostic, so cache survives conquest.
+const srvSettleCache = new Map();      // siteKey -> descriptor {prims, refY, lbl, top, street, dbg}
+const _srvSettleInflight = new Set();
+let _srvSettleQueue = [], _srvSettleTimer = 0;
+function srvSettleWant(hold, seed) {
+  const key = hold.key;
+  if (srvSettleCache.has(key) || _srvSettleInflight.has(key)) return;
+  _srvSettleInflight.add(key);
+  _srvSettleQueue.push({ key, x: hold.x, z: hold.z, tier: hold.tier, seed: seed >>> 0 });
+  if (!_srvSettleTimer) _srvSettleTimer = setTimeout(srvSettleFlush, 60);   // debounce a burst of holds into one request
+}
+function srvSettleFlush() {
+  _srvSettleTimer = 0;
+  const batch = _srvSettleQueue.splice(0, 64);
+  if (!batch.length || !window.net || !window.net.loadSettlements) { for (const it of batch) _srvSettleInflight.delete(it.key); return; }
+  const ws = worldSeed();
+  window.net.loadSettlements(batch).then(resp => {
+    for (const it of batch) _srvSettleInflight.delete(it.key);
+    if (!resp || resp.tseed !== ws || ws !== worldSeed()) return;   // a reroll/region change outran this batch
+    const d = resp.descriptors || {};
+    for (const k in d) srvSettleCache.set(k, d[k]);
+    if (_srvSettleQueue.length && !_srvSettleTimer) _srvSettleTimer = setTimeout(srvSettleFlush, 60);
+  }).catch(() => { for (const it of batch) _srvSettleInflight.delete(it.key); });
+}
 function _srvB64(s) { const bin = atob(s); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; }
 function _srvDecode(p) {
   const cells = hexCellsInChunk(p.cx, p.cz);           // SAME static enumeration the server sampled in
@@ -3893,6 +3919,7 @@ function srvRequest(keys) {
       console.error('[srv] kernel version mismatch: server', resp.kernel, 'vs client', Terra.VERSION, '— sync sim/terra.js on both sides');
     }
     for (const p of resp.chunks || []) srvChunks.set(p.cx + ',' + p.cz, _srvDecode(p));
+    _srvRoadsDirty = true;             // new road polylines are in the store — ensureRoads repaints next frame
     updateChunks(true);
   }).catch(() => { for (const k of need) _srvInflight.delete(k); });   // retried on the next crossing
 }
@@ -5166,6 +5193,81 @@ function _roadGridAdd(seg) {
       const k = gx + ',' + gz; let b = roadGrid.get(k); if (!b) roadGrid.set(k, b = []); b.push(seg);
     }
 }
+// turn ONE routed polyline into presentation: per-joint width/tone grading, the query-grid segments,
+// waymarker stones on the great roads, and a splat job. Shared by the kernel path (roadRebuild) and
+// the server path (roadRebuildFromServer) so the two never drift. `pts` are {x,z}; culling already done.
+function _roadEmitJob(pts, tier, jobs, rockPts) {
+  const T = ROAD_TIER[tier]; if (!T || pts.length < 2) return 0;
+  // per-JOINT grading, same spirit as the old mitered ribbon: the stroke narrows and its tone
+  // dirties on rough ground, and a low-frequency jitter keeps a long haul from reading machine-laid.
+  const J = pts.length, jhw = new Float64Array(J), jt = new Float64Array(J);
+  for (let i = 0; i < J; i++) {
+    const p = pts[i], rgh = landRoughAt(p.x, p.z);
+    jhw[i] = T.w * 0.5 * (1.12 - rgh * 0.62);
+    jt[i] = (0.95 + _vnoise(p.x * 0.3, p.z * 0.3, worldSeed() + 51) * 0.12) * (1 - rgh * 0.16);
+  }
+  for (let i = 0; i < J - 1; i++) {
+    const p = pts[i], q = pts[i + 1];
+    _roadGridAdd({ x1: p.x, z1: p.z, x2: q.x, z2: q.z, w: jhw[i] * 2, str: T.str });
+    if (tier === 'major' && (i % 3 === 1)) {         // waymarker stones line the great roads
+      const pPrev = pts[Math.max(0, i - 1)], pNext = pts[Math.min(J - 1, i + 1)];
+      let tx = pNext.x - pPrev.x, tz = pNext.z - pPrev.z;                // joint tangent (central difference)
+      const tl = Math.hypot(tx, tz) || 1, nx = -tz / tl, nz = tx / tl;
+      const side = (i % 6 === 1) ? 1 : -1;
+      const ox = p.x + nx * side * (jhw[i] + 0.9), oz = p.z + nz * side * (jhw[i] + 0.9);
+      if (!isWater(ox, oz)) rockPts.push({ x: ox, z: oz });
+    }
+  }
+  jobs.push({ pts, T, jhw, jt });
+  return J - 1;                                        // segment count
+}
+// the seeded roadside stones for a finished network — deterministic from position, one instanced mesh
+function _roadBuildRocks(rockPts) {
+  if (!rockPts.length || !mapTerrain) return;
+  const grp = new THREE.Group();
+  const rm = new THREE.InstancedMesh(cachedGeo('mapRock', () => new THREE.IcosahedronGeometry(1, 0)), mat(0x8d8f95), rockPts.length);
+  const m4 = new THREE.Matrix4(), qq = new THREE.Quaternion(), ee = new THREE.Euler(), vv = new THREE.Vector3(), sv = new THREE.Vector3();
+  rockPts.forEach((p, i) => {
+    const j = _vnoise(p.x * 1.7, p.z * 1.7, worldSeed() + 77), rr = 0.2 + j * 0.3;
+    qq.setFromEuler(ee.set(j * 9 % 3, j * 17 % 3, 0));
+    m4.compose(vv.set(p.x, mapElevY(p.x, p.z) + rr * 0.4, p.z), qq, sv.set(rr, rr * 0.8, rr));
+    rm.setMatrixAt(i, m4);
+  });
+  grp.add(rm);
+  roadMesh = grp;
+  mapTerrain.add(grp);
+}
+// SRV cutover: knit the in-view network from the SERVER's pre-routed road polylines (srvChunks[k].roads)
+// instead of running the ~2.4s kernel builder. The server already gathered, routed, and water/wall-culled;
+// the client only does the cheap presentation (splat + query grid + rocks). Segments arrive clipped per
+// chunk (with a small overlap for seam continuity), so we sweep the render-window chunks and emit each.
+function roadRebuildFromServer(pcx, pcz) {
+  _roadEdges = [];
+  roadGrid = new Map();
+  const rockPts = [], jobs = [];
+  const cxw = (pcx + 0.5) * CHUNK, czw = (pcz + 0.5) * CHUNK, renderR = (ROAD.renderChunkR + 0.5) * CHUNK;
+  const R = ROAD.renderChunkR;
+  let drawn = 0, segs = 0;
+  for (let cx = pcx - R; cx <= pcx + R; cx++) for (let cz = pcz - R; cz <= pcz + R; cz++) {
+    const entry = srvChunks.get(cx + ',' + cz);
+    if (!entry || !entry.roads || !entry.roads.length) continue;
+    for (const seg of entry.roads) {
+      const pts = seg.pts;
+      if (!pts || pts.length < 2) continue;
+      const P = new Array(pts.length);
+      for (let i = 0; i < pts.length; i++) P[i] = { x: pts[i][0], z: pts[i][1] };
+      const n = _roadEmitJob(P, seg.tier, jobs, rockPts);
+      if (!n) continue;
+      drawn++; segs += n;
+      // synthetic node keys keep BV.roadGraph/BV.roads inspectors working on the server path
+      _roadEdges.push({ tier: seg.tier, pts: P, a: { key: 's:' + P[0].x + ',' + P[0].z }, b: { key: 's:' + P[P.length - 1].x + ',' + P[P.length - 1].z }, aGate: null, bGate: null });
+    }
+  }
+  _roadSplatPaint(jobs, cxw, czw, renderR);
+  if (roadMesh) { if (mapTerrain) mapTerrain.remove(roadMesh); disposeGroup(roadMesh); roadMesh = null; }
+  _roadBuildRocks(rockPts);
+  _roadStats = { nodes: 0, edges: _roadEdges.length, drawn, segs };
+}
 // (re)build the whole in-view network: hierarchy → routed polylines → splat repaint + rocks + query grid
 function roadRebuild(pcx, pcz) {
   const T9 = terra();                 // the kernel knits the network (and bounds its own caches)
@@ -5185,50 +5287,13 @@ function roadRebuild(pcx, pcz) {
     for (let w = 0; w < pts.length; w++) { if (isWater(pts[w].x, pts[w].z)) { wet++; run++; if (run > maxRun) maxRun = run; } else run = 0; }
     if (wet / pts.length > 0.18 || maxRun >= 3) continue; // no bridges yet — a road never fords open water
     if (!e.key.startsWith('city:') && !e.key.startsWith('street:') && !T9.edgeWallSafe(e, pts)) continue; // a road NEVER crosses a wall away from a gate — better no road than a breach
-    const T = ROAD_TIER[e.tier];
     drawn++;
-    // per-JOINT grading, same spirit as the old mitered ribbon: the stroke narrows and its tone
-    // dirties on rough ground, and a low-frequency jitter keeps a long haul from reading machine-laid.
-    const J = pts.length, jhw = new Float64Array(J), jt = new Float64Array(J);
-    for (let i = 0; i < J; i++) {
-      const p = pts[i], rgh = landRoughAt(p.x, p.z);
-      jhw[i] = T.w * 0.5 * (1.12 - rgh * 0.62);
-      jt[i] = (0.95 + _vnoise(p.x * 0.3, p.z * 0.3, worldSeed() + 51) * 0.12) * (1 - rgh * 0.16);
-    }
-    for (let i = 0; i < J - 1; i++) {
-      const p = pts[i], q = pts[i + 1];
-      _roadGridAdd({ x1: p.x, z1: p.z, x2: q.x, z2: q.z, w: jhw[i] * 2, str: T.str });
-      if (e.tier === 'major' && (i % 3 === 1)) {       // waymarker stones line the great roads
-        const pPrev = pts[Math.max(0, i - 1)], pNext = pts[Math.min(J - 1, i + 1)];
-        let tx = pNext.x - pPrev.x, tz = pNext.z - pPrev.z;              // joint tangent (central difference)
-        const tl = Math.hypot(tx, tz) || 1, nx = -tz / tl, nz = tx / tl;
-        const side = (i % 6 === 1) ? 1 : -1;
-        const ox = p.x + nx * side * (jhw[i] + 0.9), oz = p.z + nz * side * (jhw[i] + 0.9);
-        if (!isWater(ox, oz)) rockPts.push({ x: ox, z: oz });
-      }
-      segs++;
-    }
-    jobs.push({ pts, T, jhw, jt });
+    segs += _roadEmitJob(pts, e.tier, jobs, rockPts);
   }
   _roadSplatPaint(jobs, cxw, czw, renderR);            // the roads themselves are brushed INTO the terrain (see _roadSplatPaint)
   if (roadMesh) { if (mapTerrain) mapTerrain.remove(roadMesh); disposeGroup(roadMesh); roadMesh = null; }
   // (the wall-safety cull lives in the kernel's edgeWallSafe — see the draw loop)
-  if (rockPts.length && mapTerrain) {
-    const grp = new THREE.Group();
-    {                                                  // seeded roadside stones (deterministic from position)
-      const rm = new THREE.InstancedMesh(cachedGeo('mapRock', () => new THREE.IcosahedronGeometry(1, 0)), mat(0x8d8f95), rockPts.length);
-      const m4 = new THREE.Matrix4(), qq = new THREE.Quaternion(), ee = new THREE.Euler(), vv = new THREE.Vector3(), sv = new THREE.Vector3();
-      rockPts.forEach((p, i) => {
-        const j = _vnoise(p.x * 1.7, p.z * 1.7, worldSeed() + 77), rr = 0.2 + j * 0.3;
-        qq.setFromEuler(ee.set(j * 9 % 3, j * 17 % 3, 0));
-        m4.compose(vv.set(p.x, mapElevY(p.x, p.z) + rr * 0.4, p.z), qq, sv.set(rr, rr * 0.8, rr));
-        rm.setMatrixAt(i, m4);
-      });
-      grp.add(rm);
-    }
-    roadMesh = grp;
-    mapTerrain.add(grp);
-  }
+  _roadBuildRocks(rockPts);
   _roadStats = { nodes: nodes.length, edges: edges.length, drawn, segs };
 }
 // ---------- Road splat: the network is PAINTED into the terrain, like a brush ----------
@@ -5330,17 +5395,24 @@ function _roadSplatPaint(jobs, cxw, czw, renderR) {
   _roadTex.needsUpdate = true;
   _roadWinU.value.set(cxw, czw, 1 / span);
 }
-// rebuild the network only when the player crosses into a new chunk (cheap, routes are cached)
+// rebuild the network only when the player crosses into a new chunk (cheap, routes are cached) — or,
+// in SRV mode, also when fresh server road chunks have streamed into the window (_srvRoadsDirty)
 function ensureRoads(force) {
   if (!mapTerrain) return;
   const pcx = Math.floor(player.pos.x / CHUNK), pcz = Math.floor(player.pos.z / CHUNK), pk = pcx + ',' + pcz;
+  if (SRV_ON) {
+    if (!force && pk === _roadChunk && !_srvRoadsDirty) return;
+    _roadChunk = pk; _srvRoadsDirty = false;
+    roadRebuildFromServer(pcx, pcz);              // the server routed + culled these; we only present them
+    return;
+  }
   if (!force && pk === _roadChunk) return;
   _roadChunk = pk;
   roadRebuild(pcx, pcz);
 }
 // a fresh region wipes the network (terrain teardown disposes the mesh) — clear caches so it regenerates
 function roadResetRegion() {
-  roadMesh = null; roadGrid = null; _roadChunk = '';
+  roadMesh = null; roadGrid = null; _roadChunk = ''; _srvRoadsDirty = false;
   if (_roadCtx) { _roadCtx.setTransform(1, 0, 0, 1, 0, 0); _roadCtx.clearRect(0, 0, ROAD_SPLAT.size, ROAD_SPLAT.size); _roadTex.needsUpdate = true; }
   _roadWinU.value.set(0, 0, 0);                   // gates the shader mix off until the next rebuild paints
   _terraInst = null;                              // a new region = a fresh kernel instance (all its memos drop with it)
@@ -5364,7 +5436,11 @@ function clearMarch(msg) {
 function orderMarch(tx, tz, quiet) {
   if (typeof clearMapFocus === 'function') clearMapFocus(); // a fresh march order pulls the camera back to you
   const land = nearestLand(tx, tz), lx = land[0], lz = land[1];
-  const t = travelPath(player.pos.x, player.pos.z, lx, lz);
+  // Bound the A* to a distance-scaled budget: a reachable target is found in a few hundred expansions,
+  // but an UNREACHABLE one (a separate landmass) used to explore the whole basin to the flat 16k cap —
+  // a ~210ms click stall. The scaled cap keeps every real route while failing fast on the unreachable.
+  const d0 = Math.hypot(lx - player.pos.x, lz - player.pos.z);
+  const t = travelPath(player.pos.x, player.pos.z, lx, lz, Math.min(16000, 2500 + d0 * 30));
   if (!t) { if (!quiet) showCmdToast('No route — the land bars the way'); return false; }
   marchPath = t.pts.slice(1); marchInfo = t;
   if (!marchFlag) marchFlag = buildDetFlag(PLAYER_REALM.color);
@@ -6159,34 +6235,41 @@ function sgBuildKeep(P, keep, big) {
 // The one terrain-aware builder behind every settlement and capital. Returns a THREE.Group
 // seated at (X, refY, Z); g.userData.ownerMats (the owner-colored material) recolors on conquest.
 function buildSettlementGroup(X, Z, tier, name, ownerColor, seed, opts) {
-  const r = _mulberry32(seed >>> 0);
   const street = !!(opts && opts.detail === 'street');
-  const spec0 = SG_SPEC[tier] || SG_SPEC.village;
-  // STREET LEVEL: fewer, far bigger houses on the SAME footprint. Everything positional that other
-  // systems depend on is untouched — R, castle centres, gate bearings, street plans — so roads still
-  // meet walls exactly at gates; only counts, spacing and the primitive dimensions change.
-  const spec = street ? { ...spec0,
-      houses: [Math.max(3, Math.round(spec0.houses[0] * STREET.countMul)), Math.max(1, Math.round(spec0.houses[1] * STREET.countMul))],
-      bailey: spec0.bailey ? [Math.max(1, Math.round(spec0.bailey[0] * 0.5)), Math.max(1, Math.round(spec0.bailey[1] * 0.5))] : undefined,
-      gap: spec0.gap * STREET.gapMul } : spec0;
-  const T = sgProbe(X, Z, spec), refY = T.refY;
-  const seat = (lx, lz) => T.Y(X + lx, Z + lz) - refY;                   // local Y on the real ground (relative to the site centre)
-  const isW = (lx, lz) => isWater(X + lx, Z + lz);
-  const pal = settlePalette(biomeAt(X, Z)), ownerRGB = sgRgb(ownerColor, 1);
+  // The PLACEMENT (the ~75-155ms cost for a city/capital: house-collision, street frontage, footprint
+  // fitting) now runs in the shared kernel (sim/settle.js) and returns a compact primitive list; the
+  // client only EMITS geometry from it. When a server descriptor is supplied (opts.layout) the browser
+  // skips placement entirely. Same kernel + same terra() instance ⇒ byte-identical to the old builders.
+  const layout = (opts && opts.layout) || Settle.settlementLayout(terra(), X, Z, tier, seed >>> 0,
+    { roadAxis: opts && opts.roadAxis, street: street ? STREET : null });
+  return sgEmitLayout(layout, X, Z, name, ownerColor);
+}
+// emit a settlement's primitive list into two merged meshes (structure = vertex-coloured, owner =
+// solid recolourable material), the name label, and the recolour handle. Primitive shape:
+//   [op(0box/1roof/2prism/3cone8), owner(0/1), a,b,c,d,e,f,g, hex, mul]
+// owner prims take the current owner colour; structure prims resolve sgRgb(hex,mul) — the exact THREE
+// path the inline builders used, so colours match to the byte.
+function sgEmitLayout(layout, X, Z, name, ownerColor) {
   const S = { pos: [], col: [] }, O = { pos: [], col: [] };
-  const P = { r, tier, spec, X, Z, refY, T, pal, ownerRGB, seat, isW, S, O, placed: [], exclude: [], seed, roadAxis: opts && opts.roadAxis,
-              street, mh: street ? STREET.mulH : 1, mw: street ? STREET.mulW : 1 };
-  P.fp = sgFootprint(P);                                                 // this site's own organic outline (towns/cities/villages grow irregularly; the castle curtain stays round)
-  if (spec.castle) sgBuildHold(P); else sgBuildVillage(P);
+  const ownerRGB = sgRgb(ownerColor, 1);
+  for (const pr of layout.prims) {
+    const buf = pr[1] ? O : S, col = pr[1] ? ownerRGB : sgRgb(pr[9], pr[10]);
+    switch (pr[0]) {
+      case 0: sgBox(buf, pr[2], pr[3], pr[4], pr[5], pr[6], pr[7], pr[8], col); break;
+      case 1: sgRoof(buf, pr[2], pr[3], pr[4], pr[5], pr[6], pr[7], pr[8], col); break;
+      case 2: sgPrism(buf, pr[2], pr[3], pr[4], pr[5], pr[6], col); break;
+      case 3: sgCone8(buf, pr[2], pr[3], pr[4], pr[5], pr[6], col); break;
+    }
+  }
   const g = new THREE.Group();
   if (S.pos.length) g.add(sgMesh(S, settleVCMat()));
   const ownerMats = [], om = mat(ownerColor, { shared: false }); ownerMats.push(om);
   if (O.pos.length) g.add(sgMesh(O, om));
   const label = makeNameSprite(name);
-  label.scale.set(spec.lbl, spec.lbl / 8, 1); label.position.y = spec.top * (street ? 2 : 1); g.add(label);
+  label.scale.set(layout.lbl, layout.lbl / 8, 1); label.position.y = layout.top * (layout.street ? 2 : 1); g.add(label);
   g.userData.ownerMats = ownerMats; g.userData.label = label;
-  g.userData.dbg = { buildings: P.placed.length, castles: P.exclude.length, R: spec.R, cls: T.cls };
-  g.position.set(X, refY, Z);
+  g.userData.dbg = layout.dbg;
+  g.position.set(X, layout.refY, Z);
   return g;
 }
 
@@ -6212,7 +6295,11 @@ function makeSettlement(hold) {
   const s = hold.site;
   const seed = (_chunkHash(s.cx, s.cz) ^ (Math.imul(s.idx + 3, 0x9E3779B1) >>> 0)) >>> 0;
   // a village is built AROUND ITS ROAD: the road engine draws the actual roadbed on this same axis
-  const opts = hold.tier === 'village' ? { roadAxis: villageRoadAxis(s) } : null;
+  const opts = hold.tier === 'village' ? { roadAxis: villageRoadAxis(s) } : {};
+  // town/city/capital placement (~11-186ms) can come from the server (owner-agnostic descriptor); the
+  // client emits geometry only. Villages are ~2ms and need the local road axis, so they build locally.
+  // First sight of a hold usually falls back to local build; the fetch warms the cache for revisits.
+  if (SRV_ON && hold.tier !== 'village') { const d = srvSettleCache.get(hold.key); if (d) opts.layout = d; else srvSettleWant(hold, seed); }
   return buildSettlementGroup(hold.x, hold.z, hold.tier, hold.def.name, hold.owner.color, seed, opts);
 }
 
@@ -9649,7 +9736,7 @@ BV.splatProbe = (x, z) => { // sample the splat canvas at a world point (debug: 
 };
 BV.travelTo = (x, z) => { const ok = orderMarch(x, z); return ok && marchInfo ? { seconds: Math.round(marchInfo.seconds), waypoints: marchPath.length, roadFrac: +marchInfo.roadFrac.toFixed(2) } : null; };
 BV.march = () => marchPath ? { left: marchPath.length, eta: marchInfo ? Math.round(marchInfo.seconds) : null } : null;
-BV.travelPath = (ax, az, bx, bz) => { const t = travelPath(ax, az, bx, bz); return t ? { seconds: +t.seconds.toFixed(1), roadFrac: +t.roadFrac.toFixed(2), n: t.pts.length } : null; };
+BV.travelPath = (ax, az, bx, bz, budget) => { const t = travelPath(ax, az, bx, bz, budget); return t ? { seconds: +t.seconds.toFixed(1), roadFrac: +t.roadFrac.toFixed(2), n: t.pts.length } : null; };
 BV.gates = (x, z, tier, seed) => settlementGates(x, z, tier, seed || 0);
 BV._mode = () => mode;
 BV.plan = { selectType, deploySelected, selCount: () => selected.size,

@@ -1,0 +1,12 @@
+{
+  "name": "Blade Vale",
+  "short_name": "Blade Vale",
+  "description": "Low Poly Hack & Slash",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "landscape",
+  "background_color": "#0b0e14",
+  "theme_color": "#0b0e14",
+  "start_url": "./index.html",
+  "scope": "./"
+}

@@ -995,7 +995,7 @@ function spawnProjectile(shooter, target, R) {
   mesh.castShadow = true;
   mesh.position.copy(from);
   scene.add(mesh);
-  projectiles.push({ mesh, vel, gravity, team: shooter.team, dmg: shooter.def.dmg, kind: R.kind, life: 3, ownerChar: shooter.char || null, ownerTrait: shooter.heroTrait || null });
+  projectiles.push({ mesh, vel, gravity, team: shooter.team, foes: shooter.foes || null, dmg: shooter.def.dmg, kind: R.kind, life: 3, ownerChar: shooter.char || null, ownerTrait: shooter.heroTrait || null });
 }
 function updateProjectiles(dt) {
   for (let i = projectiles.length - 1; i >= 0; i--) {
@@ -1012,7 +1012,7 @@ function updateProjectiles(dt) {
                (!fieldSimOn() && (Math.abs(p.mesh.position.x) > ARENA + 2 || Math.abs(p.mesh.position.z) > ARENA + 2));
     if (!dead) {
       // hit the first opposing combatant in the path
-      const foes = p.team === 'ally' ? enemies : opposingPlayerSide;
+      const foes = p.foes || (p.team === 'ally' ? enemies : opposingPlayerSide);
       for (const v of foes) {
         if (!v.alive) continue;
         const s = v.def ? v.def.scale : 1;
@@ -1648,8 +1648,15 @@ function grabPointer() {
 function requestFullscreenSafe() {
   const el = document.documentElement;
   const req = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
-  if (!req || document.fullscreenElement || document.webkitFullscreenElement) return;
+  if (!req || document.fullscreenElement || document.webkitFullscreenElement) { lockLandscape(); return; }
   try { const p = req.call(el); if (p && p.catch) p.catch(() => {}); } catch (e) { /* needs a user gesture */ }
+  lockLandscape();
+}
+// orientation lock: only Android (and only once fullscreen) honors this; iOS has no such API and
+// rejects — that's fine, the portrait-gate overlay covers iOS. Swallow the rejection like above.
+function lockLandscape() {
+  const o = screen.orientation;
+  if (o && o.lock) { try { const p = o.lock('landscape'); if (p && p.catch) p.catch(() => {}); } catch (e) { /* unsupported */ } }
 }
 // re-request when the tab comes back into view — this rides on the transient activation
 // left over from whatever gesture (tap/click) brought the tab forward, so it works on
@@ -1657,9 +1664,10 @@ function requestFullscreenSafe() {
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') requestFullscreenSafe(); });
 canvas.addEventListener('click', () => {
   SFX.init(); // browsers gate WebAudio behind a user gesture — this is the reliable one
-  // pointer lock rides with gameRunning: a real battle OR action mode (both are 3rd-person mouse-aim).
-  // Map/overworld leave gameRunning false, so their cursor stays free to click-march.
-  if (gameRunning && !commandPanelOpen && !pointerLocked) grabPointer();
+  // Strategic (zoomed out): cursor stays free so a click can march the army — never grab here.
+  // Action mode (zoomed in past Z_LOCK, or a live fight): the click (re)locks the mouse for aim — a
+  // reliable user gesture that covers the case where a wheel-zoom into action didn't hold the lock.
+  if ((inAimZone() || fieldBattle || encounter) && !commandPanelOpen && !pointerLocked) grabPointer();
 });
 document.addEventListener('pointerlockchange', () => {
   pointerLocked = document.pointerLockElement === canvas;
@@ -1672,10 +1680,10 @@ addEventListener('mousemove', (e) => {
 // action-mode dolly zoom: scroll to push the camera in tight (upper body, right behind the shoulder)
 // or pull it back out to the default follow distance. Only live on foot in the field, not in battle.
 canvas.addEventListener('wheel', (e) => {
-  if (!fieldSimOn()) return;
+  if (mode !== 'map' || encounter || mapCmdMode || commandPanelOpen) return; // live in BOTH states so you can scroll back and forth across Z_LOCK
   e.preventDefault();
   fieldZoomT = clamp(fieldZoomT + Math.sign(e.deltaY) * 0.08, -1, 1);
-  applyFieldZoom();
+  onZoomChanged(true); // wheel is a user gesture — best-effort (re)lock as we cross into the aim zone
 }, { passive: false });
 
 addEventListener('keydown', (e) => {
@@ -1684,14 +1692,19 @@ addEventListener('keydown', (e) => {
   if (commandPanelOpen) { handlePlanKey(e); return; } // commanding: keys order troops, not the fighter
   // a strike prompt is up (a hostile crowd stands on a squad's placed area): ⏎ throws the WHOLE army at them
   if (fieldSimOn() && gameRunning && !encounter && !musterOpen && fieldStrike && !fieldBattle && (e.code === 'Enter' || e.code === 'NumpadEnter')) { e.preventDefault(); launchStrike(fieldStrike.band, 'all'); return; }
-  if (fieldSimOn() && gameRunning && !encounter && !musterOpen && handleBattleOrderKey(e)) return; // squad orders ANY time on foot — prep before the fight, command during it
+  // squad orders while on foot in action mode (fieldSimOn) — prep before the fight, command during it.
+  // On the strategic map (fieldSimOn false) this is skipped so G stays the call-to-arms key.
+  if (fieldSimOn() && gameRunning && !encounter && !musterOpen && handleBattleOrderKey(e)) return;
   if (e.code === 'Space') { e.preventDefault(); requestDodge(); }
-  // F draws the weapon in a fight — but on the strategic (top-down) map it's the Find-parties locator
+  // F draws/sheathes the weapon in action mode; on the strategic map it's the Find-parties locator (below)
   if (e.code === 'KeyF' && !(mode === 'map' && !mapFieldMode && !encounter)) toggleWeapon();
 });
 addEventListener('keyup', (e) => { keys[e.code] = false; });
 canvas.addEventListener('mousedown', (e) => {
   if (commandPanelOpen) return;
+  // Locked = combat (clicks strike). Free cursor = navigate (clicks march, handled by the map listener) —
+  // EXCEPT in a live in-place fight, where clicks always strike even before the pointer re-locks.
+  if (!pointerLocked && !fieldBattle && !encounter) return;
   if (e.button === 0) requestAttack();        // left: light combo / finisher
   else if (e.button === 2) requestHeavyAttack(); // right: committed heavy cleave
 });
@@ -1784,7 +1797,7 @@ if (TOUCH) {
   bindBtn('tb-dodge', requestDodge);
   bindBtn('tb-block', () => { keys['ShiftLeft'] = true; }, () => { keys['ShiftLeft'] = false; });
   bindBtn('tb-weapon', toggleWeapon);
-  bindBtn('tb-ride', () => { if (mode === 'map' && !encounter && !mapCmdMode) setFieldMode(!mapFieldMode); });
+  bindBtn('tb-ride', () => { if (mode === 'map' && !encounter && !mapCmdMode) overworldZoom(fieldZoomT > Z_LOCK ? 1 : -1); }); // toggle zoom: aim <-> navigate (mobile has no pointer lock; drag-look covers aim)
   bindBtn('tb-rally', () => { if (mode === 'map' && !encounter) raiseCall(); });
   bindBtn('tb-beacon', () => { if (mode === 'map' && !encounter) openBeaconPanel(); });
   bindBtn('tb-warband', () => toggleCharsheet());
@@ -2108,8 +2121,35 @@ function damageCombatant(victim, dmg, attacker) {
   }
   const dir = new THREE.Vector3().subVectors(victim.pos, attacker.pos).setY(0);
   if (dir.lengthSq() > 1e-6) dir.normalize(); else dir.set(0, 0, 1);
-  if (victim.team === 'ally') damageAlly(victim, dmg, dir, attacker);
+  if (victim.team === 'npc') damageNpc(victim, dmg, dir, attacker);   // spectated NPC-vs-NPC fighter
+  else if (victim.team === 'ally') damageAlly(victim, dmg, dir, attacker);
   else damageEnemy(victim, dmg, dir, false, attacker);
+}
+// a fighter in a spectated NPC clash takes a blow: same weight/poise/stagger feel as an enemy, but NONE
+// of the player-battle bookkeeping (score, wave counts, enemiesRemaining) or camera juice — this melee is
+// theatre you're watching, not one you're in. On death the man just falls; his side's count drops by one.
+function damageNpc(v, dmg, fromDir, attacker) {
+  if (!v.alive) return;
+  v.hp -= dmg;
+  v.flash = 0.12;
+  if (attacker && attacker.char) attacker.char.localStrike += 0.03;
+  if (v.heroTrait === 'juggernaut') {
+    v.vel.addScaledVector(fromDir, 1.2);
+  } else {
+    v.cd = Math.max(v.cd, (v.state === 'windup' || v.state === 'recover') ? v.def.cd * 0.6 : 0.4);
+    v.vel.addScaledVector(fromDir, 6);
+    v.poise -= FEEL.lightPoiseDmg;
+    if (v.poise <= 0) { v.poise = v.maxPoise; v.staggered = true; v.state = 'hurt'; v.timer = FEEL.staggerDur; setPose(v.anim, 'hurt', 0.05); }
+    else if (!v.staggered) { v.state = 'hurt'; v.timer = 0.18; setPose(v.anim, 'hurt', 0.06); }
+  }
+  const hp = v.obj.position.clone(); hp.y = 2.1 * v.def.scale;
+  SFX.hit(hp, v.isHero);
+  spawnSparks(hp, 0xffe08a, 5);
+  if (v.hp <= 0) {
+    v.alive = false; v.state = 'dead'; v.deadT = 0; v.bar.visible = false;
+    if (attacker && attacker.char) { attacker.char.localKills = (attacker.char.localKills || 0) + 1; attacker.char.localStrike += 0.20; }
+    spawnSparks(v.obj.position.clone().setY(2), 0xff6b6b, 12);
+  }
 }
 
 function nearestEnemy(maxDist) {
@@ -2308,7 +2348,7 @@ function fighterStrike(f) {
   const scs = fieldSimOn() ? FIELD_SCALE : 1; // miniature-scale reach in a field fight
   const reach = (f.def.range + f.def.scale * 0.6) * scs;
   // cleave: hit every opposing combatant in the frontal arc
-  const foes = f.team === 'ally' ? enemies : opposingPlayerSide;
+  const foes = f.foes || (f.team === 'ally' ? enemies : opposingPlayerSide);
   for (const t of foes) {
     if (!t.alive) continue;
     const to = new THREE.Vector3().subVectors(t.pos, f.pos).setY(0);
@@ -2325,21 +2365,24 @@ function fighterStrike(f) {
 }
 
 // keep an ally moving with the player: onto its marching-formation slot in the field, else a loose escort
+// escort the fighter's commander — the player by default, but an AI leader when f.commander is set
+// (an NPC host's men fall in on their warlord exactly as your company falls in on you)
 function escortStep(f, dt) {
+  const L = f.commander || player;
   if (fieldSimOn() && f.formSlot) {
     // marching formation: seek the assigned slot — at a run when trailing, at a walk when close
     const fs = FIELD_SCALE;
     const sdx = f.formSlot.x - f.pos.x, sdz = f.formSlot.z - f.pos.z, pd = Math.hypot(sdx, sdz);
     // the general walks through the ranks: whoever stands on his path side-steps clear
     // (off his heading, to whichever side this soldier already leans), then falls back in
-    const rx = f.pos.x - player.pos.x, rz = f.pos.z - player.pos.z, rd = Math.hypot(rx, rz);
+    const rx = f.pos.x - L.pos.x, rz = f.pos.z - L.pos.z, rd = Math.hypot(rx, rz);
     const yR = FORM.yield * fs;
     let yx = 0, yz = 0;
     if (rd < yR && rd > 1e-4) {
-      const ms = Math.hypot(player.vel.x, player.vel.z);
+      const ms = Math.hypot(L.vel.x, L.vel.z);
       const w = (1 - rd / yR) * 1.8;
       if (ms > 0.4) {
-        const hx = player.vel.x / ms, hz = player.vel.z / ms;
+        const hx = L.vel.x / ms, hz = L.vel.z / ms;
         const side = (rx * -hz + rz * hx) >= 0 ? 1 : -1;
         yx = -hz * side * w; yz = hx * side * w;
       } else { yx = (rx / rd) * w; yz = (rz / rd) * w; } // he only stands close: ease straight back
@@ -2353,16 +2396,16 @@ function escortStep(f, dt) {
       if (mv.lengthSq() > 1e-6) mv.normalize();
       const urgency = clamp(pd / (3 * fs), 0.6, 1.5); // fall in briskly, settle gently
       f.vel.addScaledVector(mv, f.def.speed * urgency * dt * 6);
-      f.facing = angleLerp(f.facing, seeking ? Math.atan2(sdx, sdz) : (f.formDir != null ? f.formDir : player.facing), dt * 8);
+      f.facing = angleLerp(f.facing, seeking ? Math.atan2(sdx, sdz) : (f.formDir != null ? f.formDir : L.facing), dt * 8);
       f.walkPhase += dt * f.def.speed * 1.5; f.moving = true;
     } else {
-      f.facing = angleLerp(f.facing, f.formDir != null ? f.formDir : player.facing, dt * 6); // dressed ranks face the line of march
+      f.facing = angleLerp(f.facing, f.formDir != null ? f.formDir : L.facing, dt * 6); // dressed ranks face the line of march
     }
   } else {
-    const pd = f.pos.distanceTo(player.pos);
-    if (pd > 4.5) { // no formation (a set-piece line): loose escort on the player
-      const mv = new THREE.Vector3().subVectors(player.pos, f.pos).setY(0);
-      if (mv.lengthSq() > 1e-6) mv.normalize(); else mv.set(1, 0, 0); // guard: never normalize a zero vector (stacked on the player)
+    const pd = f.pos.distanceTo(L.pos);
+    if (pd > 4.5 * (fieldSimOn() ? FIELD_SCALE : 1)) { // no formation (a set-piece line): loose escort on the commander
+      const mv = new THREE.Vector3().subVectors(L.pos, f.pos).setY(0);
+      if (mv.lengthSq() > 1e-6) mv.normalize(); else mv.set(1, 0, 0); // guard: never normalize a zero vector (stacked on the leader)
       f.vel.addScaledVector(mv, f.def.speed * 0.7 * dt * 6);
       f.walkPhase += dt * f.def.speed * 1.4; f.moving = true;
     }
@@ -2495,6 +2538,8 @@ function stepFighter(f, dt) {
         f.walkPhase += dt * f.def.speed * 1.6; f.moving = true;
       } else if (f.team === 'ally' && player.alive) {
         escortStep(f, dt); // free & idle: fall in on the player (marching formation in the field)
+      } else if (f.team === 'npc' && f.commander && f.commander.alive) {
+        escortStep(f, dt); // an AI host's man with no foe left: fall in on his warlord
       }
       if (!f.moving) restLegs(f.parts, dt, true);
     } else {
@@ -2702,7 +2747,7 @@ function updateAllies(dt) {
 
 // nearest living opponent (any, not just the assigned target) — what a skirmisher kites from
 function nearestOpponentOf(f) {
-  const foes = f.team === 'ally' ? enemies : opposingPlayerSide;
+  const foes = f.foes || (f.team === 'ally' ? enemies : opposingPlayerSide);
   let best = null, bd = Infinity;
   for (const o of foes) {
     if (!o.alive) continue;
@@ -2717,7 +2762,7 @@ function nearestOpponentDist(f) {
 }
 // nearest foe sitting inside a zone-holder's rectangle (expanded by margin m) — what it defends against
 function nearestFoeInRect(f, z, m) {
-  const foes = f.team === 'ally' ? enemies : opposingPlayerSide;
+  const foes = f.foes || (f.team === 'ally' ? enemies : opposingPlayerSide);
   let best = null, bd = Infinity;
   for (const o of foes) {
     if (!o.alive) continue;
@@ -2747,6 +2792,7 @@ function rebuildSepGrid() {
   for (const e of enemies) put(e);
   for (const a of allies) put(a);
   if (player.alive) put(player);
+  for (const lc of liveClashes) { for (const f of lc.A) put(f); for (const f of lc.B) put(f); } // spectated clash fighters space out too
 }
 function separation(self) {
   sepV.set(0, 0, 0);
@@ -3143,13 +3189,15 @@ function updateMapCamera(dt) {
 }
 
 // ---------- Field mode: zoom into the overworld and play as your character (battle controls) ----------
-// Strategic view = the eye-in-the-sky banner. FIELD MODE = the camera drops to ground level and you run
-// the actual hero (player.obj) across the real terrain with the FULL battle control stack — mouse-aim,
-// click attack, right-click heavy, SHIFT block, SPACE dodge, F weapon swap, weapon drawn — and your
-// warband COMPANY follows as individual soldiers. The world keeps simulating; ride into a band and the
-// normal encounter -> battle flow takes over. Scroll wheel zooms in/out across the threshold; T toggles.
-let mapFieldMode = false;            // false = strategic top-down banner; true = character-level free-roam
-let fieldPref = false;               // remember the player's choice so it survives battles / new regions
+// The overworld is ONE mode now: you always run the actual hero (player.obj) across the real terrain
+// with the FULL battle control stack — mouse-aim, click attack, right-click heavy, SHIFT block, SPACE
+// dodge, F weapon swap — and your warband COMPANY follows as individual soldiers. The old discrete
+// "strategic map" is gone; zooming out just pulls the same camera back (cursor frees for click-march),
+// zooming in past Z_LOCK locks the mouse for aim. The world keeps simulating; ride/click into a band
+// and the encounter -> in-place battle flow takes over.
+// mapFieldMode is kept as the "on-foot layer is live" flag (now effectively always true while in map).
+let mapFieldMode = false;            // true = character layer active (companies materialised, battle stack armed)
+let fieldPref = true;                // map mode is gone — you're always the on-foot character; zoom governs lock/detail
 const FIELD_COMPANY_CAP = 150;       // your WHOLE warband walks with you in action mode (ceiling is perf-only)
 // The overworld is a strategic MINIATURE — a city wall is only ~1.8 world units tall — so a battle-scale
 // hero (~1.8u) would tower over it. In field mode the whole "person layer" (hero, company, the materialised
@@ -3163,9 +3211,20 @@ const FIELD_SPEED_MUL = 0.6;         // displacement is scaled down so it reads 
 // (unchanged from before this existed), -1 = closest, +1 = farthest. Three-point lerp (near/default/far)
 // so scrolling either way from the default gives a full ~7x span without moving the resting position.
 let fieldZoomT = 0;
-const FIELD_DIST_NEAR = 3.0, FIELD_DIST_DEF = 8.5, FIELD_DIST_FAR = 90;     // *FIELD_SCALE — far pulls all the way back to an eagle-eye view wide enough to take in your whole army
-const FIELD_HEIGHT_NEAR = 3.4, FIELD_HEIGHT_DEF = 5.5, FIELD_HEIGHT_FAR = 130; // *FIELD_SCALE; near ≈ the rig's own head height (~3.4*FIELD_SCALE) so a close shot sits AT eye level instead of hovering above it; far climbs high above any terrain (mountains, hills) so pulling out never clips into the landscape
-const FIELD_SHOULDER_NEAR = 0.85, FIELD_SHOULDER_DEF = 0.7, FIELD_SHOULDER_FAR = 0.6; // side offset so a close shot still clears the head
+// ONE continuous zoom axis now governs the whole overworld — the old discrete "strategic map" mode is
+// gone. fieldZoomT runs -1 (tightest over-the-shoulder combat) .. +1 (a high strategic overview). Two
+// thresholds carve it into bands (with a little hysteresis so scrolling across an edge doesn't thrash):
+//   t <= Z_LOCK          -> AIM zone: pointer locks for mouse-aim, street detail (tier 2), click = attack
+//   Z_LOCK < t <= Z_CHART-> NAVIGATE: cursor free, miniature (tier 1), click = march
+//   t >  Z_CHART         -> far OVERVIEW: cursor free, chart/icons (tier 0), click = march
+// So: locked <=> zoomed-in <=> street; free cursor <=> zoomed-out <=> click-to-march.
+const Z_LOCK = -0.15;               // zoom-in past this locks the mouse for aim/combat
+const Z_CHART = 0.55;               // zoom-out past this drops to the chart/icon overview
+const Z_HYST = 0.05;                // hysteresis half-band around each edge
+const FIELD_COMBAT_ZOOM = -0.4;     // a live fight snaps the zoom to here (well inside the aim zone)
+const FIELD_DIST_NEAR = 3.0, FIELD_DIST_DEF = 8.5, FIELD_DIST_FAR = 180;    // *FIELD_SCALE — far now pulls all the way out to a strategic overview (replaces the old map dolly)
+const FIELD_HEIGHT_NEAR = 3.4, FIELD_HEIGHT_DEF = 5.5, FIELD_HEIGHT_FAR = 250; // *FIELD_SCALE; near ≈ the rig's own head height so a close shot sits AT eye level; far climbs high above the relief for a whole-region survey
+const FIELD_SHOULDER_NEAR = 0.85, FIELD_SHOULDER_DEF = 0.7, FIELD_SHOULDER_FAR = 0.5; // side offset shrinks as we pull out so the far overview centres on the hero
 const FIELD_LOOK_NEAR = 3.1, FIELD_LOOK_DEF = 2.9, FIELD_LOOK_FAR = 2.9; // just under eye height — a slight, natural downward tilt instead of dead-level
 const FIELD_AHEAD_NEAR = 6; // *FIELD_SCALE; close zoom slides the look-at forward along facing, so it reads as looking where the character looks (only ramps in on the near side)
 function fieldZoomLerp(near, def, far) { return fieldZoomT < 0 ? lerp(def, near, -fieldZoomT) : lerp(def, far, fieldZoomT); }
@@ -3173,7 +3232,43 @@ function applyFieldZoom() {
   cameraDist = fieldZoomLerp(FIELD_DIST_NEAR, FIELD_DIST_DEF, FIELD_DIST_FAR) * FIELD_SCALE;
   cameraHeight = fieldZoomLerp(FIELD_HEIGHT_NEAR, FIELD_HEIGHT_DEF, FIELD_HEIGHT_FAR) * FIELD_SCALE;
 }
+// AIM zone == the mouse should be locked for combat. Pointer-lock + click-to-attack ride on this, NOT
+// on any mode flag. Escape frees the cursor (browser default) without changing the zoom, so you can
+// click-march even while zoomed in; a zoom-in gesture (L / wheel) re-locks.
+function inAimZone() { return mode === 'map' && fieldSimOn() && fieldZoomT <= Z_LOCK; }
+// Reconcile the pointer lock to the current zoom band. `gesture` = the call came from a real user
+// gesture (keydown/wheel) that the browser will accept for requestPointerLock.
+function reconcilePointerLock(gesture) {
+  if (!fieldSimOn() || mapCmdMode || commandPanelOpen || encounter) return;
+  if (inAimZone()) { if (!pointerLocked && gesture) grabPointer(); }
+  else if (pointerLocked && document.exitPointerLock) document.exitPointerLock();
+}
+// Single entry point whenever fieldZoomT changes. The Z_LOCK threshold splits the overworld into TWO
+// states, and crossing it flips the whole mode via setFieldMode:
+//   t <= Z_LOCK  -> ACTION:    on-foot hero, WASD movement, mouse-lock for aim, company of soldiers
+//   t >  Z_LOCK  -> STRATEGIC: your army rides as a banner column, free cursor, click-to-march
+// A little hysteresis (Z_HYST) on the leave-edge stops a scroll sitting exactly on the boundary from
+// thrashing the mode. Zoomed out, the leftover zoom range drives the strategic map's own dolly levels.
+function onZoomChanged(gesture) {
+  if (mode === 'map' && !encounter && !mapCmdMode) {
+    const want = fieldZoomT <= Z_LOCK + (mapFieldMode ? Z_HYST : 0); // enter action at Z_LOCK, leave a touch past it
+    if (want !== mapFieldMode) setFieldMode(want, { keepPref: true });
+    // strategic mode: map the pulled-out zoom range onto the top-down camera's discrete dolly levels
+    if (!mapFieldMode) mapZoomLevel = clamp(Math.round((fieldZoomT - Z_LOCK) / (1 - Z_LOCK) * MAP_ZOOM_MAX_LEVEL), 0, MAP_ZOOM_MAX_LEVEL);
+  }
+  applyFieldZoom();
+  reconcilePointerLock(gesture);
+  applyDetailTier();
+}
 const FIELD_ARMY = { showR: 36, hideR: 44, capPerBand: 48, capTotal: 220 }; // nearby flags -> FULL soldier crowds (walk up and see the whole host)
+// when TWO hosts of a map-battle are both materialised near you, their crowds stop waving swords at
+// air and instead pair off man-to-man: each soldier picks an enemy body, closes the gap, and trades
+// real windup->strike->recover swings (the same MOVES poses the hero uses). The numeric resolver still
+// decides the OUTCOME — casualties are culled from the crowd to track each side's bleeding bar, and a
+// culled man topples where he stood, preferentially one who was just struck. reach/close/move are in
+// FIELD_SCALE units (×fs at use); wind/rec/cool are seconds.
+const FIELD_MELEE = { reach: 1.55, close: 2.6, move: 3.2, wind: [0.26, 0.5], rec: 0.34, cool: [0.35, 1.0],
+                      flinch: 0.34, knock: 0.16, sfxChance: 0.14, deathDur: 1.05 };
 const fieldArmies = new Map();       // band -> { bodies:[...] } — materialised hosts near the hero
 // true only while the overworld is driven as a character — makes updatePlayer / stepFighter / updateCamera
 // ride terrain elevation (mapElevY) + land-confinement (landStep) instead of the flat battle arena
@@ -3216,24 +3311,25 @@ function setFieldMode(on, opts) {
     setDetVisible(false);                             // ...and any detachment columns
     if (typeof clearFindFlares === 'function') clearFindFlares(); // locator flares are a top-down aid
     player.obj.visible = true;
-    gameRunning = true;                              // unlocks pointer-lock + mouse-aim + attack/dodge/weapon
+    gameRunning = true;                              // battle control stack: mouse-aim + attack/dodge/weapon (gated on the pointer lock)
     cameraAngle = player.facing + Math.PI;            // 3rd person: start behind the hero (rotation is welcome here)
-    applyFieldZoom(); // sets cameraDist/cameraHeight from fieldZoomT (persists across toggles) — scroll wheel adjusts in action mode
-    // ACTION MODE locks the mouse for aim-look. Entered via the L keydown (a real user gesture), so the
-    // pointer-lock request is allowed — unlike the old scroll-wheel path browsers rejected.
+    applyFieldZoom(); // sets cameraDist/cameraHeight from fieldZoomT (persists across toggles) — scroll wheel adjusts it
+    // The mouse only locks once you zoom IN past Z_LOCK; at a resting/zoomed-out zoom the cursor stays
+    // free for click-to-march. reconcilePointerLock honours that (no forced grab here anymore).
     // the command layer rides with you from the first step: squads bind to the company and the
     // ⚔ COMMAND tab sits at the edge — stage an ambush, post a rearguard, or just march in order
     for (const g of planGroups) { g.order = 'free'; g.anchor = null; g.zone = null; } // anchors from another place/scale die here
     clearSelection();
     rebindGroupsToPool();
     renderDeck();
-    grabPointer();
-    showCmdToast('Action — mouse aim · click attack · WASD move · K command · P back to the map');
+    reconcilePointerLock(false);                      // lock only if we're already in the aim zone (default zoom is free)
+    showCmdToast('Scroll to zoom — in to aim & fight, out to click-march · WASD move · K command');
     if (playerClash) dropIntoClash(); // your clash was simulating — settle it in person instead
   } else {
     abortFieldBattle();                              // pulling out mid-fight is a retreat — survivors re-form
     closeFieldDeck();                                // the command tab belongs to the ground view
     clearAllies();                                   // the on-foot escort folds back into the banner
+    clearAllLiveClashes();                           // real NPC-clash fighters fold back to band numbers
     clearAllFieldArmies();                           // nearby hosts go back to being banner tokens
     fieldStrike = null; hideStrikeHud();             // the strike prompt is a ground-view overlay
     if (typeof planGroups !== 'undefined') for (const g of planGroups) { disposeZoneOverlay(g); disposeHoldMarker(g); g.zone = null; g.anchor = null; } // squad areas were staged on this ground
@@ -3244,7 +3340,7 @@ function setFieldMode(on, opts) {
     gameRunning = false;
     cameraAngle = 0;                                  // stay north-up (it already is; keep it explicit)
     if (document.exitPointerLock) document.exitPointerLock();
-    showCmdToast('Strategic view — press L to drop into action, P for the wide overview');
+    if (!(opts && opts.silent)) showCmdToast('Strategic view — click to march your army · zoom in to lead on foot');
   }
   applyDetailTier();                                 // action rung = street level; strategic = the miniature
   if (TOUCH && window.updateTouchHud) window.updateTouchHud();
@@ -3266,7 +3362,10 @@ function makeFieldExtra(faction, weapon, opts) {
   if (lead) { const bn = makeBanner(faction && faction.color != null ? faction.color : 0x8a1a1a); bn.scale.setScalar(0.92); bn.position.set(0.05, 0, 0.35); h.group.add(bn); } // a standard rising over the commander
   scene.add(h.group);
   return { group: h.group, parts: h.parts, anim: makeAnimator(h.parts), phase: rand(0, 6.28),
-           back: 0, side: 0, swing: rand(0.3, 1.2), swinging: false, isCommander: lead };
+           back: 0, side: 0, swing: rand(0.3, 1.2), swinging: false, isCommander: lead,
+           // per-man melee state (used only while its host is a materialised clash):
+           wx: null, wz: null, duel: null, reCd: rand(0, 0.4), mstate: 'engage',
+           mt: rand(0.1, 0.8), flinch: 0, dead: false, deadT: 0, tinted: false };
 }
 function clearFieldArmy(band) {
   const fa = fieldArmies.get(band); if (!fa) return;
@@ -3288,8 +3387,8 @@ function materialiseBand(band, budget) {
   // a live anchor + heading that EASE toward their slot behind him (updateFieldArmyBodies), so when he
   // turns the groups trail and swing into line a beat later instead of snapping.
   const fs = FIELD_SCALE, fileSp = FORM.fileSp * fs, rankSp = FORM.rankSp * fs, gap = FORM.blockGap * fs;
-  // the warlord: a taller, gold-trimmed figure a stride ahead of the first rank
-  const cmd = makeFieldExtra(band.faction, 'sword', { lead: true, scale: 1.4 });
+  // the warlord: a gold-trimmed figure, same stature as his men, a stride ahead of the first rank
+  const cmd = makeFieldExtra(band.faction, 'sword', { lead: true });
   cmd.back = -2.2 * fs;
   bodies.push(cmd);
   const squads = [];
@@ -3317,18 +3416,99 @@ function materialiseBand(band, budget) {
       placed += m;
     }
   }
-  fieldArmies.set(band, { bodies, squads, lx: band.pos.x, lz: band.pos.z });
+  for (const b of bodies) { b.wx = band.pos.x; b.wz = band.pos.z; } // seed a live pos so a duel partner never reads null (NaN)
+  fieldArmies.set(band, { bodies, squads, lx: band.pos.x, lz: band.pos.z, cap: n, bornSize: Math.max(1, band.size) });
   if (band.group) band.group.visible = false;          // the flag gives way to the soldiers
   return n;
 }
+// nearest still-standing enemy body to a point — who this man squares up against
+function pickDuelBody(x, z, foeFa) {
+  let best = null, bd = Infinity;
+  for (const e of foeFa.bodies) {
+    if (e.dead) continue;
+    const dx = e.wx == null ? e.group.position.x - x : e.wx - x;
+    const dz = e.wz == null ? e.group.position.z - z : e.wz - z;
+    const d = dx * dx + dz * dz;
+    if (d < bd) { bd = d; best = e; }
+  }
+  return best;
+}
+// the resolver bleeds each side's numeric strength (applySideLive); mirror those losses in the crowd so
+// you watch men actually fall. Cull down to the live size, felling whoever was most recently struck first.
+function reconcileFieldCasualties(band, fa) {
+  const standing = fa.bodies.filter(b => !b.dead);
+  const want = clamp(Math.round(band.size), band.alive ? 1 : 0, fa.cap);
+  let kill = standing.length - want;
+  if (kill <= 0) return;
+  // fell the just-struck first (a blow that landed), then the front-line duelists, commander last
+  standing.sort((a, b) => (b.flinch - a.flinch) || ((b.duel ? 1 : 0) - (a.duel ? 1 : 0)) || ((a.isCommander ? 1 : 0) - (b.isCommander ? 1 : 0)));
+  for (const v of standing) {
+    if (kill <= 0) break;
+    if (v.isCommander && kill < standing.length) continue; // spare the warlord unless the whole host is wiped
+    v.dead = true; v.deadT = 0; v.duel = null; kill--;
+  }
+}
+// one man's death throe: buckle at the knees and topple where he stood, then sink and fade out
+function stepDeadBody(b, dt) {
+  b.deadT += dt;
+  const k = clamp(b.deadT / FIELD_MELEE.deathDur, 0, 1);
+  b.group.rotation.x = -easeOut(Math.min(1, k * 1.4)) * 1.5;   // pitch forward onto the ground
+  b.group.position.y = mapElevY(b.group.position.x, b.group.position.z) - k * 0.25;
+  if (k > 0.6 && !b.tinted) { setTint(b.parts, 0x000000); b.tinted = true; }
+}
+// resolve one man's man-to-man duel for the frame: close the gap, then windup->strike->recover, and
+// register a hit on his opponent at the strike (a flinch + a shove — the resolver still owns the kill)
+function stepDuelBody(b, fs, dt) {
+  const t = b.duel; if (!t) return;
+  const reach = FIELD_MELEE.reach * fs;
+  const dx = t.wx - b.wx, dz = t.wz - b.wz, dd = Math.hypot(dx, dz) || 1e-4;
+  if (b.mstate === 'engage') {
+    if (dd > reach) { b.phase += dt * 7; walkLegs(b.parts, b.phase, 0.35); setPose(b.anim, 'guard', 0.2); }
+    else restLegs(b.parts, dt, true);
+    b.mt -= dt;
+    if (dd <= reach * 1.05 && b.mt <= 0) {
+      b.mstate = 'windup'; b.move = MOVES[['slashR', 'slashL', 'chop'][(b.phase * 7 | 0) % 3]];
+      b.mt = rand(FIELD_MELEE.wind[0], FIELD_MELEE.wind[1]);
+      setPose(b.anim, b.move.windup, 0.1);
+    }
+  } else if (b.mstate === 'windup') {
+    restLegs(b.parts, dt, true);
+    b.mt -= dt;
+    if (b.mt <= 0) {                                    // the blow lands
+      setPose(b.anim, b.move.strike, 0.05);
+      if (!t.dead) {
+        t.flinch = Math.max(t.flinch, FIELD_MELEE.flinch);
+        t.wx += dx / dd * FIELD_MELEE.knock * fs; t.wz += dz / dd * FIELD_MELEE.knock * fs; // shove him back a step
+        if (Math.random() < FIELD_MELEE.sfxChance) (Math.random() < 0.5 ? SFX.hit(t.group.position) : SFX.clang(t.group.position));
+      }
+      b.mstate = 'recover'; b.mt = FIELD_MELEE.rec;
+    }
+  } else {                                              // recover
+    restLegs(b.parts, dt, true);
+    b.mt -= dt;
+    if (b.mt < FIELD_MELEE.rec * 0.5) setPose(b.anim, 'guard', 0.15);
+    if (b.mt <= 0) { b.mstate = 'engage'; b.mt = rand(FIELD_MELEE.cool[0], FIELD_MELEE.cool[1]); }
+  }
+}
 function updateFieldArmyBodies(band, fa, dt) {
+  // sweep away men whose death throe has finished (freeing their meshes)
+  for (let i = fa.bodies.length - 1; i >= 0; i--) {
+    const b = fa.bodies[i];
+    if (b.dead && b.deadT >= FIELD_MELEE.deathDur) { scene.remove(b.group); disposeGroup(b.group); fa.bodies.splice(i, 1); }
+  }
   // a band locked in a clash fights a host on the OTHER side of its map-battle (sideA/sideB are SIDE
   // objects holding .bands — pick a living enemy band from the opposite side to orient/strike toward)
-  let foe = null;
+  let foe = null, foeFa = null;
   if (band.inBattle) {
     const bt = band.inBattle, other = bt.sideA.bands.includes(band) ? bt.sideB : bt.sideA;
     foe = other.bands.find(x => x.alive) || other.bands[0] || null;
+    foeFa = foe ? fieldArmies.get(foe) : null;
+    reconcileFieldCasualties(band, fa);            // bleed the crowd to match the resolver's bar
   }
+  const fs = FIELD_SCALE;
+  // duel = a real man-to-man melee, only when BOTH hosts are drawn as crowds (else there's nobody to pair
+  // off against — fall back to the old shuffle-and-swing so a half-visible clash still looks alive)
+  const duelOn = !!(foe && foeFa && foeFa.bodies.length);
   const mx = band.pos.x - fa.lx, mz = band.pos.z - fa.lz; fa.lx = band.pos.x; fa.lz = band.pos.z;
   const moving = !foe && (mx * mx + mz * mz) > 1e-5;
   const faceTo = foe ? Math.atan2(foe.pos.x - band.pos.x, foe.pos.z - band.pos.z)
@@ -3349,21 +3529,53 @@ function updateFieldArmyBodies(band, fa, dt) {
   }
   for (let bi = 0; bi < fa.bodies.length; bi++) {
     const b = fa.bodies[bi];
-    let wx, wz, yaw;
-    if (b.isCommander) {                                  // rigid on the token, a stride ahead
-      wx = band.pos.x - fdx * b.back; wz = band.pos.z - fdz * b.back; yaw = faceTo;
-    } else {                                              // placed against the squad's lagged anchor + heading
-      const sq = fa.squads[b.squad];
-      const sdx = Math.sin(sq.dir), sdz = Math.cos(sq.dir), srx = -sdz, srz = sdx;
-      wx = sq.ax - sdx * b.lb + srx * b.ls; wz = sq.az - sdz * b.lb + srz * b.ls; yaw = sq.dir;
+    // where formation would place this man (his home slot — the seam he presses toward, and where he
+    // reforms once the fight is over)
+    let fx, fz, fyaw;
+    if (b.isCommander) { fx = band.pos.x - fdx * b.back; fz = band.pos.z - fdz * b.back; fyaw = faceTo; }
+    else { const sq = fa.squads[b.squad]; const sdx = Math.sin(sq.dir), sdz = Math.cos(sq.dir);
+           fx = sq.ax - sdx * b.lb + (-sdz) * b.ls; fz = sq.az - sdz * b.lb + (sdx) * b.ls; fyaw = sq.dir; }
+    if (b.wx == null) { b.wx = fx; b.wz = fz; }
+
+    if (b.dead) { stepDeadBody(b, dt); continue; }
+
+    let yaw = fyaw, dueling = false;
+    if (duelOn) {
+      // (re)acquire an opponent from the enemy crowd, then stand off just within sword reach of him
+      if (!b.duel || b.duel.dead || !foeFa.bodies.includes(b.duel)) {
+        b.duel = null; b.reCd -= dt; if (b.reCd <= 0) { b.duel = pickDuelBody(b.wx, b.wz, foeFa); b.reCd = rand(0.25, 0.6); }
+      }
+      if (b.duel) {
+        const t = b.duel, dx = t.wx - b.wx, dz = t.wz - b.wz, dd = Math.hypot(dx, dz) || 1e-4;
+        yaw = Math.atan2(dx, dz);
+        const stand = FIELD_MELEE.reach * fs * 0.82;
+        // press up to arm's length of him — a capped step, so men visibly stride into the fray
+        const tx = t.wx - dx / dd * stand, tz = t.wz - dz / dd * stand;
+        const step = FIELD_MELEE.move * fs * dt, ddx = tx - b.wx, ddz = tz - b.wz, dm = Math.hypot(ddx, ddz);
+        if (dm > 1e-4) { const s = Math.min(1, step / dm); b.wx += ddx * s; b.wz += ddz * s; }
+        dueling = true;
+      }
     }
-    b.group.position.set(wx, mapElevY(wx, wz), wz);
-    b.group.rotation.y = yaw + (foe ? Math.sin(b.phase * 1.7) * 0.3 : 0);
+    if (!dueling) { b.wx = fx; b.wz = fz; }             // march / idle / press — snap to the formation slot
+    b.group.position.set(b.wx, mapElevY(b.wx, b.wz), b.wz);
+    b.group.rotation.x = 0;
+    b.group.rotation.y = yaw + (foe && !dueling ? Math.sin(b.phase * 1.7) * 0.3 : 0);
     // crowd LOD (full-size hosts are big now): near = every frame, mid = third-frame, far = frozen pose
     const camD2 = b.group.position.distanceToSquared(camera.position);
     const animate = camD2 < 1600 ? true : camD2 < 4900 ? ((frameNo + bi) % 3 === 0) : false;
     if (!animate) continue;
-    if (foe) {                                          // melee: shuffle + periodic swings into the enemy host
+    if (b.flinch > 0) {                                 // reeling from a blow — interrupts his own swing
+      b.flinch -= dt; setPose(b.anim, 'hurt', 0.06);
+      if (!b.tinted) { setTint(b.parts, 0x551111); b.tinted = true; }
+      b.mstate = 'engage'; b.mt = rand(0.15, 0.4);
+      updateAnimator(b.anim, dt); continue;
+    }
+    if (b.tinted) { setTint(b.parts, null); b.tinted = false; }
+    if (dueling) {                                      // real man-to-man melee
+      stepDuelBody(b, fs, dt);
+    } else if (duelOn) {                                // in the clash but no partner yet — press forward
+      b.phase += dt * 7; walkLegs(b.parts, b.phase, 0.35); setPose(b.anim, 'guard', 0.25);
+    } else if (foe) {                                   // clash, but the enemy host isn't drawn — shuffle + swing
       b.phase += dt * 6; walkLegs(b.parts, b.phase, 0.25);
       b.swing -= dt;
       if (b.swing <= 0) { b.swinging = !b.swinging; b.swing = b.swinging ? 0.16 : rand(0.4, 1.1); setPose(b.anim, b.swinging ? MOVES.slashR.strike : 'guard', 0.08); }
@@ -3380,9 +3592,12 @@ function updateFieldArmies(dt) {
   for (const band of [...fieldArmies.keys()]) if (!band.alive || !parties.includes(band)) clearFieldArmy(band); // died / despawned
   let total = 0; for (const fa of fieldArmies.values()) total += fa.bodies.length;
   const px = player.pos.x, pz = player.pos.z;
+  // a clash you can see from both sides is fought for REAL — the same fighter AI you use, leader and all
+  for (const bt of mapBattles) if (!bt.live && !bt.done) maybeStartLiveClash(bt, px, pz);
   for (const band of parties) {
     if (!band.alive) continue;
     if (fieldBattle && band === fieldBattle.band) continue; // its men are REAL fighters right now, not extras
+    if (band.inBattle && band.inBattle.live) { if (fieldArmies.get(band)) clearFieldArmy(band); continue; } // its men are live clash fighters
     const d = Math.hypot(band.pos.x - px, band.pos.z - pz);
     const has = fieldArmies.get(band);
     if (!has && d <= FIELD_ARMY.showR && total < FIELD_ARMY.capTotal) total += materialiseBand(band, FIELD_ARMY.capTotal - total);
@@ -3394,9 +3609,175 @@ function updateFieldArmies(dt) {
   // Centralised here so it self-heals — a band dying mid-clash (which nulls band.inBattle) can't strand a marker.
   for (const bt of mapBattles) {
     if (!bt.marker) continue;
-    bt.marker.visible = !(bt.sideA.bands.some(b => fieldArmies.has(b)) || bt.sideB.bands.some(b => fieldArmies.has(b)));
+    bt.marker.visible = !bt.live && !(bt.sideA.bands.some(b => fieldArmies.has(b)) || bt.sideB.bands.some(b => fieldArmies.has(b)));
   }
 }
+
+// ================= LIVE CLASH: a watched NPC-vs-NPC battle fought with the REAL fighter sim =================
+// When you're close enough to see BOTH hosts of a map-battle, we stop faking it with a numeric bar + puppets
+// and instead stand up real FIELD_SCALE fighters for each side — the very same objects the player fights as,
+// driven by the very same stepFighter AI: they pick an enemy, close, wind up, strike, take weighty hits, and
+// die from real damage. Each host's warlord is a fighter on the ground too (gold-trimmed, banner-
+// bearing, same size as his men who fall in behind). The numeric resolver is SUSPENDED for that battle
+// (bt.live) — the men decide it. Walk away and it folds back to numbers; the survivors carry on as bands. -----
+const liveClashes = [];
+const LIVE_CLASH_TOTAL_CAP = 90;  // real fighters are heavy — bound how many stand up across all nearby clashes
+const CLASH_PER_CAP = 56;         // one clash's budget, split between the sides by their strength
+function liveFighterCount() { let n = 0; for (const lc of liveClashes) n += lc.A.length + lc.B.length; return n; }
+// build one FIELD_SCALE fighter for a clash side — team 'npc' so it routes through the generic
+// (player-free) combat paths; a leader is tougher, gold-trimmed and carries the standard, same size as his men
+function spawnClashFighter(faction, type, x, z, lead) {
+  let def = ENEMY_TYPES[type] || ENEMY_TYPES.grunt;
+  if (lead) def = { ...def, hp: Math.round(def.hp * 2.4), dmg: Math.round(def.dmg * 1.5), score: def.score };
+  const h = buildHumanoid(factionFieldPalette(faction, lead), def.scale, def.weapon || 'sword');
+  h.group.scale.multiplyScalar(FIELD_SCALE);
+  if (lead) { const bn = makeBanner(faction && faction.color != null ? faction.color : 0x8a1a1a); bn.scale.setScalar(0.92); bn.position.set(0.05, 0, 0.35); h.group.add(bn); }
+  scene.add(h.group);
+  const bar = makeHealthBar(); bar.position.y = 3.6 * def.scale; h.group.add(bar);
+  const f = {
+    team: 'npc', obj: h.group, parts: h.parts, anim: makeAnimator(h.parts), bar, def, type, char: null,
+    pos: new THREE.Vector3(x, 0, z), vel: new THREE.Vector3(), facing: 0,
+    hp: def.hp, maxHp: def.hp, state: 'chase', role: 'flank', slotAngle: 0,
+    target: null, slotOn: null, waiting: false, strafeDir: Math.random() < 0.5 ? -1 : 1,
+    timer: 0, cd: rand(0, def.cd), hitDone: false, move: def.moves[0], walkPhase: Math.random() * 6,
+    flash: 0, alive: true, deadT: 0, poise: 0, maxPoise: 0, staggered: false,
+    order: 'free', isHero: !!lead, commander: null,
+  };
+  f.maxPoise = Math.round(FEEL.poiseBase + def.hp * FEEL.poiseFromHp); f.poise = f.maxPoise;
+  setPose(f.anim, 'guard', 0.3);
+  h.group.position.set(x, mapElevY(x, z), z);
+  return f;
+}
+// muster one side's block of fighters, clustered on its flank of the contested point and facing across it
+function musterClashSide(bt, sideKey, sign, n, arr) {
+  const side = bt[sideKey];
+  const roster = buildEnemyRoster(n, mapLevel || 1); shuffleInPlace(roster);
+  const bands = side.bands.filter(b => b.alive);
+  const leadBand = bands.find(b => b.leader) || bands[0];
+  const cx = bt.cx + bt.axX * sign * (2.4), cz = bt.cz + bt.axZ * sign * (2.4);
+  const rt = -bt.axZ, rz2 = bt.axX;                 // right of the contact axis (the line's frontage)
+  const face = Math.atan2(-sign * bt.axX, -sign * bt.axZ); // look across at the enemy flank
+  const fs = FIELD_SCALE, sp = 1.7 * fs;
+  const files = Math.max(3, Math.round(Math.sqrt(n) * 1.3));
+  let lead = null;
+  for (let i = 0; i < n; i++) {
+    const isLead = i === 0 && !!leadBand && !!leadBand.leader;
+    const row = (i / files) | 0, col = i % files;
+    const back = row * sp + (isLead ? -1.6 * fs : 0);              // the warlord stands a stride proud of rank 0
+    const lat = (col - (files - 1) / 2) * sp + rand(-0.2, 0.2) * fs;
+    const bx = cx + (-Math.sin(face)) * back + rt * lat;           // behind = opposite the way he faces
+    const bz = cz + (-Math.cos(face)) * back + rz2 * lat;
+    const f = spawnClashFighter(side.faction, isLead ? (leadBand.leader && leadBand.leader.base) || roster[i].type : roster[i].type, bx, bz, isLead);
+    f.facing = face;
+    if (isLead) { lead = f; f.commander = null; }
+    arr.push(f);
+  }
+  // every soldier falls in behind the warlord (escort target when no foe is left); the leader leads
+  for (const f of arr) if (f !== lead) f.commander = lead;
+  return lead;
+}
+function maybeStartLiveClash(bt, px, pz) {
+  if (liveFighterCount() > LIVE_CLASH_TOTAL_CAP - 16) return;   // budget spent on nearer clashes
+  if (playerClash && playerClash.bt === bt) return;            // the player's OWN clash rides its own system (drop-in)
+  if (bt.sideA.bands.some(b => b.isPlayerBand) || bt.sideB.bands.some(b => b.isPlayerBand)) return;
+  const near = (side) => side.bands.some(b => b.alive && Math.hypot(b.pos.x - px, b.pos.z - pz) <= FIELD_ARMY.showR);
+  if (!(near(bt.sideA) && near(bt.sideB))) return;
+  startLiveClash(bt);
+}
+function startLiveClash(bt) {
+  // clear any decorative crowd / banner tokens on the participating bands
+  for (const b of bt.sideA.bands.concat(bt.sideB.bands)) { if (fieldArmies.get(b)) clearFieldArmy(b); if (b.group) b.group.visible = false; }
+  const sa = Math.max(1, Math.round(sideSize(bt.sideA))), sb = Math.max(1, Math.round(sideSize(bt.sideB)));
+  const budget = Math.min(CLASH_PER_CAP, LIVE_CLASH_TOTAL_CAP - liveFighterCount());
+  let na = clamp(Math.round(budget * sa / (sa + sb)), 1, budget - 1);
+  na = Math.min(na, sa); let nb = Math.min(budget - na, sb);
+  const A = [], B = [];
+  const lc = { bt, A, B, overflowA: sa - na, overflowB: sb - nb, leadA: null, leadB: null };
+  lc.leadA = musterClashSide(bt, 'sideA', -1, na, A);
+  lc.leadB = musterClashSide(bt, 'sideB', 1, nb, B);
+  for (const f of A) f.foes = B;
+  for (const f of B) f.foes = A;
+  bt.live = true; bt.lc = lc;
+  liveClashes.push(lc);
+}
+function clashLivingCount(arr) { let n = 0; for (const f of arr) if (f.alive) n++; return n; }
+// hand the clash's outcome back to the bands: spread each side's survivors (living fighters + the men who
+// never had to stand up) across its bands in proportion to their old strength
+function distributeToBands(bands, total) {
+  const live = bands.filter(b => b.alive);
+  if (!live.length) return;
+  const prior = live.reduce((s, b) => s + Math.max(1, b.size), 0) || 1;
+  let assigned = 0;
+  for (let i = 0; i < live.length; i++) {
+    const b = live[i];
+    const s = i === live.length - 1 ? Math.max(0, total - assigned) : Math.round(total * Math.max(1, b.size) / prior);
+    b.size = s; assigned += s; b._shownSize = -1;
+  }
+}
+function disposeClashFighters(lc) {
+  for (const f of lc.A.concat(lc.B)) { scene.remove(f.obj); disposeGroup(f.obj); }
+  lc.A.length = 0; lc.B.length = 0;
+  const i = liveClashes.indexOf(lc); if (i >= 0) liveClashes.splice(i, 1);
+}
+// one side is wiped: the other wins on the spot — fold survivors home and let the map-battle finish for real
+function resolveLiveClash(lc) {
+  const bt = lc.bt;
+  const aWon = clashLivingCount(lc.A) > 0;
+  const survW = (aWon ? clashLivingCount(lc.A) + lc.overflowA : clashLivingCount(lc.B) + lc.overflowB);
+  const win = aWon ? bt.sideA : bt.sideB, los = aWon ? bt.sideB : bt.sideA;
+  distributeToBands(win.bands, Math.max(1, survW));
+  for (const b of los.bands) b.size = 0;
+  bt.aWins = aWon; bt.live = false; bt.lc = null;
+  disposeClashFighters(lc);
+  finishMapBattle(bt); // kills the broken side's bands, frees the victors — same as a numeric resolve
+}
+// you looked away before it was settled: fold living counts back and let the numeric resolver carry it
+function foldLiveClashToNumeric(lc) {
+  const bt = lc.bt;
+  distributeToBands(bt.sideA.bands, Math.max(1, clashLivingCount(lc.A) + lc.overflowA));
+  distributeToBands(bt.sideB.bands, Math.max(1, clashLivingCount(lc.B) + lc.overflowB));
+  bt.live = false; bt.lc = null;
+  for (const b of bt.sideA.bands.concat(bt.sideB.bands)) { if (b.alive && b.group) { b.group.visible = true; setBandLabel(b); } }
+  disposeClashFighters(lc);
+  if (!bt.done) recomputeBattle(bt); // re-derive the bar from the new sizes and continue
+}
+function updateLiveClashes(dt) {
+  for (let i = liveClashes.length - 1; i >= 0; i--) {
+    const lc = liveClashes[i];
+    const bt = lc.bt;
+    if (!fieldSimOn() || bt.done || !bt.sideA.bands.some(b => b.alive) || !bt.sideB.bands.some(b => b.alive)) { foldLiveClashToNumeric(lc); continue; }
+    // walked out of range → fold back to numbers so the living world keeps ticking off-screen
+    const px = player.pos.x, pz = player.pos.z;
+    const nearAny = bt.sideA.bands.concat(bt.sideB.bands).some(b => b.alive && Math.hypot(b.pos.x - px, b.pos.z - pz) <= FIELD_ARMY.hideR);
+    if (!nearAny) { foldLiveClashToNumeric(lc); continue; }
+    // keep the leader anchors current so escort/formation reads a live commander
+    if (lc.leadA && !lc.leadA.alive) lc.leadA = lc.A.find(f => f.alive && f.isHero) || null;
+    if (lc.leadB && !lc.leadB.alive) lc.leadB = lc.B.find(f => f.alive && f.isHero) || null;
+    // pair the two sides off (generic — no player, no pack roles) and run the real sim
+    const aLive = lc.A.filter(f => f.alive && f.state !== 'dead'), bLive = lc.B.filter(f => f.alive && f.state !== 'dead');
+    assignSide(aLive, bLive, MAX_ATTACKERS_PER_VICTIM);
+    assignSide(bLive, aLive, MAX_ATTACKERS_PER_VICTIM);
+    stepClashArr(lc.A, dt); stepClashArr(lc.B, dt);
+    if (clashLivingCount(lc.A) === 0 || clashLivingCount(lc.B) === 0) resolveLiveClash(lc);
+    else { // keep the map-battle centroid/marker roughly where the melee actually is (leaders drift)
+      updateBattleMarker(bt);
+    }
+  }
+}
+function stepClashArr(arr, dt) {
+  for (let i = arr.length - 1; i >= 0; i--) {
+    const f = arr[i];
+    if (!f.alive) { if (deathStep(f, dt)) { scene.remove(f.obj); disposeGroup(f.obj); arr.splice(i, 1); } continue; }
+    stepFighter(f, dt);
+  }
+}
+// tear a live clash off a band the player is about to fight in person (drop-in / attack), handing its
+// men back as numbers first so the normal field-battle spawn can take over cleanly
+function endLiveClashOn(band) {
+  if (band && band.inBattle && band.inBattle.live && band.inBattle.lc) foldLiveClashToNumeric(band.inBattle.lc);
+}
+// leaving the ground view (or any hard reset): every live clash folds its survivors back to band numbers
+function clearAllLiveClashes() { for (const lc of [...liveClashes]) foldLiveClashToNumeric(lc); }
 
 // ---------- Marching formation: the company shapes itself to the ground it crosses ----------
 // The army ALWAYS marches as blocks of four files: each squad is one block (a big squad just
@@ -3507,6 +3888,7 @@ let fieldBattle = null;          // { band, reserve } — the in-place fight now
 const FIELD_BATTLE_CAP = 48;     // matches FIELD_ARMY.capPerBand — the whole visible crowd converts 1:1; bigger hosts trickle in
 function startFieldBattle(band) {
   if (fieldBattle || !fieldSimOn() || !player.alive || !band || !band.alive) return; // no new war over the hero's corpse
+  endLiveClashOn(band); // if this host was mid live-clash, fold it back to a crowd first so the spawn is clean
   // the crowd you can SEE becomes the fighters you FIGHT: capture each body's spot before the
   // extras are disposed, so the real soldiers stand up exactly where the crowd stood — no popping
   const fa = fieldArmies.get(band);
@@ -3517,6 +3899,7 @@ function startFieldBattle(band) {
   band.clashCd = 9999;                        // frozen out of the ambient clash system while it fights YOU
   band.parleyCd = 9999;
   battleParty = band;
+  if (fieldZoomT > Z_LOCK) { fieldZoomT = FIELD_COMBAT_ZOOM; onZoomChanged(true); } // a fight pulls you into the aim zone (the next click also re-locks)
   wave++; waveKills = waveHeroKills = waveLosses = 0;
   if (!playerChar) loadCareers();
   ensureWarbandRoster();
@@ -4250,10 +4633,19 @@ const PETTY = [
   { name: 'Hollowmere', color: 0x4c7d62 }, { name: 'Karran',    color: 0xb08a2a },
 ];
 const HEARTLAND_R = MAP_HALF * 1.6;  // within this of origin the five named powers rule; beyond it, the frontier
+// Emergent frontier realms (see WorldSim.realmFor): infinite server/kernel-defined powers, keyed by name.
+// Registered as their region is explored so their banner colour is the exact seeded hue; a name that
+// arrives before its region (a stray territory hex) gets a stable name-hashed colour so it's never grey.
+const realmRegistry = new Map();     // realm name -> { name, color, emergent, capX, capZ }
+function _nameColor(nm) { let h = 2166136261 >>> 0; for (let i = 0; i < nm.length; i++) h = Math.imul(h ^ nm.charCodeAt(i), 16777619); return WorldSim.hslHex((h >>> 0) / 4294967296, 0.5, 0.45); }
+function registerRealm(r) { let e = realmRegistry.get(r.name); if (!e) realmRegistry.set(r.name, e = { name: r.name, color: r.color, emergent: true, capX: r.capX, capZ: r.capZ }); return e; }
 function factionByName(nm) {
   if (nm === PLAYER_REALM.name) return PLAYER_REALM;
   if (nm === FREE.name) return FREE;
-  return NATIONS.find(n => n.name === nm) || PETTY.find(p => p.name === nm) || null;
+  const known = NATIONS.find(n => n.name === nm) || PETTY.find(p => p.name === nm) || realmRegistry.get(nm);
+  if (known) return known;
+  if (!nm) return null;
+  return registerRealm({ name: nm, color: _nameColor(nm) });   // an emergent realm we haven't seated yet
 }
 function nearCapital(x, z, d) { for (const n of nations) if (Math.hypot(n.x - x, n.z - z) < d) return true; return false; }
 
@@ -4273,12 +4665,19 @@ function settlementOwner(s) {
   const owner = WorldSim.settlementOwner(s, worldSeed(),
     nations.map(n => ({ name: n.def.name, x: n.x, z: n.z })),
     nm => { const n = nations.find(c => c.def.name === nm); return n ? n.owner.name : nm; });
+  // seat the region's realm with its exact seeded colour before we resolve the name (so an explored
+  // frontier flies its true banner rather than the name-hashed fallback factionByName would mint).
+  const rm = WorldSim.realmFor(s.cx, s.cz, worldSeed());
+  if (rm && rm.name === owner) registerRealm(rm);
   return factionByName(owner) || FREE;
 }
 function settlementGarrison(s) { return WorldSim.settlementGarrison(s, worldSeed(), mapLevel); }
 function makeSettlementHold(s, srv) {
   const key = siteKey(s);
   const restored = heldOwners.get(key);
+  // seat this region's emergent realm with its exact seeded colour when it owns the hold (server-shipped
+  // holds carry only the owner NAME, so without this they'd fly the name-hashed fallback hue).
+  if (s && s.cx != null) { const rm = WorldSim.realmFor(s.cx, s.cz, worldSeed()); if (rm && (rm.name === (srv && srv.owner) || rm.name === restored)) registerRealm(rm); }
   const owner = (restored && factionByName(restored)) || (srv && factionByName(srv.owner)) || (srv ? FREE : settlementOwner(s));
   const hold = { def: { name: srv ? srv.name : settlementName(s) }, owner, x: s.x, z: s.z, tier: s.tier,
     garrison: srv ? srv.garrison : settlementGarrison(s), parleyCd: 0, conquerCd: 0, group: null, site: s, key };
@@ -4463,7 +4862,18 @@ const STREET = {
   buildR: ACTION_VIEW.camFar - 10,   // holds within this of the hero rebuild at street scale...
   dropR: ACTION_VIEW.camFar + 20,    // ...and fold back to the miniature once truly out of view (hysteresis)
 };
-function detailTier() { return mode === 'map' ? (mapFieldMode ? 2 : 1) : 1; }
+// Detail tier now follows the zoom axis, not a discrete mode: street (2) when zoomed in, miniature (1)
+// mid, chart/icons (0) at the far overview. Hysteresis (Z_HYST) around each edge — biased by the tier
+// we're already showing — keeps a boundary scroll from flipping the whole world back and forth.
+function detailTier() {
+  if (mode !== 'map' || !fieldSimOn()) return 1;
+  const t = fieldZoomT, cur = _appliedTier;
+  const lockEdge = Z_LOCK + (cur === 2 ? Z_HYST : -Z_HYST);   // already street? hold it a touch longer
+  const chartEdge = Z_CHART + (cur === 0 ? -Z_HYST : Z_HYST); // already chart? hold it a touch longer
+  if (t <= lockEdge) return 2;
+  if (t > chartEdge) return 0;
+  return 1;
+}
 let _appliedTier = 1;              // the tier the loaded world currently RENDERS (vs detailTier() = wanted)
 
 // ----- Rung 0 icons: a hold becomes its REAL wall ring + an owner-colored seat marker + its name -----
@@ -4661,7 +5071,7 @@ function applyDetailTier(force) {
   // rung 0 pushes fog to 1500 (applyVista) — lift the clip plane with it or discovered land vanishes
   // early; rung 2 is the opposite: the clip plane comes IN to the action fog line, so the far world
   // costs nothing (frustum-culled) instead of being drawn into haze
-  camera.far = tier === 0 ? 1600 : tier === 2 ? ACTION_VIEW.camFar : Math.max(300, ARENA * 4);
+  camera.far = tier === 0 ? 1600 : tier === 2 ? ACTION_VIEW.camFar : Math.max(300, ARENA * 4); // chart overview sees far so distant hold icons read from orbit
   camera.updateProjectionMatrix();
   if (_roadPaintedTier !== (tier === 2 ? 2 : 1)) ensureRoads(true);  // repaint the roadbeds at this rung's width
 }
@@ -4896,6 +5306,14 @@ function _ensureCell(q, r, xc, zc) {
 }
 function initTerritoryCells(cells) {
   for (let i = 0; i < cells.length; i++) _ensureCell(cells[i][0], cells[i][1], cells[i][2], cells[i][3]);
+}
+// which faction's LANDS a world point sits in — server truth first, then the breathing client field.
+// Drives the "you're trespassing" hail when you ride a patrol's own realm (mirrors the server's inLands).
+function territoryOwnerAt(x, z) {
+  const qr = worldToHex(x, z); const c = terrCells.get(hexKey(qr[0], qr[1]));
+  if (!c) return null;
+  if (c.so && c.ss > 0.12) return c.so;   // server-stored owner, strong enough to count as their ground
+  return c.o || null;                     // else the local CA anchor
 }
 
 // ---------- the SERVER's territory field: fetched per chunk, applied as each cell's anchor ----------
@@ -5427,6 +5845,7 @@ function roadResetRegion() {
 // the road. Bands and detachments plan the same way, budgeted to one route per frame.
 let marchPath = null, marchInfo = null, marchFlag = null;
 const _mDir = new THREE.Vector3();
+const _mZero = new THREE.Vector3(); // shared zero-vector: WASD is inert on the strategic map (click-march only)
 let _pathBudget = 1;                 // route plans allowed this frame (bands + detachments share it)
 function clearMarch(msg) {
   marchPath = null; marchInfo = null;
@@ -5501,6 +5920,7 @@ function fileColumn(g, u, filing, dt, spacing) {
 // a plain left-click on the strategic map (outside command mode) orders the march
 let _mvDown = null;
 addEventListener('mousedown', (e) => {
+  // click-to-march is live in the STRATEGIC state (zoomed out, banner army) — never on foot in action mode
   if (mode !== 'map' || mapCmdMode || mapFieldMode || encounter || e.button !== 0) return;
   if (e.target !== canvas) return;
   _mvDown = { x: e.clientX, y: e.clientY };
@@ -6747,7 +7167,7 @@ function reinforceMap() {
 
 function enterMap() {
   mode = 'map'; gameRunning = false;
-  mapFieldMode = false; clearAllFieldArmies(); // start strategic; clear any stale materialised-host crowds (fieldPref re-enters below)
+  mapFieldMode = false; clearAllLiveClashes(); clearAllFieldArmies(); // start strategic; clear any stale materialised-host crowds (fieldPref re-enters below)
   fieldBattle = null; battleParty = null;     // a fresh map drops any in-place fight cold (clearBattlefield sweeps the bodies)
   encounter = null; siegeCapital = null;
   if (typeof clearCall === 'function' && activeCall) clearCall(); // no stale call/beacon carries into a (new) region
@@ -6807,9 +7227,11 @@ function enterMap() {
   pointerLocked = false;
   updateHUD();
   obMapStart(); // first-time-on-the-map onboarding hint (shown once)
-  mapFieldMode = false;                                // enterMap rebuilt the strategic banner...
-  applyDetailTier(true);                               // ...at the strategic tier (fresh chunks already built to it — this reconciles holds/icons)
-  if (fieldPref) setFieldMode(true, { keepPref: true }); // ...but if you were on foot, drop back down and re-muster the company
+  mapFieldMode = false;                                // start STRATEGIC: your army rides as the banner column...
+  if (fieldZoomT <= Z_LOCK) fieldZoomT = 0;            // ...at a resting zoomed-out band (click-to-march, free cursor)
+  mapZoomLevel = clamp(Math.round((fieldZoomT - Z_LOCK) / (1 - Z_LOCK) * MAP_ZOOM_MAX_LEVEL), 0, MAP_ZOOM_MAX_LEVEL);
+  applyDetailTier(true);                               // reconcile holds/icons at the strategic miniature tier
+  // zoom IN past Z_LOCK (wheel / L) drops you into the on-foot hero (WASD + mouse-lock); onZoomChanged toggles it
 }
 
 // nearest living band of a DIFFERENT, non-allied faction within `radius` — drives the inter-host war.
@@ -7055,7 +7477,8 @@ function teardownEmptyBattle(bt) { // a side was wiped out elsewhere — release
   const i = mapBattles.indexOf(bt); if (i >= 0) mapBattles.splice(i, 1);
 }
 function clearMapBattles() {
-  for (const bt of mapBattles) { bt.done = true; if (bt.marker) { scene.remove(bt.marker); disposeGroup(bt.marker); } }
+  for (const lc of [...liveClashes]) disposeClashFighters(lc); // stand down any real fighters first
+  for (const bt of mapBattles) { bt.done = true; bt.live = false; bt.lc = null; if (bt.marker) { scene.remove(bt.marker); disposeGroup(bt.marker); } }
   mapBattles.length = 0;
 }
 function updateMapBattles(dt) {
@@ -7064,6 +7487,7 @@ function updateMapBattles(dt) {
     bt.sideA.bands = bt.sideA.bands.filter(b => b.alive);
     bt.sideB.bands = bt.sideB.bands.filter(b => b.alive);
     if (!bt.sideA.bands.length || !bt.sideB.bands.length) { teardownEmptyBattle(bt); continue; }
+    if (bt.live) continue;               // fought for real by the live-clash fighters — the numeric bar is suspended
     bt.t += dt;
     const frac = clamp(bt.t / bt.duration, 0, 1);
     applySideLive(bt.sideA, frac); applySideLive(bt.sideB, frac);
@@ -7241,37 +7665,16 @@ function updateActiveCall(dt) {
   if (activeCall.t > CALL_TIMEOUT) { showWaveBanner('The Host Disperses', 'Your call fades unanswered.'); clearCall(); return; }
   updateRallyBanner();
 }
-addEventListener('keydown', (e) => { if (e.code === 'KeyG' && mode === 'map' && !encounter && !fieldSimOn()) { e.preventDefault(); raiseCall(); } }); // on foot, G = select-all order key instead
-// Overworld zoom is keyboard-only (L in / P out). The mouse wheel is intentionally NOT bound: a wheel
-// event can't hold the transient activation the browser requires to grant pointer lock, so entering
-// action mode from a scroll would land you locked-out. A keydown can — hence L/P below.
-// L / P step the overworld zoom from the keyboard — always available, no mouse gesture needed.
-// Two rungs, out -> in: 1 = strategic map (P keeps pulling it farther back) · 2 = action ride-along.
-// Only the action rung locks the mouse, and since L is a keydown (a real gesture) that lock is allowed.
+addEventListener('keydown', (e) => { if (e.code === 'KeyG' && mode === 'map' && !encounter && !fieldSimOn()) { e.preventDefault(); raiseCall(); } }); // strategic map: G = call-to-arms; on foot (action) G is the select-all order key instead
+// L / P nudge the ONE zoom axis from the keyboard (in / out) — like extra wheel notches, but a keydown
+// is a gesture the browser will accept for pointer lock, so L is the guaranteed way to (re)lock for aim
+// after Escape frees the cursor. Zooming out past Z_LOCK unlocks and hands you the click-to-march cursor.
+const ZOOM_KEY_STEP = 0.14;
 function overworldZoom(dir) {                           // dir: +1 = zoom in (L), -1 = zoom out (P)
   if (mode !== 'map' || encounter || mapCmdMode || commandPanelOpen) return;
-  clearMapFocus();                                      // changing zoom re-centres on your own banner
-  if (mapFieldMode) {                                   // in action — only P (zoom out) does anything
-    if (dir < 0) { setFieldMode(false); mapZoomLevel = 0; }  // -> strategic banner (setFieldMode releases the lock + toasts)
-    applyDetailTier();
-    return;
-  }
-  if (dir > 0) {                                        // zoom in: pull back in from a wide map, or enter action
-    if (mapZoomLevel > 0) {
-      mapZoomLevel--;
-      showCmdToast(mapZoomLevel === 0
-        ? 'Strategic view — L to lead on foot, P for the wide view'
-        : `Map (zoomed out ${mapZoomLevel}/${MAP_ZOOM_MAX_LEVEL}) — L to zoom in further, P for wider still`);
-    } else {
-      setFieldMode(true);                               // -> action (setFieldMode grabs the pointer + toasts)
-    }
-  } else if (mapZoomLevel < MAP_ZOOM_MAX_LEVEL) {        // zoom out: pull the map camera farther back
-    mapZoomLevel++;
-    showCmdToast(mapZoomLevel >= MAP_ZOOM_MAX_LEVEL
-      ? 'Widest view — every land you\'ve seen · L to zoom back in'
-      : `Map (zoomed out ${mapZoomLevel}/${MAP_ZOOM_MAX_LEVEL}) — P for wider still, L to zoom in`);
-  }
-  applyDetailTier();                                  // each rung renders its own level of detail (miniature / street)
+  clearMapFocus();                                      // changing zoom re-centres on your own hero
+  fieldZoomT = clamp(fieldZoomT + (dir > 0 ? -ZOOM_KEY_STEP : ZOOM_KEY_STEP), -1, 1); // zoom in => t down
+  onZoomChanged(dir > 0);                               // L (zoom-in) is a keydown gesture -> may grab the pointer
 }
 addEventListener('keydown', (e) => {
   if (e.code !== 'KeyL' && e.code !== 'KeyP') return;
@@ -7291,11 +7694,18 @@ function applyVista(moved, dt) {
     _mileSaveT += dt;
     if (_mileSaveT > 5) { _mileSaveT = 0; try { localStorage.setItem('bv-map-miles', String(Math.round(mapMiles))); } catch (e) {} }
   }
-  if (fieldSimOn()) {
-    scene.fog.near = ACTION_VIEW.fogNear;  // ACTION: a ground-level eye ends at the treeline — the close
-    scene.fog.far = ACTION_VIEW.fogFar;    // fog is what makes street-level detail affordable (camera.far culls past it)
+  if (fieldSimOn() && !mapCmdMode) {
+    // Fog follows the zoom band: tight at street level (ground eye ends at the treeline — this is what
+    // makes street detail affordable, camera.far culls past it), then widens toward the survey horizon
+    // as you pull out to the miniature (tier 1) and the chart overview (tier 0).
+    if (_appliedTier === 2) { scene.fog.near = ACTION_VIEW.fogNear; scene.fog.far = ACTION_VIEW.fogFar; }
+    else {
+      const dmul = _appliedTier === 0 ? 2.2 : 1;   // the chart overview pushes the haze right out to the streamed edge
+      scene.fog.near = vlerp(VISTA.fogNear) * dmul;
+      scene.fog.far = vlerp(VISTA.fogFar) * dmul;
+    }
   } else {
-    const dmul = Math.pow(MAP_ZOOM_STEP, mapZoomLevel); // pushed farther out at deeper zoom-out levels
+    const dmul = Math.pow(MAP_ZOOM_STEP, mapZoomLevel); // command mode keeps the strategic dolly + its fog
     scene.fog.near = vlerp(VISTA.fogNear) * dmul;
     scene.fog.far = vlerp(VISTA.fogFar) * dmul;
   }
@@ -7335,14 +7745,15 @@ function updateMap(dt) {
     }
     updateProjectiles(dt); // arrows you loose still fly
     updateFieldArmies(dt); // nearby hosts render as real soldier crowds (clashing ones fight) instead of flags
+    updateLiveClashes(dt); // a clash you can see from both sides is fought for real with the full fighter AI
     updateFieldStrike(dt); // a hostile crowd standing on a squad's placed area → surface the attack prompt
     updateStreetHolds();   // nearby settlements rebuild at street scale, one per frame, nearest first
   } else {
-    // STRATEGIC MARCH: the party glides across the map as a banner; faster than enemy bands so you can flee
-    let mdir = dir;
+    // STRATEGIC MARCH: the party glides across the map as a banner; faster than enemy bands so you can flee.
+    // WASD is ACTION-ONLY (you must zoom in to drive the hero) — zoomed out, navigation is click-to-march.
+    let mdir = _mZero; _mZero.set(0, 0, 0);
     if (marchPath && roaming) {                      // an ordered march rides its planned route by itself
-      if (dir.lengthSq() > 0) clearMarch('You take the reins');
-      else {
+      {
         let wp = marchPath[0];
         while (wp && Math.hypot(wp.x - player.pos.x, wp.z - player.pos.z) < 1.7) { marchPath.shift(); wp = marchPath[0]; }
         if (!wp) clearMarch('The column arrives');
@@ -8668,7 +9079,7 @@ document.getElementById('next-wave-btn').addEventListener('click', () => {
   musterOverlay.classList.add('hidden');
   if (mode === 'map') { // the fight happened IN the world — resume right where you stand
     if (advanceRegion) { enterMap(); return; } // ...unless the whole realm just fell (new region)
-    if (fieldSimOn()) grabPointer();
+    reconcilePointerLock(true); // re-lock only if you're still at a combat zoom (button click is a valid gesture)
     return;
   }
   enterMap(); // safety net for any legacy path
@@ -8697,11 +9108,21 @@ function openEncounter(band) {
     encAllyBtn.style.display = ''; encAllyBtn.textContent = 'Break Pact';
     encHailBtn.textContent = 'Greet';
   } else {
-    encTitle.textContent = 'Banners Meet';
-    encInfo.innerHTML = `${swatch(band.faction.color)}A ${kind} of <b>${band.faction.name}</b> — ${band.size} strong. They have no quarrel with you. Your word?`;
+    // are you riding through THIS band's own realm? then it's their watch bidding you leave, not a chance meeting
+    const owner = territoryOwnerAt(player.pos.x, player.pos.z);
+    const trespass = !!(owner && band.faction && owner.name === band.faction.name);
+    encounter.trespass = trespass;
+    if (trespass) {
+      encTitle.textContent = 'Leave Their Lands';
+      encInfo.innerHTML = `${swatch(band.faction.color)}A ${kind} of <b>${band.faction.name}</b> — ${band.size} strong — bars the road. <b>You ride through their country.</b> They bid you turn back; press their patience and it turns to blows.`;
+      encHailBtn.textContent = 'Withdraw';
+    } else {
+      encTitle.textContent = 'Banners Meet';
+      encInfo.innerHTML = `${swatch(band.faction.color)}A ${kind} of <b>${band.faction.name}</b> — ${band.size} strong. They have no quarrel with you. Your word?`;
+      encHailBtn.textContent = 'Say Hi';
+    }
     encAttackBtn.style.display = ''; encAttackBtn.textContent = 'Attack';
     encAllyBtn.style.display = ''; encAllyBtn.textContent = 'Propose Pact';
-    encHailBtn.textContent = 'Say Hi';
   }
   encOverlay.classList.remove('hidden');
   if (document.exitPointerLock) document.exitPointerLock(); pointerLocked = false; // cursor free for the parley buttons
@@ -8754,7 +9175,7 @@ encAttackBtn.addEventListener('click', () => {
 });
 encHailBtn.addEventListener('click', () => {
   const e = encounter; closeEncounter(); if (!e) return;
-  if (e.kind === 'band') { if (e.band) { e.band.parleyCd = 6; if (!e.ally) showWaveBanner('Parley', 'You hail the ' + e.band.faction.name + ' ' + (e.band.size <= 5 ? 'pack' : 'host') + '. They give you the road and march on.'); } }
+  if (e.kind === 'band') { if (e.band) { e.band.parleyCd = 6; if (!e.ally) showWaveBanner(e.trespass ? 'Withdraw' : 'Parley', e.trespass ? 'You turn your banner about and quit ' + e.band.faction.name + ' lands. The watch lets you go.' : 'You hail the ' + e.band.faction.name + ' ' + (e.band.size <= 5 ? 'pack' : 'host') + '. They give you the road and march on.'); } }
   else if (e.kind === 'joinbattle') { if (e.band) e.band.parleyCd = 4; } // ride on — let the clash play out
   else { e.cap.parleyCd = 3; } // leave the gates be
 });
@@ -9807,14 +10228,44 @@ BV.advanceMap = (secs, dt = 0.05) => { // deterministic overworld stepping (off-
   for (let i = 0; i < n && mode === 'map' && !encounter; i++) { frameNo++; updateMap(dt); }
   return { mode, parties: parties.filter(p => p.alive).length, battles: mapBattles.length };
 };
+// deterministic ON-FOOT ambient stepping (materialised crowds + live NPC clashes) for headless tests —
+// mirrors the field branch of the render loop, minus player input
+BV.advanceField = (secs, dt = 0.03) => {
+  const n = Math.round(secs / dt);
+  for (let i = 0; i < n && fieldSimOn(); i++) {
+    frameNo++;
+    rebuildSepGrid();
+    if (fieldBattle) resolveTargets();
+    updateAllies(dt);
+    if (fieldBattle || enemies.length) { updateEnemies(dt); updateFieldBattle(dt); }
+    updateProjectiles(dt);
+    updateFieldArmies(dt);
+    updateLiveClashes(dt);
+  }
+  return { frameNo, clashes: liveClashes.length,
+    clashFighters: liveClashes.reduce((s, lc) => s + lc.A.length + lc.B.length, 0),
+    battles: BV.mapBattles() };
+};
+BV.clashInfo = () => liveClashes.map(lc => {
+  const summ = (arr) => { const live = arr.filter(f => f.alive); return {
+    n: live.length, ranged: live.filter(f => f.def.ranged).length,
+    states: live.reduce((m, f) => (m[f.state] = (m[f.state] || 0) + 1, m), {}),
+    hasTarget: live.filter(f => f.target && f.target.alive).length,
+    sample: live[0] ? { state: live[0].state, hasTgt: !!(live[0].target && live[0].target.alive),
+      tgtDist: live[0].target ? +live[0].pos.distanceTo(live[0].target.pos).toFixed(2) : null,
+      ranged: !!live[0].def.ranged, cd: +live[0].cd.toFixed(2) } : null }; };
+  return { A: summ(lc.A), B: summ(lc.B) };
+});
 // vista inspection / forcing — peek the survey reach, or set total miles to preview the far view
 BV.vista = (miles) => {
   if (typeof miles === 'number') { mapMiles = miles; mapVista = mapMiles / (mapMiles + VISTA.k); applyVista(0, 0); }
   return { miles: Math.round(mapMiles), vista: +mapVista.toFixed(3), view: VIEW,
     fog: [Math.round(scene.fog.near), Math.round(scene.fog.far)], camLift: +vlerp(VISTA.camLift).toFixed(1) };
 };
-// discovery overview: toggle and inspect visited areas
+// discovery overview: toggle and inspect visited areas (mapZoomLevel now only drives the command-mode camera)
 BV.mapZoom = (level) => { if (level !== undefined) mapZoomLevel = level; return { level: mapZoomLevel, max: MAP_ZOOM_MAX_LEVEL }; };
+// the ONE zoom axis: read/set fieldZoomT and see which band it lands in (aim/locked vs navigate vs chart)
+BV.zoom = (t) => { if (typeof t === 'number') { fieldZoomT = clamp(t, -1, 1); onZoomChanged(true); } return { t: +fieldZoomT.toFixed(3), aim: inAimZone(), locked: pointerLocked, tier: detailTier() }; };
 // camera-transition feel: read/override the combat<->map glide speed live (server flag: modeXfadeSpeed)
 BV.modeXfade = (v) => { if (typeof v === 'number' && v > 0) MODE_XFADE_SPEED = v; return MODE_XFADE_SPEED; };
 // ride-along view: read/set the 3rd-person overworld camera (automated-test + console hook)
@@ -10080,7 +10531,8 @@ function serverArmyToBand(a) {
     raider: a.size <= 5, clashCd: 0, parleyCd: 0, wanderT: rand(0, 3), wanderDir: rand(0, Math.PI * 2),
     level: mapLevel, leader, quality: 1.05, serverId: a.id,
     srvX: a.x, srvZ: a.z, srvTx: a.tx, srvTz: a.tz, srvRole: a.role || 'host', pclass: a.pclass || null,
-    homeX: a.home_x, homeZ: a.home_z, srvIntent: a.intent || null, srvIntentKind: a.intentKind || null };
+    homeX: a.home_x, homeZ: a.home_z, focusX: a.focus_x, focusZ: a.focus_z, focusKey: a.focus_key || null,
+    srvIntent: a.intent || null, srvIntentKind: a.intentKind || null };
   parties.push(band); setBandLabel(band);
   return band;
 }
@@ -10108,6 +10560,8 @@ function syncServerBands() {
     byId.delete(band.serverId);
     band.srvX = a.x; band.srvZ = a.z; band.srvTx = a.tx; band.srvTz = a.tz; band.srvRole = a.role || 'host';
     band.homeX = a.home_x; band.homeZ = a.home_z; band.pclass = a.pclass || band.pclass;
+    if (a.focus_key !== band.focusKey) band._orbitR = null; // the company moved its post — re-seed the ring on the new centre
+    band.focusX = a.focus_x; band.focusZ = a.focus_z; band.focusKey = a.focus_key || null;
     if (a.intent && a.intent !== band.srvIntent) { band.srvIntent = a.intent; band.srvIntentKind = a.intentKind; band._lblKey = ''; setBandLabel(band); } // banner re-caption on a new intent
     if (band.inBattle) continue; // a battle (server OR your own clash) owns this band's position + count until it resolves
     if (Math.hypot(band.pos.x - a.x, band.pos.z - a.z) > 30 && !patrolOrbiting(band)) { // way adrift (fresh login, long hitch): snap — but let a circling patrol keep its ring
@@ -10121,21 +10575,31 @@ function syncServerBands() {
 // a patrol that is just guarding (not pulled into a fight/defense/campaign) circles its own walls on
 // the CLIENT — the 20s server tick moves it too little to read as motion, so we animate the orbit
 // locally and only defer to the server position when it's actually doing something (intent changed).
+// the centre a patrol circles: its server-assigned roaming FOCUS (home city most of the time, a nearby
+// owned village/castle sometimes), falling back to home for pre-focus rows.
+function patrolCenter(band) {
+  if (band.focusX != null) return { x: band.focusX, z: band.focusZ };
+  if (band.homeX != null) return { x: band.homeX, z: band.homeZ };
+  return null;
+}
 function patrolOrbiting(band) {
-  return band.srvRole === 'patrol' && band.homeX != null &&
+  return band.srvRole === 'patrol' && patrolCenter(band) != null &&
     (!band.srvIntentKind || band.srvIntentKind === 'patrol');
 }
-const PATROL_ORBIT_SPEED = 4.5; // MIDDLE speed (u/s) — a visible circuit of the borders
+const PATROL_ORBIT_PERIOD = 60; // seconds for ONE full circuit of the walls — a slow watch, not a racetrack
 // between polls: circle home (patrols on watch) or catch up to the reported spot, then drift the march
 function updateServerBand(band, dt) {
   if (patrolOrbiting(band)) {
+    const c = patrolCenter(band);
     if (band._orbitR == null) {
-      band._orbitR = clamp(Math.hypot(band.pos.x - band.homeX, band.pos.z - band.homeZ), 6, 24) || 10;
-      band._orbitA = Math.atan2(band.pos.z - band.homeZ, band.pos.x - band.homeX);
+      band._orbitR = clamp(Math.hypot(band.pos.x - c.x, band.pos.z - c.z), 6, 24) || 10;
+      band._orbitA = Math.atan2(band.pos.z - c.z, band.pos.x - c.x);
       band._orbitDir = (band.serverId % 2) ? 1 : -1; // matches the server's per-warlord circling sense
     }
-    band._orbitA += band._orbitDir * (PATROL_ORBIT_SPEED / band._orbitR) * dt;
-    const tx = band.homeX + Math.cos(band._orbitA) * band._orbitR, tz = band.homeZ + Math.sin(band._orbitA) * band._orbitR;
+    // fixed PERIOD, not fixed linear speed: a lap takes ~PATROL_ORBIT_PERIOD s at any ring size (a tight
+    // ring no longer whips around in a few seconds), so a company visibly plods its circuit
+    band._orbitA += band._orbitDir * (2 * Math.PI / PATROL_ORBIT_PERIOD) * dt;
+    const tx = c.x + Math.cos(band._orbitA) * band._orbitR, tz = c.z + Math.sin(band._orbitA) * band._orbitR;
     const k = Math.min(1, dt * 3);
     band.pos.x += (tx - band.pos.x) * k; band.pos.z += (tz - band.pos.z) * k;
     band.group.position.copy(band.pos); band.group.position.y = mapElevY(band.pos.x, band.pos.z);
@@ -10351,7 +10815,7 @@ function updateCouncilOrders(dt) {
   const tgt = councilFollow || councilAttack;
   if (!tgt) return;
   if (mode !== 'map' || !tgt.alive || !parties.includes(tgt)) { councilClearOrder(tgt && !tgt.alive ? 'The party is no more.' : null); return; }
-  if (!mapFieldMode && typeof inputDir === 'function') { const dir = inputDir(); if (dir && dir.lengthSq && dir.lengthSq() > 0) { councilClearOrder('You take the reins.'); return; } }
+  if (typeof inputDir === 'function') { const dir = inputDir(); if (dir && dir.lengthSq && dir.lengthSq() > 0) { councilClearOrder('You take the reins.'); return; } } // manual WASD steer cancels a council auto-order
   const dist = Math.hypot(tgt.pos.x - player.pos.x, tgt.pos.z - player.pos.z);
   if (councilAttack) {
     if (dist < 5.5) { // close enough to force the fight
@@ -10533,7 +10997,7 @@ function findParties() {
   };
   showCmdToast(list.length + ' part' + (list.length === 1 ? 'y' : 'ies') + ' on the map — flares raised');
 }
-addEventListener('keydown', (e) => { if (e.code === 'KeyF' && mode === 'map' && !mapFieldMode && !encounter && !mapCmdMode && !commandPanelOpen) { e.preventDefault(); findParties(); } });
+addEventListener('keydown', (e) => { if (e.code === 'KeyF' && mode === 'map' && !mapFieldMode && !encounter && !mapCmdMode && !commandPanelOpen) { e.preventDefault(); findParties(); } }); // find-parties locator lives on the strategic map
 BV.findParties = () => findablePartyList();
 
 // ============================================================================
@@ -10813,10 +11277,18 @@ function doSwitchChar(id) {
 // look up one of your characters (from the last-loaded roster) by its id
 function charById(id) { return (window.net && window.net.charsList || []).find(c => c.charId === id) || null; }
 // close the panel and swing the strategic camera onto that character, marking them with a flare
+// framing another character + marching to them are STRATEGIC (top-down) actions — pull out of action
+// mode so the strategic camera can frame the flare and the march order actually drives the banner.
+function toStrategicView() {
+  if (!mapFieldMode) return;
+  if (fieldZoomT <= Z_LOCK) fieldZoomT = 0;
+  mapZoomLevel = clamp(Math.round((fieldZoomT - Z_LOCK) / (1 - Z_LOCK) * MAP_ZOOM_MAX_LEVEL), 0, MAP_ZOOM_MAX_LEVEL);
+  setFieldMode(false, { keepPref: true, silent: true });
+}
 function doFocusChar(id) {
   const c = charById(id); if (!c) return;
   toggleCharsPanel(false);
-  if (mapFieldMode) setFieldMode(false);        // the flare + framing live on the strategic map
+  toStrategicView();                             // the flare + framing live on the strategic map
   focusMapOn(c.x, c.z, 6);
   if (typeof clearFindFlares === 'function') { clearFindFlares(); raiseFindFlare(c.x, c.z, 0xffcf5b); }
   showCmdToast('Framing ' + c.name + ' · ' + Math.round(Math.hypot(c.x - player.pos.x, c.z - player.pos.z)) + ' paces away');
@@ -10826,7 +11298,7 @@ function doGoToChar(id) {
   const c = charById(id); if (!c) return;
   if (mode !== 'map' || encounter) return chMsg('finish what you are doing first');
   toggleCharsPanel(false);
-  if (mapFieldMode) setFieldMode(false);
+  toStrategicView();                             // marching the army is a strategic order
   clearMapFocus();                               // the camera rides with you as you set off
   if (typeof clearFindFlares === 'function') { clearFindFlares(); raiseFindFlare(c.x, c.z, 0xffcf5b); }
   if (orderMarch(c.x, c.z)) showCmdToast('Marching to ' + c.name);

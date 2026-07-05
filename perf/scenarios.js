@@ -37,7 +37,7 @@ const SCENARIOS = [
     // even though a huge area is "visible" — that's the culling guarantee.
     body: `
       BV.bootUniverse(1337);
-      BV.enterMap(); BV.discovery(true);
+      BV.enterMap(); BV.zoom(0.95); // zoom the ONE view all the way out to the chart/icon overview (tier 0)
       BV.setQuality('low');
       BV.advanceMap(0.2); BV.settle();
       __render(); __render();

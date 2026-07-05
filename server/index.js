@@ -12,6 +12,7 @@ const destiny = require('./destiny');
 const validate = require('./validate');
 const coop = require('./ws'); // real-time co-op battle relay (WebSocket, no external deps)
 const chunks = require('./chunks');
+const admin = require('./admin');
 const settlements = require('./settlements');
 const zlib = require('zlib');
 
@@ -198,6 +199,18 @@ const server = http.createServer(async (req, res) => {
         relations: diplomacy.relationsForApi(wid), factionState: diplomacy.factionStateForApi(wid),
         destiny: destiny.destinyForApi(wid)
       });
+    }
+
+    // ----- the admin god's-eye overview: the STANDING world beneath the live entities -----
+    // terrain raster + routed roads + the political border field + holds/capitals, all sampled with
+    // the shared kernel so the admin map matches the game. The live layer (players + every army,
+    // patrols included) rides on /api/v1/world?x=0&z=0&r=200 (unbounded box). Observing keeps the
+    // shared world ticking, same as /world.
+    if (req.method === 'GET' && p === '/api/v1/admin/overview') {
+      const wid = viewWorldId;
+      if (req.headers['x-world'] === 'shared') { tick.advanceWorld(wid); tick.touchActive(wid); }
+      const q = url.searchParams;
+      return sendZ(req, res, 200, admin.overview(wid, { extent: parseInt(q.get('extent') || '0', 10), res: parseInt(q.get('res') || '0', 10) }));
     }
 
     if (req.method === 'POST' && p === '/api/v1/world/presence') { // a player's banner heartbeat

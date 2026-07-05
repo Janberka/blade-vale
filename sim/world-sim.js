@@ -409,6 +409,41 @@
     var r = mulberry32(chunkHash(s.cx, s.cz, worldSeed) ^ (Math.imul(s.idx + 1, 2654435761) >>> 0));
     return NAME_A[(r() * NAME_A.length) | 0] + NAME_B[(r() * NAME_B.length) | 0];
   }
+
+  // ---------- emergent frontier realms ----------
+  // Beyond the heartland the world is carved into REALM_BLOCK×REALM_BLOCK cells of chunks; each cell
+  // that isn't a wilderness march is ONE named realm — a nation grown deterministically from its region
+  // seed (banner name, colour and a nominal capital seat). Infinite, unique-enough, and byte-identical
+  // on client and server, so a realm looks the same wherever it's first generated. This supersedes the
+  // old 8-name petty pool: the frontier now COHERES into real powers with contiguous borders instead of
+  // salt-and-pepper free cities. (settlementOwner assigns a whole cell to its realm; wild cells stay free.)
+  var REALM_BLOCK = 12;         // chunks per realm cell (~720 world units — a nation-sized swath)
+  var REALM_WILD = 0.15;        // fraction of cells left as wilderness (free cities, no crown)
+  var RNAME_A = ['Kael', 'Vor', 'Est', 'Dra', 'Mor', 'Bryn', 'Cael', 'Tor', 'Wyn', 'Sel', 'Ard', 'Gorm', 'Hald', 'Ryn', 'Fael', 'Oster', 'Norr', 'Sud', 'Wester', 'Cinder', 'Grey', 'Iron', 'Storm', 'Raven'];
+  var RNAME_B = ['', '', 'an', 'or', 'en', 'ar', 'el', 'ur'];
+  var RNAME_C = ['mark', 'gard', 'heim', 'reach', 'land', 'vale', 'hold', 'wald', 'fell', 'moor', 'crest', 'wick'];
+  function realmCell(cx, cz) { return { rx: Math.floor(cx / REALM_BLOCK), rz: Math.floor(cz / REALM_BLOCK) }; }
+  function realmHash(rx, rz, worldSeed) {
+    return (Math.imul(rx | 0, 2246822519) ^ Math.imul(rz | 0, 3266489917) ^ Math.imul(worldSeed >>> 0, 668265263)) >>> 0;
+  }
+  // HSL→packed 0xRRGGBB (the client renders any faction object by its .color int)
+  function hslHex(h, s, l) {
+    function f(n) { var k = (n + h * 12) % 12, a = s * Math.min(l, 1 - l); return l - a * Math.max(-1, Math.min(k - 3, Math.min(9 - k, 1))); }
+    return ((Math.round(f(0) * 255) << 16) | (Math.round(f(8) * 255) << 8) | Math.round(f(4) * 255)) >>> 0;
+  }
+  // the realm that owns the cell containing (cx, cz), or null for a wilderness march. seat is the cell
+  // centre (the caller land-snaps it to a real settlement); colour is a stable seeded hue.
+  function realmFor(cx, cz, worldSeed) {
+    var cell = realmCell(cx, cz);
+    var r = mulberry32(realmHash(cell.rx, cell.rz, worldSeed));
+    if (r() < REALM_WILD) return null;                                    // a masterless march
+    var name = RNAME_A[(r() * RNAME_A.length) | 0] + RNAME_B[(r() * RNAME_B.length) | 0] + RNAME_C[(r() * RNAME_C.length) | 0];
+    var color = hslHex(r(), 0.42 + r() * 0.22, 0.40 + r() * 0.14);
+    return {
+      name: name, color: color, rx: cell.rx, rz: cell.rz, seed: realmHash(cell.rx, cell.rz, worldSeed),
+      capX: (cell.rx + 0.5) * REALM_BLOCK * CHUNK, capZ: (cell.rz + 0.5) * REALM_BLOCK * CHUNK,
+    };
+  }
   // owner of a site. caps = [{name, x, z}] for the five powers (heartland Voronoi); beyond the
   // heartland a seeded roll yields a Free City or one of the petty realms. nationOwnerOf(name)
   // lets the caller map a capital's faction → the political owner string (defaults to the name).
@@ -422,8 +457,8 @@
       if (!best) return FREE_NAME;
       return nationOwnerOf ? (nationOwnerOf(best.name) || best.name) : best.name;
     }
-    var r = mulberry32(chunkHash(s.cx, s.cz, worldSeed) ^ (Math.imul(s.idx + 7, 40503) >>> 0));
-    return r() < 0.55 ? FREE_NAME : PETTY_NAMES[(r() * PETTY_NAMES.length) | 0];   // frontier → free cities + petty realms
+    var rm = realmFor(s.cx, s.cz, worldSeed);   // frontier → the region's emergent realm (or a free march)
+    return rm ? rm.name : FREE_NAME;
   }
   // deterministic garrison (the client used Math.random per spawn; the server seeds it off the site
   // so a hold's strength is stable across ticks/restarts — distant holds bristle with men).
@@ -475,6 +510,8 @@
     chunkHash: chunkHash, frontierLevel: frontierLevel, settlementSites: settlementSites,
     siteKey: siteKey, settlementName: settlementName, settlementOwner: settlementOwner,
     settlementGarrison: settlementGarrison,
+    // emergent realm kernel
+    REALM_BLOCK: REALM_BLOCK, realmCell: realmCell, realmFor: realmFor, hslHex: hslHex,
     // territory kernel
     TERRITORY: TERRITORY, territoryCell: territoryCell,
     // diplomacy kernel

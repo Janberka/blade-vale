@@ -21,6 +21,7 @@ const Chunks = require('./chunks');
 
 const NATIONS = ['Aurelia', 'Khorvane', 'Sahir', 'Wendmark', 'Maridor']; // keep in sync with tick.js
 const PLAYER = 'Your Banner';
+const FREE = WorldSim.FREE_NAME;   // 'Free City' — the only masterless owner; every other non-player owner is a realm
 // NOT the old ±90 arena bound: the explored world streams far past it (holds exist at |x| > 140),
 // and clamping to the old edge stranded their patrols mid-map. This is a sanity backstop only —
 // every real destination (home, muster, target, foe) is an actual settlement or army position.
@@ -39,11 +40,31 @@ const QUOTA = {
 const MILITIA_QUOTA = { city: { large: 0, medium: 2, small: 4 }, town: { large: 0, medium: 1, small: 2 }, village: { large: 0, medium: 0, small: 0 } };
 const PATROL_SIZE  = { large: [24, 40], medium: [10, 18], small: [3, 8] };
 // each class rides a wider ring: the big companies range out to the borders of their ground, the
-// small watches stay tight to the walls. (This is the perimeter they CIRCLE, not a wander leash.)
-const PATROL_LEASH = { large: 22, medium: 14, small: 8 };  // circuit radius around home
+// small watches stay tight to the walls. This is now an OUTWARD OFFSET added to the settlement's
+// footprint — the watch orbits OUTSIDE the ramparts, not inside them (a city wall is ~44u across, far
+// wider than the old flat 8–22 ring, which left the guard circling the market square).
+const PATROL_LEASH = { large: 22, medium: 14, small: 8 };  // ring offset BEYOND the walls
+// settlement footprint radius (SG_SPEC.R + wall margin) the ring wraps: village 7 / town 15 / city 38 /
+// capital 46, bumped so the circuit clears the stone walls. Keep in sync with sim/terra.js SG_SPEC.
+const FOOT_R = { village: 9, town: 20, city: 46, capital: 54 };
+function ringR(tier, pclass) { return (FOOT_R[tier] != null ? FOOT_R[tier] : FOOT_R.village) + (PATROL_LEASH[pclass] || 8); }
 const PATROL_SPEED = 5;      // map units per tick — MIDDLE speed (packs wander at nothing, hosts march at 6)
 const MUSTER_CD = 4;         // ticks between replacement patrols at one settlement
 const DEFEND_R = 13;         // an enemy this close to home pulls every patrol onto it
+
+// ---- roaming focus: patrols walk the whole realm they hold, not one fixed ring ----
+const PATROL_VISIT_CHANCE = 0.18;                          // odds a re-pick rides a company out (LOW: the bulk of a garrison keeps to its own walls)
+const PATROL_VISIT_R = { large: 70, medium: 40, small: 0 }; // how far each class ranges to visit (small watches stay home)
+const VISIT_DWELL = [5, 11];                               // ticks a visit lasts — short sorties, so companies don't pile up out at one hold
+const HOME_DWELL  = [6, 14];                               // ticks a home spell lasts (kept short so they keep circulating)
+// how many VISITORS (home roster excluded) a hold will draw, by tier — a village/town must never
+// look better-guarded than the city that garrisons it, so small holds cap hard; big holds don't need one.
+const VISIT_CAP = { capital: 99, city: 99, town: 2, village: 1 };
+// a faction's "lands": within this of one of its settlements (bigger holds project further, echoing the
+// territory overlay). Drives who a patrol FIGHTS (enemy on our soil) vs merely TURNS BACK (neutral column).
+const LANDS_R = { capital: 60, city: 36, town: 26, village: 18 };
+const LEAVE_CD = 8;                                        // ticks before we re-announce turning one column back
+const NUDGE = 3;                                           // units a shadowed neutral column is shoved toward the border
 
 // ---- campaigns ----
 const CAMP = {
@@ -116,12 +137,12 @@ function settlements(worldId) {
 // ---------- PATROLS ----------
 function quotaFor(s) {
   if (s.owner === PLAYER) return null;                        // the player raises their own armies
-  if (isNation(s.owner)) return QUOTA[s.tier] || QUOTA.village;
-  return MILITIA_QUOTA[s.tier] || MILITIA_QUOTA.village;      // free cities / petty realms keep a watch
+  if (s.owner === FREE) return MILITIA_QUOTA[s.tier] || MILITIA_QUOTA.village;  // masterless — a town watch only
+  return QUOTA[s.tier] || QUOTA.village;                      // the five nations AND emergent frontier realms keep a full garrison
 }
 function spawnPatrol(worldId, tick, s, pclass) {
-  const sz = PATROL_SIZE[pclass], leash = PATROL_LEASH[pclass];
-  const a = rand(0, Math.PI * 2), r = rand(2, leash);
+  const sz = PATROL_SIZE[pclass], R = ringR(s.tier, pclass);
+  const a = rand(0, Math.PI * 2), r = rand(R * 0.82, R);   // stand up ON the circuit, outside the walls
   const pers = { ambition: +rand(0, 0.5).toFixed(2), caution: +rand(0.3, 1).toFixed(2), loyalty: +rand(0.5, 1).toFixed(2), vengeance: +rand(0, 1).toFixed(2) };
   db.prepare(`INSERT INTO warlords(world_id, name, faction, archetype, skills_json, renown, size, x, z, born_tick,
       personality_json, loyalty, role, pclass, home_key, home_x, home_z)
@@ -176,40 +197,135 @@ function nearGrid(grid, x, z, r, fn) {
   }
 }
 
-// patrols ride circuits around their walls; an enemy near home pulls the whole watch onto it
-function tickPatrols(worldId, tick, armies, relMap, busy, steered, grid) {
-  const upd = db.prepare('UPDATE warlords SET x=?, z=?, tx=?, tz=? WHERE id=?');
+// ---- territory + roam helpers ----
+// settlements grouped by owning faction — a realm's holdings drive both roam targets and "in our lands"
+function byOwner(setts) {
+  const m = new Map();
+  for (const s of setts) { let a = m.get(s.owner); if (!a) m.set(s.owner, a = []); a.push(s); }
+  return m;
+}
+function inLands(ownByFaction, faction, x, z) {
+  const list = ownByFaction.get(faction); if (!list) return false;
+  for (const s of list) { const r = LANDS_R[s.tier] || 24; if ((s.x - x) * (s.x - x) + (s.z - z) * (s.z - z) <= r * r) return true; }
+  return false;
+}
+function nearestOwned(ownByFaction, faction, x, z) {
+  const list = ownByFaction.get(faction); if (!list) return null;
+  let best = null, bd = Infinity;
+  for (const s of list) { const d = (s.x - x) * (s.x - x) + (s.z - z) * (s.z - z); if (d < bd) { bd = d; best = s; } }
+  return best;
+}
+// a column riding our ground that is NOT a declared enemy: same realm + pact-bound neighbours are waved
+// through (friends), everyone else is a neutral to be turned back. (enemies are the combatEnemies path.)
+function neutralIntruder(relMap, p, o) {
+  if (o.faction === p.faction || o.faction === PLAYER) return false;      // kin, and the player (client hails them)
+  if (combatEnemies(relMap, p.faction, o.faction)) return false;          // enemy -> attacked, not asked to leave
+  if (isNation(p.faction) && isNation(o.faction)) {
+    const st = D.stanceBetween(relMap, p.faction, o.faction);
+    if (st === 'alliance' || st === 'nonaggression') return false;        // friend -> let pass
+  }
+  return true;
+}
+// re-pick a patrol's circuit centre: usually its home city's own borders, sometimes a ride out to a
+// nearby OWNED village/castle/town it also guards. Small watches never leave the walls. A per-hold
+// visitor cap (VISIT_CAP) keeps rovers from piling onto one small hold and out-garrisoning its city.
+function repickFocus(tick, p, ownList, visitorCount) {
+  const range = PATROL_VISIT_R[p.pclass] || 0;
+  let target = null;
+  if (range > 0 && ownList && ownList.length && Math.random() < PATROL_VISIT_CHANCE) {
+    const cand = [];
+    for (const s of ownList) {
+      if (s.key === p.home_key) continue;                                 // "visit" means somewhere other than home
+      const d = Math.hypot(s.x - p.home_x, s.z - p.home_z);
+      if (d <= 0 || d > range) continue;
+      const cap = VISIT_CAP[s.tier] != null ? VISIT_CAP[s.tier] : 2;
+      if ((visitorCount.get(s.key) || 0) >= cap) continue;                // this hold already has its fill of guests
+      cand.push(s);
+    }
+    if (cand.length) target = pick(cand);
+  }
+  const old = p.focus_key;
+  if (target) { p.focus_key = target.key; p.focus_x = target.x; p.focus_z = target.z; p.focus_until = tick + Math.round(rand(VISIT_DWELL[0], VISIT_DWELL[1])); }
+  else { p.focus_key = p.home_key; p.focus_x = p.home_x; p.focus_z = p.home_z; p.focus_until = tick + Math.round(rand(HOME_DWELL[0], HOME_DWELL[1])); }
+  // keep the live visitor tally in step so companies re-picking on the SAME tick spread out instead of clumping
+  if (old && old !== p.home_key) visitorCount.set(old, Math.max(0, (visitorCount.get(old) || 0) - 1));
+  if (p.focus_key !== p.home_key) visitorCount.set(p.focus_key, (visitorCount.get(p.focus_key) || 0) + 1);
+}
+const _leaveCd = new Map(); // 'worldId:hostId' -> tick until which we won't re-announce a turn-back
+// a neutral column on our soil is shadowed by the watch and shoved back toward the border — no blood.
+function askToLeave(worldId, tick, patrol, host, ownByFaction, nudged, upd) {
+  patrol.tx = host.x; patrol.tz = host.z;                                 // the watch rides over to see them off
+  if (nudged.has(host.id)) return;                                        // one shove per tick, however many watches spot them
+  nudged.add(host.id);
+  const near = nearestOwned(ownByFaction, patrol.faction, host.x, host.z);
+  if (!near) return;
+  let ox = host.x - near.x, oz = host.z - near.z; const on = Math.hypot(ox, oz) || 1;
+  host.x = clamp(host.x + ox / on * NUDGE, -MAP_HALF, MAP_HALF);
+  host.z = clamp(host.z + oz / on * NUDGE, -MAP_HALF, MAP_HALF);
+  host.tx = clamp(host.x + ox / on * 20, -MAP_HALF, MAP_HALF);            // and their march is turned back outward
+  host.tz = clamp(host.z + oz / on * 20, -MAP_HALF, MAP_HALF);
+  upd.run(host.x, host.z, host.tx, host.tz, host.focus_x, host.focus_z, host.focus_key, host.focus_until, host.id);
+  const key = worldId + ':' + host.id;
+  if ((_leaveCd.get(key) || 0) <= tick && Math.random() < 0.25) {
+    _leaveCd.set(key, tick + LEAVE_CD);
+    ev(worldId, tick, 'turned_back', 'The watch of ' + near.name + ' turns a ' + host.faction + ' column back from ' + patrol.faction + ' lands');
+  }
+}
+
+// patrols ride circuits around a ROAMING FOCUS (home most of the time, a nearby owned hold sometimes);
+// an enemy on our soil is chased down, a neutral column is turned back, a friend is let pass.
+function tickPatrols(worldId, tick, armies, relMap, busy, steered, grid, ownByFaction, nudged, visitorCount, settTier) {
+  const upd = db.prepare('UPDATE warlords SET x=?, z=?, tx=?, tz=?, focus_x=?, focus_z=?, focus_key=?, focus_until=? WHERE id=?');
   for (const p of armies) {
     if (p.role !== 'patrol' || busy.has(p.id) || steered.has(p.id)) continue;
     if (p.home_x == null) continue;
-    const leash = PATROL_LEASH[p.pclass] || 9;
-    // threat check: a declared ENEMY anywhere near the settlement, or ANY non-pact intruder
-    // right at the walls — a tense neutral riding past the leash line is glared at, not charged
-    let threat = null, td = DEFEND_R * DEFEND_R;
-    nearGrid(grid, p.home_x, p.home_z, DEFEND_R, (o) => {
+    // every once in a while the server re-picks where this company patrols (see repickFocus)
+    if (p.focus_x == null || p.focus_until <= tick) repickFocus(tick, p, ownByFaction.get(p.faction), visitorCount);
+    // the circuit wraps the walls of whatever settlement the company is posted to (home or a visit)
+    const focusTier = (settTier && (settTier.get(p.focus_key) || settTier.get(p.home_key))) || 'town';
+    const fx = p.focus_x, fz = p.focus_z, leash = ringR(focusTier, p.pclass);
+    const scanR = DEFEND_R + leash;
+    // scan the ground the company actually holds (around its post) for intruders
+    let threat = null, td = scanR * scanR;
+    nearGrid(grid, p.x, p.z, scanR, (o) => {
       if (o.id === p.id) return;
-      // intercept enemy HOSTS bearing down on home, or anyone actually at the walls — an enemy
-      // patrol merely riding its own circuit nearby is shadowed by the fight rule, not chased
-      const provoked = defendingHome(relMap, p, o) || (o.role !== 'patrol' && combatEnemies(relMap, p.faction, o.faction));
-      if (!provoked) return;
-      const d = (o.x - p.home_x) * (o.x - p.home_x) + (o.z - p.home_z) * (o.z - p.home_z);
-      if (d < td) { td = d; threat = o; }
+      if (combatEnemies(relMap, p.faction, o.faction)) {
+        // an ENEMY army (patrol OR host) on our soil, or bearing on either home — run it down; the
+        // fight itself locks in meetClashes once they close to sword-range
+        if (inLands(ownByFaction, p.faction, o.x, o.z) || defendingHome(relMap, p, o) || defendingHome(relMap, o, p)) {
+          const d = (o.x - p.x) * (o.x - p.x) + (o.z - p.z) * (o.z - p.z);
+          if (d < td) { td = d; threat = o; }
+        }
+        return;
+      }
+      // a non-enemy raider/free company actually AT our walls still forms up the watch (militia defence)
+      if (defendingHome(relMap, p, o) && !(isNation(p.faction) && isNation(o.faction))) {
+        const d = (o.x - p.x) * (o.x - p.x) + (o.z - p.z) * (o.z - p.z);
+        if (d < td) { td = d; threat = o; }
+        return;
+      }
+      // a NEUTRAL peer column wandering our lands — shadow it and turn it back (no blood)
+      if (o.role === 'host' && !busy.has(o.id) && !steered.has(o.id) &&
+          neutralIntruder(relMap, p, o) && inLands(ownByFaction, p.faction, o.x, o.z)) {
+        askToLeave(worldId, tick, p, o, ownByFaction, nudged, upd);
+      }
     });
     if (threat) { p.tx = threat.x; p.tz = threat.z; }
-    else {
-      // ride the PERIMETER: the next waypoint is a step further around the ring at the leash radius,
-      // in the patrol's fixed circling direction — so the watch visibly orbits its walls/borders
-      // instead of pin-balling in and out. (Strayed patrols first curl back onto the ring.)
-      const bearing = Math.atan2(p.z - p.home_z, p.x - p.home_x);
-      const dir = (p.id % 2) ? 1 : -1;                                      // half circle each way (stable per warlord)
-      const a = bearing + dir * 0.9;                                        // ~50° of arc per waypoint
-      p.tx = clamp(p.home_x + Math.cos(a) * leash, -MAP_HALF, MAP_HALF);
-      p.tz = clamp(p.home_z + Math.sin(a) * leash, -MAP_HALF, MAP_HALF);
+    else if (Math.hypot(p.x - fx, p.z - fz) > leash + 3) {
+      p.tx = fx; p.tz = fz;                                               // riding out to a new post (a village/castle visit)
+    } else {
+      // ride the PERIMETER of the focus: a step further around the ring in the fixed circling sense, so
+      // the watch visibly orbits its walls/borders instead of pin-balling in and out.
+      const bearing = Math.atan2(p.z - fz, p.x - fx);
+      const dir = (p.id % 2) ? 1 : -1;                                    // half circle each way (stable per warlord)
+      const a = bearing + dir * 0.9;                                      // ~50° of arc per waypoint
+      p.tx = clamp(fx + Math.cos(a) * leash, -MAP_HALF, MAP_HALF);
+      p.tz = clamp(fz + Math.sin(a) * leash, -MAP_HALF, MAP_HALF);
     }
     const dx = p.tx - p.x, dz = p.tz - p.z, d = Math.hypot(dx, dz) || 1, step = Math.min(PATROL_SPEED, d);
     p.x = clamp(p.x + dx / d * step + rand(-0.4, 0.4), -MAP_HALF, MAP_HALF);
     p.z = clamp(p.z + dz / d * step + rand(-0.4, 0.4), -MAP_HALF, MAP_HALF);
-    upd.run(p.x, p.z, p.tx, p.tz, p.id);
+    upd.run(p.x, p.z, p.tx, p.tz, p.focus_x, p.focus_z, p.focus_key, p.focus_until, p.id);
   }
 }
 
@@ -261,28 +377,30 @@ const CLASH_COOLDOWN = 3;
 function cdKey(worldId, id) { return worldId + ':' + id; }
 function onCooldown(worldId, tick, id) { return (_clashCd.get(cdKey(worldId, id)) || 0) > tick; }
 function setCooldown(worldId, tick, ids) { for (const id of ids) _clashCd.set(cdKey(worldId, id), tick + CLASH_COOLDOWN); }
-function meetClashes(worldId, tick, armies, relMap, busy, grid) {
+function meetClashes(worldId, tick, armies, relMap, busy, grid, ownByFaction) {
   const used = new Set();
   for (const a of armies) {
     if (busy.has(a.id) || used.has(a.id) || onCooldown(worldId, tick, a.id)) continue;
     let foe = null, fd = CLASH_RANGE * CLASH_RANGE;
     nearGrid(grid, a.x, a.z, CLASH_RANGE, (o) => {
       if (o.id === a.id || busy.has(o.id) || used.has(o.id) || onCooldown(worldId, tick, o.id)) return;
-      // an intruder in either home sanctum always provokes the watch
-      const sanctum = defendingHome(relMap, a, o) || defendingHome(relMap, o, a);
-      if (!sanctum) {
-        if (!combatEnemies(relMap, a.faction, o.faction)) return;
-        // two PATROLS whose circuits merely cross in the open field glare and ride on — patrols
-        // fight over SETTLEMENTS (walls, sieges, reliefs), else warring borders grind every
-        // city's roster to nothing. Hosts are the roaming war and engage each other freely.
-        if (a.role === 'patrol' && o.role === 'patrol') return;
-        // a patrol engages a passing enemy HOST only in its own defended country — pressing an
-        // attack on the settlement costs the raider blood, but the open road stays passable
-        const patrol = a.role === 'patrol' ? a : (o.role === 'patrol' ? o : null);
-        if (patrol && patrol.home_x != null) {
-          const host = patrol === a ? o : a;
-          if (Math.hypot(host.x - patrol.home_x, host.z - patrol.home_z) > DEFEND_R) return;
+      if (combatEnemies(relMap, a.faction, o.faction)) {
+        // enemies draw swords when one stands on OWNED SOIL (either realm's lands) or has breached a
+        // wall — a patrol fights any enemy, patrol OR host, that rides into its country. Only two
+        // enemies meeting in true no-man's-land pass, unless a roaming HOST is hunting the war there.
+        const onSoil = inLands(ownByFaction, a.faction, o.x, o.z) || inLands(ownByFaction, o.faction, a.x, a.z)
+          || defendingHome(relMap, a, o) || defendingHome(relMap, o, a);
+        if (!onSoil) {
+          if (a.role === 'patrol' && o.role === 'patrol') return;          // two patrols pass in the open
+          const patrol = a.role === 'patrol' ? a : (o.role === 'patrol' ? o : null);
+          if (patrol) return;                                              // a patrol won't chase a host off its lands
         }
+      } else {
+        // not declared enemies: neutrals are TURNED BACK (tickPatrols), never fought. Only a non-nation
+        // raider actually breaching a wall still provokes the old defensive militia watch.
+        const breach = defendingHome(relMap, a, o) || defendingHome(relMap, o, a);
+        if (!breach) return;
+        if (isNation(a.faction) && isNation(o.faction)) return;            // two nations at peace: escorted off, not fought
       }
       const d = (o.x - a.x) * (o.x - a.x) + (o.z - a.z) * (o.z - a.z);
       if (d < fd) { fd = d; foe = o; }
@@ -559,11 +677,20 @@ function maybeStartCampaign(worldId, tick, armies, relMap, busy) {
 function tickWarfare(worldId, tick, armies, relMap) {
   const busy = busySet(worldId);
   const steered = campaignSteered(worldId);
+  const setts = settlements(worldId);
+  const ownByFaction = byOwner(setts);                     // who holds what — roam targets + "in our lands" tests
+  const settTier = new Map(setts.map(s => [s.key, s.tier])); // key -> tier, so a patrol's ring wraps its walls
   const grid = buildGrid(armies);
-  tickPatrols(worldId, tick, armies, relMap, busy, steered, grid);
+  const nudged = new Set();                                // neutral columns shoved back this tick (dedupe)
+  // how many guests each hold currently hosts (home roster excluded) — caps rovers per hold so a small
+  // village never out-garrisons its city; kept live across the loop as companies re-pick.
+  const visitorCount = new Map();
+  for (const a of armies) if (a.role === 'patrol' && a.focus_key && a.focus_key !== a.home_key)
+    visitorCount.set(a.focus_key, (visitorCount.get(a.focus_key) || 0) + 1);
+  tickPatrols(worldId, tick, armies, relMap, busy, steered, grid, ownByFaction, nudged, visitorCount, settTier);
   tickCampaigns(worldId, tick, armies, relMap, busy);
   maybeStartCampaign(worldId, tick, armies, relMap, busy);
-  meetClashes(worldId, tick, armies, relMap, busy, buildGrid(armies)); // fresh grid: everyone has moved
+  meetClashes(worldId, tick, armies, relMap, busy, buildGrid(armies), ownByFaction); // fresh grid: everyone has moved
   tickBattles(worldId, tick);
   if (tick % 3 === 0) ensurePatrols(worldId, tick);
   return busy;
@@ -619,6 +746,15 @@ function intentForRow(a, ctx) {
   const hit = ctx.idx.get(a.id);
   if (hit) return hit;
   if (a.role === 'patrol') {
+    // riding OUT to another owned hold (focus != home, still far) reads as travel so the client
+    // dead-reckons the column between settlements instead of orbiting; otherwise it circles its post
+    if (a.focus_key && a.focus_key !== a.home_key && a.focus_x != null) {
+      const leash = PATROL_LEASH[a.pclass] || 9;
+      const fnm = ctx.homeName.get(a.focus_key);
+      if (Math.hypot(a.x - a.focus_x, a.z - a.focus_z) > leash + 3)
+        return { intent: fnm ? 'Riding to ' + fnm : 'Riding out', intentKind: 'travel' };
+      return { intent: fnm ? 'Patrolling ' + fnm : 'On patrol', intentKind: 'patrol' };
+    }
     const nm = a.home_key ? ctx.homeName.get(a.home_key) : null;
     return { intent: nm ? 'Patrolling ' + nm : 'On patrol', intentKind: 'patrol' };
   }
@@ -629,7 +765,8 @@ function intentForRow(a, ctx) {
 // campaign (those must render wherever they are — the ⚔ markers and muster beacons point at them).
 function getArmiesNear(worldId, x, z, r) {
   const cols = `id, name, faction, archetype, x, z, tx, tz, size, renown, kills, battles_won, intent,
-    intent_target_kind, intent_target_id, loyalty, personality_json, grudge_faction, destiny, fate, role, pclass, home_key, home_x, home_z`;
+    intent_target_kind, intent_target_id, loyalty, personality_json, grudge_faction, destiny, fate, role, pclass,
+    home_key, home_x, home_z, focus_key, focus_x, focus_z`;
   const ctx = buildIntentIndex(worldId);
   const tag = (rows) => { for (const a of rows) { const i = intentForRow(a, ctx); a.intent = i.intent; a.intentKind = i.intentKind; } return rows; };
   if (x == null || z == null) return tag(db.prepare(`SELECT ${cols} FROM warlords WHERE world_id=? AND status='alive' AND role='host' ORDER BY id`).all(worldId));

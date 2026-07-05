@@ -6,6 +6,9 @@ server/world.db
 server/world.db-shm
 server/world.db-wal
 server/world.db.bak-*
+train/ai.db
+train/ai.db-shm
+train/ai.db-wal
 server/launchd.log
 server/run.log
 .backup/

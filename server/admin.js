@@ -13,6 +13,7 @@ const Terra = require('../sim/terra.js');
 const WorldSim = require('../sim/world-sim.js');
 const Roads = require('./roads.js');
 const chunks = require('./chunks.js');
+const tick = require('./tick.js');
 
 const CHUNK = Terra.CHUNK;
 const MAP_HALF = WorldSim.MAP_HALF;                 // 90 — the named-powers core half-size
@@ -135,4 +136,63 @@ function overview(worldId, opts) {
   return { extent, core: MAP_HALF, terrain, territory, roads, holds, capitals };
 }
 
-module.exports = { overview };
+// ---------- reset: move everyone to a fresh shared world and delete the current one ----------
+// A hard reset: the old shared world and ALL its data are deleted (fresh start — player characters
+// go with it), and a brand-new shared world is created with its OWN terrain seed (a different-looking
+// map) and freshly seeded (capitals/nations, warlord hosts, diplomacy, destiny). Because the shared
+// world is resolved as "the single row where kind='shared'", once the swap commits every client that
+// sends `X-World: shared` lands in the new world automatically — that IS the "move all users".
+
+// every table that scopes rows to a world — discovered from the live schema so it can never drift out
+// of date as migrations add tables (hold_regions, future tables, etc. are covered automatically).
+function worldScopedTables() {
+  const out = [];
+  for (const { name } of db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all()) {
+    if (name === 'worlds') continue;
+    if (db.prepare('PRAGMA table_info(' + name + ')').all().some(c => c.name === 'world_id')) out.push(name);
+  }
+  return out;
+}
+// a non-zero 32-bit terrain seed for the new world, distinct from the one we're leaving
+function freshSeed(avoid) {
+  let s = 0;
+  while (!s || s === (avoid >>> 0)) s = (Math.floor(Math.random() * 0xffffffff) ^ (Date.now() & 0xffff)) >>> 0;
+  return s;
+}
+
+function resetWorld() {
+  let sys = db.prepare("SELECT id FROM accounts WHERE handle='system'").get();
+  if (!sys) sys = { id: db.prepare("INSERT INTO accounts(handle) VALUES ('system')").run().lastInsertRowid };
+  const old = db.prepare("SELECT id, universe_seed FROM worlds WHERE kind='shared'").get();
+  const newSeed = freshSeed(old ? (old.universe_seed || 0) : 0);
+  const tables = worldScopedTables();
+
+  // FKs reference worlds(id) with no ON DELETE CASCADE, and some world tables cross-reference each
+  // other (e.g. campaign/battle members) — so wipe with foreign_keys OFF (toggled outside the txn,
+  // as SQLite ignores the pragma mid-transaction), then restore it. Single-process server: safe.
+  db.pragma('foreign_keys = OFF');
+  let result;
+  try {
+    result = db.transaction(() => {
+      if (old) {
+        for (const t of tables) db.prepare('DELETE FROM ' + t + ' WHERE world_id=?').run(old.id);
+        db.prepare('DELETE FROM worlds WHERE id=?').run(old.id);
+      }
+      const now = Math.floor(Date.now() / 1000);
+      const r = db.prepare("INSERT INTO worlds(account_id, seed, kind, universe_seed, last_tick_at) VALUES (?,?,'shared',?,?)")
+        .run(sys.id, newSeed & 0x7fffffff, newSeed, now);
+      const newId = r.lastInsertRowid;
+      tick.seedWorld(newId);                 // capitals, warlord hosts, diplomacy, destiny — a playable world
+      return { ok: true, oldWorldId: old ? old.id : null, newWorldId: newId, terrainSeed: newSeed };
+    })();
+  } finally {
+    db.pragma('foreign_keys = ON');
+  }
+  // the static terrain/road caches are keyed by tseed, so the new world just misses them; clear the
+  // old entries so a fresh map doesn't keep stale megabytes around.
+  _terrCache.clear();
+  _roadCache.clear();
+  return result;
+}
+
+module.exports = { overview, resetWorld };

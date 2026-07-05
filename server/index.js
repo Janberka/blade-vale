@@ -16,6 +16,11 @@ const admin = require('./admin');
 const settlements = require('./settlements');
 const zlib = require('zlib');
 
+// lazily open the SEPARATE battle-AI training DB (train/ai.db) — optional subsystem; a failure here must
+// never take down the game server, so it's guarded and memoised.
+let _aidb = undefined;
+function aidbSafe() { if (_aidb === undefined) { try { _aidb = require('../train/aidb'); } catch (e) { console.error('battle-AI db unavailable:', e.message); _aidb = null; } } return _aidb; }
+
 migrate();
 // seed every world's macro state and start the always-on heartbeat (advances inactive worlds)
 for (const w of db.prepare('SELECT id FROM worlds').all()) tick.seedWorld(w.id);
@@ -106,6 +111,25 @@ const server = http.createServer(async (req, res) => {
     // client-tunable feature flags (camera feel, etc.) — fetched once at boot
     if (req.method === 'GET' && p === '/api/v1/config') {
       return send(res, 200, { ok: true, flags: FLAGS });
+    }
+
+    // ----- battle-AI training loop (public, no auth): the ?battle editor reports battles here and
+    // fetches the current champion policy. Backed by the SEPARATE train/ai.db (loaded lazily so the
+    // game server boots fine without the training subsystem). See sim/trainer.js. -----
+    if (req.method === 'POST' && p === '/api/v1/battle-log') {
+      const rec = await readBody(req); const ai = aidbSafe();
+      if (!ai) return send(res, 200, { ok: false, reason: 'training db unavailable' });
+      try { const id = ai.insertBattle(rec, { source: 'editor' }); return send(res, 200, { ok: true, id }); }
+      catch (e) { return send(res, 200, { ok: false, reason: String(e.message || e) }); }
+    }
+    if (req.method === 'GET' && p === '/api/v1/policy/champion') {
+      const ai = aidbSafe(); if (!ai) return send(res, 200, { ok: false });
+      const c = ai.getChampion();
+      return send(res, 200, c ? { ok: true, generation: c.generation, fitness: c.fitness, genome: c.genome } : { ok: false });
+    }
+    if (req.method === 'GET' && p === '/api/v1/battle-log/stats') {
+      const ai = aidbSafe(); if (!ai) return send(res, 200, { ok: false });
+      return send(res, 200, Object.assign({ ok: true }, ai.counts(), { stats: ai.stats(parseInt(url.searchParams.get('n') || '500', 10)) }));
     }
 
     // ----- auth: super-simple username/password (before the account seam — no token needed) -----
@@ -213,6 +237,16 @@ const server = http.createServer(async (req, res) => {
       return sendZ(req, res, 200, admin.overview(wid, { extent: parseInt(q.get('extent') || '0', 10), res: parseInt(q.get('res') || '0', 10) }));
     }
 
+    // ----- DESTRUCTIVE: delete the shared world and spin up a fresh one (new terrain) -----
+    // Everyone on `X-World: shared` lands in the new world on their next poll; the old world and all
+    // its data (including player characters — a fresh start) are gone. Guarded by an explicit confirm.
+    if (req.method === 'POST' && p === '/api/v1/admin/reset-world') {
+      const b = await readBody(req);
+      if (!b || b.confirm !== 'RESET') return send(res, 400, { error: "pass { confirm: 'RESET' } to proceed" });
+      const out = admin.resetWorld();
+      return send(res, 200, out);
+    }
+
     if (req.method === 'POST' && p === '/api/v1/world/presence') { // a player's banner heartbeat
       const b = await readBody(req);
       tick.updatePresence(viewWorldId, acct.id, b);
@@ -247,7 +281,7 @@ const server = http.createServer(async (req, res) => {
       const q = url.searchParams;
       const w = db.prepare('SELECT kind, map_level, universe_seed FROM worlds WHERE id=?').get(viewWorldId);
       let level, useed;
-      if (w.kind === 'shared') { level = 0; useed = chunks.SHARED_WORLD_SEED; }
+      if (w.kind === 'shared') { level = 0; useed = (w.universe_seed != null ? (w.universe_seed >>> 0) : chunks.SHARED_WORLD_SEED); }
       else {
         level = Math.max(0, Math.min(9999, parseInt(q.get('level') || '0', 10) || 0));
         useed = (parseInt(q.get('u') || '0', 10) || w.universe_seed || 0) >>> 0;
@@ -281,7 +315,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && p === '/api/v1/settlements') {
       const w = db.prepare('SELECT kind, map_level, universe_seed FROM worlds WHERE id=?').get(viewWorldId);
       let level, useed;
-      if (w.kind === 'shared') { level = 0; useed = chunks.SHARED_WORLD_SEED; }
+      if (w.kind === 'shared') { level = 0; useed = (w.universe_seed != null ? (w.universe_seed >>> 0) : chunks.SHARED_WORLD_SEED); }
       else { level = w.map_level | 0; useed = (w.universe_seed || 0) >>> 0; if (!useed) return send(res, 400, { error: 'no universe seed claimed' }); }
       const b = await readBody(req);
       const items = Array.isArray(b && b.items) ? b.items.slice(0, 64) : [];

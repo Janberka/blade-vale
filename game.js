@@ -3592,8 +3592,12 @@ function updateFieldArmies(dt) {
   for (const band of [...fieldArmies.keys()]) if (!band.alive || !parties.includes(band)) clearFieldArmy(band); // died / despawned
   let total = 0; for (const fa of fieldArmies.values()) total += fa.bodies.length;
   const px = player.pos.x, pz = player.pos.z;
-  // a clash you can see from both sides is fought for REAL — the same fighter AI you use, leader and all
+  // a clash you can see from both sides is fought for REAL — the same fighter AI you use, leader and all.
+  // BOTH battle sources upgrade: the client's own mapBattles AND the shared world's server battles
+  // (srvBattles) — in the shared world every NPC-vs-NPC fight is a server battle, so without this the
+  // living war would only ever pantomime.
   for (const bt of mapBattles) if (!bt.live && !bt.done) maybeStartLiveClash(bt, px, pz);
+  for (const e of srvBattles.values()) if (!e.bt.live && !e.bt.done) maybeStartLiveClash(e.bt, px, pz, e);
   for (const band of parties) {
     if (!band.alive) continue;
     if (fieldBattle && band === fieldBattle.band) continue; // its men are REAL fighters right now, not extras
@@ -3648,25 +3652,38 @@ function spawnClashFighter(faction, type, x, z, lead) {
   h.group.position.set(x, mapElevY(x, z), z);
   return f;
 }
-// muster one side's block of fighters, clustered on its flank of the contested point and facing across it
+// muster one side as a BATTLE LINE, not a mob: the two fronts start a charge apart (so the fight opens
+// with lines closing, exactly like a fight you're in), ranks are dressed at formation pitch (outside the
+// separation radius, so nobody jostles), melee fills the front rows and archers/throwers loose from the
+// rear — the same shape the engine's own behaviors settle into around the player.
+const CLASH_GAP = 12;    // world units between the two fronts at muster — melee charges it, archers (minRange ~5) stand and loose
 function musterClashSide(bt, sideKey, sign, n, arr) {
   const side = bt[sideKey];
-  const roster = buildEnemyRoster(n, mapLevel || 1); shuffleInPlace(roster);
+  const roster = buildEnemyRoster(n, mapLevel || 1);
+  // battle order: melee to the front ranks, ranged to the rear (sort is stable — the mix stays varied within each)
+  const isRanged = (r) => !!((ENEMY_TYPES[r.type] || ENEMY_TYPES.grunt).ranged);
+  roster.sort((a, b) => (isRanged(a) ? 1 : 0) - (isRanged(b) ? 1 : 0));
   const bands = side.bands.filter(b => b.alive);
   const leadBand = bands.find(b => b.leader) || bands[0];
-  const cx = bt.cx + bt.axX * sign * (2.4), cz = bt.cz + bt.axZ * sign * (2.4);
-  const rt = -bt.axZ, rz2 = bt.axX;                 // right of the contact axis (the line's frontage)
-  const face = Math.atan2(-sign * bt.axX, -sign * bt.axZ); // look across at the enemy flank
-  const fs = FIELD_SCALE, sp = 1.7 * fs;
-  const files = Math.max(3, Math.round(Math.sqrt(n) * 1.3));
+  const hasLead = !!(leadBand && leadBand.leader);
+  const cx = bt.cx + bt.axX * sign * (CLASH_GAP / 2), cz = bt.cz + bt.axZ * sign * (CLASH_GAP / 2);
+  const rt = -bt.axZ, rz2 = bt.axX;                 // lateral axis of the line (perpendicular to contact)
+  const face = Math.atan2(-sign * bt.axX, -sign * bt.axZ); // face the enemy line
+  const fs = FIELD_SCALE, sp = 2.5 * fs;            // rank/file pitch just past personal space — dressed, not crushed
+  const files = clamp(Math.round(Math.sqrt(n) * 1.6), 4, 12);
   let lead = null;
   for (let i = 0; i < n; i++) {
-    const isLead = i === 0 && !!leadBand && !!leadBand.leader;
-    const row = (i / files) | 0, col = i % files;
-    const back = row * sp + (isLead ? -1.6 * fs : 0);              // the warlord stands a stride proud of rank 0
-    const lat = (col - (files - 1) / 2) * sp + rand(-0.2, 0.2) * fs;
-    const bx = cx + (-Math.sin(face)) * back + rt * lat;           // behind = opposite the way he faces
-    const bz = cz + (-Math.cos(face)) * back + rz2 * lat;
+    const isLead = hasLead && i === 0;
+    const gi = hasLead ? i - 1 : i;                 // grid index of the men behind the warlord
+    const row = isLead ? 0 : (gi / files) | 0, col = isLead ? 0 : gi % files;
+    const back = isLead ? -1.6 * fs : row * sp + rand(-0.12, 0.12) * fs; // the warlord a stride proud of rank 0
+    const lat = isLead ? 0 : (col - (files - 1) / 2) * sp + rand(-0.12, 0.12) * fs;
+    // slide the slot out from the CONTESTED CENTER over land (the bands met there marching, so the
+    // center is land) — a slot that would fall in water stops at the shore instead of stranding a
+    // fighter on the far bank where landStep would never let him reach the fight
+    const [bx, bz] = landStep(bt.cx, bt.cz,
+      (cx + (-Math.sin(face)) * back + rt * lat) - bt.cx,
+      (cz + (-Math.cos(face)) * back + rz2 * lat) - bt.cz);
     const f = spawnClashFighter(side.faction, isLead ? (leadBand.leader && leadBand.leader.base) || roster[i].type : roster[i].type, bx, bz, isLead);
     f.facing = face;
     if (isLead) { lead = f; f.commander = null; }
@@ -3676,15 +3693,16 @@ function musterClashSide(bt, sideKey, sign, n, arr) {
   for (const f of arr) if (f !== lead) f.commander = lead;
   return lead;
 }
-function maybeStartLiveClash(bt, px, pz) {
+function maybeStartLiveClash(bt, px, pz, srvE) {
+  if (bt.noLive) return;                                        // timed out once already — the bar finishes this one
   if (liveFighterCount() > LIVE_CLASH_TOTAL_CAP - 16) return;   // budget spent on nearer clashes
   if (playerClash && playerClash.bt === bt) return;            // the player's OWN clash rides its own system (drop-in)
   if (bt.sideA.bands.some(b => b.isPlayerBand) || bt.sideB.bands.some(b => b.isPlayerBand)) return;
   const near = (side) => side.bands.some(b => b.alive && Math.hypot(b.pos.x - px, b.pos.z - pz) <= FIELD_ARMY.showR);
   if (!(near(bt.sideA) && near(bt.sideB))) return;
-  startLiveClash(bt);
+  startLiveClash(bt, srvE);
 }
-function startLiveClash(bt) {
+function startLiveClash(bt, srvE) {
   // clear any decorative crowd / banner tokens on the participating bands
   for (const b of bt.sideA.bands.concat(bt.sideB.bands)) { if (fieldArmies.get(b)) clearFieldArmy(b); if (b.group) b.group.visible = false; }
   const sa = Math.max(1, Math.round(sideSize(bt.sideA))), sb = Math.max(1, Math.round(sideSize(bt.sideB)));
@@ -3692,7 +3710,10 @@ function startLiveClash(bt) {
   let na = clamp(Math.round(budget * sa / (sa + sb)), 1, budget - 1);
   na = Math.min(na, sa); let nb = Math.min(budget - na, sb);
   const A = [], B = [];
-  const lc = { bt, A, B, overflowA: sa - na, overflowB: sb - nb, leadA: null, leadB: null };
+  // srv: the SERVER owns this battle's outcome — fighters fight for real, but each side's headcount is
+  // reconciled to the server's bleeding strength (kA/kB = fielded-per-man ratios; n0 = fielded caps)
+  const lc = { bt, A, B, overflowA: sa - na, overflowB: sb - nb, leadA: null, leadB: null, age: 0,
+               srv: srvE || null, n0A: na, n0B: nb, kA: na / sa, kB: nb / sb };
   lc.leadA = musterClashSide(bt, 'sideA', -1, na, A);
   lc.leadB = musterClashSide(bt, 'sideB', 1, nb, B);
   for (const f of A) f.foes = B;
@@ -3734,22 +3755,70 @@ function resolveLiveClash(lc) {
 // you looked away before it was settled: fold living counts back and let the numeric resolver carry it
 function foldLiveClashToNumeric(lc) {
   const bt = lc.bt;
+  bt.live = false; bt.lc = null;
+  if (lc.srv) {
+    // a server battle never hands its numbers to the client — just stand the fighters down; the
+    // banners return and the server's bar carries the war from here
+    for (const b of bt.sideA.bands.concat(bt.sideB.bands)) if (b.alive && b.group) b.group.visible = true;
+    disposeClashFighters(lc);
+    return;
+  }
   distributeToBands(bt.sideA.bands, Math.max(1, clashLivingCount(lc.A) + lc.overflowA));
   distributeToBands(bt.sideB.bands, Math.max(1, clashLivingCount(lc.B) + lc.overflowB));
-  bt.live = false; bt.lc = null;
   for (const b of bt.sideA.bands.concat(bt.sideB.bands)) { if (b.alive && b.group) { b.group.visible = true; setBandLabel(b); } }
   disposeClashFighters(lc);
   if (!bt.done) recomputeBattle(bt); // re-derive the bar from the new sizes and continue
+}
+const CLASH_MAX_SECS = 75; // a straggler endgame (a kiting archer along a shoreline) must never hang the war — fold and let the bar finish it
+// a server-owned clash: cull or reinforce one side so the men on the ground track the server's
+// bleeding strength — local blades set the CHOREOGRAPHY, the server's numbers set the ATTRITION
+function reconcileSrvClashSide(lc, key) {
+  const bt = lc.bt, side = key === 'A' ? bt.sideA : bt.sideB, arr = key === 'A' ? lc.A : lc.B;
+  const sign = key === 'A' ? -1 : 1, cap = key === 'A' ? lc.n0A : lc.n0B, k = key === 'A' ? lc.kA : lc.kB;
+  const want = clamp(Math.round(side.live * k), side.live >= 1 ? 1 : 0, cap);
+  const standing = arr.filter(f => f.alive);
+  if (standing.length > want) {
+    // the server's attrition outran the melee: the extra men fall where they fight (just-struck first, warlord last)
+    let kill = standing.length - want;
+    standing.sort((a, b) => (b.flash - a.flash) || ((a.isHero ? 1 : 0) - (b.isHero ? 1 : 0)));
+    for (const v of standing) {
+      if (kill <= 0) break;
+      if (v.isHero && kill < standing.length) continue;
+      v.alive = false; v.state = 'dead'; v.deadT = 0; v.bar.visible = false; kill--;
+    }
+  } else if (standing.length < want && lc.age > 1.5) {
+    // the melee outran the server: the host's depth feeds a fresh man in from the rear (one per frame)
+    const rr = CLASH_GAP / 2 + 2 + rand(0, 2), lat = rand(-3, 3);
+    const [sx, sz] = landStep(bt.cx, bt.cz, bt.axX * sign * rr + (-bt.axZ) * lat, bt.axZ * sign * rr + bt.axX * lat);
+    const types = ['grunt', 'grunt', 'grunt', 'rogue', 'longsword', 'archer'];
+    const f = spawnClashFighter(side.faction, types[(Math.random() * types.length) | 0], sx, sz, false);
+    f.facing = Math.atan2(-sign * bt.axX, -sign * bt.axZ);
+    f.foes = key === 'A' ? lc.B : lc.A;
+    f.commander = key === 'A' ? lc.leadA : lc.leadB;
+    arr.push(f);
+  }
 }
 function updateLiveClashes(dt) {
   for (let i = liveClashes.length - 1; i >= 0; i--) {
     const lc = liveClashes[i];
     const bt = lc.bt;
-    if (!fieldSimOn() || bt.done || !bt.sideA.bands.some(b => b.alive) || !bt.sideB.bands.some(b => b.alive)) { foldLiveClashToNumeric(lc); continue; }
-    // walked out of range → fold back to numbers so the living world keeps ticking off-screen
-    const px = player.pos.x, pz = player.pos.z;
-    const nearAny = bt.sideA.bands.concat(bt.sideB.bands).some(b => b.alive && Math.hypot(b.pos.x - px, b.pos.z - pz) <= FIELD_ARMY.hideR);
-    if (!nearAny) { foldLiveClashToNumeric(lc); continue; }
+    lc.age += dt;
+    if (lc.srv) {
+      // SERVER battle: it ends when the server says so (the id leaves the poll) — no local timeout,
+      // no local victory call; walking away or leaving the ground view just stands the fighters down
+      const gone = bt.done || !srvBattles.has(lc.srv.sb.id);
+      const px = player.pos.x, pz = player.pos.z;
+      const nearAny = !gone && bt.sideA.bands.concat(bt.sideB.bands).some(b => b.alive && Math.hypot(b.pos.x - px, b.pos.z - pz) <= FIELD_ARMY.hideR);
+      if (!fieldSimOn() || gone || !nearAny) { foldLiveClashToNumeric(lc); continue; }
+      reconcileSrvClashSide(lc, 'A'); reconcileSrvClashSide(lc, 'B');
+    } else {
+      if (lc.age > CLASH_MAX_SECS) bt.noLive = true; // this one's a straggler grind — once folded, the bar finishes it (no re-muster loop)
+      if (!fieldSimOn() || bt.done || bt.noLive || !bt.sideA.bands.some(b => b.alive) || !bt.sideB.bands.some(b => b.alive)) { foldLiveClashToNumeric(lc); continue; }
+      // walked out of range → fold back to numbers so the living world keeps ticking off-screen
+      const px = player.pos.x, pz = player.pos.z;
+      const nearAny = bt.sideA.bands.concat(bt.sideB.bands).some(b => b.alive && Math.hypot(b.pos.x - px, b.pos.z - pz) <= FIELD_ARMY.hideR);
+      if (!nearAny) { foldLiveClashToNumeric(lc); continue; }
+    }
     // keep the leader anchors current so escort/formation reads a live commander
     if (lc.leadA && !lc.leadA.alive) lc.leadA = lc.A.find(f => f.alive && f.isHero) || null;
     if (lc.leadB && !lc.leadB.alive) lc.leadB = lc.B.find(f => f.alive && f.isHero) || null;
@@ -3758,10 +3827,8 @@ function updateLiveClashes(dt) {
     assignSide(aLive, bLive, MAX_ATTACKERS_PER_VICTIM);
     assignSide(bLive, aLive, MAX_ATTACKERS_PER_VICTIM);
     stepClashArr(lc.A, dt); stepClashArr(lc.B, dt);
-    if (clashLivingCount(lc.A) === 0 || clashLivingCount(lc.B) === 0) resolveLiveClash(lc);
-    else { // keep the map-battle centroid/marker roughly where the melee actually is (leaders drift)
-      updateBattleMarker(bt);
-    }
+    if (!lc.srv && (clashLivingCount(lc.A) === 0 || clashLivingCount(lc.B) === 0)) resolveLiveClash(lc);
+    else updateBattleMarker(bt); // keep the bar/marker current (hidden while live, but state stays fresh)
   }
 }
 function stepClashArr(arr, dt) {
@@ -4854,7 +4921,7 @@ const STREET = {
   countMul: 0.34,   // fewer houses — each is ~2.8x wider, so the same districts stay full
   treeScale: 1.45,  // street trees are mature trees, not map pictograms
   rockScale: 1.5,   // boulders, not pebbles
-  roadWMul: 2.1,    // painted roadbed width at street level (paint-only; routing/ETA untouched)
+  roadWMul: 1.5,    // painted roadbed width at street level (paint-only; routing/ETA untouched)
   // MUST cover the whole visible range (out to camFar), not just a bubble around the hero: a
   // settlement you can plainly see but that's still at old map-miniature scale reads as a small
   // toy sitting close by, not a huge structure standing far off — a real size/perspective mismatch,
@@ -5725,8 +5792,10 @@ const ROAD_SPLAT = {
   size: 2048,      // canvas resolution (px) — ~2.8 px per world unit over the render window
   pad: 30,         // world-margin past the road render window so strokes never clip at the rim
   tone: 0.90,      // painted tint of the tier colour (terrain lighting brings it back up)
-  vergeW: 2.2,     // worn shoulder width, × the core width
+  vergeW: 1.6,     // worn shoulder width, × the core width
   vergeA: 0.28,    // shoulder opacity — packed earth bleeding into the grass
+  maxW: 4.5,       // HARD cap on painted core width (world units, ~1 hex) so no road — or stack of
+                   // overlapping roads — ever balloons past a sane size; the "limit" on a merged road
 };
 let _roadCv = null, _roadCtx = null, _roadTex = null, _roadDbg = false;
 let _roadPaintedTier = 1;   // width tier the splat was last painted at (2 = street width, else 1)
@@ -5788,27 +5857,33 @@ function _roadSplatPaint(jobs, cxw, czw, renderR) {
   ctx.lineCap = ctx.lineJoin = 'round';
   const css = (hex, m, a) => 'rgba(' + Math.min(255, ((hex >> 16) & 255) * m | 0) + ',' + Math.min(255, ((hex >> 8) & 255) * m | 0) + ',' + Math.min(255, (hex & 255) * m | 0) + ',' + a + ')';
   const trace = (pts) => { ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].z); for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].z); };
-  for (const j of jobs) {                              // pass 1: shoulders (one stroke per edge — a single path never double-blends with itself)
+  // MERGE overlapping roads into one, with a limit. The old painter stroked every edge PER SEGMENT at
+  // its own graded tone, so a road seamed against itself and any two roads sharing a corridor wove into
+  // a cross-hatched blob wider than a town. Now each road is ONE flat-toned stroke per edge (round joins
+  // weld it to itself — no internal seams), the network is drawn THIN→WIDE (sort by width) so where a
+  // lane and a trunk overlap the trunk lands on top and the pair reads as the single larger road, and
+  // every width is clamped to ROAD_SPLAT.maxW so no road — or stack of overlaps — can balloon.
+  const CAP = ROAD_SPLAT.maxW;
+  const capW = (w) => Math.min(w, CAP) * RD;
+  const order = jobs.slice().sort((a, b) => a.T.w - b.T.w);
+  for (const j of order) {                             // pass 1: worn shoulders (packed-earth verge feathering into grass)
     if (j.T === ROAD_TIER.path) continue;              // a foot-trail has no built shoulder
     ctx.strokeStyle = _roadDbg ? 'rgba(255,90,42,0.5)' : css(j.T.col, ROAD_SPLAT.tone * 0.72, ROAD_SPLAT.vergeA);
-    ctx.lineWidth = j.T.w * ROAD_SPLAT.vergeW * RD;
+    ctx.lineWidth = capW(j.T.w) * ROAD_SPLAT.vergeW;
     trace(j.pts); ctx.stroke();
   }
-  for (const j of jobs) {                              // pass 2: cores
-    const pts = j.pts;
+  for (const j of order) {                             // pass 2: opaque cores — one flat stroke per edge
     if (j.T === ROAD_TIER.path) {                      // trail: a worn dashed hairline
       ctx.setLineDash([2.4, 2.0]);
       ctx.strokeStyle = _roadDbg ? '#ff5a2a' : css(j.T.col, ROAD_SPLAT.tone, 0.8);
-      ctx.lineWidth = j.T.w * RD;
-      trace(pts); ctx.stroke();
+      ctx.lineWidth = capW(j.T.w);
+      trace(j.pts); ctx.stroke();
       ctx.setLineDash([]);
       continue;
     }
-    for (let i = 0; i < pts.length - 1; i++) {         // opaque per-segment strokes keep the per-joint width & tone grading (round caps weld them seamless)
-      ctx.strokeStyle = _roadDbg ? '#ff5a2a' : css(j.T.col, ROAD_SPLAT.tone * (j.jt[i] + j.jt[i + 1]) * 0.5, 1);
-      ctx.lineWidth = (j.jhw[i] + j.jhw[i + 1]) * RD;
-      ctx.beginPath(); ctx.moveTo(pts[i].x, pts[i].z); ctx.lineTo(pts[i + 1].x, pts[i + 1].z); ctx.stroke();
-    }
+    ctx.strokeStyle = _roadDbg ? '#ff5a2a' : css(j.T.col, ROAD_SPLAT.tone, 1);
+    ctx.lineWidth = capW(j.T.w);
+    trace(j.pts); ctx.stroke();
   }
   _roadTex.needsUpdate = true;
   _roadWinU.value.set(cxw, czw, 1 / span);
@@ -9702,6 +9777,7 @@ function updateDbgHud() {
 let last = performance.now();
 let frameNo = 0;
 function loop(now) {
+  if (BATTLE.on) return battleFrame(now); // battle-editor mode: two armies fighting in a valley, own sim + orbit
   if (EDIT.on) return editFrame(now);   // object-editor mode: orbit + render one model, skip the game sim
   const rawMs = now - last;
   const dt = Math.min((now - last) / 1000, 0.05);
@@ -10241,20 +10317,33 @@ BV.advanceField = (secs, dt = 0.03) => {
     updateProjectiles(dt);
     updateFieldArmies(dt);
     updateLiveClashes(dt);
+    updateMapBattles(dt); // the real loop ticks the numeric bars every frame too (updateMap) — a folded clash finishes there
+    updateServerWar(dt);  // ...and the server-battle bars (shared world), so srv live-clash reconcile is testable
   }
   return { frameNo, clashes: liveClashes.length,
     clashFighters: liveClashes.reduce((s, lc) => s + lc.A.length + lc.B.length, 0),
     battles: BV.mapBattles() };
 };
 BV.clashInfo = () => liveClashes.map(lc => {
-  const summ = (arr) => { const live = arr.filter(f => f.alive); return {
-    n: live.length, ranged: live.filter(f => f.def.ranged).length,
-    states: live.reduce((m, f) => (m[f.state] = (m[f.state] || 0) + 1, m), {}),
-    hasTarget: live.filter(f => f.target && f.target.alive).length,
-    sample: live[0] ? { state: live[0].state, hasTgt: !!(live[0].target && live[0].target.alive),
-      tgtDist: live[0].target ? +live[0].pos.distanceTo(live[0].target.pos).toFixed(2) : null,
-      ranged: !!live[0].def.ranged, cd: +live[0].cd.toFixed(2) } : null }; };
-  return { A: summ(lc.A), B: summ(lc.B) };
+  const summ = (arr, foes) => {
+    const live = arr.filter(f => f.alive);
+    const nd = (f) => { let bd = Infinity; for (const o of foes) if (o.alive) { const d = f.pos.distanceTo(o.pos); if (d < bd) bd = d; } return bd; };
+    const rg = live.filter(f => f.def.ranged), ml = live.filter(f => !f.def.ranged);
+    return {
+      n: live.length, ranged: rg.length,
+      // avg distance to the nearest living foe — archers should hold ~minRange*FIELD_SCALE, melee ~attack reach
+      rangedDist: rg.length ? +(rg.reduce((s, f) => s + nd(f), 0) / rg.length).toFixed(2) : null,
+      meleeDist: ml.length ? +(ml.reduce((s, f) => s + nd(f), 0) / ml.length).toFixed(2) : null,
+      states: live.reduce((m, f) => (m[f.state] = (m[f.state] || 0) + 1, m), {}),
+      hasTarget: live.filter(f => f.target && f.target.alive).length };
+  };
+  return { A: summ(lc.A, lc.B), B: summ(lc.B, lc.A) };
+});
+BV.clashDump = () => liveClashes.map(lc => {
+  const row = (f) => ({ x: +f.pos.x.toFixed(1), z: +f.pos.z.toFixed(1), v: +f.vel.length().toFixed(1),
+    d: f.target && f.target.alive ? +f.pos.distanceTo(f.target.pos).toFixed(1) : null,
+    w: f.waiting ? 1 : 0, r: f.def.ranged ? 1 : 0, st: f.state });
+  return { A: lc.A.filter(f => f.alive).map(row), B: lc.B.filter(f => f.alive).map(row) };
 });
 // vista inspection / forcing — peek the survey reach, or set total miles to preview the far view
 BV.vista = (miles) => {
@@ -10304,6 +10393,28 @@ BV.startClash = (sizeA, sizeB) => {
   const a = mk(nations[0], sizeA, -1.2), b = mk(nations[1], sizeB, 1.2);
   return startMapBattle(a, b).duration;
 };
+// server-war test rig: fabricate a server battle with NO backend — drive the shared-world live-clash
+// path headlessly (fakeSrvBleed = the server's tick bleeding the sides; fakeSrvEnd = the server calling it)
+BV.fakeSrvBattle = (sizeA, sizeB) => {
+  const cx = player.pos.x + 6, cz = player.pos.z;
+  const mk = (nation, sz, sid, ox) => {
+    const g = makePartyToken(sz, nation.def); g.position.set(cx + ox, 0, cz); scene.add(g);
+    const band = { group: g, pos: new THREE.Vector3(cx + ox, 0, cz), size: sz, alive: true, speed: 0, faction: nation.def,
+      raider: false, clashCd: 1e9, parleyCd: 1e9, wanderT: 1, wanderDir: 0, level: mapLevel,
+      leader: makeBandLeader(sz, mapLevel, true), quality: 1, serverId: sid };
+    parties.push(band); setBandLabel(band); return band;
+  };
+  const a = mk(nations[0], sizeA, 9001, -1.2), b = mk(nations[1], sizeB, 9002, 1.2);
+  const bt = { server: true, id: 'srv999', cx, cz, axX: 1, axZ: 0, t: 0, duration: 1, done: false, aWins: null,
+    sideA: { faction: a.faction, bands: [a], start: sizeA, end: sizeA, live: sizeA },
+    sideB: { faction: b.faction, bands: [b], start: sizeB, end: sizeB, live: sizeB } };
+  bt.marker = makeBattleMarker(bt);
+  a.inBattle = bt; b.inBattle = bt; a._w = 1; b._w = 1;
+  srvBattles.set(999, { bt, sb: { id: 999 }, targetA: sizeA, targetB: sizeB, garBand: null });
+  return { cx, cz };
+};
+BV.fakeSrvBleed = (ta, tb) => { const e = srvBattles.get(999); if (e) { e.targetA = ta; e.targetB = tb; } return !!e; };
+BV.fakeSrvEnd = () => { const e = srvBattles.get(999); if (e) { releaseSrvBattle(e); srvBattles.delete(999); } return true; };
 BV.pacts = () => [...playerPacts].map(f => f.name);
 BV.openEncounter = openEncounter; // debug: pop the parley/aid screen for a given band
 BV.bandOfRelation = (ally) => parties.find(p => p.alive && !p.inBattle && isAllyFaction(p.faction) === ally) || null;
@@ -10632,6 +10743,8 @@ function bindSrvSide(e, side, ids) {
   for (const b of side.bands) { b.inBattle = e.bt; b.clashCd = 1e9; b._w = total > 0 ? b.size / total : 1 / (side.bands.length || 1); }
 }
 function releaseSrvBattle(e) {
+  e.bt.done = true;
+  if (e.bt.lc) foldLiveClashToNumeric(e.bt.lc); // stand down any real fighters before the battle object goes
   for (const side of [e.bt.sideA, e.bt.sideB]) for (const b of side.bands) {
     if (!b.alive) continue;
     if (b === e.garBand) continue;
@@ -10691,9 +10804,9 @@ function updateSrvBattles(dt) {
       const ns = Math.max(1, Math.round(side.live * (b._w || 1)));
       if (ns !== b._shownSize) { b._shownSize = ns; b.size = ns; setBandLabel(b); }
     }
-    layoutBattle(bt);
+    if (!bt.live) layoutBattle(bt); // while fought for real the fighters hold the ground — don't shuffle the hidden banners
     updateBattleMarker(bt);
-    if (bt.marker) bt.marker.visible = !(bt.sideA.bands.some(b => fieldArmies.has(b)) || bt.sideB.bands.some(b => fieldArmies.has(b)));
+    if (bt.marker) bt.marker.visible = !bt.live && !(bt.sideA.bands.some(b => fieldArmies.has(b)) || bt.sideB.bands.some(b => fieldArmies.has(b)));
   }
 }
 
@@ -11998,6 +12111,910 @@ BV.editSnap = (w) => { editSnap(w); return 'snapped'; };   // 0=before, 1=after,
 BV.editPose = (n) => { if (EDIT.anims.length && POSES[n]) { EDIT.pose = n; for (const a of EDIT.anims) setPose(a, n, 0.25); editPosePanel(); } return EDIT.pose; };
 BV.editStatus = editStatus;
 
+/* ============================================================================
+   BATTLE EDITOR — ?battle  (or ?battle=1 / window.BV_BATTLE)
+   A self-contained sandbox, exactly like the object editor: two enemy armies
+   drop into a valley walled by mountains on two sides and fight to the last man.
+   Everything is built by the REAL generators — the valley is displaced terrain
+   (battleValleyY rides the mapElevY hook), every soldier is buildHumanoid, and
+   the melee reuses the shared pose system (setPose/MOVES/walkLegs/restLegs) — so
+   edits to those show up here too. This is the piece we iterate on together.
+   Each host holds a commanded rank-and-file line (front-rank swords, rear-rank
+   archers loosing arrows); men weigh real morale facts (local odds, wounds, how
+   the whole host fares) and ROUT to the rear when their nerve breaks, rallying
+   if they reach safety. Bodies take up space (battleSeparate) — men shove, they
+   don't clip through each other. CLICK a soldier to possess him and fight in
+   person (WASD + mouse-look + click to strike/shoot, Esc to release).
+   Each host has an AI COMMANDER who PLANS a doctrine pre-battle (line / wings /
+   oblique / defensive / skirmish), carves the army into divisions (center, wings,
+   reserve, archers) and deploys them, then re-tasks them live as the fight turns
+   (charge / hold / flank / fall-back). Aggressive generals lead from the front
+   (their death craters morale); cautious ones watch from the rear and flee if
+   broken. TERRAIN rerolls each restart — always a valley walled by mountains,
+   with a snaking floor + knolls. Each restart also rerolls two random-sized
+   armies with random class mixes (?fixed=1 pins the URL values).
+   Every resolved AI battle is LOGGED (see the BATTLE LOG block) into a dataset
+   for an NPC battle-intelligence layer — the 📊 Log panel shows the first-cut
+   analysis (doctrine win rates, lead-vs-watch, matchups) and exports the JSON.
+   Params: ?battle&n=&seed=&archers=<0..0.7>&fixed=1&log=<url|server>.
+   Live hooks: BV.battle / BV.battleRestart / BV.battlePause / BV.battleTune /
+   BV.battleOrder(teamIdx,'advance'|'hold') / BV.battlePossess(i) / BV.battleRelease
+   / BV.battleStatus / BV.battleStep.
+   ============================================================================ */
+const BATTLE = {
+  on: false, last: 0, paused: false, over: false, bodies: [], armies: [], arrows: [], ground: null,
+  spin: false, spinRate: 0.05, hudEl: null, idc: 0, phase: 'deploy', deployT: 0, terr: null,
+  possessed: null, keys: new Set(),                      // click a soldier to take him over (WASD + mouse-look)
+  cam: { yaw: 0, pitch: 0.32, dist: 7.5 },               // over-the-shoulder follow rig while possessing
+  log: [], rec: null, logOpen: false,                    // battle telemetry — a dataset for an NPC battle-AI
+  cfg: { perSide: 40, seed: 1, archerFrac: 0.34, fixed: false, sink: null },
+  orbit: { target: new THREE.Vector3(0, 3, 0), r: 116, theta: 0.36, phi: 0.80 },
+};
+// melee tuning — all in one table so we can dial the feel of the fight live (BV.battleTune)
+const BATTLE_MELEE = { reach: 2.3, move: 4.6, wind: [0.28, 0.55], rec: 0.36, cool: [0.30, 0.9],
+                       dmg: [8, 16], hp: [34, 54], flinch: 0.30, knock: 0.22, deathDur: 1.1, sfxChance: 0.16 };
+// formation: soldiers hold a commanded rank-and-file slot in their division and only stray a leash from
+// it to strike, so the host fights as a body instead of a mob funnelling to one point. Each division's
+// anchor is maneuvered by its commander (battleAdvanceUnits); a man reaches the foe in front, no further.
+const BATTLE_FORM = { gapX: 3.2, gapZ: 3.0, frontStand: 34, marchSpeed: 3.6, contactGap: 3.2, leash: 4.2, percept: 9, bodyR: 1.15 };
+// morale: every man periodically weighs REAL facts — is he outnumbered where he stands, how hurt is he,
+// how badly is his whole host losing — and if his nerve breaks he routs to the rear instead of fighting;
+// once he's safe among friends again his nerve recovers and he may rally back into line. (hysteresis)
+const BATTLE_MORALE = { break: 0.30, rally: 0.60, senseR: 8, fallbackDepth: 16, fallbackSpeed: 6.2,
+                        hitShock: 0.14, allyDeathShock: 0.05 };
+// archers: hang back in the rear ranks and loose ballistic arrows; if a foe closes to melee they give
+// ground to keep their distance (kite) rather than stand and trade blows.
+const BATTLE_ARCHER = { range: 60, minRange: 11, cd: [1.6, 2.7], drawTime: 0.55, projSpeed: 47, dmg: [9, 17], hpMul: 0.8 };
+// commanders: a brief deploy phase where the planned array stands before the advance is ordered.
+const BATTLE_CMD = { deploySecs: 1.8 };
+// the two hosts: AZURE musters at -Z facing +Z, CRIMSON at +Z facing -Z, and they close down the valley
+const BATTLE_TEAMS = [
+  { name: 'AZURE',   pal: { skin: 0xe0b088, cloth: 0x2f6fd0, accent: 0x1d3f7a, blade: 0xeaf2ff }, sign: 1 },
+  { name: 'CRIMSON', pal: { skin: 0xd8a878, cloth: 0xc23a2f, accent: 0x6e1a15, blade: 0xfff0e6 }, sign: -1 },
+];
+
+// ---- the valley: a flat fighting floor along Z, mountains climbing steeply on ±X ----
+// Rolled fresh each battle (battleRollTerrain) but ALWAYS a valley: a floor that snakes gently down its
+// length, walled by mountains of differing height on each side, with a knoll or two of high ground on
+// the floor that a commander can deploy toward. Rides the editTerrainFn→mapElevY hook via battleValleyY.
+function battleRollTerrain() {
+  const R = Math.random, t = {
+    half: 24 + R() * 12, rise: 52 + R() * 26,                 // floor half-width; how far the flank climbs
+    peakL: 50 + R() * 30, peakR: 50 + R() * 30,               // the two walls, independently tall
+    freqL: 0.03 + R() * 0.05, phaseL: R() * TAU, ampL: 0.06 + R() * 0.10,
+    freqR: 0.03 + R() * 0.05, phaseR: R() * TAU, ampR: 0.06 + R() * 0.10,
+    bend: (R() * 2 - 1) * 4, bendFreq: 0.008 + R() * 0.012,   // the valley centreline drifts as it runs
+    floorRough: 0.7 + R() * 1.1, knolls: [],
+  };
+  const nk = Math.floor(R() * 3);                             // 0–2 gentle rises of high ground on the floor
+  for (let i = 0; i < nk; i++) t.knolls.push({ x: (R() * 2 - 1) * t.half * 0.55, z: (R() * 2 - 1) * 26, h: 3 + R() * 5, r: 6 + R() * 6 });
+  t.peakRef = Math.max(t.peakL, t.peakR);
+  return t;
+}
+function battleFloorCx(z) { const T = BATTLE.terr; return T ? T.bend * Math.sin(z * T.bendFreq) : 0; } // valley centreline at z
+function battleValleyY(x, z) {
+  const T = BATTLE.terr; if (!T) return 0;
+  const rel = x - battleFloorCx(z), ax = Math.abs(rel), right = rel >= 0;
+  const peak = right ? T.peakR : T.peakL;
+  let h = 0;
+  if (ax > T.half) { const tt = Math.min(1, (ax - T.half) / T.rise); h = peak * tt * tt * (3 - 2 * tt); } // smoothstep up the flank
+  const flank = Math.max(0, Math.min(1, (ax - T.half) / T.rise)), fold = flank * (1 - flank) * 4;
+  h += Math.sin(z * (right ? T.freqR : T.freqL) + (right ? T.phaseR : T.phaseL)) * peak * (right ? T.ampR : T.ampL) * fold; // ridgelines
+  h += Math.sin(x * 0.08) * Math.cos(z * 0.06) * T.floorRough * (1 - Math.min(1, ax / T.half));                            // faint floor undulation
+  for (const k of T.knolls) { const dx = x - k.x, dz = z - k.z; h += k.h * Math.exp(-(dx * dx + dz * dz) / (2 * k.r * k.r)); } // high ground
+  return Math.max(0, h);
+}
+const _BATTLE_STOPS = [[0, 0x46722a], [0.16, 0x4f6f2c], [0.40, 0x6b6a48], [0.64, 0x726d63], [0.84, 0x8a867f], [0.94, 0xaab0b3], [1, 0xdfe4e8]];
+function battleValleyColor(c, y, peak) {
+  const f = Math.max(0, Math.min(1, y / peak));
+  let a = _BATTLE_STOPS[0], b = _BATTLE_STOPS[_BATTLE_STOPS.length - 1];
+  for (let i = 0; i < _BATTLE_STOPS.length - 1; i++) if (f >= _BATTLE_STOPS[i][0] && f <= _BATTLE_STOPS[i + 1][0]) { a = _BATTLE_STOPS[i]; b = _BATTLE_STOPS[i + 1]; break; }
+  const t = (b[0] - a[0]) < 1e-6 ? 0 : (f - a[0]) / (b[0] - a[0]);
+  return c.setHex(a[1]).lerp(_tmpCol.setHex(b[1]), t);
+}
+function battleTerrain() {
+  const T = BATTLE.terr, W = (T.half + T.rise) * 2 * 1.1, L = 300;
+  const geo = new THREE.PlaneGeometry(W, L, 160, 168); geo.rotateX(-Math.PI / 2);
+  const p = geo.attributes.position, col = new Float32Array(p.count * 3), c = new THREE.Color();
+  for (let i = 0; i < p.count; i++) {
+    const y = battleValleyY(p.getX(i), p.getZ(i)); p.setY(i, y);
+    battleValleyColor(c, y, T.peakRef); col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3)); geo.computeVertexNormals();
+  const m = new THREE.Mesh(geo, new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: true, shininess: 2, specular: 0x000000 }));
+  m.receiveShadow = true; return m;
+}
+
+// ---- soldiers, units & commanders ----
+// A body belongs to a UNIT (a division the commander maneuvers). Its commanded position is its unit's
+// moving anchor, offset by its slot (slotX across the front, slotBack = depth behind), rotated to the
+// unit's facing and slid onto the valley floor. role is 'melee' (sword) or 'archer' (bow).
+function battleSlot(b) {
+  const u = b.unit, cx = battleFloorCx(u.az);
+  const fwx = Math.sin(u.faceYaw), fwz = Math.cos(u.faceYaw), rgx = Math.cos(u.faceYaw), rgz = -Math.sin(u.faceYaw);
+  return { x: u.ax + cx + rgx * b.slotX - fwx * b.slotBack, z: u.az + rgz * b.slotX - fwz * b.slotBack };
+}
+function battleMakeBody(army, unit, slotX, slotBack, role, r) {
+  const weapon = role === 'archer' ? 'bow' : 'sword';
+  const h = buildHumanoid(army.team.pal, 1, weapon); const group = h.group || h;
+  const yaw = army.sign > 0 ? 0 : Math.PI;             // figures face +Z at yaw 0, so CRIMSON turns about
+  const maxHp = rand(BATTLE_MELEE.hp[0], BATTLE_MELEE.hp[1]) * (role === 'archer' ? BATTLE_ARCHER.hpMul : 1);
+  const b = { id: BATTLE.idc++, team: army.team, army, unit, role, group, parts: h.parts, anim: makeAnimator(h.parts),
+           x: 0, z: 0, yaw, slotX, slotBack, phase: r() * TAU, speed: 0.85 + r() * 0.35,
+           hp: maxHp, maxHp, morale: 1, broken: false, moraleCd: r() * 0.4,
+           state: 'engage', mt: 0, move: null, target: null, shotCd: 0.3 + r() * 1.8, drawT: 0,
+           atkT: 0, atkStrike: 0, struck: false, isCommander: false, watching: false, fleeing: false,
+           dead: false, deadT: 0, flinch: 0, tinted: false };
+  const s = battleSlot(b); b.x = s.x + (r() - 0.5) * 0.3; b.z = s.z;
+  group.position.set(b.x, battleValleyY(b.x, b.z), b.z); group.rotation.y = yaw;
+  scene.add(group); group.userData.bvBody = b;           // so a click can raycast back to the body
+  return b;
+}
+// muster one division at its planned anchor: a rank-and-file block, wider files for melee than archers
+function battleBuildUnit(army, spec, r) {
+  const F = army.sign > 0 ? 0 : Math.PI;
+  const u = { army, role: spec.role, kind: spec.kind, order: spec.order, sign: army.sign,
+              ax: spec.ax, az: spec.az, homeAx: spec.ax, homeAz: spec.az, faceYaw: F, wp: spec.wp || null, bodies: [] };
+  army.units.push(u);
+  const files = Math.max(3, Math.round(Math.sqrt(spec.count * (spec.role === 'archer' ? 1.4 : 1.9))));
+  const ranks = Math.ceil(spec.count / files);
+  let idx = 0;
+  for (let rk = 0; rk < ranks; rk++) for (let fi = 0; fi < files && idx < spec.count; fi++, idx++) {
+    const slotX = (fi - (files - 1) / 2) * BATTLE_FORM.gapX + (r() - 0.5) * 0.5;
+    const b = battleMakeBody(army, u, slotX, rk * BATTLE_FORM.gapZ, spec.role, r);
+    u.bodies.push(b); BATTLE.bodies.push(b);
+  }
+  return u;
+}
+// The commander's PRE-BATTLE plan: pick a doctrine from the host's makeup, then carve it into divisions
+// and place them. Aggressive generals lead from the front; cautious ones command from a rise at the rear.
+function battlePlanArmy(army, per, archerFrac, r) {
+  const archers = Math.min(per - 1, Math.round(per * archerFrac)), melee = per - archers;
+  const aggression = 0.3 + r() * 0.6, caution = 0.3 + r() * 0.5;
+  const pool = archerFrac > 0.42 ? ['defensive', 'skirmish', 'line'] : ['line', 'wings', 'oblique', 'wings', 'skirmish'];
+  const strategy = pool[Math.floor(r() * pool.length)];
+  const H = BATTLE.terr ? BATTLE.terr.half : 30, wing = H * 0.5, sign = army.sign, base = -sign * BATTLE_FORM.frontStand, fwd = sign;
+  const specs = [];
+  const add = (kind, role, count, ax, az, order, wp) => { if (count > 0) specs.push({ kind, role, count, ax, az, order, wp: wp || null }); };
+  if (strategy === 'line') {
+    const res = Math.round(melee * 0.18); add('center', 'melee', melee - res, 0, base, 'advance'); add('reserve', 'melee', res, 0, base - fwd * 11, 'hold');
+  } else if (strategy === 'wings') {
+    const res = Math.round(melee * 0.12), rem = melee - res, cen = Math.round(rem * 0.5), lw = Math.round((rem - cen) / 2), rw = rem - cen - lw;
+    add('center', 'melee', cen, 0, base, 'advance');
+    add('left', 'melee', lw, -wing, base - fwd * 3, 'flank', { ax: -H * 0.92, az: base + fwd * 6 });
+    add('right', 'melee', rw, wing, base - fwd * 3, 'flank', { ax: H * 0.92, az: base + fwd * 6 });
+    add('reserve', 'melee', res, 0, base - fwd * 12, 'hold');
+  } else if (strategy === 'oblique') {
+    const strongR = r() < 0.5, strong = Math.round(melee * 0.5), cen = Math.round(melee * 0.32), weak = melee - strong - cen;
+    add('center', 'melee', cen, 0, base, 'advance');
+    add(strongR ? 'right' : 'left', 'melee', strong, strongR ? wing : -wing, base, 'charge');
+    add(strongR ? 'left' : 'right', 'melee', weak, strongR ? -wing : wing, base - fwd * 8, 'hold');   // refused flank
+  } else if (strategy === 'defensive') {
+    const res = Math.round(melee * 0.35); add('center', 'melee', melee - res, 0, base, 'hold'); add('reserve', 'melee', res, 0, base - fwd * 10, 'hold');
+  } else { add('center', 'melee', melee, 0, base - fwd * 6, 'advance'); }  // skirmish: melee behind the arrow screen
+  if (archers > 0) add(strategy === 'skirmish' || strategy === 'defensive' ? 'skirmish' : 'archers', 'archer', archers,
+                       0, base + fwd * (strategy === 'skirmish' || strategy === 'defensive' ? 4 : -7), 'skirmish');
+  const lead = strategy !== 'defensive' && r() < aggression;
+  return { strategy, aggression, caution, lead, specs };
+}
+function battleAddCommander(army, plan, r) {
+  const cen = army.units.find(u => u.kind === 'center') || army.units.find(u => u.role === 'melee') || army.units[0];
+  const sign = army.sign, base = -sign * BATTLE_FORM.frontStand;
+  const cu = { army, role: 'melee', kind: 'command', order: plan.lead ? 'advance' : 'hold', sign,
+               ax: 0, az: plan.lead ? base + sign * 2 : base - sign * 22, homeAx: 0, homeAz: base - sign * 22,
+               faceYaw: sign > 0 ? 0 : Math.PI, wp: null, bodies: [] };
+  army.units.push(cu);
+  const c = battleMakeBody(army, cu, 0, 0, 'melee', r);
+  c.isCommander = true; c.watching = !plan.lead; c.maxHp *= 2.2; c.hp = c.maxHp; c.speed *= 0.95;
+  c.group.scale.setScalar(1.28);
+  try { const ban = makeBanner(army.team.pal.accent); if (ban) { ban.position.y = 2.7; ban.scale.setScalar(1.05); c.group.add(ban); } } catch (e) {}
+  cu.bodies.push(c); BATTLE.bodies.push(c); army.commander = c;
+  return c;
+}
+function battleRaiseArmy(team, per, seed, archerFrac) {
+  const r = _mulberry32((seed >>> 0) || 1);
+  const army = { team, sign: team.sign, start: per, alive: per, units: [], commander: null, cmd: null, routing: false, thinkCd: 1.0 };
+  BATTLE.armies.push(army);
+  const plan = battlePlanArmy(army, per, clamp(archerFrac == null ? BATTLE.cfg.archerFrac : archerFrac, 0, 0.7), r);
+  army.cmd = { aggression: plan.aggression, caution: plan.caution, lead: plan.lead, strategy: plan.strategy };
+  for (const spec of plan.specs) battleBuildUnit(army, spec, r);
+  battleAddCommander(army, plan, r);
+  army.start = army.alive = BATTLE.bodies.filter(b => b.army === army).length; // honest total incl. the commander
+  return army;
+}
+function battleNearestEnemyWithin(b, R) {
+  let best = null, bd = R * R;
+  for (const o of BATTLE.bodies) {
+    if (o.dead || o.team === b.team) continue;
+    const dx = o.x - b.x, dz = o.z - b.z, d = dx * dx + dz * dz;
+    if (d < bd) { bd = d; best = o; }
+  }
+  return best;
+}
+// weigh the real facts around a man and settle his nerve; break/rally with hysteresis so he doesn't dither
+function battleAssessMorale(b) {
+  let friends = 0, foes = 0; const R2 = BATTLE_MORALE.senseR * BATTLE_MORALE.senseR;
+  for (const o of BATTLE.bodies) {
+    if (o.dead || o === b) continue;
+    const dx = o.x - b.x, dz = o.z - b.z; if (dx * dx + dz * dz > R2) continue;
+    (o.team === b.team ? friends++ : foes++);
+  }
+  const localBal = (friends + 1) / (friends + foes + 1);        // 1 = safe among friends, →0 = surrounded
+  const hpFrac = clamp(b.hp / b.maxHp, 0, 1);
+  const armyFrac = b.army.start ? b.army.alive / b.army.start : 1; // is the whole host winning or breaking?
+  let target = clamp(0.12 + 0.48 * localBal + 0.22 * hpFrac + 0.24 * armyFrac, 0, 1);
+  if (foes > friends + 1) target -= 0.15;                       // being personally outnumbered is its own dread
+  const k = target < b.morale ? 0.6 : 0.28;                     // fear strikes fast, courage returns slow
+  b.morale = clamp(b.morale + (target - b.morale) * k, 0, 1);
+  if (!b.broken && b.morale < BATTLE_MORALE.break) b.broken = true;
+  else if (b.broken && b.morale > BATTLE_MORALE.rally) b.broken = false;
+}
+function battleDamage(t, amt, fx, fz) {
+  t.hp -= amt;
+  t.flinch = Math.max(t.flinch, BATTLE_MELEE.flinch);
+  t.morale = Math.max(0, t.morale - BATTLE_MORALE.hitShock);   // a wound shakes the nerve
+  const dx = t.x - fx, dz = t.z - fz, dd = Math.hypot(dx, dz) || 1e-4;
+  t.x += dx / dd * BATTLE_MELEE.knock; t.z += dz / dd * BATTLE_MELEE.knock; // shove him back a step
+  if (Math.random() < BATTLE_MELEE.sfxChance) try { (Math.random() < 0.5 ? SFX.hit : SFX.clang)(t.group.position); } catch (e) {}
+  if (t.hp <= 0 && !t.dead) {
+    t.dead = true; t.deadT = 0; t.target = null;
+    if (t.isCommander) {                                 // the general is down — the whole host's heart sinks
+      t.army.commander = null; battleLogEvent('commander-down', { team: t.team.name });
+      for (const o of BATTLE.bodies) if (!o.dead && o.army === t.army) o.morale = Math.max(0, o.morale - 0.32);
+    } else for (const o of BATTLE.bodies) if (!o.dead && o.team === t.team) { // his fall shakes nearby comrades
+      const ddx = o.x - t.x, ddz = o.z - t.z; if (ddx * ddx + ddz * ddz < 36) o.morale = Math.max(0, o.morale - BATTLE_MORALE.allyDeathShock);
+    }
+  }
+}
+function battleStepDead(b, dt) {
+  b.deadT += dt;
+  const k = clamp(b.deadT / BATTLE_MELEE.deathDur, 0, 1);
+  b.group.rotation.x = -easeOut(Math.min(1, k * 1.4)) * 1.5;              // pitch forward and topple
+  b.group.position.y = battleValleyY(b.x, b.z) - k * 0.25;
+  if (k > 0.6 && !b.tinted) { setTint(b.parts, 0x000000); b.tinted = true; }
+}
+// walk a man toward a point; returns the distance that remained (0 = arrived)
+function battleMoveToward(b, tx, tz, dt, spd, amp) {
+  const dx = tx - b.x, dz = tz - b.z, dd = Math.hypot(dx, dz);
+  if (dd > 1e-3) { const step = Math.min(spd * dt, dd); b.x += dx / dd * step; b.z += dz / dd * step;
+    b.phase += dt * 8; walkLegs(b.parts, b.phase, amp == null ? 0.4 : amp); b.yaw = Math.atan2(dx, dz); }
+  return dd;
+}
+function battleMeleeCycle(b, t, dd, reach, dt) {
+  restLegs(b.parts, dt, true);
+  b.mt -= dt;
+  if (b.state === 'engage') {
+    setPose(b.anim, 'guard', 0.2);
+    if (b.mt <= 0) {
+      b.state = 'windup'; b.move = MOVES[['slashR', 'slashL', 'chop'][(b.phase * 7 | 0) % 3]];
+      b.mt = rand(BATTLE_MELEE.wind[0], BATTLE_MELEE.wind[1]); setPose(b.anim, b.move.windup, 0.1);
+    }
+  } else if (b.state === 'windup') {
+    if (b.mt <= 0) {
+      setPose(b.anim, b.move.strike, 0.05);
+      if (!t.dead && dd <= reach * 1.2) battleDamage(t, rand(BATTLE_MELEE.dmg[0], BATTLE_MELEE.dmg[1]), b.x, b.z);
+      b.state = 'recover'; b.mt = BATTLE_MELEE.rec;
+    }
+  } else {                                                                // recover
+    if (b.mt < BATTLE_MELEE.rec * 0.5) setPose(b.anim, 'guard', 0.15);
+    if (b.mt <= 0) { b.state = 'engage'; b.mt = rand(BATTLE_MELEE.cool[0], BATTLE_MELEE.cool[1]); }
+  }
+}
+// hold the slot, face the foe. If an enemy is within reach or a short leash, press him; otherwise dress back into line.
+function battleStepMelee(b, dt, slot) {
+  if (b.flinch > 0) {                                                    // reeling — his own swing is interrupted
+    b.flinch -= dt; setPose(b.anim, 'hurt', 0.06);
+    if (!b.tinted) { setTint(b.parts, 0x551111); b.tinted = true; }
+    b.state = 'engage'; b.mt = rand(0.15, 0.4); restLegs(b.parts, dt, true); return;
+  }
+  if (b.tinted) { setTint(b.parts, null); b.tinted = false; }
+  const retreating = b.unit.order === 'fallback', leash = b.unit.order === 'charge' ? BATTLE_FORM.leash * 1.9 : BATTLE_FORM.leash;
+  const t = retreating ? null : battleNearestEnemyWithin(b, BATTLE_FORM.percept); // a commanded withdrawal won't turn to fight
+  if (t) {
+    const dx = t.x - b.x, dz = t.z - b.z, dd = Math.hypot(dx, dz) || 1e-4;
+    b.yaw = Math.atan2(dx, dz); b.target = t;
+    const reach = BATTLE_MELEE.reach;
+    if (dd <= reach) { battleMeleeCycle(b, t, dd, reach, dt); return; }
+    const step = Math.min(BATTLE_MELEE.move * b.speed * dt, dd - reach * 0.85);
+    const nx = b.x + dx / dd * step, nz = b.z + dz / dd * step;
+    if (Math.hypot(nx - slot.x, nz - slot.z) <= leash) {                 // press him only while still dressed to the line
+      b.x = nx; b.z = nz; b.phase += dt * 8; walkLegs(b.parts, b.phase, 0.4); setPose(b.anim, 'guard', 0.2);
+      b.state = 'engage'; b.mt = 0; return;
+    }
+  }
+  // no reachable foe — return to the commanded slot and hold, facing the enemy
+  const rem = battleMoveToward(b, slot.x, slot.z, dt, BATTLE_FORM.marchSpeed * b.speed);
+  if (rem < 0.2) { restLegs(b.parts, dt, true); setPose(b.anim, 'guard', 0.25); b.yaw = b.unit.faceYaw; }
+  else setPose(b.anim, 'relax', 0.25);
+}
+function battleStepArcher(b, dt, slot) {
+  const threat = battleNearestEnemyWithin(b, BATTLE_ARCHER.minRange);
+  if (threat) {                                                         // a foe is in his face — give ground to keep range
+    battleMoveToward(b, slot.x, slot.z - b.army.sign * 7, dt, BATTLE_MELEE.move * b.speed, 0.6);
+    b.yaw = Math.atan2(threat.x - b.x, threat.z - b.z); b.drawT = 0; setPose(b.anim, 'relax', 0.2); return;
+  }
+  if (battleMoveToward(b, slot.x, slot.z, dt, BATTLE_FORM.marchSpeed * b.speed) > 0.3) { setPose(b.anim, 'relax', 0.25); return; }
+  restLegs(b.parts, dt, false);
+  const foe = battleNearestEnemyWithin(b, BATTLE_ARCHER.range);
+  if (!foe) { setPose(b.anim, 'relax', 0.3); return; }
+  b.yaw = Math.atan2(foe.x - b.x, foe.z - b.z);
+  if (b.drawT > 0) {                                                    // drawing the string
+    setPose(b.anim, 'aimBow', 0.15); b.drawT -= dt;
+    if (b.drawT <= 0) { setPose(b.anim, 'looseBow', 0.05); battleShootArrow(b, foe); b.shotCd = rand(BATTLE_ARCHER.cd[0], BATTLE_ARCHER.cd[1]); }
+  } else if ((b.shotCd -= dt) <= 0) { b.drawT = BATTLE_ARCHER.drawTime; setPose(b.anim, 'aimBow', 0.2); }
+  else setPose(b.anim, 'aimBow', 0.3);
+}
+// broken men rout: run past their own rear ranks, no fight left in them
+function battleStepFallback(b, dt, slot) {
+  const rem = battleMoveToward(b, slot.x, slot.z - b.army.sign * BATTLE_MORALE.fallbackDepth, dt, BATTLE_MORALE.fallbackSpeed * b.speed, 0.75);
+  setPose(b.anim, rem < 0.5 ? 'hurt' : 'relax', 0.2);
+}
+function battleStepBody(b, dt) {
+  if (b.dead) { battleStepDead(b, dt); return; }
+  if (b === BATTLE.possessed) { battleControlPossessed(b, dt); return; } // you drive him, not the AI
+  if (b.isCommander && b.watching) { battleStepCommanderWatch(b, dt); } // a general who commands from the rear
+  else {
+    if ((b.moraleCd -= dt) <= 0) { battleAssessMorale(b); b.moraleCd = rand(0.3, 0.55); }
+    const slot = battleSlot(b);
+    if (b.broken) battleStepFallback(b, dt, slot);
+    else if (b.role === 'archer') battleStepArcher(b, dt, slot);
+    else battleStepMelee(b, dt, slot);
+  }
+  updateAnimator(b.anim, dt);
+  b.group.position.set(b.x, battleValleyY(b.x, b.z), b.z);
+  b.group.rotation.set(0, b.yaw, 0);
+}
+
+// ---- arrows: a self-contained ballistic volley (reuses the shaft+head arrow look) ----
+function battleShootArrow(from, target) {
+  const g = new THREE.Group();
+  const shaft = new THREE.Mesh(cachedGeo('proj-shaft', () => new THREE.CylinderGeometry(0.03, 0.03, 0.85, 5)), mat(0x7a5a36, { smooth: true }));
+  shaft.rotation.x = Math.PI / 2; g.add(shaft);
+  const head = new THREE.Mesh(cachedGeo('proj-head', () => new THREE.ConeGeometry(0.06, 0.16, 4)), mat(0xb9c2cc, { metal: 0.5 }));
+  head.rotation.x = Math.PI / 2; head.position.z = 0.5; g.add(head);
+  const sx = from.x, sy = battleValleyY(from.x, from.z) + 1.6, sz = from.z;
+  const tx = target.x, tz = target.z, ty = battleValleyY(tx, tz) + 1.1;
+  const dist = Math.hypot(tx - sx, tz - sz), flight = Math.max(0.12, dist / BATTLE_ARCHER.projSpeed), grav = 9;
+  const vel = new THREE.Vector3((tx - sx) / flight, (ty - sy) / flight + 0.5 * grav * flight, (tz - sz) / flight);
+  g.position.set(sx, sy, sz); scene.add(g);
+  BATTLE.arrows.push({ g, vel, grav, team: from.team, target, dmg: rand(BATTLE_ARCHER.dmg[0], BATTLE_ARCHER.dmg[1]), life: flight + 0.5 });
+}
+function battleStepArrows(dt) {
+  for (let i = BATTLE.arrows.length - 1; i >= 0; i--) {
+    const a = BATTLE.arrows[i];
+    a.vel.y -= a.grav * dt; a.g.position.addScaledVector(a.vel, dt);
+    tmpV.copy(a.g.position).add(a.vel); a.g.lookAt(tmpV);
+    a.life -= dt;
+    const gy = battleValleyY(a.g.position.x, a.g.position.z);
+    let done = a.life <= 0 || a.g.position.y <= gy;
+    if (a.target && !a.target.dead) {                                   // proximity hit on the mark
+      const dx = a.target.x - a.g.position.x, dz = a.target.z - a.g.position.z;
+      if (dx * dx + dz * dz < 1.7 && Math.abs(a.g.position.y - (gy + 1.1)) < 1.8) {
+        battleDamage(a.target, a.dmg, a.g.position.x - a.vel.x * 0.02, a.g.position.z - a.vel.z * 0.02); done = true;
+      }
+    }
+    if (done) { scene.remove(a.g); try { disposeGroup(a.g); } catch (e) {} BATTLE.arrows.splice(i, 1); }
+  }
+}
+// ---- commanders maneuver their divisions ----
+function battleUnitAlive(u) { let n = 0; for (const b of u.bodies) if (!b.dead) n++; return n; }
+// move each division's anchor per its standing order; bodies then dress to their slots on the new anchor
+function battleAdvanceUnits(dt) {
+  if (BATTLE.phase !== 'battle') return;                  // during the deploy phase everyone stands in the array
+  for (const A of BATTLE.armies) for (const u of A.units) { u.wx = u.ax + battleFloorCx(u.az); u.wz = u.az; }
+  for (const A of BATTLE.armies) for (const u of A.units) {
+    if (!battleUnitAlive(u)) continue;
+    let en = null, ed = Infinity;                         // nearest enemy division
+    for (const B of BATTLE.armies) { if (B === A) continue; for (const v of B.units) { if (!battleUnitAlive(v)) continue;
+      const dx = v.wx - u.wx, dz = v.wz - u.wz, d = dx * dx + dz * dz; if (d < ed) { ed = d; en = v; } } }
+    if (!en) continue;
+    const bx = en.wx - u.wx, bz = en.wz - u.wz, bd = Math.hypot(bx, bz) || 1e-4, bearing = Math.atan2(bx, bz), M = BATTLE_FORM.marchSpeed;
+    const face = tg => { let da = tg - u.faceYaw; da = Math.atan2(Math.sin(da), Math.cos(da)); u.faceYaw += da * Math.min(1, dt * 2.5); };
+    switch (u.order) {
+      case 'hold': u.ax += (u.homeAx - u.ax) * Math.min(1, dt); u.az += (u.homeAz - u.az) * Math.min(1, dt); face(bearing); break;
+      case 'advance': if (bd > BATTLE_FORM.contactGap + 3) { u.az += (bz / bd) * M * dt; u.ax += (bx / bd) * M * dt * 0.4; } face(bearing); break;
+      case 'charge': if (bd > BATTLE_FORM.contactGap + 1) { u.az += (bz / bd) * M * 1.7 * dt; u.ax += (bx / bd) * M * 1.7 * dt; } face(bearing); break;
+      case 'flank': if (u.wp) { const wx = u.wp.ax - u.ax, wz = u.wp.az - u.az, wd = Math.hypot(wx, wz);
+          if (wd < 3) { u.order = 'charge'; u.wp = null; } else { u.ax += (wx / wd) * M * 1.15 * dt; u.az += (wz / wd) * M * 1.15 * dt; face(Math.atan2(wx, wz)); } }
+          else u.order = 'charge'; break;
+      case 'fallback': u.az -= A.sign * BATTLE_MORALE.fallbackSpeed * 0.6 * dt; face(bearing); break;
+      case 'skirmish': { const stand = BATTLE_ARCHER.range * 0.62;
+          if (bd < stand - 2) u.az -= (bz / bd) * M * dt; else if (bd > stand + 3) u.az += (bz / bd) * M * 0.7 * dt; face(bearing); break; }
+    }
+  }
+}
+// the commander's running read of the battle — re-tasks his divisions every couple of seconds
+function battleCommanderThink(A) {
+  if (BATTLE.phase !== 'battle') return;
+  const B = BATTLE.armies.find(x => x !== A); if (!B) return;
+  const my = A.alive, foe = B.alive, ratio = my / (foe + 1), p = A.cmd;
+  const weakFriend = A.units.some(x => x.role === 'melee' && x.kind !== 'command' && battleUnitAlive(x) > 0 && battleUnitAlive(x) < x.bodies.length * 0.4);
+  for (const u of A.units) {
+    const alive = battleUnitAlive(u); if (!alive || u.kind === 'command') continue;
+    if (u.role === 'archer') { u.order = 'skirmish'; continue; }
+    const broken = u.bodies.filter(b => !b.dead && b.broken).length;
+    if (broken > alive * 0.55) { u.order = 'fallback'; continue; }        // this division has cracked — pull it back
+    if (u.kind === 'reserve') { u.order = (ratio > 1.02 || foe < A.start * 0.55 || weakFriend) ? 'charge' : 'hold'; continue; } // commit when it tells
+    if (u.kind === 'left' || u.kind === 'right') { u.order = ratio < 0.65 * p.caution ? 'fallback' : u.wp ? 'flank' : 'charge'; continue; }
+    u.order = (ratio < 0.5 && p.aggression < 0.7) ? 'hold' : 'advance';   // the center
+  }
+  A.routing = my < A.start * (0.16 + 0.14 * p.caution);
+  if (A.routing) for (const u of A.units) if (u.role !== 'archer' && u.kind !== 'command') u.order = 'fallback'; // a general retreat
+}
+// a general who watches from the rear: he holds his rise and reads the fight — but rides for his life once his host breaks
+function battleStepCommanderWatch(b, dt) {
+  const u = b.unit, cx = battleFloorCx(u.az);
+  b.fleeing = b.army.alive < b.army.start * 0.22;
+  const tz = b.fleeing ? u.az - b.army.sign * 46 : u.az;
+  const rem = battleMoveToward(b, u.ax + cx, tz, dt, (b.fleeing ? BATTLE_MORALE.fallbackSpeed : BATTLE_FORM.marchSpeed) * b.speed, b.fleeing ? 0.8 : 0.4);
+  if (rem < 0.3) { restLegs(b.parts, dt, false); setPose(b.anim, 'relax', 0.3); b.yaw = b.army.sign > 0 ? 0 : Math.PI; }
+}
+// ---- bodies take up space: nobody walks through anybody, they shove ----
+// a spatial-hash relaxation pass — living men within bodyR of each other are pushed apart (equal and
+// opposite, weighted so a possessed hero is heavy and wades through the press). This is what turns two
+// lines meeting into a shoving crush instead of overlapping ghosts.
+const _battleGrid = new Map();
+function battleSeparate() {
+  const R = BATTLE_FORM.bodyR, R2 = R * R, cs = R, grid = _battleGrid; grid.clear();
+  for (const b of BATTLE.bodies) {
+    if (b.dead) continue;
+    b._cx = Math.floor(b.x / cs); b._cz = Math.floor(b.z / cs);
+    const k = b._cx + ':' + b._cz; let arr = grid.get(k); if (!arr) { arr = []; grid.set(k, arr); } arr.push(b);
+  }
+  for (const b of BATTLE.bodies) {
+    if (b.dead) continue;
+    for (let ox = -1; ox <= 1; ox++) for (let oz = -1; oz <= 1; oz++) {
+      const arr = grid.get((b._cx + ox) + ':' + (b._cz + oz)); if (!arr) continue;
+      for (const o of arr) {
+        if (o.id <= b.id) continue;                        // handle each pair once
+        const dx = o.x - b.x, dz = o.z - b.z, d2 = dx * dx + dz * dz;
+        if (d2 >= R2 || d2 < 1e-6) continue;
+        const d = Math.sqrt(d2), overlap = R - d, nx = dx / d, nz = dz / d;
+        const wb = b === BATTLE.possessed ? 4 : 1, wo = o === BATTLE.possessed ? 4 : 1, tot = wb + wo;
+        b.x -= nx * overlap * (wo / tot); b.z -= nz * overlap * (wo / tot);
+        o.x += nx * overlap * (wb / tot); o.z += nz * overlap * (wb / tot);
+      }
+    }
+  }
+}
+
+// ---- possession: click a soldier and drive him yourself (WASD + mouse-look) ----
+const _battleRay = new THREE.Raycaster();
+function battlePickBody(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  _battleRay.setFromCamera({ x: ((clientX - rect.left) / rect.width) * 2 - 1, y: -((clientY - rect.top) / rect.height) * 2 + 1 }, camera);
+  const groups = []; for (const b of BATTLE.bodies) if (!b.dead) groups.push(b.group);
+  const hits = _battleRay.intersectObjects(groups, true);
+  for (const h of hits) { let o = h.object; while (o) { if (o.userData && o.userData.bvBody && !o.userData.bvBody.dead) return o.userData.bvBody; o = o.parent; } }
+  return null;
+}
+function battlePossess(b) {
+  if (!b || b.dead) return null;
+  if (BATTLE.rec) BATTLE.rec.hadPlayer = true;             // this battle is no longer pure AI-vs-AI
+  BATTLE.possessed = b; b.broken = false; b.morale = 1;    // a driven man never routs
+  if (b.tinted) { setTint(b.parts, null); b.tinted = false; }
+  BATTLE.cam.yaw = b.yaw; BATTLE.cam.pitch = 0.32;
+  try { canvas.requestPointerLock && canvas.requestPointerLock(); } catch (e) {}
+  battleUpdateHud();
+  return b;
+}
+function battleRelease() {
+  if (!BATTLE.possessed) return;
+  BATTLE.possessed = null; BATTLE.keys.clear();
+  try { if (document.pointerLockElement === canvas && document.exitPointerLock) document.exitPointerLock(); } catch (e) {}
+  battleUpdateHud();
+}
+function battlePlayerStrike(b) {                            // the possessed hero's blow: a frontal cone
+  const reach = BATTLE_MELEE.reach * 1.35, fdx = Math.sin(b.yaw), fdz = Math.cos(b.yaw);
+  for (const o of BATTLE.bodies) {
+    if (o.dead || o.team === b.team) continue;
+    const dx = o.x - b.x, dz = o.z - b.z, dd = Math.hypot(dx, dz); if (dd > reach) continue;
+    if ((dx * fdx + dz * fdz) / (dd || 1) < 0.25) continue; // only what's in front of the swing
+    battleDamage(o, rand(BATTLE_MELEE.dmg[0], BATTLE_MELEE.dmg[1]) * 1.5, b.x, b.z);
+  }
+}
+function battlePlayerAttack() {                            // fired by a mouse click while possessing
+  const b = BATTLE.possessed; if (!b || b.dead || b.atkT > 0) return;
+  if (b.role === 'archer') {
+    let foe = battleNearestEnemyWithin(b, BATTLE_ARCHER.range);
+    const fdx = Math.sin(b.yaw), fdz = Math.cos(b.yaw);
+    if (!foe || ((foe.x - b.x) * fdx + (foe.z - b.z) * fdz) < 0) foe = { x: b.x + fdx * 40, z: b.z + fdz * 40, dead: false }; // no mark → loose downrange
+    setPose(b.anim, 'looseBow', 0.05); battleShootArrow(b, foe); b.atkT = 0.5; b.struck = true;
+  } else {
+    b.move = MOVES[['slashR', 'slashL', 'chop'][(b.phase * 7 | 0) % 3]];
+    setPose(b.anim, b.move.windup, 0.08); b.atkT = 0.42; b.atkStrike = 0.22; b.struck = false;
+  }
+}
+function battleControlPossessed(b, dt) {
+  const cam = BATTLE.cam, K = BATTLE.keys;
+  const fx = Math.sin(cam.yaw), fz = Math.cos(cam.yaw), rx = Math.cos(cam.yaw), rz = -Math.sin(cam.yaw);
+  let mx = 0, mz = 0;
+  if (K.has('w')) { mx += fx; mz += fz; } if (K.has('s')) { mx -= fx; mz -= fz; }
+  if (K.has('d')) { mx += rx; mz += rz; } if (K.has('a')) { mx -= rx; mz -= rz; }
+  b.yaw = cam.yaw;                                          // you face where you aim
+  const mm = Math.hypot(mx, mz), sprint = K.has('shift');
+  if (b.atkT > 0) {                                         // mid-swing: legs settle, the blow lands partway
+    b.atkT -= dt;
+    if (!b.struck && b.atkT <= b.atkStrike) { setPose(b.anim, b.move.strike, 0.05); battlePlayerStrike(b); b.struck = true; }
+    if (b.atkT <= 0) setPose(b.anim, 'guard', 0.15);
+    restLegs(b.parts, dt, true);
+  } else if (mm > 1e-3) {
+    const spd = BATTLE_MELEE.move * b.speed * (sprint ? 1.6 : 1.05);
+    b.x += mx / mm * spd * dt; b.z += mz / mm * spd * dt;
+    b.phase += dt * (sprint ? 13 : 10); walkLegs(b.parts, b.phase, sprint ? 0.9 : 0.55);
+    setPose(b.anim, b.role === 'archer' ? 'relax' : 'guard', 0.2);
+  } else { restLegs(b.parts, dt, true); setPose(b.anim, b.role === 'archer' ? 'relax' : 'guard', 0.2); }
+  updateAnimator(b.anim, dt);
+  b.group.position.set(b.x, battleValleyY(b.x, b.z), b.z);
+  b.group.rotation.set(0, b.yaw, 0);
+}
+function battleFollowCam(dt) {
+  const b = BATTLE.possessed, cam = BATTLE.cam;
+  const hx = b.x, hy = battleValleyY(b.x, b.z) + 1.55, hz = b.z, cp = Math.cos(cam.pitch);
+  tmpV.set(hx - Math.sin(cam.yaw) * cam.dist * cp, hy + cam.dist * Math.sin(cam.pitch) + 0.6, hz - Math.cos(cam.yaw) * cam.dist * cp);
+  camera.position.lerp(tmpV, clamp(dt * 12, 0, 1));
+  camera.lookAt(hx, hy, hz);
+}
+
+/* ============================================================================
+   BATTLE LOG — every resolved battle captured as an ML-ready record so an NPC
+   battle-intelligence layer can learn from it: pre-battle FEATURES (terrain,
+   odds, each commander's doctrine/temperament/deployment), a TIMELINE (casualty
+   samples + events), and the OUTCOME (winner, margin, survivors, whose general
+   lived). Auto-logs AI-vs-AI resolutions to localStorage; battles you fought in
+   are flagged hadPlayer so pure-AI rows can be filtered. Optional POST sink
+   (?log=<url> / BV.battleLogSink) feeds a real server pipeline later.
+   Hooks: BV.battleLog / BV.battleIntel / BV.battleLogExport / BV.battleLogClear.
+   ============================================================================ */
+const BATTLE_LOG_KEY = 'bv-battle-log-v1', BATTLE_LOG_CAP = 800, BATTLE_SAMPLE = 1.0;
+function battleLogLoad() { try { BATTLE.log = JSON.parse(localStorage.getItem(BATTLE_LOG_KEY) || '[]') || []; } catch (e) { BATTLE.log = []; } }
+function battleLogSave() { try { localStorage.setItem(BATTLE_LOG_KEY, JSON.stringify(BATTLE.log.slice(-BATTLE_LOG_CAP))); } catch (e) {} }
+function battleArmyFeatures(A) {
+  return { team: A.team.name, doctrine: A.cmd.strategy, aggression: +A.cmd.aggression.toFixed(2), caution: +A.cmd.caution.toFixed(2),
+           lead: A.cmd.lead, start: A.start,
+           archers: A.units.filter(u => u.role === 'archer').reduce((s, u) => s + u.bodies.length, 0),
+           units: A.units.filter(u => u.kind !== 'command').map(u => ({ kind: u.kind, role: u.role, n: u.bodies.length })) };
+}
+function battleRecordStart() {
+  const T = BATTLE.terr;
+  BATTLE.rec = {
+    id: 'b' + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36),
+    ts: Date.now(), seed: BATTLE.cfg.seed, fixed: !!BATTLE.cfg.fixed, hadPlayer: false,
+    terrain: { half: +T.half.toFixed(1), rise: +T.rise.toFixed(1), peakL: +T.peakL.toFixed(1), peakR: +T.peakR.toFixed(1), bend: +T.bend.toFixed(1), knolls: T.knolls.length },
+    armies: BATTLE.armies.map(battleArmyFeatures),
+    samples: [], events: [], t: 0, ticks: 0, _sampleAt: 0, _blood: false, _routed: [false, false], done: false,
+  };
+}
+function battleLogEvent(type, extra) { const r = BATTLE.rec; if (!r || r.done) return; r.events.push(Object.assign({ t: +r.t.toFixed(1), type }, extra || {})); }
+function battleRecordTick(dt, a, c) {
+  const r = BATTLE.rec; if (!r || r.done) return;
+  r.t += dt; r.ticks++;
+  if (!r._blood && (a + c) < (BATTLE.armies[0].start + BATTLE.armies[1].start)) { r._blood = true; battleLogEvent('first-blood'); }
+  const [ra, rc] = battleRouting();                                    // when a wing's nerve visibly cracks
+  [[0, ra, a], [1, rc, c]].forEach(([i, rt, al]) => { if (!r._routed[i] && al > 0 && rt >= Math.max(3, BATTLE.armies[i].start * 0.25)) { r._routed[i] = true; battleLogEvent('mass-rout', { team: BATTLE_TEAMS[i].name }); } });
+  if (r.t >= r._sampleAt) { r.samples.push([+r.t.toFixed(1), a, c]); r._sampleAt += BATTLE_SAMPLE; }
+}
+function battleRecordFinish(winner) {
+  const r = BATTLE.rec; if (!r || r.done) return; r.done = true;
+  const [a, c] = battleCounts();
+  if (!winner) winner = a > c ? BATTLE_TEAMS[0].name : c > a ? BATTLE_TEAMS[1].name : 'draw';
+  r.durationSec = +r.t.toFixed(1);
+  battleLogEvent('over', { winner });
+  r.outcome = { winner, azureSurvivors: a, crimsonSurvivors: c, margin: Math.abs(a - c) };
+  r.armies.forEach((af, i) => { const A = BATTLE.armies[i];
+    af.survivors = A.alive; af.dead = A.start - A.alive; af.commanderSurvived = !!A.commander; af.won = winner === af.team;
+    af.unitsFinal = A.units.filter(u => u.kind !== 'command').map(u => ({ kind: u.kind, n: battleUnitAlive(u) }));
+  });
+  for (const k of ['_sampleAt', '_blood', '_routed', 't', 'done']) delete r[k];  // drop scratch fields
+  BATTLE.log.push(r); battleLogSave(); battleLogPost(r); BATTLE.rec = null;
+  if (BATTLE.logOpen) battleLogPanel();
+}
+function battleLogPost(rec) {                                          // optional fire-and-forget server ingest
+  const url = BATTLE.cfg.sink; if (!url) return;
+  try { fetch(url === 'server' ? '/api/v1/battle-log' : url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(rec), keepalive: true }).catch(() => {}); } catch (e) {}
+}
+// the first cut of the intelligence layer: what the logged battles say about doctrine, generalship & odds
+function battleIntel(opts) {
+  const includePlayer = opts && opts.includePlayer;
+  const games = BATTLE.log.filter(g => g.outcome && (includePlayer || !g.hadPlayer));
+  const doc = {}, matchup = {}, lead = { lead: { g: 0, w: 0, s: 0 }, watch: { g: 0, w: 0, s: 0 } };
+  let odds = { g: 0, biggerWon: 0 };
+  for (const g of games) {
+    for (const af of g.armies) {
+      (doc[af.doctrine] || (doc[af.doctrine] = { g: 0, w: 0 })); doc[af.doctrine].g++; if (af.won) doc[af.doctrine].w++;
+      const L = af.lead ? 'lead' : 'watch'; lead[L].g++; if (af.won) lead[L].w++; if (af.commanderSurvived) lead[L].s++;
+    }
+    if (g.outcome.winner !== 'draw' && g.armies.length === 2) {
+      const w = g.armies.find(x => x.won), l = g.armies.find(x => !x.won);
+      if (w && l) { const key = w.doctrine + ' ▸ ' + l.doctrine; (matchup[key] || (matchup[key] = 0)); matchup[key]++;
+        odds.g++; if ((w.start >= l.start)) odds.biggerWon++; }
+    }
+  }
+  const pct = (w, g) => g ? Math.round(100 * w / g) : 0;
+  return {
+    battles: games.length, total: BATTLE.log.length,
+    doctrines: Object.entries(doc).map(([k, v]) => ({ doctrine: k, games: v.g, winPct: pct(v.w, v.g) })).sort((x, y) => y.winPct - x.winPct),
+    generalship: { lead: { games: lead.lead.g, winPct: pct(lead.lead.w, lead.lead.g), survivalPct: pct(lead.lead.s, lead.lead.g) },
+                   watch: { games: lead.watch.g, winPct: pct(lead.watch.w, lead.watch.g), survivalPct: pct(lead.watch.s, lead.watch.g) } },
+    biggerArmyWinPct: pct(odds.biggerWon, odds.g),
+    topMatchups: Object.entries(matchup).map(([k, n]) => ({ matchup: k, n })).sort((x, y) => y.n - x.n).slice(0, 8),
+  };
+}
+function battleLogExport() {
+  try {
+    const blob = new Blob([JSON.stringify(BATTLE.log)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob), a = document.createElement('a');
+    a.href = url; a.download = 'battle-log-' + Date.now() + '.json'; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 3000);
+  } catch (e) {}
+  return BATTLE.log.length;
+}
+function battleLogClear() { BATTLE.log.length = 0; battleLogSave(); if (BATTLE.logOpen) battleLogPanel(); battleUpdateHud(); return 0; }
+function battleLogPanel() {
+  let p = document.getElementById('battle-log');
+  if (!BATTLE.logOpen) { if (p) p.remove(); return; }
+  if (!p) {
+    p = document.createElement('div'); p.id = 'battle-log';
+    p.style.cssText = 'position:fixed;right:12px;top:12px;bottom:12px;z-index:41;width:326px;overflow:auto;' +
+      'background:rgba(16,14,24,.95);border:1px solid #3a3247;border-radius:10px;padding:14px;font:12px system-ui;color:#e8def8';
+    document.body.appendChild(p);
+  }
+  const I = battleIntel(), bar = (v) => '<span style="display:inline-block;height:7px;border-radius:3px;background:#4d8dff;vertical-align:middle;width:' + Math.max(2, v * 0.9) + 'px"></span>';
+  const dRows = I.doctrines.map(d => '<div style="display:flex;justify-content:space-between;gap:6px;margin:2px 0"><span>' + d.doctrine + '</span><span>' + bar(d.winPct) + ' <b>' + d.winPct + '%</b> <span style="color:#8a7fa0">·' + d.games + '</span></span></div>').join('') || '<div style="color:#8a7fa0">no data yet</div>';
+  const mRows = I.topMatchups.map(m => '<div style="display:flex;justify-content:space-between;margin:1px 0"><span>' + m.matchup + '</span><span style="color:#8a7fa0">×' + m.n + '</span></div>').join('') || '<div style="color:#8a7fa0">—</div>';
+  const G = I.generalship;
+  const recent = BATTLE.log.slice(-14).reverse().map(g => {
+    if (!g.outcome) return '';
+    const A = g.armies[0], C = g.armies[1], win = g.outcome.winner;
+    const col = win === 'AZURE' ? '#7db3ff' : win === 'CRIMSON' ? '#ff8a7d' : '#c9bfda';
+    return '<div style="border-top:1px solid #2a2438;padding:4px 0;line-height:1.35">' +
+      '<span style="color:#7db3ff">' + A.doctrine + ' ' + A.start + '</span> vs <span style="color:#ff8a7d">' + C.doctrine + ' ' + C.start + '</span>' +
+      '<div><b style="color:' + col + '">' + win + '</b> +' + g.outcome.margin + ' · ' + g.durationSec + 's' +
+      (g.hadPlayer ? ' · <span style="color:#ffe089">⚔you</span>' : '') + '</div></div>';
+  }).join('');
+  p.innerHTML =
+    '<div style="display:flex;justify-content:space-between;align-items:center"><b style="color:#ffe089;font-size:14px">📊 Battle Intelligence</b><button id="bl-x" style="border:0;background:#2a2438;color:#e8def8;border-radius:6px;cursor:pointer;padding:3px 8px">✕</button></div>' +
+    '<div style="color:#8a7fa0;margin:6px 0 10px">' + I.battles + ' AI battles analysed <span style="color:#5f566e">(' + I.total + ' logged)</span></div>' +
+    '<div style="font-weight:800;color:#c9bfda;margin-bottom:3px">Doctrine win rate</div>' + dRows +
+    '<div style="font-weight:800;color:#c9bfda;margin:10px 0 3px">General: lead vs watch</div>' +
+    '<div style="display:flex;gap:8px">' +
+      '<div style="flex:1;background:#221d30;border-radius:6px;padding:6px"><div style="color:#ffcf7a;font-weight:700">⚔ Lead</div>win <b>' + G.lead.winPct + '%</b><br>survive <b>' + G.lead.survivalPct + '%</b><br><span style="color:#8a7fa0">' + G.lead.games + ' gen.</span></div>' +
+      '<div style="flex:1;background:#221d30;border-radius:6px;padding:6px"><div style="color:#9fd6ff;font-weight:700">👁 Watch</div>win <b>' + G.watch.winPct + '%</b><br>survive <b>' + G.watch.survivalPct + '%</b><br><span style="color:#8a7fa0">' + G.watch.games + ' gen.</span></div>' +
+    '</div>' +
+    '<div style="margin-top:8px;color:#c9bfda">Bigger army wins <b>' + I.biggerArmyWinPct + '%</b></div>' +
+    '<div style="font-weight:800;color:#c9bfda;margin:10px 0 3px">Top matchups (winner ▸ loser)</div>' + mRows +
+    '<div style="display:flex;gap:6px;margin:12px 0 4px"><button id="bl-exp" style="flex:1;border:0;background:#2a5cc0;color:#fff;border-radius:6px;cursor:pointer;padding:6px;font-weight:700">⬇ Export JSON</button><button id="bl-clr" style="border:0;background:#5a2a2a;color:#fff;border-radius:6px;cursor:pointer;padding:6px 10px">Clear</button></div>' +
+    '<div style="font-weight:800;color:#c9bfda;margin:10px 0 2px">Recent</div>' + (recent || '<div style="color:#8a7fa0">none yet</div>');
+  p.querySelector('#bl-x').onclick = () => { BATTLE.logOpen = false; battleLogPanel(); battleUpdateHud(); };
+  p.querySelector('#bl-exp').onclick = () => battleLogExport();
+  p.querySelector('#bl-clr').onclick = () => { if (confirm('Clear all logged battles?')) battleLogClear(); };
+}
+
+// ---- counts / HUD ----
+// tally the living per side AND refresh each army's alive count (morale weighs the host's strength)
+function battleCounts() {
+  let a = 0, c = 0;
+  for (const A of BATTLE.armies) A.alive = 0;
+  for (const b of BATTLE.bodies) { if (b.dead) continue; b.army.alive++; (b.team === BATTLE_TEAMS[0] ? a++ : c++); }
+  return [a, c];
+}
+function battleRouting() {
+  let a = 0, c = 0;
+  for (const b of BATTLE.bodies) { if (b.dead || !b.broken) continue; (b.team === BATTLE_TEAMS[0] ? a++ : c++); }
+  return [a, c];
+}
+function battleUpdateHud() {
+  if (!BATTLE.hudEl) return;
+  const [a, c] = battleCounts();
+  const [ra, rc] = battleRouting();
+  const cnt = document.getElementById('battle-counts');
+  const genLabel = A => { if (!A || !A.cmd) return ''; const c = A.commander;
+    const tag = !c ? '☠ leaderless' : A.cmd.lead ? (c === BATTLE.possessed ? 'you lead' : 'leads') : c.fleeing ? 'fled' : 'commands';
+    return '<span style="color:#9a90ab;font-weight:600;font-size:11px"> · ' + A.cmd.strategy + ' · ' + tag + '</span>'; };
+  const row = (A, name, col, n, routing) => '<div style="margin-top:3px"><div style="display:flex;justify-content:space-between">' +
+    '<span style="color:' + col + ';font-weight:800">' + name + '</span><span style="font-weight:800">' + n +
+    (routing ? '<span style="color:#e0b84d;font-weight:600;font-size:11px"> · ' + routing + ' routing</span>' : '') + '</span></div>' +
+    '<div style="line-height:1.1">' + genLabel(A) + '</div></div>';
+  const p = BATTLE.possessed;
+  const poss = p && !p.dead
+    ? '<div style="margin-top:8px;padding-top:8px;border-top:1px solid #3a3247">' +
+        '<div style="color:' + (p.team === BATTLE_TEAMS[0] ? '#7db3ff' : '#ff8a7d') + ';font-weight:800">◉ you · ' + p.team.name + ' ' + p.role +
+        '<span style="color:#8fd08f;font-weight:600"> · ' + Math.max(0, Math.round(p.hp)) + 'hp</span></div>' +
+        '<div style="margin-top:3px;font-size:11px;color:#c9bfda">WASD move · mouse aim · click ' + (p.role === 'archer' ? 'shoot' : 'strike') + ' · Esc release</div></div>'
+    : '';
+  const phase = BATTLE.phase === 'deploy' ? '<div style="margin:2px 0 4px;color:#ffe089;font-weight:700;font-size:11px">⚑ commanders deploying…</div>' : '';
+  if (cnt) cnt.innerHTML = phase +
+    row(BATTLE.armies[0], BATTLE_TEAMS[0].name, '#7db3ff', a, ra) + row(BATTLE.armies[1], BATTLE_TEAMS[1].name, '#ff8a7d', c, rc) +
+    (BATTLE.over ? '<div style="margin-top:6px;color:#ffe089;font-weight:800;text-align:center">' + (BATTLE.winner && BATTLE.winner !== 'draw' ? BATTLE.winner + ' HOLDS THE FIELD' : 'STALEMATE') + '</div>' : '') + poss;
+  const pb = document.getElementById('battle-pause'); if (pb) pb.textContent = BATTLE.paused ? '▶ Resume' : '⏸ Pause';
+  const lb = document.getElementById('battle-logbtn'); if (lb) lb.textContent = (BATTLE.logOpen ? '✕ Close log' : '📊 Log') + ' (' + BATTLE.log.length + ')';
+}
+function battleHud() {
+  let p = document.getElementById('battle-hud');
+  if (!p) {
+    p = document.createElement('div'); p.id = 'battle-hud';
+    p.style.cssText = 'position:fixed;left:12px;top:12px;z-index:40;background:rgba(16,14,24,.86);' +
+      'border:1px solid #3a3247;border-radius:10px;padding:12px 14px;width:190px;font:13px system-ui;color:#e8def8';
+    document.body.appendChild(p);
+  }
+  BATTLE.hudEl = p;
+  const btn = (id, label) => '<button id="' + id + '" style="flex:1;padding:6px 8px;border:0;border-radius:6px;' +
+    'cursor:pointer;font-weight:700;background:#2a2438;color:#e8def8">' + label + '</button>';
+  p.innerHTML = '<div style="font-weight:800;color:#ffe089;margin-bottom:8px">⚔ Battle Editor</div>' +
+    '<div id="battle-counts"></div>' +
+    '<div style="display:flex;gap:6px;margin-top:10px">' + btn('battle-pause', '⏸ Pause') + btn('battle-restart', '↻ Restart') + '</div>' +
+    '<div style="display:flex;gap:6px;margin-top:6px">' + btn('battle-logbtn', '📊 Log') + '</div>' +
+    '<div style="margin-top:8px;font-size:11px;color:#9a90ab;line-height:1.4">click a soldier to control him · drag orbit · scroll zoom · Space pause · R restart</div>';
+  p.querySelector('#battle-pause').onclick = () => { BATTLE.paused = !BATTLE.paused; battleUpdateHud(); };
+  p.querySelector('#battle-restart').onclick = () => battleSetup();
+  p.querySelector('#battle-logbtn').onclick = () => { BATTLE.logOpen = !BATTLE.logOpen; battleLogPanel(); battleUpdateHud(); };
+  battleUpdateHud();
+}
+
+// ---- lifecycle ----
+function battleClear() {
+  for (const b of BATTLE.bodies) { scene.remove(b.group); try { disposeGroup(b.group); } catch (e) {} }
+  for (const a of BATTLE.arrows) { scene.remove(a.g); try { disposeGroup(a.g); } catch (e) {} }
+  BATTLE.bodies.length = 0; BATTLE.arrows.length = 0; BATTLE.armies.length = 0;
+  if (BATTLE.ground) { scene.remove(BATTLE.ground); try { disposeGroup(BATTLE.ground); } catch (e) {} BATTLE.ground = null; }
+}
+// each host's size and class-mix. ?fixed=1 pins the URL values (deterministic); otherwise every restart
+// rolls two fresh, independently-sized armies with random archer proportions — no two battles alike.
+function battleArmySpecs() {
+  if (BATTLE.cfg.fixed) return [{ per: BATTLE.cfg.perSide, seed: BATTLE.cfg.seed, archerFrac: BATTLE.cfg.archerFrac },
+                                { per: BATTLE.cfg.perSide, seed: (BATTLE.cfg.seed ^ 0x9e3779b9) >>> 0, archerFrac: BATTLE.cfg.archerFrac }];
+  const roll = () => ({ per: 18 + Math.floor(Math.random() * 60), seed: (Math.random() * 0xffffffff) >>> 0, archerFrac: 0.1 + Math.random() * 0.45 });
+  return [roll(), roll()];
+}
+function battleSetup() {
+  battleRelease();
+  battleClear();
+  BATTLE.over = false; BATTLE.winner = null; BATTLE.idc = 0;
+  BATTLE.terr = battleRollTerrain();                                     // fresh valley every battle
+  BATTLE.phase = 'deploy'; BATTLE.deployT = BATTLE_CMD.deploySecs;       // hold the planned array before the advance
+  BATTLE.ground = battleTerrain(); scene.add(BATTLE.ground);
+  const specs = battleArmySpecs();
+  battleRaiseArmy(BATTLE_TEAMS[0], specs[0].per, specs[0].seed, specs[0].archerFrac);
+  battleRaiseArmy(BATTLE_TEAMS[1], specs[1].per, specs[1].seed, specs[1].archerFrac);
+  battleRecordStart();                                                   // begin capturing this battle (an unfinished prior rec is dropped)
+  battleUpdateHud();
+  return { total: BATTLE.bodies.length, azure: BATTLE.armies[0].start, crimson: BATTLE.armies[1].start,
+           strategies: BATTLE.armies.map(a => a.cmd.strategy) };
+}
+// advance the sim by dt: run the deploy→battle gate, the commanders' periodic re-tasking, unit maneuver,
+// every body, the shove pass, and the arrows. Shared by the live frame and the headless stepper.
+function battleTick(dt) {
+  battleCounts();                                                       // refresh army.alive before morale/commanders read it
+  if (BATTLE.phase === 'deploy') { BATTLE.deployT -= dt; if (BATTLE.deployT <= 0) { BATTLE.phase = 'battle'; battleLogEvent('engage'); for (const A of BATTLE.armies) battleCommanderThink(A); } }
+  else for (const A of BATTLE.armies) { if ((A.thinkCd -= dt) <= 0) { battleCommanderThink(A); A.thinkCd = 1.8 + Math.random() * 1.2; } }
+  battleAdvanceUnits(dt);
+  for (const b of BATTLE.bodies) battleStepBody(b, dt);
+  battleSeparate();                                                     // nobody overlaps — they shove
+  for (const b of BATTLE.bodies) if (!b.dead) b.group.position.set(b.x, battleValleyY(b.x, b.z), b.z); // commit shoved positions
+  battleStepArrows(dt);
+  if (BATTLE.possessed && BATTLE.possessed.dead) battleRelease();       // your man fell — back to the orbit view
+  const [a, c] = battleCounts();
+  battleRecordTick(dt, a, c);                                           // telemetry: samples + events
+  // resolution: a host that's wiped, gutted below ~15%, or mostly routing while losing has BROKEN and quits
+  // the field — armies don't fight to the last man (this also settles slow archer-kite endgames).
+  if (!BATTLE.over && BATTLE.phase === 'battle') {
+    const [ra, rc] = battleRouting();
+    // a host is beaten when it's wiped, or has lost most of its men AND is now badly outnumbered, or is
+    // mostly routing while already down — it breaks and quits rather than fighting to the last man.
+    const broken = (al, rt, st, en) => al === 0 || (al < st * 0.35 && al < en * 0.6) || (al > 0 && al < st * 0.55 && rt / al > 0.55);
+    const bA = broken(a, ra, BATTLE.armies[0].start, c), bB = broken(c, rc, BATTLE.armies[1].start, a);
+    if (bA || bB || (BATTLE.rec && BATTLE.rec.t > 70)) {                  // 70s backstop for an even grind / mutual archer kite
+      const winner = (bA && !bB) ? BATTLE_TEAMS[1].name : (bB && !bA) ? BATTLE_TEAMS[0].name  // the side that broke loses the field
+        : a > c ? BATTLE_TEAMS[0].name : c > a ? BATTLE_TEAMS[1].name : 'draw';                // both broke / timeout → by survivors
+      BATTLE.over = true; BATTLE.winner = winner; battleRecordFinish(winner);
+    }
+  }
+}
+function battleFrame(now) {
+  const o = BATTLE.orbit, dt = Math.min((now - (BATTLE.last || now)) / 1000, 0.05); BATTLE.last = now;
+  if (!BATTLE.paused) { battleTick(dt); battleUpdateHud(); }
+  if (BATTLE.possessed) { battleFollowCam(dt); }                         // over-the-shoulder while you drive a soldier
+  else {
+    if (BATTLE.spin) o.theta += BATTLE.spinRate * dt;
+    const st = Math.sin(o.phi);
+    camera.position.set(o.target.x + o.r * st * Math.sin(o.theta),
+                        o.target.y + o.r * Math.cos(o.phi),
+                        o.target.z + o.r * st * Math.cos(o.theta));
+    camera.lookAt(o.target);
+  }
+  renderer.render(scene, camera);
+  requestAnimationFrame(loop);
+}
+function battleInstallControls() {
+  const o = BATTLE.orbit; let drag = false, moved = 0, px = 0, py = 0, dx0 = 0, dy0 = 0;
+  const locked = () => document.pointerLockElement === canvas;
+  canvas.addEventListener('pointerdown', e => {
+    if (BATTLE.possessed) { if (locked()) battlePlayerAttack(); return; } // a click while driving = a swing/shot
+    drag = true; moved = 0; BATTLE.spin = false; px = dx0 = e.clientX; py = dy0 = e.clientY;
+  });
+  window.addEventListener('pointermove', e => {
+    if (BATTLE.possessed) {                                              // mouse-look aims the soldier
+      if (!locked()) return;
+      BATTLE.cam.yaw -= (e.movementX || 0) * 0.0026;
+      BATTLE.cam.pitch = clamp(BATTLE.cam.pitch + (e.movementY || 0) * 0.0022, -0.15, 1.15);
+      return;
+    }
+    if (!drag) return;
+    moved += Math.abs(e.clientX - px) + Math.abs(e.clientY - py);
+    o.theta -= (e.clientX - px) * 0.01; o.phi = clamp(o.phi - (e.clientY - py) * 0.01, 0.12, 1.45);
+    px = e.clientX; py = e.clientY;
+  });
+  window.addEventListener('pointerup', e => {
+    if (BATTLE.possessed || !drag) { drag = false; return; }
+    drag = false;
+    if (moved < 6) { const b = battlePickBody(e.clientX, e.clientY); if (b) battlePossess(b); } // a tap (not a drag) grabs the man under it
+  });
+  canvas.addEventListener('wheel', e => {
+    if (BATTLE.possessed) BATTLE.cam.dist = clamp(BATTLE.cam.dist * (1 + Math.sign(e.deltaY) * 0.1), 3, 20);
+    else o.r = clamp(o.r * (1 + Math.sign(e.deltaY) * 0.08), 20, 440);
+    e.preventDefault();
+  }, { passive: false });
+  document.addEventListener('pointerlockchange', () => { if (BATTLE.possessed && !locked()) battleRelease(); }); // Esc leaves lock → release
+  window.addEventListener('keydown', e => {
+    if (!BATTLE.on) return;
+    const k = e.key.toLowerCase();
+    if (e.code === 'Space') { BATTLE.paused = !BATTLE.paused; battleUpdateHud(); e.preventDefault(); return; }
+    if (k === 'r') { battleSetup(); return; }
+    if (BATTLE.possessed) {
+      if (k === 'escape') { battleRelease(); return; }
+      if ('wasd'.includes(k)) BATTLE.keys.add(k);
+      if (e.key === 'Shift') BATTLE.keys.add('shift');
+    }
+  });
+  window.addEventListener('keyup', e => {
+    const k = e.key.toLowerCase();
+    if ('wasd'.includes(k)) BATTLE.keys.delete(k);
+    if (e.key === 'Shift') BATTLE.keys.delete('shift');
+  });
+}
+function battleBoot(cfg) {
+  BATTLE.on = true; BATTLE.cfg = { ...BATTLE.cfg, ...(cfg || {}) };
+  battleLogLoad();                                        // restore the battle dataset from localStorage
+  try { setBattleDressing(false); } catch (e) {}
+  for (const c of scene.children.slice()) { if (!c.isLight) c.visible = false; } // strip the boot-time world clutter
+  scene.fog = null;
+  scene.background = new THREE.Color(0x9fb8d6);                           // a hazy mountain sky
+  const hud = document.getElementById('hud'); if (hud) hud.classList.add('hidden');
+  const tch = document.getElementById('touch'); if (tch) tch.classList.add('hidden');
+  document.querySelectorAll('.overlay').forEach(o => o.classList.add('hidden'));
+  editTerrainFn = battleValleyY;                                         // mapElevY probes ride the valley
+  if (typeof hemi !== 'undefined') hemi.intensity = 0.8;
+  if (typeof sun !== 'undefined') sun.intensity = 1.1;
+  const fill = new THREE.DirectionalLight(0xbcd0ff, 0.24); fill.position.set(-40, 30, -20); scene.add(fill);
+  battleInstallControls();
+  battleHud();
+  battleSetup();
+  try { console.log('[battle-editor]', JSON.stringify({ perSide: BATTLE.cfg.perSide, seed: BATTLE.cfg.seed, archerFrac: BATTLE.cfg.archerFrac })); } catch (e) {}
+}
+BV.battle = (cfg) => { if (!BATTLE.on) battleBoot(cfg || {}); else { BATTLE.cfg = { ...BATTLE.cfg, ...(cfg || {}) }; battleSetup(); } return { perSide: BATTLE.cfg.perSide, seed: BATTLE.cfg.seed }; };
+BV.battleRestart = () => battleSetup();
+BV.battlePause = (on) => { BATTLE.paused = on === undefined ? !BATTLE.paused : !!on; battleUpdateHud(); return BATTLE.paused; };
+BV.battleTune = (patch) => { Object.assign(BATTLE_MELEE, patch || {}); return { ...BATTLE_MELEE }; };  // dial the melee feel live
+BV.battleOrder = (teamIdx, order) => { const a = BATTLE.armies[teamIdx]; if (a) a.order = order; return a ? a.order : null; }; // 'advance' | 'hold'
+BV.battleStatus = () => {
+  const [a, c] = battleCounts(), [ra, rc] = battleRouting();
+  const arch = t => BATTLE.bodies.filter(b => !b.dead && b.team === t && b.role === 'archer').length;
+  return { on: BATTLE.on, paused: BATTLE.paused, over: BATTLE.over, total: BATTLE.bodies.length,
+    azure: a, crimson: c, routing: { azure: ra, crimson: rc }, archers: { azure: arch(BATTLE_TEAMS[0]), crimson: arch(BATTLE_TEAMS[1]) },
+    arrows: BATTLE.arrows.length, dead: BATTLE.bodies.filter(b => b.dead).length, phase: BATTLE.phase,
+    commanders: BATTLE.armies.map(A => A.cmd ? { strategy: A.cmd.strategy, lead: A.cmd.lead, alive: !!A.commander,
+      units: A.units.filter(u => u.kind !== 'command').map(u => ({ kind: u.kind, order: u.order, n: battleUnitAlive(u) })) } : null),
+    possessed: BATTLE.possessed ? { team: BATTLE.possessed.team.name, role: BATTLE.possessed.role, hp: Math.round(BATTLE.possessed.hp), commander: BATTLE.possessed.isCommander } : null };
+};
+BV.battleStep = (steps = 60, dt = 1 / 60) => { for (let i = 0; i < steps; i++) battleTick(dt); return BV.battleStatus(); }; // headless: advance the fight without waiting on rAF
+BV.battlePossess = (i = 0) => { const live = BATTLE.bodies.filter(b => !b.dead); return battlePossess(live[Math.min(i, live.length - 1)]) ? BV.battleStatus() : null; };
+BV.battleRelease = () => { battleRelease(); return BV.battleStatus(); };
+BV.battleLog = () => BATTLE.log;                                      // the raw dataset
+BV.battleIntel = (opts) => battleIntel(opts);                         // aggregate readout (the intelligence layer's first cut)
+BV.battleLogExport = () => battleLogExport();                         // download the dataset as JSON
+BV.battleLogClear = () => battleLogClear();
+BV.battleLogSink = (url) => { BATTLE.cfg.sink = url || null; return BATTLE.cfg.sink; }; // POST each finished battle to a server
+
 // Boot. ?edit=<kind> (or window.BV_EDIT) opens the object editor; otherwise show the sign-in gate
 // and DEFER the universe boot until the player clicks "Enter the Vale". The game no longer auto-
 // enters: you sign in (or create an account) first, and entering loads your active character.
@@ -12014,7 +13031,16 @@ function enterTheVale() {
   if (m) bootUniverse(parseInt(m[1], 10) >>> 0, undefined, menOverride);
   else bootUniverse(undefined, 'drifter', menOverride);
 }
-if (window.BV_EDIT || _editWord) {
+// ?battle (or ?battle=1, ?battle&n=60&seed=7) opens the battle editor — two armies fighting in a valley.
+if (window.BV_BATTLE || (_editQ && _editQ.has('battle'))) {
+  const per = _editQ ? parseInt(_editQ.get('n'), 10) : NaN;
+  const sd = _editQ ? parseInt(_editQ.get('seed'), 10) : NaN;
+  const af = _editQ ? parseFloat(_editQ.get('archers')) : NaN;
+  battleBoot({ perSide: isFinite(per) && per > 0 ? Math.min(per, 160) : 40, seed: isFinite(sd) ? sd >>> 0 : 1,
+               archerFrac: isFinite(af) ? clamp(af, 0, 0.7) : 0.34,
+               fixed: !!(_editQ && _editQ.has('fixed')), // ?fixed=1 pins the armies; default rerolls each restart
+               sink: (_editQ && _editQ.get('log')) || null }); // ?log=<url>|server POSTs each finished battle
+} else if (window.BV_EDIT || _editWord) {
   editorBoot(window.BV_EDIT || parseEditSpec(_editWord, _editQ));
 } else {
   refreshAuthGate(); // show login vs. signed-in Enter button (the sim idles behind the overlay)

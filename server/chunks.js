@@ -39,12 +39,15 @@ function terraFor(tseed) {
   return T;
 }
 
-// current terrain pointer for a world: shared worlds are pinned; solo worlds follow the player's
-// claimed universe (null until the client's first /chunks call claims one)
+// current terrain pointer for a world. A shared world's terrain is its OWN universe_seed (so a reset
+// can spin up a fresh-looking map); the original shared world predates that column (universe_seed
+// null) and falls back to the pinned SHARED_WORLD_SEED so its map is unchanged. Solo worlds follow
+// the player's claimed universe (null until the client's first /chunks call claims one).
+function sharedUseed(w) { return w.universe_seed != null ? (w.universe_seed >>> 0) : SHARED_WORLD_SEED; }
 function tseedParams(worldId) {
   const w = db.prepare('SELECT kind, map_level, universe_seed FROM worlds WHERE id=?').get(worldId);
   if (!w) return null;
-  if (w.kind === 'shared') return { level: 0, useed: SHARED_WORLD_SEED, tseed: tseedOf(0, SHARED_WORLD_SEED) };
+  if (w.kind === 'shared') { const us = sharedUseed(w); return { level: 0, useed: us, tseed: tseedOf(0, us) }; }
   if (w.universe_seed == null) return null;
   const lv = w.map_level | 0;
   return { level: lv, useed: w.universe_seed >>> 0, tseed: tseedOf(lv, w.universe_seed >>> 0) };

@@ -53,6 +53,18 @@
   .prow { cursor: pointer; }
   .prow:hover { background: rgba(125,200,255,.10); }
   .prow.foc { outline: 1px solid rgba(255,211,77,.55); background: rgba(255,211,77,.08); }
+  .danger { margin-top: 8px; }
+  .danger .sec { color: #ff8a7a; border-bottom-color: rgba(255,138,122,.25); }
+  .danger .warn { font-size: 11px; color: #b0788a; margin-bottom: 8px; line-height: 1.45; }
+  .bigbtn { width: 100%; font-size: 13px; font-weight: 700; padding: 9px 12px; border-radius: 8px; cursor: pointer;
+    border: 1px solid rgba(255,90,60,.5); background: rgba(255,90,60,.12); color: #ffb3a3; }
+  .bigbtn:hover { background: rgba(255,90,60,.2); }
+  .bigbtn:disabled { opacity: .55; cursor: default; }
+  .confirmrow { display: flex; gap: 8px; }
+  .confirmrow button { flex: 1; font-size: 12px; font-weight: 700; padding: 9px 8px; border-radius: 8px; cursor: pointer; }
+  .btn-yes { border: 1px solid rgba(255,70,50,.7); background: rgba(255,70,50,.8); color: #fff; }
+  .btn-yes:hover { background: rgba(255,70,50,.95); }
+  .btn-no { border: 1px solid rgba(150,170,200,.35); background: rgba(255,255,255,.05); color: #cdddf3; }
 </style>
 </head>
 <body>
@@ -85,6 +97,15 @@
     <div id="nations"><div class="empty">—</div></div>
     <div class="sec">Players &amp; hosts <span id="pcount" style="opacity:.6"></span></div>
     <div id="players"><div class="empty">waiting for the living world…</div></div>
+    <div class="danger">
+      <div class="sec">Danger</div>
+      <div class="warn">Move everyone to a fresh shared world (new terrain) and permanently delete the current one — all players, characters, warfare and progress are wiped. Accounts &amp; logins are kept.</div>
+      <button id="resetBtn" class="bigbtn">⟳ New world — reset &amp; move all users</button>
+      <div id="resetConfirm" class="confirmrow" style="display:none">
+        <button class="btn-yes" id="resetYes">Delete &amp; reset</button>
+        <button class="btn-no" id="resetNo">Cancel</button>
+      </div>
+    </div>
   </aside>
 </div>
 <script>
@@ -164,14 +185,20 @@
     var e = focusEntity();
     return e ? { x: e.x, z: e.z } : null;
   }
+  // a stable identity for a "player" row. Live humans carry account_id; camped/idle characters
+  // (concatenated into world.players) carry neither account_id nor id, so fall back to the name.
+  function playerKey(p) { return p.account_id != null ? 'a' + p.account_id : 'n' + p.name; }
   function focusEntity() {
     if (!focus || !world) return null;
+    // compare as strings: roster-row clicks hand us the key from a DOM data-attribute (a string),
+    // while search / map-click pass it raw — match regardless of which path set focus.
+    var k = String(focus.key);
     if (focus.type === 'player') {
       var ps = world.players || [];
-      for (var i = 0; i < ps.length; i++) if (ps[i].account_id === focus.key) return ps[i];
+      for (var i = 0; i < ps.length; i++) if (playerKey(ps[i]) === k) return ps[i];
     } else {
       var as = world.armies || [];
-      for (var j = 0; j < as.length; j++) if (as[j].id === focus.key) return as[j];
+      for (var j = 0; j < as.length; j++) if (String(as[j].id) === k) return as[j];
     }
     return null;
   }
@@ -321,12 +348,17 @@
       ctx.stroke(); ctx.globalAlpha = 1;
     });
     (world && world.players || []).forEach(function (p, i) {
-      var col = colorFor(p.account_id, i), x = t.x(p.x), y = t.y(p.z);
-      ctx.beginPath(); ctx.arc(x, y, 7, 0, 7); ctx.fillStyle = col; ctx.fill();
-      ctx.lineWidth = 2; ctx.strokeStyle = '#0b0e14'; ctx.stroke();
+      var col = colorFor(playerKey(p), i), x = t.x(p.x), y = t.y(p.z);
+      // a real human: a 👤 in an identity-coloured ring, so live users stand out from NPC hosts
+      ctx.beginPath(); ctx.arc(x, y, 11, 0, 7);
+      ctx.fillStyle = 'rgba(11,14,20,.6)'; ctx.fill();
+      ctx.lineWidth = 2.5; ctx.strokeStyle = col; ctx.stroke();
+      ctx.font = '15px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.shadowColor = '#000'; ctx.shadowBlur = 4;
+      ctx.fillText('👤', x, y + 1); ctx.textBaseline = 'alphabetic'; ctx.shadowBlur = 0;
       ctx.fillStyle = '#fff'; ctx.font = 'bold 13px system-ui'; ctx.textAlign = 'left';
       ctx.shadowColor = '#000'; ctx.shadowBlur = 4;
-      ctx.fillText('☆ ' + p.name, x + 11, y + 4); ctx.shadowBlur = 0;
+      ctx.fillText(p.name, x + 15, y + 4); ctx.shadowBlur = 0;
     });
 
     // 11. focus highlight — a pulsing gold ring + name over the followed character
@@ -340,7 +372,7 @@
         ctx.beginPath(); ctx.arc(fx, fy, 11, 0, 7); ctx.stroke();
         ctx.fillStyle = '#ffe6a0'; ctx.font = 'bold 13px system-ui'; ctx.textAlign = 'center';
         ctx.shadowColor = '#000'; ctx.shadowBlur = 4;
-        ctx.fillText((focus.type === 'player' ? '☆ ' : '') + (fe.name || focus.name), fx, fy - 16); ctx.shadowBlur = 0;
+        ctx.fillText((focus.type === 'player' ? '👤 ' : '') + (fe.name || focus.name), fx, fy - 16); ctx.shadowBlur = 0;
       }
     }
   }
@@ -348,13 +380,14 @@
   function ingestWorld(w) {
     world = w;
     (w.players || []).forEach(function (p, i) {
-      colorFor(p.account_id, i);
-      var tr = trails[p.account_id] || (trails[p.account_id] = []);
+      var pk = playerKey(p);
+      colorFor(pk, i);
+      var tr = trails[pk] || (trails[pk] = []);
       var last = tr[tr.length - 1];
       if (!last || Math.abs(last.x - p.x) > 0.6 || Math.abs(last.z - p.z) > 0.6) {
         tr.push({ x: p.x, z: p.z }); if (tr.length > 600) tr.shift();
       }
-      var set = discovered[p.account_id] || (discovered[p.account_id] = new Set());
+      var set = discovered[pk] || (discovered[pk] = new Set());
       var cx = Math.round(p.x / CELL), cz = Math.round(p.z / CELL);
       for (var dx = -SIGHT; dx <= SIGHT; dx++) for (var dz = -SIGHT; dz <= SIGHT; dz++)
         if (dx * dx + dz * dz <= SIGHT * SIGHT) set.add((cx + dx) + ',' + (cz + dz));
@@ -382,9 +415,9 @@
       ? '· ' + humans.length + ' player · ' + hosts.length + ' hosts' : '';
     var focSel = focus ? (focus.type + ':' + focus.key) : '';
     var rows = humans.map(function (p, i) {
-      var sel = focSel === ('player:' + p.account_id) ? ' foc' : '';
-      return '<div class="prow' + sel + '" data-ft="player" data-fk="' + esc(p.account_id) + '"><span class="dot" style="background:' + colorFor(p.account_id, i) + '"></span>' +
-        '<div><div class="pname">☆ ' + esc(p.name) + '</div>' +
+      var pk = playerKey(p), sel = focSel === ('player:' + pk) ? ' foc' : '';
+      return '<div class="prow' + sel + '" data-ft="player" data-fk="' + esc(pk) + '"><span class="dot" style="background:' + colorFor(pk, i) + '"></span>' +
+        '<div><div class="pname">👤 ' + esc(p.name) + '</div>' +
         '<div class="pmeta">' + esc(p.faction || 'Your Banner') + ' · human</div></div>' +
         '<div class="pright">' + (p.size | 0) + ' men<br>(' + Math.round(p.x) + ', ' + Math.round(p.z) + ')</div></div>';
     }).concat(hosts.sort(function (a, b) { return (b.renown || 0) - (a.renown || 0); }).slice(0, 40).map(function (a) {
@@ -425,7 +458,7 @@
   var searchEl = document.getElementById('search'), resultsEl = document.getElementById('results'), selIdx = -1, curMatches = [];
   function candidates() {
     var out = [];
-    (world && world.players || []).forEach(function (p) { out.push({ type: 'player', key: p.account_id, name: p.name, sub: (p.faction || 'Your Banner') + ' · human', ent: p }); });
+    (world && world.players || []).forEach(function (p) { out.push({ type: 'player', key: playerKey(p), name: p.name, sub: (p.faction || 'Your Banner') + ' · human', ent: p }); });
     (world && world.armies || []).forEach(function (a) {
       out.push({ type: 'host', key: a.id, name: a.name, sub: (a.faction || '') + (a.role === 'patrol' ? ' · patrol' : (a.intent ? ' · ' + a.intent : ' · host')), ent: a });
     });
@@ -441,7 +474,7 @@
       var col = c.type === 'player' ? '#39d0ff' : facCss(c.ent.faction);
       return '<div class="ritem' + (i === selIdx ? ' sel' : '') + '" data-i="' + i + '">' +
         '<span class="dot" style="width:9px;height:9px;flex:0 0 9px;background:' + col + '"></span>' +
-        '<span>' + esc(c.name) + ' <span style="opacity:.55;font-size:11px">' + esc(c.sub) + '</span></span>' +
+        '<span>' + (c.type === 'player' ? '👤 ' : '') + esc(c.name) + ' <span style="opacity:.55;font-size:11px">' + esc(c.sub) + '</span></span>' +
         '<span class="rtag">' + (c.type === 'player' ? 'player' : (c.ent.role === 'patrol' ? 'patrol' : 'host')) + '</span></div>';
     }).join('');
   }
@@ -477,13 +510,42 @@
     var px = (e.clientX - rect.left) * (canvas.width / rect.width), py = (e.clientY - rect.top) * (canvas.height / rect.height);
     var best = null, bestD = 20 * (window.devicePixelRatio || 1);   // pick radius in device px
     function consider(cand, x, z) { var d = Math.hypot(t.x(x) - px, t.y(z) - py); if (d < bestD) { bestD = d; best = cand; } }
-    (world && world.players || []).forEach(function (p) { consider({ type: 'player', key: p.account_id, name: p.name }, p.x, p.z); });
+    (world && world.players || []).forEach(function (p) { consider({ type: 'player', key: playerKey(p), name: p.name }, p.x, p.z); });
     (world && world.armies || []).forEach(function (a) { consider({ type: 'host', key: a.id, name: a.name }, a.x, a.z); });
     if (best) setFocus(best.type, best.key, best.name); else if (focus) clearFocus();
   });
   window.addEventListener('keydown', function (e) {
     if (e.key === 'Escape' && focus && document.activeElement !== searchEl) clearFocus();
   });
+
+  // ---------- danger: reset the shared world (delete current, move everyone to a fresh one) ----------
+  var resetBtn = document.getElementById('resetBtn'), resetConfirm = document.getElementById('resetConfirm');
+  function showResetConfirm(on) { resetBtn.style.display = on ? 'none' : ''; resetConfirm.style.display = on ? 'flex' : 'none'; }
+  resetBtn.onclick = function () { showResetConfirm(true); };
+  document.getElementById('resetNo').onclick = function () { showResetConfirm(false); };
+  document.getElementById('resetYes').onclick = function () {
+    var yes = document.getElementById('resetYes');
+    yes.disabled = true; yes.textContent = 'Resetting…';
+    statusEl.innerHTML = '⟳ resetting the shared world…';
+    fetch(BASE + '/admin/reset-world', { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, HDR), body: JSON.stringify({ confirm: 'RESET' }) })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        yes.disabled = false; yes.textContent = 'Delete & reset'; showResetConfirm(false);
+        if (!res.ok) { statusEl.innerHTML = '<span class="off">reset failed</span> — ' + esc((res.j && res.j.error) || 'error'); return; }
+        // drop everything we knew about the old world; the next polls fetch the brand-new one
+        world = null; ov = null; extent = CORE; clearFocus();
+        terrCanvas = null; terrSig = ''; borderCanvas = null;
+        trails = {}; discovered = {}; colorOf = {}; _facRgb = {};
+        searchEl.value = ''; resultsEl.innerHTML = ''; curMatches = [];
+        render();
+        statusEl.innerHTML = '✔ fresh shared world <b>#' + res.j.newWorldId + '</b> (terrain ' + res.j.terrainSeed + ') — building the new map…';
+        pollOverview(); pollWorld();
+      })
+      .catch(function () {
+        yes.disabled = false; yes.textContent = 'Delete & reset'; showResetConfirm(false);
+        statusEl.innerHTML = '<span class="off">reset failed</span> — backend unreachable';
+      });
+  };
 
   function pollWorld() {
     fetch(BASE + '/world?since=0&x=0&z=0&r=200', { headers: HDR })

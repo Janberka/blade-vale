@@ -142,11 +142,11 @@
     relaxPasses: 3,
     fall: 2.6,
   };
-  var ROAD_TIER = {
-    major:  { w: 3.4, col: 0x9a9ba0, str: 1.00 },
-    medium: { w: 2.2, col: 0x85868b, str: 0.82 },
-    small:  { w: 1.4, col: 0x737470, str: 0.62 },
-    path:   { w: 0.7, col: 0x7a6a50, str: 0.40 },
+  var ROAD_TIER = {                                  // w = core roadbed width, world units (HEX is ~4.8u across)
+    major:  { w: 2.6, col: 0x9a9ba0, str: 1.00 },    // a great road ~half a hex of packed core
+    medium: { w: 1.7, col: 0x85868b, str: 0.82 },
+    small:  { w: 1.05, col: 0x737470, str: 0.62 },   // lanes + interior streets: a cart's width, not a highway
+    path:   { w: 0.55, col: 0x7a6a50, str: 0.40 },
   };
   var MOVE = {
     roadSpeed: 0.62,

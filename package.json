@@ -13,7 +13,9 @@
     "perf": "node perf/run.js",
     "perf:update": "node perf/run.js --update",
     "roads:determin": "node perf/roads-determin.js",
-    "settle:determin": "node perf/settle-determin.js"
+    "settle:determin": "node perf/settle-determin.js",
+    "trainer": "node sim/trainer.js",
+    "battle:determin": "node perf/battle-determin.js"
   },
   "dependencies": {
     "better-sqlite3": "^11.8.1"

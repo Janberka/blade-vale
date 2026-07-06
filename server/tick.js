@@ -344,23 +344,13 @@ function runTick(worldId, tick) {
   const armies = db.prepare("SELECT * FROM warlords WHERE world_id=? AND status='alive'").all(worldId);
   if (armies.filter(a => a.role === 'host').length < 2) { seedWorld(worldId); return; }
   const relMap = D.relationsFor(worldId);   // who is at war with whom this tick (drives every target choice)
-  const upd = db.prepare('UPDATE warlords SET x=?, z=?, tx=?, tz=? WHERE id=?');
   const lockedPre = Warfare.busySet(worldId);            // armies mid-battle hold their ground
   const steered = Warfare.campaignSteered(worldId);      // campaign members march to the banners instead
-  // 1. free HOSTS march toward a rival, else an enemy hold, else wander (patrols/campaigns are warfare's)
-  for (const a of armies) {
-    if (a.role !== 'host' || lockedPre.has(a.id) || steered.has(a.id)) continue;
-    const rv = nearestRival(armies, a, relMap);
-    const cap = nearestEnemyCap(worldId, a.faction, a.x, a.z, relMap);
-    let tx, tz;
-    if (rv && rv.d2 < 70 * 70) { tx = rv.o.x; tz = rv.o.z; }
-    else if (cap) { tx = cap.x; tz = cap.z; }
-    else { tx = a.x + rand(-20, 20); tz = a.z + rand(-20, 20); }
-    const dx = tx - a.x, dz = tz - a.z, d = Math.hypot(dx, dz) || 1, step = Math.min(ARMY_SPEED, d);
-    a.x = clamp(a.x + dx / d * step + rand(-1, 1), -MAP_HALF, MAP_HALF);
-    a.z = clamp(a.z + dz / d * step + rand(-1, 1), -MAP_HALF, MAP_HALF);
-    upd.run(a.x, a.z, tx, tz, a.id);
-  }
+  // 1. free HOSTS take STANDING STRATEGIC ORDERS — hunt a beatable rival, mass the banners, probe
+  //    or storm a border, stand guard, or fall back from hopeless ground — steered by the trained
+  //    battle-commander genome (train/ai.db champion). Armies maneuver with intent instead of
+  //    drifting at the nearest rival. (warfare owns it; patrols/campaigns keep their own movement.)
+  Warfare.strategizeHosts(worldId, tick, armies, relMap, lockedPre, steered);
   // 2. the living war: patrols ride their circuits, campaigns muster/march/besiege, meeting rivals
   //    lock into TIMED battles that bleed over ticks (returns everyone still locked in a fight)
   const clashed = Warfare.tickWarfare(worldId, tick, armies, relMap);

@@ -1,36 +1,36 @@
 {
   "boot-map": {
-    "drawCalls": 6172,
-    "triangles": 525416,
-    "geometries": 450,
+    "drawCalls": 6171,
+    "triangles": 445367,
+    "geometries": 453,
     "fighters": 198
   },
   "map-overview-rung0": {
-    "drawCalls": 4654,
-    "triangles": 275450,
-    "geometries": 338
+    "drawCalls": 500,
+    "triangles": 305008,
+    "geometries": 164
   },
   "action-street-rung2": {
-    "drawCalls": 5043,
-    "triangles": 456582,
-    "geometries": 365,
+    "drawCalls": 6180,
+    "triangles": 432813,
+    "geometries": 440,
     "fineTiles": 12,
     "hyperTiles": 4,
     "streets": 0
   },
   "action-battle-200": {
-    "drawCalls": 6175,
-    "triangles": 525442,
-    "geometries": 452,
-    "fighters": 220,
-    "simMsPerFrame": 13.069
+    "drawCalls": 6174,
+    "triangles": 445393,
+    "geometries": 454,
+    "fighters": 223,
+    "simMsPerFrame": 13.788
   },
   "sim-map-offmap": {
-    "simMsPerFrame": 50.31
+    "simMsPerFrame": 12.928
   },
   "mode-switch": {
-    "switchToStreetMs": 118.3,
-    "switchToStrategicMs": 612.5,
-    "switchToBattleMs": 1043.6
+    "switchToStreetMs": 1288.6,
+    "switchToStrategicMs": 549.7,
+    "switchToBattleMs": 939.6
   }
 }

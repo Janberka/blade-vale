@@ -281,7 +281,7 @@ const server = http.createServer(async (req, res) => {
       const q = url.searchParams;
       const w = db.prepare('SELECT kind, map_level, universe_seed FROM worlds WHERE id=?').get(viewWorldId);
       let level, useed;
-      if (w.kind === 'shared') { level = 0; useed = (w.universe_seed != null ? (w.universe_seed >>> 0) : chunks.SHARED_WORLD_SEED); }
+      if (w.kind === 'shared') { level = 0; useed = chunks.SHARED_WORLD_SEED; } // pinned: must match the client's SHARED_WORLD_SEED (else tseed mismatch → blank terrain)
       else {
         level = Math.max(0, Math.min(9999, parseInt(q.get('level') || '0', 10) || 0));
         useed = (parseInt(q.get('u') || '0', 10) || w.universe_seed || 0) >>> 0;
@@ -315,7 +315,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && p === '/api/v1/settlements') {
       const w = db.prepare('SELECT kind, map_level, universe_seed FROM worlds WHERE id=?').get(viewWorldId);
       let level, useed;
-      if (w.kind === 'shared') { level = 0; useed = (w.universe_seed != null ? (w.universe_seed >>> 0) : chunks.SHARED_WORLD_SEED); }
+      if (w.kind === 'shared') { level = 0; useed = chunks.SHARED_WORLD_SEED; } // pinned: must match the client's SHARED_WORLD_SEED
       else { level = w.map_level | 0; useed = (w.universe_seed || 0) >>> 0; if (!useed) return send(res, 400, { error: 'no universe seed claimed' }); }
       const b = await readBody(req);
       const items = Array.isArray(b && b.items) ? b.items.slice(0, 64) : [];

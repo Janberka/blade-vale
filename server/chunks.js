@@ -39,11 +39,12 @@ function terraFor(tseed) {
   return T;
 }
 
-// current terrain pointer for a world. A shared world's terrain is its OWN universe_seed (so a reset
-// can spin up a fresh-looking map); the original shared world predates that column (universe_seed
-// null) and falls back to the pinned SHARED_WORLD_SEED so its map is unchanged. Solo worlds follow
-// the player's claimed universe (null until the client's first /chunks call claims one).
-function sharedUseed(w) { return w.universe_seed != null ? (w.universe_seed >>> 0) : SHARED_WORLD_SEED; }
+// current terrain pointer for a world: shared worlds are PINNED to SHARED_WORLD_SEED — the client
+// derives its whole shared-world identity (terrain, capitals, station, home realm) from that one
+// fixed seed, so the server must match it or the client rejects every chunk (tseed mismatch → blank
+// terrain). Per-shared-world seeds can't ship until the client learns the seed from the server.
+// Solo worlds follow the player's claimed universe (null until the client's first /chunks call claims one).
+function sharedUseed(w) { return SHARED_WORLD_SEED; }
 function tseedParams(worldId) {
   const w = db.prepare('SELECT kind, map_level, universe_seed FROM worlds WHERE id=?').get(worldId);
   if (!w) return null;

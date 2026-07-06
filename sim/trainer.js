@@ -82,7 +82,7 @@ function duel(gChamp, gChal, n) {
     const champA = i % 2 === 0;                         // alternate which side the champion takes
     const rec = playBattle(champA ? gChamp : gChal, champA ? gChal : gChamp);
     recs.push(rec);
-    const w = rec.outcome.winner; if (w === 'draw') continue;
+    const w = rec.outcome.leaderWin || rec.outcome.winner; if (w === 'draw') continue; // leaderWin credits a wise withdrawal
     const champSide = champA ? 'A' : 'B';
     if (w === champSide) champWins++; else chalWins++;
   }
@@ -108,7 +108,7 @@ function benchmark(champ, baseline, n) {
   for (let i = 0; i < n; i++) {
     const champA = i % 2 === 0;
     const rec = playBattle(champA ? champ : baseline, champA ? baseline : champ, 'benchmark');
-    const w = rec.outcome.winner; if (w === 'draw') continue; decided++;
+    const w = rec.outcome.leaderWin || rec.outcome.winner; if (w === 'draw') continue; decided++;
     if (w === (champA ? 'A' : 'B')) champWins++;
   }
   return decided ? champWins / decided : 0.5;

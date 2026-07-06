@@ -381,6 +381,11 @@
       if (B.phase !== 'battle') return;
       var C = A.C, other = B.armies[0] === A ? B.armies[1] : B.armies[0]; if (!other) return;
       var my = A.alive, foe = other.alive, ratio = my / (foe + 1), p = A.cmd, tau = A.distress * C.exploreGain;
+      // a wise leader refuses a hopeless fight: badly outnumbered while still largely intact → withdraw and
+      // save the men (extracting the army in good order is scored as HIS win, not a rout).
+      if (!A.withdrawing && ratio < 0.42 && my > A.start * 0.68) A.withdrawing = true;
+      if (A.withdrawing) { for (var wi = 0; wi < A.units.length; wi++) { var wu = A.units[wi]; if (wu.kind !== 'command') wu.order = 'fallback'; } return; }
+      var winningBig = ratio > 1.12 || foe < A.start * 0.5;  // the moment he holds an edge — press to finish it fast
       var weakFriend = false;
       for (var i = 0; i < A.units.length; i++) { var x = A.units[i]; if (x.role === 'melee' && x.kind !== 'command') { var al = unitAlive(x); if (al > 0 && al < x.bodies.length * 0.4) { weakFriend = true; break; } } }
       for (var u2 = 0; u2 < A.units.length; u2++) {
@@ -388,6 +393,7 @@
         if (u.role === 'archer') { u.order = 'skirmish'; continue; }
         var broken = 0; for (var bi = 0; bi < u.bodies.length; bi++) { var bb = u.bodies[bi]; if (!bb.dead && bb.broken) broken++; }
         if (broken > alive * C.brokenFallbackFrac) { u.order = 'fallback'; continue; }
+        if (winningBig) { u.order = u.wp ? 'flank' : 'charge'; continue; }                       // press hard to finish quickly
         // distress exploration: a losing commander sometimes gambles a unit onto a fresh order
         if (tau > rng()) { u.order = ORDERS_EXPLORE[(rng() * ORDERS_EXPLORE.length) | 0]; continue; }
         if (u.kind === 'reserve') { u.order = (ratio > C.reserveCommitRatio || foe < A.start * 0.55 || weakFriend) ? 'charge' : 'hold'; continue; }
@@ -419,8 +425,9 @@
 
     // ---- counts, distress, records ----
     function counts() {
-      var a = 0, c = 0; for (var i = 0; i < B.armies.length; i++) B.armies[i].alive = 0;
-      for (var j = 0; j < B.bodies.length; j++) { var b = B.bodies[j]; if (b.dead) continue; b.army.alive++; (b.team === TEAMS[0] ? a++ : c++); }
+      var a = 0, c = 0; for (var i = 0; i < B.armies.length; i++) { B.armies[i].alive = 0; B.armies[i]._sx = 0; B.armies[i]._sz = 0; }
+      for (var j = 0; j < B.bodies.length; j++) { var b = B.bodies[j]; if (b.dead) continue; b.army.alive++; b.army._sx += b.x; b.army._sz += b.z; (b.team === TEAMS[0] ? a++ : c++); }
+      for (var k2 = 0; k2 < B.armies.length; k2++) { var Ac = B.armies[k2]; if (Ac.alive) { Ac.cx = Ac._sx / Ac.alive; Ac.cz = Ac._sz / Ac.alive; } } // living centroid (break-of-contact)
       // distress: how much worse my host fares than the enemy's (drives "try new things")
       if (B.armies.length === 2) {
         var fa = B.armies[0].start ? B.armies[0].alive / B.armies[0].start : 1, fb = B.armies[1].start ? B.armies[1].alive / B.armies[1].start : 1;
@@ -457,14 +464,15 @@
       }
       return out;
     }
-    function finish(winner) {
+    function finish(winner, withdrawer) {
       var r = B.rec; if (!r || r.done) return; r.done = true;
       var cc = counts(), a = cc[0], c = cc[1];
       if (!winner) winner = a > c ? 'A' : c > a ? 'B' : 'draw';
+      var leaderWin = withdrawer || winner;                    // the withdrawer's LEADER wins by saving his army
       r.durationSec = +B.t.toFixed(1); logEvent('over', winner);
-      r.outcome = { winner: winner, aSurvivors: a, bSurvivors: c, margin: Math.abs(a - c) };
-      for (var i = 0; i < 2; i++) { var A = B.armies[i], af = r.armies[i]; af.survivors = A.alive; af.dead = A.start - A.alive; af.commanderSurvived = !!A.commander; af.won = winner === af.team; }
-      B.winner = winner; B.rec.soldierSamples = soldierSamples(winner);
+      r.outcome = { winner: winner, leaderWin: leaderWin, type: withdrawer ? 'withdrawal' : 'decisive', withdrawer: withdrawer || null, aSurvivors: a, bSurvivors: c, margin: Math.abs(a - c) };
+      for (var i = 0; i < 2; i++) { var A = B.armies[i], af = r.armies[i]; af.survivors = A.alive; af.dead = A.start - A.alive; af.commanderSurvived = !!A.commander; af.won = leaderWin === af.team; af.withdrew = withdrawer === af.team; }
+      B.winner = winner; B.rec.soldierSamples = soldierSamples(leaderWin);
     }
 
     // ---- build the two hosts + start the record ----
@@ -478,7 +486,7 @@
       rebuildLive();
       var cc0 = counts();
       if (B.phase === 'deploy') { B.deployT -= dt; if (B.deployT <= 0) { B.phase = 'battle'; logEvent('engage'); commanderThink(B.armies[0]); commanderThink(B.armies[1]); } }
-      else { for (var i = 0; i < B.armies.length; i++) { var A = B.armies[i]; if ((A.thinkCd -= dt) <= 0) { commanderThink(A); A.thinkCd = 1.8 + rng() * 1.2; } } }
+      else { for (var i = 0; i < B.armies.length; i++) { var A = B.armies[i]; if ((A.thinkCd -= dt) <= 0) { commanderThink(A); A.thinkCd = 0.7 + rng() * 0.7; } } } // leaders re-decide more often
       advanceUnits(dt);
       for (var b = 0; b < B.bodies.length; b++) stepBody(B.bodies[b], dt);
       separate();
@@ -487,9 +495,16 @@
       var cc = counts(), a = cc[0], c = cc[1];
       recordTick(dt, a, c);
       if (B.phase === 'battle') {
+        var A0 = B.armies[0], A1 = B.armies[1];
+        // successful withdrawal: a retreating side broke contact (hosts far apart) with most of its men → leader wins
+        var gap = (A0.alive && A1.alive) ? Math.hypot((A0.cx || 0) - (A1.cx || 0), (A0.cz || 0) - (A1.cz || 0)) : 999;
+        var wp = [[A0, A1, a], [A1, A0, c]];
+        for (var wpi = 0; wpi < 2; wpi++) { var W = wp[wpi][0], F = wp[wpi][1], wc = wp[wpi][2];
+          if (!B.over && W.withdrawing && wc >= W.start * 0.45 && gap > 60 && B.t > 6) { B.over = true; finish(F.team.name, W.team.name); } }
+        if (B.over) return;
         var rr = routing();
         var broken = function (al, rt, st, en) { return al === 0 || (al < st * 0.35 && al < en * 0.6) || (al > 0 && al < st * 0.55 && rt / al > 0.55); };
-        var bA = broken(a, rr[0], B.armies[0].start, c), bB = broken(c, rr[1], B.armies[1].start, a);
+        var bA = broken(a, rr[0], A0.start, c), bB = broken(c, rr[1], A1.start, a);
         if (bA || bB || B.t > 70) {
           var winner = (bA && !bB) ? 'B' : (bB && !bA) ? 'A' : a > c ? 'A' : c > a ? 'B' : 'draw';
           B.over = true; finish(winner);

@@ -52,9 +52,12 @@ const SCENARIOS = [
     // On-foot roam (rung 2). The detail bubble should raise poly count only right around the hero
     // (#6) while everything past ~100u stays coarse (#5). We record the bubble state so a regression
     // that DISABLES the LOD (tris collapse) or BLOWS IT UP (tris explode) both trip the budget.
+    // NOTE: since the one-view zoom model, the detail tier follows fieldZoomT alone — BV.fieldMode(true)
+    // at the resting zoom (t=0) is a half-state the game never enters (enterMap parks t at 0). Drive the
+    // ZOOM axis instead, like the player: past Z_LOCK it flips field mode AND lands in the street tier.
     body: `
       BV.bootUniverse(1337);
-      BV.enterMap(); BV.fieldMode(true);
+      BV.enterMap(); BV.zoom(-0.4);   // zoom in past Z_LOCK — the one-view way onto the street rung (FIELD_COMBAT_ZOOM)
       BV.setQuality('low');
       BV.advanceMap(0.3); BV.settle();
       __render(); __render();
@@ -113,8 +116,9 @@ const SCENARIOS = [
       BV.setQuality('low');
       BV.enterMap(); BV.advanceMap(0.1);
       const timed = (fn) => { const t = performance.now(); fn(); return +(performance.now() - t).toFixed(2); };
-      const toStreet = timed(() => { BV.fieldMode(true); BV.advanceMap(0.05); });
-      const toStrat  = timed(() => { BV.fieldMode(false); BV.advanceMap(0.05); });
+      // one-view zoom model: transitions are ZOOM crossings (they flip field mode + detail tier together)
+      const toStreet = timed(() => { BV.zoom(-0.4); BV.advanceMap(0.05); });
+      const toStrat  = timed(() => { BV.zoom(0); BV.advanceMap(0.05); });
       const toBattle = timed(() => { BV.enterBattleWith(60); BV.advance(0.05, 0.016); });
       return { switchToStreetMs: toStreet, switchToStrategicMs: toStrat, switchToBattleMs: toBattle };
     `,

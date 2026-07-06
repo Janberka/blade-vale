@@ -44,12 +44,35 @@ const LOWER_IS_BETTER = /drawCalls|triangles|geometries|Ms$|MsPerFrame$/;
 // when the deterministic spawn isn't adjacent to a settlement, so a floor on it would false-positive.
 const MUST_STAY_POSITIVE = { 'action-street-rung2': ['fineTiles'], 'action-battle-200': ['fighters'] };
 
+// Per-metric regression tolerance. Render COUNTERS (draws/tris/geometries) are near-exact run-to-run
+// — seed + reseed + freeze + fixed camera make them repeat to the digit — and they're LOAD-INDEPENDENT
+// (renderer.info counts geometry, not wall-clock), so they're the trustworthy device-FPS proxy and keep
+// the tight TOL. Everything TIME-based is a different story on a shared dev box: it scales with machine
+// load. simMsPerFrame is a MEAN over 100+ deterministic steps, so it only wobbles moderately (a wider
+// band absorbs light background load). The `switchTo*Ms` numbers are the worst case — each is ONE
+// wall-clock timing of a whole detail-tier rebuild (terrain re-tessellation + scatter + geometry
+// construction + whatever GC lands mid-transition), swinging ~40% even between back-to-back quiet runs.
+// Their bands still catch the regression these guards exist for — a rebuild that stops being budgeted
+// and goes fully synchronous, or a per-frame sim cost that jumps 1.5x+ — without flapping on noise.
+// NB none of these survive a pathologically loaded machine (load avg ≫ cores inflates them ~3x); that's
+// inherent to CPU-time benchmarking — capture baselines and check on a reasonably quiet box.
+const SIM_MS_TOL = 0.4;      // averaged per-frame CPU sim cost
+const SWITCH_MS_TOL = 0.6;   // single-shot transition wall-clock
+function tolFor(k) {
+  if (/switchTo\w*Ms$/.test(k)) return SWITCH_MS_TOL;
+  if (/MsPerFrame$/.test(k)) return SIM_MS_TOL;
+  return TOL;
+}
+
 function log(...a) { if (!JSON_OUT) console.log(...a); }
 
 async function launch() {
   return puppeteer.launch({
     executablePath: CHROME,
     headless: 'new',
+    // A street-tier transition (mode-switch) genuinely rebuilds terrain tessellation + scatter, which
+    // under software-GL takes ~1.5s; the default 180s protocol timeout can trip under multi-run load.
+    protocolTimeout: 600000,
     args: [
       '--headless=new', '--no-sandbox',
       '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
@@ -138,8 +161,9 @@ function check(results, budgets) {
     if (!base) { fails.push(`${scn.key}: no baseline (run --update)`); continue; }
     for (const [k, v] of Object.entries(cur)) {
       if (LOWER_IS_BETTER.test(k) && typeof v === 'number' && typeof base[k] === 'number') {
-        const ceil = base[k] * (1 + TOL) + (/Ms/.test(k) ? 1 : 0); // +1ms slack on timing noise
-        if (v > ceil) fails.push(`${scn.key}.${k}: ${v} > ${ceil.toFixed(1)} (baseline ${base[k]}, +${(TOL * 100)|0}%)`);
+        const tol = tolFor(k);
+        const ceil = base[k] * (1 + tol) + (/Ms/.test(k) ? 1 : 0); // +1ms slack on timing noise
+        if (v > ceil) fails.push(`${scn.key}.${k}: ${v} > ${ceil.toFixed(1)} (baseline ${base[k]}, +${(tol * 100)|0}%)`);
       }
     }
     for (const k of (MUST_STAY_POSITIVE[scn.key] || [])) {

@@ -69,6 +69,7 @@ function sgHouse(P, lx, lz, opts) {
   const c0 = seat(lx - hw, lz - hd), c1 = seat(lx + hw, lz - hd), c2 = seat(lx - hw, lz + hd), c3 = seat(lx + hw, lz + hd);
   const lo = Math.min(c0, c1, c2, c3), hi = Math.max(c0, c1, c2, c3);
   if (hi - lo > 3.5 * mw) return false;
+  if (P.builds) P.builds.push({ x: lx, z: lz, r: Math.max(hw, hd) + 0.15 * mw }); // its footprint blocks movement
   const floorY = hi + 0.05, plinthBot = lo - 0.25 * mw;
   sgBox(S, lx, (plinthBot + floorY) / 2, lz, w * 1.05, floorY - plinthBot, d * 1.05, yaw, sgRgb(pal.stoneDk, 0.9 + r() * 0.12));
   sgBox(S, lx, floorY + h / 2, lz, w, h, d, yaw, sgRgb(opts.wallHex || pal.daub, 0.88 + r() * 0.22));
@@ -192,12 +193,15 @@ function sgPalisade(P) {
   const Rfit = P.street ? Math.max(3.0, P.spec.R + 1.5 / 0.8) : sgWallEnvelope(P, 1.5, 3.0);
   const N = Math.max(14, Math.round(Rfit * 1.4 * 1.2 * (P.street ? 1.25 : 1))), wood = sgRgb(pal.wood, 1);
   const gateA = P._T0.cityGateBearings(T, P.seed, P.X, P.Z).big[0];
-  for (let k = 0; k < N; k++) {
-    const a = k / N * TAU;
-    if (Math.abs(((a - gateA + Math.PI) % TAU + TAU) % TAU - Math.PI) < 0.34) continue;
+  let prev = null;                                                 // link consecutive posts into a solid run; reset across gaps
+  for (let k = 0; k <= N; k++) {
+    const a = (k % N) / N * TAU;
+    if (Math.abs(((a - gateA + Math.PI) % TAU + TAU) % TAU - Math.PI) < 0.34) { prev = null; continue; }
     const R = Rfit * fp(a), lx = Math.cos(a) * R, lz = Math.sin(a) * R, y = seat(lx, lz);
-    if (P.isW(lx, lz)) continue;
-    sgBox(S, lx, y + 0.85 * mh, lz, 0.34 * mw, (1.6 + r() * 0.2) * mh, 0.34 * mw, a, wood);
+    if (P.isW(lx, lz)) { prev = null; continue; }
+    if (k < N) sgBox(S, lx, y + 0.85 * mh, lz, 0.34 * mw, (1.6 + r() * 0.2) * mh, 0.34 * mw, a, wood);
+    if (prev && P.walls) P.walls.push({ ax: prev.lx, az: prev.lz, bx: lx, bz: lz, r: 0.34 * mw }); // the stockade line blocks movement
+    prev = { lx, lz };
   }
   for (const sgn of [-0.4, 0.4]) {
     const a2 = gateA + sgn * 0.34, R2 = Rfit * fp(a2), lx = Math.cos(a2) * R2, lz = Math.sin(a2) * R2, y = seat(lx, lz);
@@ -242,6 +246,7 @@ function sgCityWall(P) {
     const lo = Math.min(A.y, B.y), hi = Math.max(A.y, B.y), top = hi + wallH, bot = lo - 0.9 * mh;
     sgBox(S, mx, (top + bot) / 2, mz, len, top - bot, thick, ang, stone);
     sgBox(S, mx, top + 0.16 * mw, mz, len, 0.3 * mw, thick * 1.15, ang, stoneDk);
+    if (P.walls) P.walls.push({ ax: A.lx, az: A.lz, bx: B.lx, bz: B.lz, r: thick * 0.6 }); // the wall line blocks movement (gate arcs are skipped above)
   }
   const TN = Math.max(10, Math.round(Rmax * 0.45));
   for (let k = 0; k < TN; k++) {
@@ -370,6 +375,7 @@ function sgBuildCurtain(P, verts, gates) {
     }
     sgBox(S, mx, (top + bot) / 2, mz, len, top - bot, thick, ang, stone);
     sgBox(S, mx, top + 0.16 * mw, mz, len, 0.32 * mw, thick * 1.15, ang, stoneDk);
+    if (P.walls) P.walls.push({ ax: A.lx, az: A.lz, bx: B.lx, bz: B.lz, r: thick * 0.6 }); // curtain segment (gate segments skipped above)
   }
   for (let i = 0; i < N; i++) {
     const v = verts[i], gate = gateTower.has(i), th = wallH + ((gate ? 2.2 : 0.9) + r() * 0.4) * mh, rad = (gate ? 1.05 : 0.78) * tw;
@@ -383,6 +389,7 @@ function sgBuildKeep(P, keep, big) {
   const km = P.street ? Math.min(P.mw, ((P._cR || 6) * 0.62) / (kw0 * 0.775)) : 1;
   const stone = sgRgb(pal.stone, 1), stoneDk = sgRgb(pal.stoneDk, 1);
   const kw = kw0 * km, kh = (big ? 5.0 : 4.0) * mh, hw = kw * 0.75;
+  if (P.builds) P.builds.push({ x: keep.lx, z: keep.lz, r: kw * 0.85 }); // the keep is a solid block
   const c = [seat(keep.lx - hw, keep.lz - hw), seat(keep.lx + hw, keep.lz - hw), seat(keep.lx - hw, keep.lz + hw), seat(keep.lx + hw, keep.lz + hw)];
   const lo = Math.min.apply(null, c), hiC = Math.max.apply(null, c), floorY = hiC + 0.05;
   sgBox(S, keep.lx, (lo - 0.3 + floorY) / 2, keep.lz, kw * 1.55, floorY - (lo - 0.3), kw * 1.55, 0, stoneDk);
@@ -417,10 +424,12 @@ function settlementLayout(T0, X, Z, tier, seed, opts) {
   const prims = [];
   const S = { o: 0, p: prims }, O = { o: 1, p: prims };
   const P = { r, tier, spec, X, Z, refY, T, pal, ownerRGB: sgRgb(0, 1), seat, isW, S, O, placed: [], exclude: [], seed, roadAxis: opts.roadAxis,
-              street, mh: street ? STREET.mulH : 1, mw: street ? STREET.mulW : 1, _T0: T0 };
+              street, mh: street ? STREET.mulH : 1, mw: street ? STREET.mulW : 1, _T0: T0,
+              walls: [], builds: [] }; // collision export: wall SEGMENTS (gate gaps absent) + building footprints
   P.fp = Terra.sgFootprint(P);
   if (spec.castle) sgBuildHold(P); else sgBuildVillage(P);
   return { prims, refY, cls: T.cls, street, lbl: spec.lbl, top: spec.top,
+           walls: P.walls, builds: P.builds,
            dbg: { buildings: P.placed.length, castles: P.exclude.length, R: spec.R, cls: T.cls } };
 }
 

@@ -274,7 +274,7 @@ function askToLeave(worldId, tick, patrol, host, ownByFaction, nudged, upd) {
 
 // patrols ride circuits around a ROAMING FOCUS (home most of the time, a nearby owned hold sometimes);
 // an enemy on our soil is chased down, a neutral column is turned back, a friend is let pass.
-function tickPatrols(worldId, tick, armies, relMap, busy, steered, grid, ownByFaction, nudged, visitorCount, settTier) {
+function tickPatrols(worldId, tick, armies, relMap, busy, steered, grid, ownByFaction, nudged, visitorCount, settTier, battles, settGrid) {
   const upd = db.prepare('UPDATE warlords SET x=?, z=?, tx=?, tz=?, focus_x=?, focus_z=?, focus_key=?, focus_until=? WHERE id=?');
   for (const p of armies) {
     if (p.role !== 'patrol' || busy.has(p.id) || steered.has(p.id)) continue;
@@ -325,6 +325,14 @@ function tickPatrols(worldId, tick, armies, relMap, busy, steered, grid, ownByFa
     const dx = p.tx - p.x, dz = p.tz - p.z, d = Math.hypot(dx, dz) || 1, step = Math.min(PATROL_SPEED, d);
     p.x = clamp(p.x + dx / d * step + rand(-0.4, 0.4), -MAP_HALF, MAP_HALF);
     p.z = clamp(p.z + dz / d * step + rand(-0.4, 0.4), -MAP_HALF, MAP_HALF);
+    // the watch skirts other armies' battles and never rides THROUGH foreign walls — its own post
+    // (home + current focus) is its business, everything else it goes around
+    if (battles || settGrid) {
+      _kcExempt.clear();
+      if (p.home_key) _kcExempt.add(p.home_key);
+      if (p.focus_key) _kcExempt.add(p.focus_key);
+      keepClear(p, battles || [], settGrid, _kcExempt);
+    }
     upd.run(p.x, p.z, p.tx, p.tz, p.focus_x, p.focus_z, p.focus_key, p.focus_until, p.id);
   }
 }
@@ -673,6 +681,216 @@ function maybeStartCampaign(worldId, tick, armies, relMap, busy) {
     ' — ' + members.length + ' hosts answer' + (allied.length ? ' (with ' + allied.join(' and ') + ' beside them)' : ''));
 }
 
+// ---------- STRATEGY: free hosts maneuver like the trained battle commanders ----------
+// Between wars a host is never parked. Every few ticks its commander re-reads the local balance
+// of power and takes a STANDING ORDER — run down a beatable rival, mass with a stronger friendly
+// stack, probe an enemy border at a wary standoff (pacing along it), storm a weakly-held wall,
+// stand guard over his own marches, or fall back from hopeless ground in good order. Temperament
+// and thresholds come from the SAME trained commander genome (θ_C) the battle editor's champion
+// plays — train/ai.db's champion steers the map, and its learned doctrine preferences (line /
+// defensive / skirmish logits) weight mass-vs-guard-vs-probe. No champion → the shipped baseline.
+// Standing orders persist in the focus_* columns (idle on host rows — patrols own them otherwise):
+// focus_key='strat|<kind>|<label>', focus_x/z = the order's anchor, focus_until = re-read tick.
+const STRAT = {
+  HOST_SPEED: 6,           // map units per tick — keep in sync with tick.js ARMY_SPEED
+  DWELL: [6, 12],          // ticks a standing order lasts before the commander re-reads the map
+  SENSE_R: 55,             // how far he reads the local balance of power
+  HUNT_R: 70,              // how far he will ride to run down a rival host
+  BORDER_R: 120,           // how far he looks for an enemy border worth probing (caps always qualify)
+  STAND_BASE: 16,          // probe standoff short of the enemy walls...
+  STAND_CAUT: 22,          // ...plus caution × this (a wary general keeps his distance)
+  PACE: 0.22,              // radians a border-watcher walks along his standoff arc per tick
+};
+let _aidb;                 // lazy — the game server must boot (and tick) fine without the training subsystem
+function aidbSafe() { if (_aidb === undefined) { try { _aidb = require('../train/aidb'); } catch (e) { _aidb = null; } } return _aidb; }
+let _champC = null, _champAt = -Infinity;
+function championCommander(tick) {          // cached ~30 ticks so the tick never grinds on the AI db
+  if (tick - _champAt < 30) return _champC;
+  _champAt = tick;
+  const ai = aidbSafe();
+  try { const c = ai && ai.getChampion(); _champC = (c && c.genome && c.genome.commander) || null; }
+  catch (e) { _champC = null; }
+  return _champC;
+}
+function persOf(a) { try { return JSON.parse(a.personality_json || '{}') || {}; } catch (e) { return {}; } }
+// what a lone host may actually STORM — mirrors the conquest executors (tick.js contestHolds /
+// capital step): declared enemies, plus masterless Free/petty holds; emergent-realm holds fall
+// only to the campaign/siege path. Probe/guard keep the wider rivalable() watch-the-border set.
+const STORM_NEUTRAL = new Set([FREE].concat(WorldSim.PETTY_NAMES || []));
+function stormable(relMap, faction, s) {
+  if (s.owner === PLAYER || s.owner === faction) return false;
+  if (s.src === 'cap') return WorldSim.areEnemies(D.stanceBetween(relMap, faction, s.owner));
+  if (STORM_NEUTRAL.has(s.owner)) return true;
+  return isNation(s.owner) && WorldSim.areEnemies(D.stanceBetween(relMap, faction, s.owner));
+}
+function parseStrat(key) {
+  if (!key || key.slice(0, 6) !== 'strat|') return null;
+  const p = key.split('|'); return { kind: p[1], label: p[2] || '' };
+}
+// pick the standing order from the commander's read of the map (mirrors battleCommanderThink's shape)
+function pickStrategy(a, ctx) {
+  const { aggr, caut, post, ratio, foes, foeHost, ally, C } = ctx;
+  // 1. a wise leader refuses hopeless ground (the kernel's withdrawal, writ strategic)
+  const wTh = 0.30 + 0.25 * caut + (post === 'desperate' ? 0.10 : 0);
+  if (foes > 0 && ratio < wTh) {
+    const home = ctx.ownSett;
+    if (home) return { kind: 'withdraw', label: home.name, x: home.x, z: home.z, dwell: [3, 6] };
+  }
+  // 2. a beatable rival in reach → run him down (the moment he holds an edge, he presses)
+  if (foeHost && ratio >= 1.30 - 0.45 * aggr) return { kind: 'hunt', label: foeHost.name, x: foeHost.x, z: foeHost.z, dwell: [4, 8] };
+  // 3. a weakly-held wall he can actually TAKE alone → march on it (keeps solo conquest alive)
+  const es = ctx.stormSett;
+  if (es && a.size >= (es.garrison || 0) * 2.2 && Math.random() < aggr * (post === 'expand' ? 1 : 0.55))
+    return { kind: 'storm', label: es.name, x: es.x, z: es.z, dwell: [6, 12] };
+  // 4. otherwise the learned doctrine decides the posture: probe / mass / guard
+  const L = (C && C.docLogit) || {}, T = Math.max(0.4, (C && C.doctrineTemp) || 1);
+  const w = [];
+  if (es) w.push(['probe', Math.exp(((L.skirmish || 0) + 0.5 * (L.wings || 0) + 0.5 * (L.oblique || 0)) / T) * (post === 'expand' ? 1.5 : 1)]);
+  if (ally) w.push(['mass', Math.exp((L.line || 0) / T) * (post === 'consolidate' ? 1.5 : 1)]);
+  if (ctx.ownSett) w.push(['guard', Math.exp((L.defensive || 0) / T) * (post === 'defend' ? 1.8 : 1)]);
+  let sum = 0; for (const e of w) sum += e[1];
+  if (sum > 0) {
+    let roll = Math.random() * sum;
+    for (const [kind, wt] of w) {
+      roll -= wt; if (roll > 0) continue;
+      if (kind === 'probe') return { kind: 'probe', label: es.name, x: es.x, z: es.z, dwell: STRAT.DWELL };
+      if (kind === 'mass') return { kind: 'mass', label: ally.name, x: ally.x, z: ally.z, dwell: [4, 8] };
+      return { kind: 'guard', label: ctx.ownSett.name, x: ctx.ownSett.x, z: ctx.ownSett.z, dwell: STRAT.DWELL };
+    }
+  }
+  return { kind: 'roam', label: '', x: a.x + rand(-25, 25), z: a.z + rand(-25, 25), dwell: [2, 4] };
+}
+// walk a standoff arc around an anchor: close to the ring, then pace along it (border patrol look)
+function stepRing(upd, a, ax, az, stand) {
+  const dx = a.x - ax, dz = a.z - az, d = Math.hypot(dx, dz) || 1;
+  let ang = Math.atan2(dz, dx);
+  if (Math.abs(d - stand) < 4) ang += (a.id % 2 ? STRAT.PACE : -STRAT.PACE);   // on station — walk the line
+  stepToward(upd, a, ax + Math.cos(ang) * stand, az + Math.sin(ang) * stand, STRAT.HOST_SPEED);
+}
+// the per-tick strategic pass for every free host (called from tick.js in place of the old
+// march-at-the-nearest-rival drift; busy = mid-battle, steered = marching under campaign banners)
+function strategizeHosts(worldId, tick, armies, relMap, busy, steered) {
+  const upd = db.prepare('UPDATE warlords SET x=?, z=?, tx=?, tz=? WHERE id=?');
+  const updPos = db.prepare('UPDATE warlords SET x=?, z=? WHERE id=?');   // keep-clear slide (tx/tz untouched — the client keeps dead-reckoning the march)
+  const saveOrder = db.prepare('UPDATE warlords SET focus_key=?, focus_x=?, focus_z=?, focus_until=? WHERE id=?');
+  const C = championCommander(tick);
+  const setts = settlements(worldId);
+  const postures = D.factionStateFor(worldId);
+  const grid = buildGrid(armies);
+  const battles = activeBattles(worldId);                                 // bystanders give these a wide berth
+  const settGrid = buildSettGrid(setts);
+  for (const a of armies) {
+    if (a.role !== 'host' || a.faction === PLAYER || busy.has(a.id) || steered.has(a.id)) continue;
+    // temperament: the champion genome's distribution, individualized by this warlord's own nature
+    const pers = persOf(a);
+    const aggr = clamp((C && C.aggrMean != null ? C.aggrMean : 0.6) + ((pers.ambition != null ? pers.ambition : 0.5) - 0.5) * 2 * (C && C.aggrSpread != null ? C.aggrSpread : 0.3), 0.05, 0.98);
+    const caut = clamp((C && C.cautMean != null ? C.cautMean : 0.55) + ((pers.caution != null ? pers.caution : 0.5) - 0.5) * 2 * (C && C.cautSpread != null ? C.cautSpread : 0.25), 0.05, 0.95);
+    const post = (postures.get(a.faction) || {}).posture || 'consolidate';
+    // read the local balance of power (his own men count — a great host IS the local strength)
+    let mine = a.size, foes = 0, foeHost = null, foeD = Infinity, ally = null, allyD = Infinity;
+    const S2 = STRAT.SENSE_R * STRAT.SENSE_R, H2 = STRAT.HUNT_R * STRAT.HUNT_R;
+    nearGrid(grid, a.x, a.z, STRAT.HUNT_R, (o) => {
+      if (o === a || o.status !== 'alive') return;
+      const dx = o.x - a.x, dz = o.z - a.z, d2 = dx * dx + dz * dz;
+      if (o.faction === a.faction) {
+        if (d2 <= S2) mine += o.size;
+        if (o.role === 'host' && o.size > a.size && d2 < allyD && !busy.has(o.id)) { allyD = d2; ally = o; }
+      } else if (rivalable(relMap, a.faction, o.faction)) {
+        if (d2 <= S2) foes += o.size;
+        if (o.role === 'host' && d2 <= H2 && d2 < foeD) { foeD = d2; foeHost = o; }
+      }
+    });
+    const ratio = mine / (foes + 1);
+    // nearest own settlement (rally/guard point), nearest enemy/free border worth watching, and
+    // the nearest wall he could actually take (storm targets are stricter than probe targets)
+    let ownSett = null, od = Infinity, enemySett = null, ed = Infinity, stormSett = null, sd = Infinity;
+    const B2 = STRAT.BORDER_R * STRAT.BORDER_R;
+    for (const s of setts) {
+      const d2 = (s.x - a.x) * (s.x - a.x) + (s.z - a.z) * (s.z - a.z);
+      if (s.owner === a.faction) { if (d2 < od) { od = d2; ownSett = s; } continue; }
+      if (s.owner === PLAYER) continue;
+      if (d2 <= B2 && (s.owner === FREE || rivalable(relMap, a.faction, s.owner)) && d2 < ed) { ed = d2; enemySett = s; }
+      if (d2 <= B2 && d2 < sd && stormable(relMap, a.faction, s)) { sd = d2; stormSett = s; }
+    }
+    // keep or re-read the standing order
+    let cur = parseStrat(a.focus_key);
+    let expired = !cur || a.focus_until == null || tick >= a.focus_until;
+    if (cur && !expired) {                                     // interrupts: the map changed under the order
+      if (foes > 0 && ratio < 0.30 + 0.25 * caut && cur.kind !== 'withdraw') expired = true;   // hopeless ground
+      if (cur.kind === 'hunt' && (!foeHost || ratio < 0.9)) expired = true;                    // quarry gone / odds turned
+      if (cur.kind === 'withdraw' && (foes === 0 || ratio > 0.9)) expired = true;              // storm has passed
+    }
+    if (expired) {
+      const pickd = pickStrategy(a, { aggr, caut, post, ratio, foes, foeHost, ally, ownSett, enemySett, stormSett, C });
+      cur = { kind: pickd.kind, label: pickd.label };
+      a.focus_key = 'strat|' + pickd.kind + '|' + (pickd.label || '');
+      a.focus_x = pickd.x; a.focus_z = pickd.z;
+      a.focus_until = tick + Math.round(rand(pickd.dwell[0], pickd.dwell[1]));
+      saveOrder.run(a.focus_key, a.focus_x, a.focus_z, a.focus_until, a.id);
+    }
+    // execute the order. Border rings stand off from the WALLS, not the market square — offset by
+    // the anchor settlement's footprint (same convention as the patrol ringR).
+    let foot = 0, anchorKey = null;
+    if (cur.kind === 'probe' || cur.kind === 'guard' || cur.kind === 'storm' || cur.kind === 'withdraw') {
+      let fd2 = 36;
+      for (const s of setts) { const d2 = (s.x - a.focus_x) * (s.x - a.focus_x) + (s.z - a.focus_z) * (s.z - a.focus_z); if (d2 < fd2) { fd2 = d2; foot = FOOT_R[s.tier] != null ? FOOT_R[s.tier] : FOOT_R.village; anchorKey = s.key; } }
+    }
+    if (cur.kind === 'hunt' && foeHost) stepToward(upd, a, foeHost.x, foeHost.z, STRAT.HOST_SPEED);
+    else if (cur.kind === 'mass' && ally) stepToward(upd, a, ally.x, ally.z, STRAT.HOST_SPEED);   // live-follow the rallying stack
+    else if (cur.kind === 'probe') stepRing(upd, a, a.focus_x, a.focus_z, foot + STRAT.STAND_BASE + caut * STRAT.STAND_CAUT);
+    else if (cur.kind === 'guard') stepRing(upd, a, a.focus_x, a.focus_z, foot + 10);
+    else stepToward(upd, a, a.focus_x, a.focus_z, STRAT.HOST_SPEED);       // storm / withdraw / mass-anchor / roam
+    // a bystander skirts other armies' battles and walled towns — a STORM order may enter its target
+    _kcExempt.clear();
+    if ((cur.kind === 'storm' || cur.kind === 'withdraw') && anchorKey) _kcExempt.add(anchorKey);
+    if (keepClear(a, battles, settGrid, _kcExempt)) updPos.run(a.x, a.z, a.id);
+  }
+}
+
+// ---- keep out of what isn't yours: bystanders skirt battles, armies go AROUND walls ----
+// Post-step correction, not steering: an army that ends its tick inside a battle's standoff ring
+// (someone else's fight) or inside a settlement's walled footprint (no business there) slides out
+// to the ring — at tick granularity it reads as the column skirting the walls / giving the field
+// a wide berth. Participants never reach this (busy/steered are skipped by both movers); a storm
+// order and a patrol's own post are exempt (their business IS inside).
+const BATTLE_STANDOFF = 14;
+// the HARD masonry, not the patrol-circuit footprint: FOOT_R carries a wide circuit margin (capital
+// 54 — wider than the gap between the five capitals, so keep-out at FOOT_R would blanket the whole
+// heartland). WALL_R is the wall line an army visibly must not pass through.
+const WALL_R = { village: 6, town: 12, city: 22, capital: 24 };
+const SETT_CELL = 64;
+function buildSettGrid(setts) {
+  const g = new Map();
+  for (const s of setts) { const k = ((s.x / SETT_CELL) | 0) + ':' + ((s.z / SETT_CELL) | 0); let a = g.get(k); if (!a) g.set(k, a = []); a.push(s); }
+  return g;
+}
+function keepClear(a, battles, settGrid, exempt) {
+  let moved = false;
+  for (const b of battles) {
+    const dx = a.x - b.x, dz = a.z - b.z, d = Math.hypot(dx, dz);
+    if (d >= BATTLE_STANDOFF) continue;
+    const k = BATTLE_STANDOFF / (d || 1);
+    a.x = clamp(b.x + dx * k, -MAP_HALF, MAP_HALF); a.z = clamp(b.z + dz * k, -MAP_HALF, MAP_HALF); moved = true;
+  }
+  if (settGrid) {
+    const cx = (a.x / SETT_CELL) | 0, cz = (a.z / SETT_CELL) | 0;
+    for (let ox = -1; ox <= 1; ox++) for (let oz = -1; oz <= 1; oz++) {
+      const arr = settGrid.get((cx + ox) + ':' + (cz + oz)); if (!arr) continue;
+      for (const s of arr) {
+        if (s.owner === a.faction) continue;               // its own realm's gates are open to it
+        if (exempt && exempt.has(s.key)) continue;
+        const R = (WALL_R[s.tier] != null ? WALL_R[s.tier] : WALL_R.village) + 2;
+        const dx = a.x - s.x, dz = a.z - s.z, d = Math.hypot(dx, dz);
+        if (d >= R) continue;
+        const k = R / (d || 1);
+        a.x = clamp(s.x + dx * k, -MAP_HALF, MAP_HALF); a.z = clamp(s.z + dz * k, -MAP_HALF, MAP_HALF); moved = true;
+      }
+    }
+  }
+  return moved;
+}
+const _kcExempt = new Set(); // scratch (rebuilt per army — never retained)
+
 // ---------- the per-tick entry point (called from tick.js inside the runTicks transaction) ----------
 function tickWarfare(worldId, tick, armies, relMap) {
   const busy = busySet(worldId);
@@ -687,7 +905,8 @@ function tickWarfare(worldId, tick, armies, relMap) {
   const visitorCount = new Map();
   for (const a of armies) if (a.role === 'patrol' && a.focus_key && a.focus_key !== a.home_key)
     visitorCount.set(a.focus_key, (visitorCount.get(a.focus_key) || 0) + 1);
-  tickPatrols(worldId, tick, armies, relMap, busy, steered, grid, ownByFaction, nudged, visitorCount, settTier);
+  tickPatrols(worldId, tick, armies, relMap, busy, steered, grid, ownByFaction, nudged, visitorCount, settTier,
+    activeBattles(worldId), buildSettGrid(setts));
   tickCampaigns(worldId, tick, armies, relMap, busy);
   maybeStartCampaign(worldId, tick, armies, relMap, busy);
   meetClashes(worldId, tick, armies, relMap, busy, buildGrid(armies), ownByFaction); // fresh grid: everyone has moved
@@ -758,6 +977,18 @@ function intentForRow(a, ctx) {
     const nm = a.home_key ? ctx.homeName.get(a.home_key) : null;
     return { intent: nm ? 'Patrolling ' + nm : 'On patrol', intentKind: 'patrol' };
   }
+  // a free host under a STANDING STRATEGIC ORDER (strategizeHosts) — say what its commander intends
+  const st = a.role === 'host' ? parseStrat(a.focus_key) : null;
+  if (st) {
+    const L = st.label;
+    if (st.kind === 'hunt') return { intent: 'Hunting ' + (L || 'a rival host'), intentKind: 'hunt' };
+    if (st.kind === 'probe') return { intent: L ? 'Probing the border at ' + L : 'Probing the border', intentKind: 'probe' };
+    if (st.kind === 'storm') return { intent: L ? 'Marching on ' + L : 'Marching to war', intentKind: 'march' };
+    if (st.kind === 'mass') return { intent: L ? 'Massing with ' + L : 'Massing the banners', intentKind: 'muster' };
+    if (st.kind === 'guard') return { intent: L ? 'Standing guard over ' + L : 'Standing guard', intentKind: 'patrol' };
+    if (st.kind === 'withdraw') return { intent: 'Falling back in good order', intentKind: 'withdraw' };
+    return { intent: 'Ranging the marches', intentKind: 'roam' };
+  }
   // a free host with no campaign/battle: it's hunting the war (target set by tick.js toward a rival/cap)
   return { intent: 'Marching to war', intentKind: 'roam' };
 }
@@ -784,7 +1015,7 @@ function getArmiesNear(worldId, x, z, r) {
 }
 
 module.exports = {
-  tickWarfare, ensurePatrols, busySet, campaignSteered, orphanPatrols,
+  tickWarfare, ensurePatrols, busySet, campaignSteered, orphanPatrols, strategizeHosts,
   getBattles, getCampaigns, getArmiesNear,
   startBattle, maybeStartCampaign, activeCampaigns, activeBattles, settlements,
   QUOTA, CAMP, BIG_BATTLE, PATROL_SPEED,

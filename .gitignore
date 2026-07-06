@@ -2,6 +2,7 @@
 .DS_Store
 
 node_modules/
+world.db
 server/world.db
 server/world.db-shm
 server/world.db-wal

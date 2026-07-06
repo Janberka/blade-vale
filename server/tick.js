@@ -186,7 +186,16 @@ const CHUNK = WorldSim.CHUNK;
 function ensureRegion(worldId, x, z, radiusChunks) {
   const tp = Chunks.tseedParams(worldId);
   if (!tp) return { chunksEnsured: 0 };              // solo world before its client claimed a universe
-  return Chunks.ensureChunks(worldId, tp.level, tp.useed, x, z, radiusChunks == null ? HOLD_GEN_RADIUS : radiusChunks | 0, 12);
+  const res = Chunks.ensureChunks(worldId, tp.level, tp.useed, x, z, radiusChunks == null ? HOLD_GEN_RADIUS : radiusChunks | 0, 12);
+  // GARRISON-ON-GENERATE: fresh ground gets its watch NOW, not up to ~a minute later when the next
+  // ensurePatrols tick (tick % 3, ~1/20s) comes around. Without this, teleporting/fast-travelling
+  // drops you into settlements that are still empty; walking merely hides the lag. Bursts the full
+  // complement for virgin holds (total==0) in one transaction; idempotent for already-garrisoned ones.
+  if (res && res.chunksGenerated > 0) {
+    const t = (db.prepare('SELECT sim_tick FROM worlds WHERE id=?').get(worldId) || { sim_tick: 0 }).sim_tick | 0;
+    db.transaction(() => Warfare.ensurePatrols(worldId, t))();
+  }
+  return res;
 }
 function holdKeyOf(h) { return h.cx + ',' + h.cz + ',' + h.idx; }
 // holds near a point (for /world serving + the contest scan). Bounded by a coordinate box.

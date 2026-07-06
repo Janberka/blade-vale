@@ -16,7 +16,7 @@
 })(typeof self !== 'undefined' ? self : this, function (WorldSim) {
   'use strict';
 
-  var VERSION = 2;                       // bump on ANY math change (chunk payloads are stamped with it)
+  var VERSION = 4;                       // bump on ANY math change (chunk payloads are stamped with it)
   var TAU = Math.PI * 2;
   function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
   var mulberry32 = WorldSim.mulberry32;
@@ -25,7 +25,7 @@
   // ---------- Static constants (seed-independent, mirrored by game.js aliases) ----------
   var CHUNK = WorldSim.CHUNK;            // 60 — world units per chunk side
   var MAP_HALF = WorldSim.MAP_HALF;      // 90 — overworld half-size (drives tempAt latitude + nearestLand bound)
-  var CITY_BLOCK = 7;                    // mirrors WorldSim CITY_BLOCK (not exported there)
+  var CITY_BLOCK = 11;                   // mirrors WorldSim CITY_BLOCK (not exported there)
   var SEA_LEVEL = 0.38;
   var TERR_SCALE = 1 / 42;
   var MAP_RELIEF = 17;                   // overworld vertical exaggeration — base lift for the rolling country
@@ -164,10 +164,10 @@
   // ---------- Settlement spec (radii/walls — the mesh-building knobs ride along, they're plain data) ----------
   var SCATTER_DENSITY = 0.28;   // multiplier on biome tree/rock chance — thins features so tiles read clean
   var SG_SPEC = {
-    village: { castle: false, R: 7,  houses: [10, 6],   castles: [0, 0],   wall: null,       centerClear: 0,    lbl: 3.8, top: 4.2,  gap: 2.0 },
-    town:    { castle: true,  R: 15, houses: [38, 12],  castles: [1, 0.4], castleR: 6, bailey: [3, 3], wallH: 1.2, wall: 'palisade', centerClear: 0,    lbl: 5.4, top: 7.0,  gap: 2.0 },
-    city:    { castle: true,  R: 38, houses: [280, 80], castles: [3, 0], castleR: 8, bailey: [4, 3], wallH: 1.8, wall: 'stone',    centerClear: 0.30, lbl: 10.5, top: 15.0, gap: 2.0 },
-    capital: { castle: true,  R: 46, houses: [380, 90], castles: [3, 0], castleR: 9, bailey: [6, 4], wallH: 2.1, wall: 'stone',    centerClear: 0.32, bigKeep: true, lbl: 12.5, top: 18.0, gap: 2.1 },
+    village: { castle: false, R: 10, houses: [13, 7],   castles: [0, 0],   wall: null,       centerClear: 0,    lbl: 3.8, top: 4.2,  gap: 2.0 },
+    town:    { castle: true,  R: 21, houses: [50, 14],  castles: [1, 0.4], castleR: 6, bailey: [3, 3], wallH: 1.2, wall: 'palisade', centerClear: 0,    lbl: 5.4, top: 7.0,  gap: 2.0 },
+    city:    { castle: true,  R: 48, houses: [330, 90], castles: [3, 0], castleR: 8, bailey: [4, 3], wallH: 1.8, wall: 'stone',    centerClear: 0.30, lbl: 10.5, top: 15.0, gap: 2.0 },
+    capital: { castle: true,  R: 58, houses: [440, 100], castles: [3, 0], castleR: 9, bailey: [6, 4], wallH: 2.1, wall: 'stone',    centerClear: 0.32, bigKeep: true, lbl: 12.5, top: 18.0, gap: 2.1 },
   };
 
   // ---------- Static path helpers ----------
@@ -440,13 +440,32 @@
     function capitalSeats() {
       var out = [];
       var jitter = ((seed % 1000) / 1000 - 0.5) * 0.18;   // ±~5°
-      var CAP_RING = MAP_HALF * 1.5;
-      for (var i = 0; i < NATION_HOMES.length; i++) {
+      // The five crowns ride a WIDE ring: the old MAP_HALF*1.5 (135u) packed 58u-wall capitals only
+      // ~18u apart on the tight bearings, so their walls collapsed into each other. At MAP_HALF*2.4
+      // (216u) the ring circumference finally has room for five capital footprints.
+      var CAP_RING = MAP_HALF * 2.4;
+      var i;
+      for (i = 0; i < NATION_HOMES.length; i++) {
         var ang = NATION_HOMES[i].home + jitter, bx = Math.cos(ang) * CAP_RING, bz = Math.sin(ang) * CAP_RING;
         var spot = bestLandSpot(bx, bz, 36, 16);
         var p = spot ? [spot.x, spot.z] : nearestLand(bx, bz);
         out.push({ idx: i, name: NATION_HOMES[i].name, x: p[0], z: p[1] });
       }
+      // Guarantee the crowns stay apart no matter what the coastline did to their seats: relax any
+      // over-close pair apart along its axis (deterministic — pure geometry), then re-snap to land.
+      var MIN_SEP = SG_SPEC.capital.R * 2 + 80;           // ≥ ~80u of open country between capital walls
+      for (var pass = 0; pass < 8; pass++) {
+        var moved = false;
+        for (i = 0; i < out.length; i++) for (var j = i + 1; j < out.length; j++) {
+          var A = out[i], Bc = out[j], dx = Bc.x - A.x, dz = Bc.z - A.z, d = Math.hypot(dx, dz) || 1e-3;
+          if (d >= MIN_SEP) continue;
+          var push = (MIN_SEP - d) / 2, ux = dx / d, uz = dz / d;
+          A.x -= ux * push; A.z -= uz * push; Bc.x += ux * push; Bc.z += uz * push;
+          moved = true;
+        }
+        if (!moved) break;
+      }
+      for (i = 0; i < out.length; i++) { var q = nearestLand(out[i].x, out[i].z); out[i].x = q[0]; out[i].z = q[1]; }
       return out;
     }
 
@@ -507,7 +526,7 @@
         var px = A.x + vx * u, pz = A.z + vz * u, d2 = Math.pow(s.x - px, 2) + Math.pow(s.z - pz, 2);
         if (!best || d2 < best.d2) best = { px: px, pz: pz, d2: d2, nx: -vz / L, nz: vx / L };
       }
-      var cap = s.tier === 'town' ? 150 : 60;
+      var cap = s.tier === 'town' ? 60 : 60;   // keep holds local to their chunk so the overlap scan can see every collision
       if (!best || best.d2 > cap * cap) return;
       var rng = mulberry32((chunkHash(s.cx, s.cz, seed) ^ Math.imul(s.idx + 11, 0x27d4eb2f)) >>> 0);
       if (s.tier === 'village') {
@@ -523,8 +542,13 @@
         if (!isWater(tx, tz)) { s.x = tx; s.z = tz; return; }
       }
     }
-    // deterministic settlement sites within a chunk — kernel identity, land-decided positions
-    function settlementSites(cx, cz) {
+    // reseat a chunk's raw kernel sites onto the land — cities to their block seat, holds onto the
+    // road skeleton. No keep-out and, crucially, NO recursion into settlementSites, so the neighbour
+    // scan below can call this freely to see what the next chunk over placed.
+    var rawCache = new Map();               // "cx,cz" -> reseated (pre-cull) sites, reused by neighbour scans
+    function reseatRaw(cx, cz) {
+      var key = cx + ',' + cz, hit = rawCache.get(key);
+      if (hit) return hit;
       var sites = WorldSim.settlementSites(cx, cz, seed);
       for (var i = sites.length - 1; i >= 0; i--) {
         var s = sites[i];
@@ -533,7 +557,65 @@
           if (c) { s.x = c.x; s.z = c.z; } else sites.splice(i, 1);
         } else snapToSkeleton(s);
       }
+      if (rawCache.size > 40000) rawCache.clear();
+      rawCache.set(key, sites);
       return sites;
+    }
+    function holdRank(t) { return t === 'capital' ? 4 : t === 'city' ? 3 : t === 'town' ? 2 : 1; }
+    // a stable global tie-break so BOTH chunks in an overlapping cross-chunk pair drop the SAME hold
+    function holdKey(s) { return (Math.imul(s.cx | 0, 73856093) ^ Math.imul(s.cz | 0, 19349663) ^ Math.imul((s.idx | 0) + 1, 83492791)) >>> 0; }
+    // deterministic settlement sites within a chunk — kernel identity, land-decided positions.
+    // A hold is dropped when its walls would touch a HIGHER-priority hold (bigger tier, or equal tier
+    // with the smaller holdKey) in this chunk or any of the eight neighbours — so exactly one of every
+    // overlapping pair survives and client + server agree on which.
+    function settlementSites(cx, cz) {
+      var sites = reseatRaw(cx, cz).slice();  // copy — we cull this list but must NOT mutate the raw cache
+      var caps = capitalsProvider();
+      var others = sites.slice();            // this chunk's holds, pre-cull, for same-chunk comparisons
+      // scan ±SCAN chunks: a hold snaps at most ~88u onto the road skeleton, so a collision's home
+      // chunk can be up to ~4 cells away — anything nearer than that must be visible from here.
+      var SCAN = 4;
+      for (var nx = cx - SCAN; nx <= cx + SCAN; nx++) for (var nz = cz - SCAN; nz <= cz + SCAN; nz++) {
+        if (nx === cx && nz === cz) continue;
+        var ns = reseatRaw(nx, nz);
+        for (var q = 0; q < ns.length; q++) others.push(ns[q]);
+      }
+      var gap = 8;
+      for (var i = sites.length - 1; i >= 0; i--) {
+        var s = sites[i], myR = (SG_SPEC[s.tier] || SG_SPEC.village).R;
+        if (s.tier === 'city') {
+          // never seat a city on top of a capital — drop it if its walls would touch a crown's
+          if (nearBigHold(s.x, s.z, SG_SPEC.city.R, caps, s)) { sites.splice(i, 1); continue; }
+        } else if (nearBigHold(s.x, s.z, myR, caps, s)) { sites.splice(i, 1); continue; }
+        // walled holds must not overlap each other; the lower-priority one yields
+        if (s.tier === 'village') continue;   // villages have no wall — let them nestle close
+        var myRank = holdRank(s.tier), myKey = holdKey(s), lose = false;
+        for (var k = 0; k < others.length; k++) {
+          var o = others[k];
+          if (o === s || o.tier === 'village') continue;
+          if (o.cx === s.cx && o.cz === s.cz && o.idx === s.idx) continue;
+          var oRank = holdRank(o.tier);
+          var better = oRank > myRank || (oRank === myRank && holdKey(o) < myKey);
+          if (!better) continue;
+          if (Math.hypot(o.x - s.x, o.z - s.z) < myR + (SG_SPEC[o.tier] || SG_SPEC.village).R + gap) { lose = true; break; }
+        }
+        if (lose) sites.splice(i, 1);
+      }
+      return sites;
+    }
+    // does a hold of radius myR at (x,z) overlap any nearby city seat or capital (walls touching)?
+    function nearBigHold(x, z, myR, caps, self) {
+      var BW = CITY_BLOCK * CHUNK, bx0 = Math.floor(x / BW), bz0 = Math.floor(z / BW), gap = 8;
+      for (var bx = bx0 - 1; bx <= bx0 + 1; bx++) for (var bz = bz0 - 1; bz <= bz0 + 1; bz++) {
+        var c = citySeat(bx, bz); if (!c) continue;
+        if (self && Math.abs(c.x - x) < 1e-3 && Math.abs(c.z - z) < 1e-3) continue;   // that's me
+        if (Math.hypot(c.x - x, c.z - z) < SG_SPEC.city.R + myR + gap) return true;
+      }
+      for (var k = 0; k < caps.length; k++) {
+        var n = caps[k];
+        if (Math.hypot(n.x - x, n.z - z) < SG_SPEC.capital.R + myR + gap) return true;
+      }
+      return false;
     }
     function roadSites(cx, cz) {
       var k = cx + ',' + cz, s = siteCache.get(k);

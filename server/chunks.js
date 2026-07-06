@@ -119,8 +119,9 @@ function ensureChunk(worldId, level, useed, cx, cz) {
   const row = db.prepare('SELECT payload FROM chunks WHERE world_id=? AND tseed=? AND cx=? AND cz=?').get(worldId, tseed, cx, cz);
   if (row) {
     const cached = JSON.parse(zlib.gunzipSync(row.payload).toString('utf8'));
-    if (cached.v === PAYLOAD_V) return cached;       // stored shape is current — serve as-is
-    // an older payload shape (e.g. pre-ring v1): regenerate and REPLACE below (holds rows persist)
+    if (cached.v === PAYLOAD_V && cached.kernel === Terra.VERSION) return cached;  // shape AND math current — serve as-is
+    // stale shape (pre-ring v1) OR stale kernel math (e.g. capitals re-spaced): regenerate + REPLACE
+    // below so a math bump makes a genuinely new world without a manual DB wipe (holds rows reseat)
   }
   const T = terraFor(tseed);
   const ownerOf = nationOwnerMap(worldId);

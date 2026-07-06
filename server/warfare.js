@@ -22,10 +22,12 @@ const Chunks = require('./chunks');
 const NATIONS = ['Aurelia', 'Khorvane', 'Sahir', 'Wendmark', 'Maridor']; // keep in sync with tick.js
 const PLAYER = 'Your Banner';
 const FREE = WorldSim.FREE_NAME;   // 'Free City' — the only masterless owner; every other non-player owner is a realm
-// NOT the old ±90 arena bound: the explored world streams far past it (holds exist at |x| > 140),
-// and clamping to the old edge stranded their patrols mid-map. This is a sanity backstop only —
-// every real destination (home, muster, target, foe) is an actual settlement or army position.
-const MAP_HALF = 640;
+// The world is INFINITE and deterministic — settlements stream out with no edge (holds exist at
+// |x| > 1700 and beyond). This is a pure NaN/garbage sanity guard, NOT a play boundary: any real
+// clamp here strands far patrols at the edge and leaves everything past it a ghost town (the old
+// 640 bound did exactly that — patrols for distant holds piled up on the ring instead of guarding
+// their own walls). Every real destination is an actual settlement or army position, always in range.
+const MAP_HALF = 1e7;
 const CAP_RADIUS = 48;
 const CAP_ANGLE = [2.62, 0.15, 1.57, 4.71, 3.67];                        // keep in sync with tick.js
 
@@ -34,19 +36,19 @@ const CAP_ANGLE = [2.62, 0.15, 1.57, 4.71, 3.67];                        // keep
 const QUOTA = {
   capital: { large: 2, medium: 5, small: 10 },
   city:    { large: 2, medium: 5, small: 10 },
-  town:    { large: 0, medium: 1, small: 3 },
-  village: { large: 0, medium: 0, small: 0 },   // villages shelter under their town's patrols
+  town:    { large: 0, medium: 2, small: 4 },
+  village: { large: 0, medium: 0, small: 1 },   // a lone watch — so open country still shows some life
 };
-const MILITIA_QUOTA = { city: { large: 0, medium: 2, small: 4 }, town: { large: 0, medium: 1, small: 2 }, village: { large: 0, medium: 0, small: 0 } };
+const MILITIA_QUOTA = { city: { large: 0, medium: 2, small: 4 }, town: { large: 0, medium: 1, small: 2 }, village: { large: 0, medium: 0, small: 1 } };
 const PATROL_SIZE  = { large: [24, 40], medium: [10, 18], small: [3, 8] };
 // each class rides a wider ring: the big companies range out to the borders of their ground, the
 // small watches stay tight to the walls. This is now an OUTWARD OFFSET added to the settlement's
 // footprint — the watch orbits OUTSIDE the ramparts, not inside them (a city wall is ~44u across, far
 // wider than the old flat 8–22 ring, which left the guard circling the market square).
 const PATROL_LEASH = { large: 22, medium: 14, small: 8 };  // ring offset BEYOND the walls
-// settlement footprint radius (SG_SPEC.R + wall margin) the ring wraps: village 7 / town 15 / city 38 /
-// capital 46, bumped so the circuit clears the stone walls. Keep in sync with sim/terra.js SG_SPEC.
-const FOOT_R = { village: 9, town: 20, city: 46, capital: 54 };
+// settlement footprint radius (SG_SPEC.R + wall margin) the ring wraps: village 10 / town 21 / city 48 /
+// capital 58, bumped so the circuit clears the stone walls. Keep in sync with sim/terra.js SG_SPEC.
+const FOOT_R = { village: 12, town: 26, city: 57, capital: 66 };
 function ringR(tier, pclass) { return (FOOT_R[tier] != null ? FOOT_R[tier] : FOOT_R.village) + (PATROL_LEASH[pclass] || 8); }
 const PATROL_SPEED = 5;      // map units per tick — MIDDLE speed (packs wander at nothing, hosts march at 6)
 const MUSTER_CD = 4;         // ticks between replacement patrols at one settlement
@@ -855,9 +857,9 @@ function strategizeHosts(worldId, tick, armies, relMap, busy, steered) {
 // order and a patrol's own post are exempt (their business IS inside).
 const BATTLE_STANDOFF = 14;
 // the HARD masonry, not the patrol-circuit footprint: FOOT_R carries a wide circuit margin (capital
-// 54 — wider than the gap between the five capitals, so keep-out at FOOT_R would blanket the whole
-// heartland). WALL_R is the wall line an army visibly must not pass through.
-const WALL_R = { village: 6, town: 12, city: 22, capital: 24 };
+// 66 — wider than the gap between the five capitals, so keep-out at FOOT_R would blanket the whole
+// heartland). WALL_R is the wall line an army visibly must not pass through (scaled to SG_SPEC.R).
+const WALL_R = { village: 8, town: 17, city: 28, capital: 30 };
 const SETT_CELL = 64;
 function buildSettGrid(setts) {
   const g = new Map();

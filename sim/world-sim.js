@@ -356,7 +356,7 @@
   // ============================================================================
   var CHUNK = 60;                 // world units per chunk side (matches game.js CHUNK)
   var MAP_HALF = 90;              // overworld half-size (matches game.js MAP_HALF)
-  var HEARTLAND_R = MAP_HALF * 1.6; // within this of origin the five named powers rule; beyond it, the frontier
+  var HEARTLAND_R = MAP_HALF * 3.0; // within this of origin the five named powers rule; beyond it, the frontier (widened so the pushed-out capital ring, ~216u, stays inside their own heartland)
   var FRONTIER_STEP = 240;        // every this-many units from origin, holds get one band deadlier
   var FREE_NAME = 'Free City';
   var PETTY_NAMES = ['Greymark', 'Ravenfell', 'Thornhold', 'Duskvar', 'Stormwatch', 'Ashreach', 'Hollowmere', 'Karran'];
@@ -374,10 +374,10 @@
   // Cities are landmarks, not common holds: they live on a COARSE LATTICE so the big ones stay far
   // apart. One candidate city per CITY_BLOCK×CITY_BLOCK block of chunks, only ~CITY_CHANCE of blocks
   // actually hold one, seated near the block centre with bounded jitter — so two neighbouring cities
-  // are never closer than ~CITY_BLOCK·CHUNK·(1−2·jitter) ≈ 290u apart (a real journey between cities).
+  // are never closer than ~CITY_BLOCK·CHUNK·(1−2·jitter) ≈ 462u apart (a real journey between cities).
   // The client then land-snaps each centre (can drift ~80u to escape a coast), still well within spacing.
-  var CITY_BLOCK = 7;            // chunks per city cell (≈420 world units)
-  var CITY_CHANCE = 0.5;         // fraction of cells that actually hold a city
+  var CITY_BLOCK = 11;           // chunks per city cell (≈660 world units — cities kept well apart)
+  var CITY_CHANCE = 0.45;        // fraction of cells that actually hold a city
   var CITY_IDX = 9;             // reserved site index so a lattice city never collides with idx 0/1
   function blockCity(cx, cz, worldSeed) {
     var bx = Math.floor(cx / CITY_BLOCK), bz = Math.floor(cz / CITY_BLOCK);
@@ -389,15 +389,18 @@
   }
 
   // deterministic settlement sites within a chunk: 0–2 villages/towns per chunk, plus a lattice city
-  // when this chunk hosts its block's one (see blockCity).
+  // when this chunk hosts its block's one (see blockCity). MOST chunks are empty country now — only
+  // ~22% carry a hold — so the map breathes: real distance and wilderness between settlements.
   function settlementSites(cx, cz, worldSeed) {
     var rng = mulberry32(chunkHash(cx, cz, worldSeed) ^ 0x51A7);
-    var n = rng() < 0.42 ? 0 : (rng() < 0.80 ? 1 : 2);
+    // ~50% of chunks now carry a hold (was ~22%) — real villages and towns fill the country BETWEEN
+    // the far-apart cities instead of leaving vast empty stretches.
+    var n = rng() < 0.50 ? 0 : (rng() < 0.88 ? 1 : 2);
     var out = [];
     for (var i = 0; i < n; i++) {
       var x = (cx + 0.20 + rng() * 0.60) * CHUNK;   // kept off the chunk edges so neighbours don't collide
       var z = (cz + 0.20 + rng() * 0.60) * CHUNK;
-      var tier = rng() < 0.78 ? 'village' : 'town';
+      var tier = rng() < 0.72 ? 'village' : 'town';
       out.push({ x: x, z: z, tier: tier, idx: i, cx: cx, cz: cz });
     }
     var city = blockCity(cx, cz, worldSeed);

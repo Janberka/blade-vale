@@ -1638,6 +1638,7 @@ let touchMove = { f: 0, s: 0, active: false };
 // requestPointerLock returns a promise in modern browsers and REJECTS (async, so a
 // try/catch can't see it) when the call isn't tied to a live user gesture — swallow it.
 function grabPointer() {
+  if (typeof MARCH !== 'undefined' && MARCH.on) return;   // the march editor is a spectator sandbox — never seize the mouse
   if (!canvas.requestPointerLock) return;
   try { const p = canvas.requestPointerLock(); if (p && p.catch) p.catch(() => {}); } catch (e) { /* needs a user gesture */ }
 }
@@ -3097,7 +3098,7 @@ function disposeGroup(g) {
       }
       return;
     }
-    if (!c.isMesh) return;
+    if (!c.isMesh && !c.isLine && !c.isPoints) return;   // Lines/Points carry their own geo+material too — free them (was leaking march path lines)
     // cached geometries/materials are shared across many objects — never dispose them
     if (c.geometry && !c.geometry.userData.cached) c.geometry.dispose();
     if (c.material && !c.material.userData.cached) {
@@ -3974,6 +3975,9 @@ BV.testClash = (n = 40, dist = 16) => {
   return { id: bt.id, a: a.faction.name, b: b.faction.name, per: n };
 };
 // test/console hook: what every fielded NPC host's commander is doing right now
+// screen-space marker layer QA: live count, and a demo pin at a world point to eyeball projection
+BV.markers = () => ({ live: MK.items.size, tier: _appliedTier });
+BV.mkDemo = (x, z) => { const m = makeMapPin(0xff44aa, () => ({ x: x || player.pos.x, z: z || player.pos.z, y: mapElevY(x || player.pos.x, z || player.pos.z) + 8 }), { title: 'demo pin' }); return !!m; };
 BV.warHosts = () => {
   const sum = (h) => h ? { strategy: h.cmd.strategy, aggr: +h.cmd.aggression.toFixed(2), caut: +h.cmd.caution.toFixed(2),
     alive: h.fighters.filter(f => f.alive).length, start: h.start, withdrawing: h.withdrawing, routing: h.routing,
@@ -4130,6 +4134,7 @@ function resolveLiveClash(lc) {
   distributeToBands(win.bands, Math.max(1, survW));
   for (const b of los.bands) b.size = 0;
   bt.aWins = aWon; bt.live = false; bt.lc = null;
+  if (typeof MARCH !== 'undefined' && MARCH.on) marchClashResolved(lc); // narrate the killing blow + the losing commander's fall BEFORE the men are disposed
   disposeClashFighters(lc);
   finishMapBattle(bt); // kills the broken side's bands, frees the victors — same as a numeric resolve
 }
@@ -5171,7 +5176,7 @@ const PETTY = [
   { name: 'Stormwatch', color: 0x3b7d96 }, { name: 'Ashreach',  color: 0xa6543a },
   { name: 'Hollowmere', color: 0x4c7d62 }, { name: 'Karran',    color: 0xb08a2a },
 ];
-const HEARTLAND_R = MAP_HALF * 1.6;  // within this of origin the five named powers rule; beyond it, the frontier
+const HEARTLAND_R = MAP_HALF * 3.0;  // within this of origin the five named powers rule; beyond it, the frontier (widened to hold the pushed-out capital ring, ~216u)
 // Emergent frontier realms (see WorldSim.realmFor): infinite server/kernel-defined powers, keyed by name.
 // Registered as their region is explored so their banner colour is the exact seeded hue; a name that
 // arrives before its region (a stray territory hex) gets a stable name-hashed colour so it's never grey.
@@ -5747,7 +5752,7 @@ function buildChunk(cx, cz) {
       group.add(hold.group);
       holds.push(hold); settlements.push(hold);
     }
-  } else {
+  } else if (!(typeof MARCH !== 'undefined' && MARCH.on)) {   // march editor: no ambient villages — only the two towns exist
     for (const s of settlementSites(cx, cz)) {
       // capitals are now ~95u across, so hold sites must clear them by far more than the old 18u
       if (isWater(s.x, s.z) || nearCapital(s.x, s.z, s.tier === 'city' ? 100 : 58)) continue;
@@ -6648,34 +6653,91 @@ function fillNationSec(name) {
   else fill(null);
 }
 
+// ---------- Screen-space marker layer ----------
+// Things we PAINT — war/⚔ icons, map pins, warhost/order/rally flags, faction flag symbols — are
+// UI, not scenery. They must read at a constant pixel size at any zoom (never scale in 3D) and be
+// hover/click-actionable. So instead of THREE meshes/sprites in the scene graph, each is a DOM
+// element in #markers, anchored to a WORLD point that we project to the screen every frame. World
+// scenery (buildings, terrain, banners flapping on castles, soldiers) still lives in 3D — this
+// layer is only for the symbolic paint.
+const MK = (() => {
+  const host = document.getElementById('markers');
+  const items = new Set();        // live markers
+  const _p = new THREE.Vector3(); // scratch for projection
+  // add({ anchor:{x,z} | ()=>({x,z}), y?, html/glyph/pin/flag, color?, size?, onClick?, onHover?,
+  //       title?, visible?:()=>bool }) -> handle with .remove()/.set*()
+  function add(opt) {
+    if (!host) return { remove() {}, el: null };
+    const el = document.createElement('div');
+    el.className = 'mk' + (opt.className ? ' ' + opt.className : '');
+    const m = { el, opt, x: 0, y: 0, shown: false };
+    setContent(m, opt);
+    if (opt.title) el.title = opt.title;
+    if (opt.onClick) el.addEventListener('click', (e) => { e.stopPropagation(); opt.onClick(e, m); });
+    if (opt.onHover) el.addEventListener('mouseenter', () => opt.onHover(true, m));
+    if (opt.onHover) el.addEventListener('mouseleave', () => opt.onHover(false, m));
+    host.appendChild(el);
+    items.add(m);
+    m.remove = () => { items.delete(m); if (el.parentNode) el.parentNode.removeChild(el); };
+    m.setColor = (c) => { m.opt.color = c; paintColor(m); };
+    m.setGlyph = (g) => { m.opt.glyph = g; setContent(m, m.opt); };
+    m.setLabel = (t) => { const l = el.querySelector('.mk-lbl'); if (l) l.textContent = t; };
+    return m;
+  }
+  function paintColor(m) { if (m.opt.color != null) m.el.style.color = _hex6(m.opt.color); }
+  function setContent(m, opt) {
+    if (opt.pin) m.el.innerHTML = '<svg class="mk-pin" viewBox="0 0 20 26"><path d="M10 0C4.5 0 0 4.4 0 9.9 0 17 10 26 10 26s10-9 10-16.1C20 4.4 15.5 0 10 0z" fill="currentColor" stroke="rgba(0,0,0,.5)" stroke-width="1.2"/><circle cx="10" cy="9.6" r="3.7" fill="rgba(255,255,255,.85)"/></svg>';
+    else if (opt.flagSvg) m.el.innerHTML = opt.flagSvg;
+    else if (opt.html != null) m.el.innerHTML = opt.html;
+    else { m.el.className = 'mk mk-glyph' + (opt.className ? ' ' + opt.className : ''); m.el.textContent = opt.glyph || ''; }
+    paintColor(m);
+    if (opt.size) m.el.style.fontSize = opt.size + 'px';
+  }
+  function anchorPos(m) { const a = m.opt.anchor; return typeof a === 'function' ? a() : a; }
+  // project every marker to the screen; called once per frame after the camera settles
+  function update() {
+    if (!host || !items.size) return;
+    const W = innerWidth, H = innerHeight;
+    for (const m of items) {
+      const a = anchorPos(m);
+      const vis = a && (!m.opt.visible || m.opt.visible());
+      if (!vis) { if (m.shown) { m.el.classList.add('mk-hide'); m.shown = false; } continue; }
+      // anchors are world {x,z} with an optional height (opt.y overrides, else anchor.y, else terrain)
+      const wy = m.opt.y != null ? m.opt.y : (a.y != null ? a.y : mapElevY(a.x, a.z));
+      _p.set(a.x, wy, a.z);
+      _p.project(camera);
+      if (_p.z > 1) { if (m.shown) { m.el.classList.add('mk-hide'); m.shown = false; } continue; } // behind camera
+      const sx = (_p.x * 0.5 + 0.5) * W, sy = (-_p.y * 0.5 + 0.5) * H;
+      // cull well off-screen so hidden markers don't pile transforms
+      if (sx < -60 || sx > W + 60 || sy < -60 || sy > H + 60) { if (m.shown) { m.el.classList.add('mk-hide'); m.shown = false; } continue; }
+      if (!m.shown) { m.el.classList.remove('mk-hide'); m.shown = true; }
+      m.el.style.transform = 'translate(' + sx.toFixed(1) + 'px,' + sy.toFixed(1) + 'px) translate(-50%,-50%)';
+    }
+  }
+  return { add, update, items };
+})();
+
 // ---------- Map pins: yours at a glance ----------
 // A pin marks what is YOURS on the map: your banner (gold), your other characters (gold), and
 // every hold sworn to you (realm blue). Pins ride the chart + map rungs — bigger on the chart —
 // and stand down at street level.
 const PIN_C = { you: 0xffd34d, chars: 0xffcf5b, owned: 0x2f6fd0 };
-const _ownedPins = new Map();          // hold entry -> its pin group
-const _allPins = new Set();            // every live pin, for rung scaling + pruning
-function makeMapPin(colorHex, s) {
-  const g = new THREE.Group();
-  const m = mat(colorHex);
-  const needle = new THREE.Mesh(cachedGeo('pinNeedle', () => new THREE.ConeGeometry(0.4, 3.2, 8)), m);
-  needle.rotation.x = Math.PI; needle.position.y = 1.6;                 // tip kisses the anchor point
-  const head = new THREE.Mesh(cachedGeo('pinHead', () => new THREE.SphereGeometry(1.0, 10, 8)), m);
-  head.position.y = 3.4;
-  g.add(needle); g.add(head);
-  g.userData.pinScale = s || 1;
-  g.scale.setScalar(g.userData.pinScale);
-  _allPins.add(g);
-  return g;
+const _ownedPins = new Map();          // hold entry -> its screen-space pin marker
+const _pinMarks = new Set();           // every live pin marker, for the debug hook
+// A pin is a constant-size teardrop in the screen-space marker layer. `anchor` is the world point
+// it rides (a function so it tracks moving carriers); `opt` may carry title/onClick/visible.
+function makeMapPin(colorHex, anchor, opt) {
+  opt = opt || {};
+  const mk = MK.add({
+    className: 'mk-pinwrap', pin: true, color: colorHex, anchor,
+    title: opt.title, onClick: opt.onClick,
+    visible: opt.visible || (() => _appliedTier !== 2),   // pins read at chart/map rungs, stand down at street level
+  });
+  _pinMarks.add(mk);
+  const rm = mk.remove; mk.remove = () => { _pinMarks.delete(mk); rm(); };
+  return mk;
 }
-function _pinRoot(o) { while (o.parent) o = o.parent; return o; }
-function applyPinTier(tier) {
-  for (const g of _allPins) {
-    if (_pinRoot(g) !== scene) { _allPins.delete(g); continue; }        // its carrier left the world
-    g.visible = tier !== 2;
-    g.scale.setScalar(g.userData.pinScale * (tier === 0 ? 2.2 : 1));
-  }
-}
+function applyPinTier(_tier) { /* screen-space pins are constant size and self-hide via visible() — nothing to scale */ }
 function refreshOwnedPins() {
   if (!mapTerrain) return;
   const live = new Set();
@@ -6684,12 +6746,12 @@ function refreshOwnedPins() {
     live.add(en);
     if (_ownedPins.has(en)) continue;
     const spec = SG_SPEC[en.tier || 'capital'] || SG_SPEC.village;
-    const pin = makeMapPin(PIN_C.owned, en.tier === 'village' ? 1.0 : 1.35);
-    pin.position.set(en.x, mapElevY(en.x, en.z) + (spec.top || 5) + 2.5, en.z);
-    mapTerrain.add(pin); _ownedPins.set(en, pin);
+    const top = (spec.top || 5) + 2.5;
+    const pin = makeMapPin(PIN_C.owned, () => ({ x: en.x, z: en.z, y: mapElevY(en.x, en.z) + top }),
+      { title: en.def && en.def.name, onClick: () => openHoldPanel(en) });
+    _ownedPins.set(en, pin);
   }
-  for (const [en, pin] of _ownedPins) if (!live.has(en)) { _allPins.delete(pin); if (pin.parent) pin.parent.remove(pin); _ownedPins.delete(en); }
-  applyPinTier(_appliedTier);
+  for (const [en, pin] of _ownedPins) if (!live.has(en)) { pin.remove(); _ownedPins.delete(en); }
 }
 
 // ---------- Strategic map: persistent capitals + streamed chunks ----------
@@ -7762,8 +7824,10 @@ function enterMap() {
   // the player rides the map as a banner party, like the rival hosts — not the walking hero
   if (player.mapToken) { scene.remove(player.mapToken); disposeGroup(player.mapToken); }
   player.mapToken = makeColumn(warbandComp, PLAYER_REALM.color, '★ ' + warbandTotal());
-  const youPin = makeMapPin(PIN_C.you, 0.9); youPin.position.y = 6.4;   // "you are here", readable from any rung
-  player.mapToken.add(youPin);
+  if (!player.youPin) {                                                 // "you are here", readable from any rung; rides your column
+    player.youPin = makeMapPin(PIN_C.you, () => (player.mapToken && player.mapToken.visible)
+      ? { x: player.pos.x, z: player.pos.z, y: mapElevY(player.pos.x, player.pos.z) + 6.4 } : null);
+  }
   player.mapToken.position.copy(player.pos);
   player.mapToken.position.y = mapElevY(player.pos.x, player.pos.z);
   scene.add(player.mapToken);
@@ -8024,18 +8088,38 @@ function recomputeBattle(bt) {
   bt.t = oldFrac * bt.duration; // resume from the progress already made (0 at creation)
 }
 function makeBattleMarker(bt) {
+  // The battle's spot on the ground stays a 3D decal (it IS on the terrain). The ⚔ symbol and the
+  // tug-of-war bar are PAINT — they live in the screen-space marker layer at a constant size, so a
+  // clash reads the same whether you're zoomed to the chart or standing on the field, and it's
+  // hoverable for who's fighting.
   const g = new THREE.Group();
   const disc = new THREE.Mesh(cachedGeo('cbDisc', () => { const c = new THREE.CircleGeometry(5.0, 26); c.rotateX(-Math.PI / 2); return c; }),
     mat(0xff5a2a, { shared: false, emissive: 0xff5a2a, emissiveI: 0.5 }));
   disc.material.transparent = true; disc.material.opacity = 0.3; disc.position.y = 0.2; g.add(disc); g.userData.disc = disc;
-  const barY = 5.4;
-  const barA = boxMesh(1, 0.5, 0.5, mat(bt.sideA.faction.color, { shared: false })); barA.position.set(0, barY, 0); g.add(barA);
-  const barB = boxMesh(1, 0.5, 0.5, mat(bt.sideB.faction.color, { shared: false })); barB.position.set(0, barY, 0); g.add(barB);
-  g.userData.barA = barA; g.userData.barB = barB;
-  const glyph = makeNameSprite('⚔'); glyph.scale.set(2.6, 2.6, 1); glyph.position.y = barY + 1.2; g.add(glyph);
   scene.add(g);
+  bt.mk = MK.add({
+    className: 'mk-battle',
+    anchor: () => ({ x: bt.cx, z: bt.cz }), y: 6.4,
+    html: '<div class="mkb-ico">⚔</div><div class="mkb-bar"><i class="mkb-a"></i><i class="mkb-b"></i></div>',
+    // step aside at street level, and while the clash is fought for real by materialised fighters
+    // (those code paths flip the ground disc's .visible — the icon rides the same signal)
+    visible: () => _appliedTier !== 2 && g.visible,
+    onClick: () => focusMapOn(bt.cx, bt.cz, 5),
+  });
+  if (bt.mk.el) {
+    bt.mk.barA = bt.mk.el.querySelector('.mkb-a'); bt.mk.barB = bt.mk.el.querySelector('.mkb-b');
+    bt.mk.barA.style.background = _hex6(bt.sideA.faction.color);
+    bt.mk.barB.style.background = _hex6(bt.sideB.faction.color);
+  }
   return g;
 }
+// A GREAT battle / siege: enlarge the paint and hang a name banner off it — all in screen space.
+function markBattleBig(bt, text) {
+  if (!bt.mk || !bt.mk.el) return;
+  bt.mk.el.classList.add('mk-battle-big');
+  if (text) { const l = document.createElement('div'); l.className = 'mkb-name'; l.textContent = text; bt.mk.el.appendChild(l); }
+}
+function removeBattleMarker(bt) { if (bt.mk) { bt.mk.remove(); bt.mk = null; } }
 function startMapBattle(a, b) {
   const cx = (a.pos.x + b.pos.x) / 2, cz = (a.pos.z + b.pos.z) / 2;
   let axx = b.pos.x - a.pos.x, axz = b.pos.z - a.pos.z; const al = Math.hypot(axx, axz) || 1; axx /= al; axz /= al;
@@ -8087,11 +8171,15 @@ function layoutBattle(bt) { // cluster each side either flank of the contested p
 function updateBattleMarker(bt) {
   const m = bt.marker; if (!m) return;
   m.position.set(bt.cx, mapElevY(bt.cx, bt.cz) + 0.15, bt.cz);
-  const la = Math.max(0, bt.sideA.live), lb = Math.max(0, bt.sideB.live), tot = Math.max(1, la + lb), W = 6, fa = la / tot;
-  const barA = m.userData.barA, barB = m.userData.barB;
-  barA.scale.x = Math.max(0.02, W * fa); barA.position.x = -W / 2 + (W * fa) / 2;
-  barB.scale.x = Math.max(0.02, W * (1 - fa)); barB.position.x = -W / 2 + W * fa + (W * (1 - fa)) / 2;
   m.userData.disc.material.opacity = 0.26 + 0.12 * Math.sin(rtNow * 8);
+  const la = Math.max(0, bt.sideA.live), lb = Math.max(0, bt.sideB.live), tot = Math.max(1, la + lb), fa = la / tot;
+  const mk = bt.mk;                                      // the screen-space ⚔ + tug-of-war bar
+  if (mk && mk.barA) {
+    mk.barA.style.width = (fa * 100).toFixed(1) + '%';
+    mk.barB.style.width = ((1 - fa) * 100).toFixed(1) + '%';
+    const na = Math.round(la), nb = Math.round(lb);
+    mk.el.title = bt.sideA.faction.name + ' ' + na + '  ✕  ' + nb + ' ' + bt.sideB.faction.name;
+  }
 }
 function recordClashOutcome(bt) { // the winning warlord's name grows with the war (mirrors the old instant resolve)
   const win = bt.aWins ? bt.sideA : bt.sideB, los = bt.aWins ? bt.sideB : bt.sideA;
@@ -8107,22 +8195,23 @@ function recordClashOutcome(bt) { // the winning warlord's name grows with the w
 function finishMapBattle(bt) {
   if (bt.done) return; bt.done = true;
   recordClashOutcome(bt);
+  if (typeof MARCH !== 'undefined' && MARCH.on) marchBattleFinished(bt); // narrate the outcome (covers both wipe + fold-to-numeric endings)
   const win = bt.aWins ? bt.sideA : bt.sideB, los = bt.aWins ? bt.sideB : bt.sideA;
   spawnPopup(tmpV2.set(bt.cx, 3.2, bt.cz), '⚔', '#ffe089');
   for (const b of los.bands) if (b.alive) { if (b.leader) spawnPopup(b.pos.clone().setY(3.2), b.leader.name + "'s host is broken", '#ff9b6b'); b.inBattle = null; killBand(b); }
   for (const b of win.bands) if (b.alive) { b.inBattle = null; b.clashCd = 1.5; b._shownSize = -1; if (b.isDetachment) reconcileDetachment(b); else setBandLabel(b); }
-  if (bt.marker) { scene.remove(bt.marker); disposeGroup(bt.marker); }
+  if (bt.marker) { scene.remove(bt.marker); disposeGroup(bt.marker); } removeBattleMarker(bt);
   const i = mapBattles.indexOf(bt); if (i >= 0) mapBattles.splice(i, 1);
 }
 function teardownEmptyBattle(bt) { // a side was wiped out elsewhere — release the survivors
   bt.done = true;
   for (const b of bt.sideA.bands.concat(bt.sideB.bands)) if (b.alive) { b.inBattle = null; b.clashCd = 1; b._shownSize = -1; setBandLabel(b); }
-  if (bt.marker) { scene.remove(bt.marker); disposeGroup(bt.marker); }
+  if (bt.marker) { scene.remove(bt.marker); disposeGroup(bt.marker); } removeBattleMarker(bt);
   const i = mapBattles.indexOf(bt); if (i >= 0) mapBattles.splice(i, 1);
 }
 function clearMapBattles() {
   for (const lc of [...liveClashes]) disposeClashFighters(lc); // stand down any real fighters first
-  for (const bt of mapBattles) { bt.done = true; bt.live = false; bt.lc = null; if (bt.marker) { scene.remove(bt.marker); disposeGroup(bt.marker); } }
+  for (const bt of mapBattles) { bt.done = true; bt.live = false; bt.lc = null; if (bt.marker) { scene.remove(bt.marker); disposeGroup(bt.marker); } removeBattleMarker(bt); }
   mapBattles.length = 0;
 }
 function updateMapBattles(dt) {
@@ -8243,7 +8332,7 @@ function dropIntoClash() {
   for (const b of foe.bands) if (b.alive && b !== lead) { b.inBattle = null; killBand(b); }
   lead.size = remaining; lead.inBattle = null; lead.clashCd = 1e9; // frozen: its men are about to be real
   bt.done = true;
-  if (bt.marker) { scene.remove(bt.marker); disposeGroup(bt.marker); }
+  if (bt.marker) { scene.remove(bt.marker); disposeGroup(bt.marker); } removeBattleMarker(bt);
   const i = mapBattles.indexOf(bt); if (i >= 0) mapBattles.splice(i, 1);
   const my = pc.myBand;
   my.alive = false; my.inBattle = null;
@@ -10348,6 +10437,7 @@ let last = performance.now();
 let frameNo = 0;
 function loop(now) {
   if (BATTLE.on) return battleFrame(now); // battle-editor mode: two armies fighting in a valley, own sim + orbit
+  if (MARCH.on) return marchFrame(now);  // march-editor mode: two hosts patrol real towns/roads — tune how they WALK
   if (EDIT.on) return editFrame(now);   // object-editor mode: orbit + render one model, skip the game sim
   const rawMs = now - last;
   const dt = Math.min((now - last) / 1000, 0.05);
@@ -10423,6 +10513,7 @@ function loop(now) {
     if (vigStr !== lastVig) { lastVig = vigStr; damageFlash.style.opacity = vigStr; }
   }
 
+  MK.update();                 // project painted markers to the screen after the camera has settled
   renderer.render(scene, camera);
   requestAnimationFrame(loop);
 }
@@ -10730,7 +10821,7 @@ BV.territory = () => {
 BV.territorySnapshot = BV.territory;
 BV.terrAt = (x, z) => { const [q, r] = worldToHex(x, z); const c = terrCells.get(hexKey(q, r)); return c ? (c.w ? 'water' : (c.o ? c.o.name : 'unclaimed')) : 'unloaded'; };
 // the border sheet + realm cards + pins (this feature set's test hooks)
-BV.borders = () => ({ layer: TERR_LAYER, hover: hoverNation ? factionName(hoverNation) : null, srvTerrChunks: srvTerr.size, overlays: Array.from(mapChunks.values()).filter(r => r.terrOverlay).length, pins: _allPins.size, ownedPins: _ownedPins.size });
+BV.borders = () => ({ layer: TERR_LAYER, hover: hoverNation ? factionName(hoverNation) : null, srvTerrChunks: srvTerr.size, overlays: Array.from(mapChunks.values()).filter(r => r.terrOverlay).length, pins: _pinMarks.size, ownedPins: _ownedPins.size });
 BV.hoverNation = (name) => { setHoverNation(name ? factionByName(name) : null); return hoverNation ? factionName(hoverNation) : null; };
 BV.wallRing = (x, z, tier, seed) => terra().wallRingPts(x, z, tier || 'city', seed >>> 0);
 BV.openHold = (name) => { const en = _allHoldEntries().find(e => e.def.name === name); if (en) openHoldPanel(en); return !!en; };
@@ -11237,7 +11328,32 @@ function serverArmyToBand(a) {
     homeX: a.home_x, homeZ: a.home_z, focusX: a.focus_x, focusZ: a.focus_z, focusKey: a.focus_key || null,
     srvIntent: a.intent || null, srvIntentKind: a.intentKind || null };
   parties.push(band); setBandLabel(band);
+  beginBandFadeIn(band);   // don't pop in — ease the banner up from transparent as it takes its post
   return band;
+}
+// FADE-IN: a newly-arrived server band shouldn't pop or slide into being. Clone its (shared) materials
+// so this token alone can go transparent, ramp opacity 0→1 over FADE_IN_S, then restore the shared
+// materials (and dispose the clones) so batching is untouched once it's fully present.
+const FADE_IN_S = 0.55;
+function beginBandFadeIn(band) {
+  band._fade = 0; band._fadeObjs = [];
+  band.group.traverse(o => {
+    if (!o.material || Array.isArray(o.material)) return;
+    const shared = o.material, clone = shared.clone();
+    clone.transparent = true; clone.opacity = 0;
+    clone.userData.cached = false;   // clone() copied cached:true — clear it so disposeGroup frees it if the band dies mid-fade
+    o.material = clone;
+    band._fadeObjs.push({ o, shared, clone });
+  });
+}
+function stepBandFadeIn(band, dt) {
+  if (!band._fadeObjs) return;
+  band._fade = Math.min(1, band._fade + dt / FADE_IN_S);
+  for (const f of band._fadeObjs) f.clone.opacity = band._fade;
+  if (band._fade >= 1) {                       // done: hand back the shared materials, drop the clones
+    for (const f of band._fadeObjs) { if (f.o.material === f.clone) f.o.material = f.shared; f.clone.dispose(); }
+    band._fadeObjs = null;
+  }
 }
 // the authoritative named warlords, APPENDED onto the ambient swarm (no clear) — the server's
 // persistent hosts and the client's living-world bands coexist so the map stays crowded + alive.
@@ -11292,10 +11408,14 @@ function patrolOrbiting(band) {
 const PATROL_ORBIT_PERIOD = 60; // seconds for ONE full circuit of the walls — a slow watch, not a racetrack
 // between polls: circle home (patrols on watch) or catch up to the reported spot, then drift the march
 function updateServerBand(band, dt) {
+  stepBandFadeIn(band, dt);   // ease the banner in wherever it stands (orbit or march), every frame until opaque
   if (patrolOrbiting(band)) {
     const c = patrolCenter(band);
     if (band._orbitR == null) {
-      band._orbitR = clamp(Math.hypot(band.pos.x - c.x, band.pos.z - c.z), 6, 24) || 10;
+      // seed the ring THROUGH the spawn point (server places patrols on a footprint-scaled ring up to
+      // ~90u out for a big hold) — a tight clamp here forced the ring inward and the patrol visibly slid
+      // into place from its spawn spot. Wide bound = it appears already on its circuit, outside the walls.
+      band._orbitR = clamp(Math.hypot(band.pos.x - c.x, band.pos.z - c.z), 6, 100) || 10;
       band._orbitA = Math.atan2(band.pos.z - c.z, band.pos.x - c.x);
       band._orbitDir = (band.serverId % 2) ? 1 : -1; // matches the server's per-warlord circling sense
     }
@@ -11343,7 +11463,7 @@ function releaseSrvBattle(e) {
     b.inBattle = null; b.clashCd = 1.5; b._shownSize = -1; setBandLabel(b);
   }
   if (e.garBand && e.garBand.alive) { e.garBand.inBattle = null; killBand(e.garBand); } // the walls stand down
-  if (e.bt.marker) { scene.remove(e.bt.marker); disposeGroup(e.bt.marker); e.bt.marker = null; }
+  if (e.bt.marker) { scene.remove(e.bt.marker); disposeGroup(e.bt.marker); e.bt.marker = null; } removeBattleMarker(e.bt);
 }
 function syncServerBattles() {
   if (mode !== 'map') return;
@@ -11358,10 +11478,8 @@ function syncServerBattles() {
         sideA: { faction: facA, bands: [], start: sb.aStart, end: sb.aStart, live: sb.aStr },
         sideB: { faction: facB, bands: [], start: sb.bStart, end: sb.bStart, live: sb.bStr } };
       bt.marker = makeBattleMarker(bt);
-      if (sb.big) { // a GREAT battle: the large crossed swords, readable from the widest rung
-        bt.marker.scale.setScalar(2.4);
-        const label = makeNameSprite('⚔ ' + (sb.holdName ? 'Siege of ' + sb.holdName : 'A great battle — ' + sb.aFaction + ' vs ' + sb.bFaction));
-        label.scale.set(7.5, 0.9, 1); label.position.y = 8.8; bt.marker.add(label);
+      if (sb.big) { // a GREAT battle: the large crossed swords + name banner, readable from the widest rung
+        markBattleBig(bt, sb.holdName ? 'Siege of ' + sb.holdName : 'A great battle — ' + sb.aFaction + ' vs ' + sb.bFaction);
         spawnPopup(tmpV2.set(sb.x, 4.0, sb.z), '⚔ A great battle is joined!', '#ffd24a');
       }
       e = { bt, sb, targetA: sb.aStr, targetB: sb.bStr, garBand: null };
@@ -11813,7 +11931,7 @@ function applyActiveChar(c) {
   renderMyChars();
 }
 // your own WAITING banners on the map (gold ◆) — the active one is your normal ★ column
-function clearMyChars() { for (const t of myCharTokens) { scene.remove(t); disposeGroup(t); } myCharTokens.length = 0; }
+function clearMyChars() { for (const t of myCharTokens) { if (t.userData.pin) t.userData.pin.remove(); scene.remove(t); disposeGroup(t); } myCharTokens.length = 0; }
 function renderMyChars() {
   clearMyChars();
   if (!(window.net && window.net.session)) return;
@@ -11823,10 +11941,12 @@ function renderMyChars() {
     const a = charOrders.get(c.charId);                  // a moving character rides its live agent spot
     const cx = a && a.kind !== 'hold' ? a.x : c.x, cz = a && a.kind !== 'hold' ? a.z : c.z;
     const g = makeOtherPlayerToken(c.name + ' · ' + c.men, c.men, { color: 0xffcf5b, prefix: '◆ ' });
-    const chPin = makeMapPin(PIN_C.chars, 0.8); chPin.position.y = 5.6; g.add(chPin); // your other self, pinned
     const px = clamp(cx, -MAP_HALF + 1, MAP_HALF - 1), pz = clamp(cz, -MAP_HALF + 1, MAP_HALF - 1);
     g.position.set(px, mapElevY(px, pz), pz);
     g.userData.charId = c.charId;
+    // your other self, pinned — constant-size marker riding this waiting banner
+    g.userData.pin = makeMapPin(PIN_C.chars, () => g.parent ? { x: g.position.x, z: g.position.z, y: g.position.y + 5.6 } : null,
+      { title: c.name + ' · ' + c.men + ' men' });
     scene.add(g); myCharTokens.push(g);
   }
 }
@@ -14195,6 +14315,533 @@ BV.battleTrain = (on) => { if (!battleTrainInit()) return 'kernel not loaded'; B
 BV.battleGraph = (on) => { BATTLE.graphOpen = on === undefined ? !BATTLE.graphOpen : !!on; battleGraphPanel(); battleUpdateHud(); return BATTLE.graphOpen; };
 BV.battleTrainStep = () => { battleTrainStep(); return BATTLE.train ? { gen: BATTLE.train.gen, skill: BATTLE.train.skill } : null; }; // manual training step (headless testing)
 
+/* ============================================================================
+   MARCH EDITOR — ?march  (or ?march&seed=7&n=44&sep=26)
+   A self-contained sandbox for the ONE thing we're iterating on here: how an NPC
+   army with a leader WALKS through the world. Two towns sit close together on the
+   REAL terrain (buildSettlementGroup) with the REAL road network knit around them
+   (buildMapTerrain → ensureRoads), and two rival hosts patrol a circuit that
+   encloses both — following roads between waypoints, slowing on steep ground, and
+   pairing off man-to-man when they meet. Every soldier is the same crowd body the
+   live game uses (materialiseBand + updateFieldArmyBodies), so the four things we
+   want to improve are all LIVE and all tunable via BV.marchTune:
+     · formation cohesion  — squad anchors easing behind the leader (kPos/kDir)
+     · road following      — travelPath (hex-A* road routing) between waypoints
+     · terrain response    — per-step slope slow-down (slopeSlow)
+     · foot animation      — walkLegs / setPose inside updateFieldArmyBodies
+   Nobody drives; you watch and dial. BV.march* hooks pause/step/tune/reset.
+============================================================================ */
+const MARCH = {
+  on: false, cfg: {}, armies: [], towns: [], last: 0, paused: false, speed: 1,
+  orbit: { target: new THREE.Vector3(), r: 120, theta: 0.7, phi: 0.9 },
+  showPaths: false, pathGroup: null, log: [], clock: 0,
+  war: { over: false, winner: null, endAt: 0 },   // the campaign has a WINNER: hold falls → its side loses the war
+  terr: null, ground: null, bound: 150,   // self-contained procedural terrain (rolled fresh each Restart, like the battle editor)
+  ai: {
+    ringR: 26,          // radius of each host's patrol ring around ITS OWN town
+    arrive: 3.0,        // how close counts as "reached this waypoint"
+    patrolSpeed: 5.5,   // units/s on the ring
+    marchSpeed: 8.0,    // units/s charging a sighted enemy
+    senseR: 40,         // spot an enemy host within this and CHARGE — a border sighting starts the fight
+    clashR: 12,         // contact range = CLASH_GAP, so the battle line musters right where the marchers stand (no formation-centre jump)
+    slopeSlow: 2.6,     // higher = steeper ground bleeds more speed (terrain response)
+    clashCd: 5,         // seconds a survivor stays disengaged after a battle (attrition is the battle's, not a knob)
+    respawn: 7,         // seconds before a broken host re-musters at its town
+  },
+};
+// ---- REAL terrain: a self-contained patch of the actual game world (a fresh Terra kernel instance at a
+// random offset, exactly like the battle editor's worldTerrain mode), sampled into ONE mesh with the
+// REAL elevation (mountains, ridges, valleys) and the REAL biome COLOURS (grass/forest/rock/snow), plus a
+// few extra random MOUNTAIN peaks for drama. Real roads/settlements ride this same kernel. ----
+function marchRollTerrain() {
+  const R = Math.random, SEA = (typeof Terra !== 'undefined' && Terra.SEA_LEVEL != null) ? Terra.SEA_LEVEL : 0.38;
+  const ti = Terra.make((R() * 0xffffffff) >>> 0);           // a real worldgen instance
+  let ox = 0, oz = 0, base = 0;
+  for (let tries = 0; tries < 48; tries++) {                 // find a dry patch with real relief to fight over
+    ox = (R() * 2 - 1) * 6000; oz = (R() * 2 - 1) * 6000; base = ti.elevationAt(ox, oz);
+    if (base < SEA + 0.05) continue;                          // not in the sea/coast
+    let hi = base, lo = base;
+    for (let k = 0; k < 14; k++) { const e = ti.elevationAt(ox + (R() * 2 - 1) * 110, oz + (R() * 2 - 1) * 110); hi = Math.max(hi, e); lo = Math.min(lo, e); }
+    if (hi - lo > 0.05 && lo > SEA - 0.02) break;             // some relief, but not a coastline that floods the field
+  }
+  const peaks = [], nk = 2 + Math.floor(R() * 3);            // 2–4 extra mountains scattered across the field
+  for (let i = 0; i < nk; i++) peaks.push({ x: (R() * 2 - 1) * 120, z: (R() * 2 - 1) * 120, h: 12 + R() * 30, r: 22 + R() * 30 });
+  return { terra: ti, ox, oz, baseY: ti.elevToY(base), peaks };
+}
+function marchPeakY(T, lx, lz) {
+  let h = 0; for (const k of T.peaks) { const dx = lx - k.x, dz = lz - k.z; h += k.h * Math.exp(-(dx * dx + dz * dz) / (2 * k.r * k.r)); } return h;
+}
+function marchTerrainY(x, z) {
+  const T = MARCH.terr; if (!T) return 0;
+  return (T.terra.elevToY(T.terra.elevationAt(T.ox + x, T.oz + z)) - T.baseY) + marchPeakY(T, x, z);
+}
+function marchTerrain() {
+  const T = MARCH.terr, S = MARCH.bound * 2.2;
+  const geo = new THREE.PlaneGeometry(S, S, 200, 200); geo.rotateX(-Math.PI / 2);
+  const p = geo.attributes.position, col = new Float32Array(p.count * 3), c = new THREE.Color();
+  const rgb = [0, 0, 0], rock = new THREE.Color(0x83837c), snow = new THREE.Color(0xc4ccd4);
+  for (let i = 0; i < p.count; i++) {
+    const lx = p.getX(i), lz = p.getZ(i), pk = marchPeakY(T, lx, lz);
+    p.setY(i, (T.terra.elevToY(T.terra.elevationAt(T.ox + lx, T.oz + lz)) - T.baseY) + pk);
+    T.terra.groundColorRGB(T.ox + lx, T.oz + lz, rgb); c.setRGB(rgb[0], rgb[1], rgb[2]); // REAL biome colour
+    if (pk > 8) c.lerp(rock, clamp((pk - 8) / 24, 0, 1) * 0.7).lerp(snow, clamp((pk - 30) / 18, 0, 1) * 0.7); // rock, then a soft snow cap only on the tallest added peaks
+    col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3)); geo.computeVertexNormals();
+  const m = new THREE.Mesh(geo, new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: true, shininess: 2, specular: 0x000000 }));
+  m.receiveShadow = true; return m;
+}
+// ---- roads: routed by the REAL kernel A* (travelPath — the same terrain-cost pathfinder the game uses
+// for hosts), so the track bends around the real mountains, ridges and water, then laid as a grey ribbon
+// on the terrain. The armies march these roads city-to-city, like campaigning hosts. ----
+const MARCH_ROAD_COL = 0x9a9ba0;                            // the real game major-road grey (ROAD_TIER.major.col)
+function marchRoadPath(x0, z0, x1, z1) {
+  const T = MARCH.terr;
+  if (T && T.terra && T.terra.travelPath) {                 // REAL routing on this field's kernel instance
+    try {
+      const r = T.terra.travelPath(T.ox + x0, T.oz + z0, T.ox + x1, T.oz + z1, 9000);
+      if (r && r.pts && r.pts.length >= 2) return r.pts.map(pt => ({ x: pt.x - T.ox, z: pt.z - T.oz }));
+    } catch (e) {}
+  }
+  // fallback: a gentle synthetic curve if the router bailed
+  const dx = x1 - x0, dz = z1 - z0, len = Math.hypot(dx, dz) || 1, px = -dz / len, pz = dx / len;
+  const bulge = (Math.random() * 2 - 1) * len * 0.16, N = Math.max(10, Math.round(len / 6)), pts = [];
+  for (let i = 0; i <= N; i++) { const t = i / N, off = Math.sin(t * Math.PI) * bulge; pts.push({ x: x0 + dx * t + px * off, z: z0 + dz * t + pz * off }); }
+  return pts;
+}
+// emit a road ribbon (two verts per centre point, offset along the local normal) onto the terrain surface
+function marchRoadRibbon(pts, width, hex) {
+  const pos = [], idx = [], W = width / 2, LIFT = 0.12;
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
+    let tx = b.x - a.x, tz = b.z - a.z; const tl = Math.hypot(tx, tz) || 1; tx /= tl; tz /= tl;
+    const nx = -tz, nz = tx, p = pts[i];
+    const lx = p.x + nx * W, lz = p.z + nz * W, rx = p.x - nx * W, rz = p.z - nz * W;
+    pos.push(lx, mapElevY(lx, lz) + LIFT, lz, rx, mapElevY(rx, rz) + LIFT, rz);
+    if (i > 0) { const k = (i - 1) * 2; idx.push(k, k + 1, k + 2, k + 1, k + 3, k + 2); }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); geo.setIndex(idx); geo.computeVertexNormals();
+  // an UNLIT double-sided decal: a flat pale road that reads the same regardless of face winding / sun angle,
+  // sitting just above the grass (polygonOffset stops it z-fighting the terrain it hugs)
+  const m = new THREE.MeshBasicMaterial({ color: hex, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+  return new THREE.Mesh(geo, m);
+}
+// a point is always land on the synthetic terrain — keep the helper so call sites don't branch
+function marchLand(x, z) { return { x, z }; }
+// terrain-aware step: slow on steep ground, ride the relief. Returns distance still to go.
+function marchStepTo(a, tx, tz, speed, dt) {
+  const dx = tx - a.pos.x, dz = tz - a.pos.z, d = Math.hypot(dx, dz);
+  if (d < 1e-4) return 0;
+  const e = 1.2, gx = (mapElevY(a.pos.x + e, a.pos.z) - mapElevY(a.pos.x - e, a.pos.z)) / (2 * e);
+  const gz = (mapElevY(a.pos.x, a.pos.z + e) - mapElevY(a.pos.x, a.pos.z - e)) / (2 * e);
+  const slope = Math.hypot(gx, gz);
+  const sp = speed / (1 + slope * MARCH.ai.slopeSlow);       // steeper ⇒ slower (terrain response)
+  const step = Math.min(d, sp * dt), nx = a.pos.x + dx / d * step, nz = a.pos.z + dz / d * step;
+  const B = MARCH.bound - 6;
+  a.pos.set(clamp(nx, -B, B), mapElevY(nx, nz), clamp(nz, -B, B));
+  a.pos.y = mapElevY(a.pos.x, a.pos.z);
+  a.heading = Math.atan2(dx, dz);
+  return d - step;
+}
+// walk straight to (tx,tz), terrain-aware (marchStepTo rides the slope). The synthetic sandbox has no
+// road net — travelPath would route on the REAL streamed world (different terrain/water), so we never
+// use it here; marchStepTo's slope-slowdown is the whole terrain response.
+function marchFollow(a, tx, tz, speed, dt) {
+  if (!a.path || a.path.gx !== (tx | 0) || a.path.gz !== (tz | 0)) a.path = { pts: [{ x: a.pos.x, z: a.pos.z }, { x: tx, z: tz }], i: 1, gx: tx | 0, gz: tz | 0 };
+  const rem = marchStepTo(a, tx, tz, speed, dt);
+  if (rem <= MARCH.ai.arrive) return true;
+  return false;
+}
+// an empty invisible banner group so the band satisfies the real battle plumbing (killBand/setBandLabel
+// dispose + relabel band.group; materialiseBand hides it while a crowd stands in for the flag)
+function marchBandGroup() { const g = new THREE.Group(); g.visible = false; scene.add(g); return g; }
+// two hosts touch → hand the fight to the REAL battle system: a live clash with champion-driven
+// commanders (warHostRaise: doctrine, divisions, live re-tasking, per-man morale) and real fighters
+// (stepFighter — actual hits, deaths, routs). This is the SAME AI the live game runs, not a pantomime.
+// the world positions of a marching host's men RIGHT NOW (its materialised crowd) — where the eye last
+// saw each soldier, so the battle can put its fighters THERE and run them into line
+function marchBodyPositions(band) {
+  const fa = fieldArmies.get(band); if (!fa) return [];
+  const out = [];
+  for (const bdy of fa.bodies) { if (bdy.dead) continue; out.push([bdy.wx != null ? bdy.wx : bdy.group.position.x, bdy.wz != null ? bdy.wz : bdy.group.position.z]); }
+  return out;
+}
+// slide a freshly-mustered side — its fighters AND its division anchors, as one rigid body — from the
+// midpoint muster grid to where its host actually stands. Keeps fighters and their target slots CONSISTENT
+// at band.pos even when no crowd exists (headless / an unmaterialised band), so the fight never desyncs.
+function marchShiftSide(arr, host, toX, toZ) {
+  if (!arr.length || !host) return;
+  let cx = 0, cz = 0; for (const f of arr) { cx += f.pos.x; cz += f.pos.z; } cx /= arr.length; cz /= arr.length;
+  const dx = toX - cx, dz = toZ - cz;
+  for (const f of arr) { f.pos.x += dx; f.pos.z += dz; if (f.obj) f.obj.position.set(f.pos.x, mapElevY(f.pos.x, f.pos.z), f.pos.z); }
+  for (const u of host.units) { u.ax += dx; u.az += dz; u.homeAx += dx; u.homeAz += dz; if (u.wp) { u.wp.ax += dx; u.wp.az += dz; } }
+  host.cx += dx; host.cz += dz;
+}
+// place each fighter at a marching soldier's spot (paired left→right so nobody crosses), leaving its
+// TARGET slot at the shifted formation. warFighterStep then makes each man RUN from where he was
+// marching into his rank — the army visibly forms up as it closes, instead of snapping into a grid.
+function marchRunFromMarch(arr, marcherPts, faceX, faceZ) {
+  const m = marcherPts.length; if (!m || !arr.length) return;
+  const latX = -faceZ, latZ = faceX, lat = (x, z) => x * latX + z * latZ;   // lateral axis of the line
+  const pts = marcherPts.slice().sort((p, q) => lat(p[0], p[1]) - lat(q[0], q[1]));
+  const fs = arr.slice().sort((a, b) => lat(a.pos.x, a.pos.z) - lat(b.pos.x, b.pos.z));
+  for (let i = 0; i < fs.length; i++) {
+    const p = pts[Math.min((i * m / fs.length) | 0, m - 1)], f = fs[i];
+    f.pos.x = p[0]; f.pos.z = p[1];
+    if (f.obj) f.obj.position.set(p[0], mapElevY(p[0], p[1]), p[1]);
+  }
+}
+function marchStartClash(a, b) {
+  const posA = marchBodyPositions(a), posB = marchBodyPositions(b); // capture the marching men BEFORE startLiveClash clears the crowds
+  const bt = startMapBattle(a, b);   // real sides + marker + bar; sets a/b.inBattle and clashCd=1e9 (movement leaves them be)
+  if (bt.marker) bt.marker.visible = false;  // the real fighters ARE the marker here — hide the pink map disc
+  startLiveClash(bt);                // champion commanders (θ_C/θ_S) TAKE OVER NOW — divisions, orders, morale — and advance to contact
+  if (bt.lc) {
+    marchShiftSide(bt.lc.A, bt.lc.hostA, a.pos.x, a.pos.z); marchShiftSide(bt.lc.B, bt.lc.hostB, b.pos.x, b.pos.z); // formation intact at each host's spot (consistent even with no crowd)
+    marchRunFromMarch(bt.lc.A, posA, a.pos.x - b.pos.x, a.pos.z - b.pos.z); // face = toward the foe
+    marchRunFromMarch(bt.lc.B, posB, b.pos.x - a.pos.x, b.pos.z - a.pos.z);
+    marchLog(`⚔ <b style="color:#${a.faction.color.toString(16).padStart(6, '0')}">${a.faction.name}</b> and <b style="color:#${b.faction.color.toString(16).padStart(6, '0')}">${b.faction.name}</b> have sighted each other — the hosts form up!`, '#ffe089');
+  }
+  a.state = b.state = 'clash';
+}
+// ---- realtime battle log: leaders' commands + who falls ----
+const MARCH_DIV = { center: 'the center', left: 'the left wing', right: 'the right wing', reserve: 'the reserve', archers: 'the archers', skirmish: 'the skirmishers' };
+const MARCH_ORDER = { advance: 'advance', charge: 'CHARGE', hold: 'hold the line', flank: 'wheel to flank', fallback: 'fall back', skirmish: 'skirmish', hold_zone: 'hold' };
+function marchLog(msg, color) {
+  const s = Math.floor(MARCH.clock), tag = ((s / 60) | 0) + ':' + ('' + (s % 60)).padStart(2, '0');
+  MARCH.log.push({ tag, msg, color: color || '#cfd6e2' });
+  if (MARCH.log.length > 80) MARCH.log.shift();
+  MARCH._logDirty = true;    // coalesced: rendered ONCE per frame in marchFrame (a clash-start bursts ~12 lines)
+}
+function marchLogRender() {
+  const el = document.getElementById('march-log-body'); if (!el) return;
+  el.innerHTML = MARCH.log.slice(-18).map(r =>
+    `<div style="margin-top:3px;line-height:1.35"><span style="color:#6b7280">${r.tag}</span> <span style="color:${r.color}">${r.msg}</span></div>`).join('');
+  el.scrollTop = el.scrollHeight;
+}
+// poll every live clash for command changes + fresh deaths and narrate them
+function marchPollLog() {
+  for (const lc of liveClashes) { if (!lc.bt) continue; marchPollHost(lc.hostA, lc.bt.sideA, lc.A); marchPollHost(lc.hostB, lc.bt.sideB, lc.B); }
+}
+function marchPollHost(host, side, arr) {
+  if (!host || !side || !side.faction) return;
+  const name = side.faction.name || 'Host', col = '#' + side.faction.color.toString(16).padStart(6, '0');
+  const leader = (side.bands && side.bands[0] && side.bands[0].leader && side.bands[0].leader.name) || (name + '’s captain');
+  for (const u of host.units) {                                  // leaders' orders to each division (initial deployment + every re-task)
+    if (u.kind === 'command') continue;                          // log even a division wiped the same frame it was re-tasked — the command WAS given
+    if (u._mlOrder !== u.order) {
+      const verb = u._mlOrder === undefined ? 'commands' : 'orders';
+      marchLog(`<b style="color:${col}">${leader}</b> ${verb} ${MARCH_DIV[u.kind] || u.kind} to <b>${MARCH_ORDER[u.order] || u.order}</b>`, '#e6dcc0');
+      u._mlOrder = u.order;
+    }
+  }
+  let alive = 0;                                                  // fresh casualties
+  for (const f of arr) {
+    if (!f.alive && !f._mlDead) { f._mlDead = true; host._mlCas = (host._mlCas || 0) + 1;
+      if (f.isHero) marchLog(`☠ <b style="color:${col}">${leader}</b> has fallen!`, '#ff8a6b'); }
+    if (f.alive) alive++;
+  }
+  const cas = host._mlCas || 0, mile = (cas / 6) | 0;
+  if (mile > (host._mlMile || 0)) { host._mlMile = mile; marchLog(`<b style="color:${col}">${name}</b> — ${cas} fallen, ${alive} still standing`, '#9aa4b4'); }
+}
+// a wipe-resolve disposes the men in the same substep the last blow lands — poll them ONE last time so
+// the killing blow + the losing commander's fall are narrated (marchPollLog runs too late; lc is gone by then)
+function marchClashResolved(lc) {
+  const bt = lc.bt; if (!bt) return;
+  marchPollHost(lc.hostA, bt.sideA, lc.A);
+  marchPollHost(lc.hostB, bt.sideB, lc.B);
+}
+// the battle is over (via wipe OR fold-to-numeric) — finishMapBattle is the ONE choke point for both, so
+// narrate the outcome here, once. aWins is set by the time this runs.
+function marchBattleFinished(bt) {
+  if (!bt || bt.aWins == null) return;
+  const wf = (bt.aWins ? bt.sideA : bt.sideB).faction, lf = (bt.aWins ? bt.sideB : bt.sideA).faction;
+  if (wf && lf) marchLog(`🏆 <b style="color:#${wf.color.toString(16).padStart(6, '0')}">${wf.name}</b> has broken <b style="color:#${lf.color.toString(16).padStart(6, '0')}">${lf.name}</b> — the field is theirs!`, '#ffe089');
+}
+function marchRespawn(a) {
+  const t = a.home; const p = marchLand(t.x + (Math.random() - 0.5) * 6, t.z + (Math.random() - 0.5) * 6);
+  a.pos.set(p.x, mapElevY(p.x, p.z), p.z);
+  a.group = marchBandGroup();        // killBand disposed the old banner when this host was broken
+  a.size = a.bornSize; a.alive = true; a.state = 'patrol'; a.inBattle = null; a.path = null; a.clashCd = 0; a._shownSize = -1; a.wp = 3;
+  a.leader = makeBandLeader(a.bornSize, 3, true);
+}
+// the brain — one authoritative sim step. THIS is the code the editor exists to improve.
+function marchTick(dt) {
+  const A = MARCH.armies; if (A.length < 2) return;
+  for (const a of A) {
+    if (a.clashCd > 0) a.clashCd -= dt;
+    if (!a.alive) {  // broken by the live clash (killBand) — arm the re-muster timer once, then count down
+      if (a.state !== 'dead') { a.state = 'dead'; a.respawnT = MARCH.ai.respawn; if (a.fa) { clearFieldArmy(a); a.fa = null; } }
+      a.respawnT -= dt; if (a.respawnT <= 0) marchRespawn(a);
+    }
+  }
+  // SIGHT the enemy → the commanders take over at once. The live clash starts here, well before contact,
+  // so the champion war-hosts march their divisions across the gap (advance orders) and form up as they
+  // close — "leaders command when they see the enemy approaching". Only from a settled patrol, cooled down.
+  const [a, b] = A;
+  if (a.alive && b.alive && !a.inBattle && a.clashCd <= 0 && b.clashCd <= 0 && a.state === 'patrol' && b.state === 'patrol') {
+    const d = Math.hypot(a.pos.x - b.pos.x, a.pos.z - b.pos.z);
+    // sighting range grows with the settlement distance, so widely-spaced cities still reliably sight each
+    // other and march the long way to war (instead of circling their own walls forever)
+    const senseR = Math.max(MARCH.ai.senseR, (MARCH.cfg.sep || 64) * 0.55);
+    if (d < senseR) marchStartClash(a, b);
+  }
+  for (const a of A) {
+    if (!a.alive) continue;
+    const foe = A.find(x => x !== a);
+    if (a.state === 'clash') {                             // the real live clash owns movement + outcome now
+      if (!a.inBattle) { a.state = 'withdraw'; a.path = null; a.clashCd = MARCH.ai.clashCd; } // finishMapBattle resolved it — survivor falls back
+      continue;
+    }
+    if (a.state === 'withdraw') {                          // routed/beaten — fall back to home city, RE-MUSTER to full, then march out again
+      if (marchFollow(a, a.home.x, a.home.z, MARCH.ai.marchSpeed, dt)) { a.state = 'patrol'; a.path = null; a.size = a.bornSize; a.wp = 3; }
+      continue;
+    }
+    // patrol = MARCH the road from its city toward the enemy (like a campaigning host); it advances
+    // waypoint by waypoint and HOLDS at the far end (it clashes long before reaching the enemy walls)
+    const wp = a.route[Math.min(a.wp, a.route.length - 1)];
+    if (marchFollow(a, wp.x, wp.z, MARCH.ai.patrolSpeed, dt)) { if (a.wp < a.route.length - 1) a.wp++; a.path = null; }
+  }
+  // park the spectator on the action every step so a live clash never folds itself back to numbers
+  // (updateLiveClashes needs a band within FIELD_ARMY.hideR of player.pos to stay REAL)
+  let px = 0, pz = 0, k = 0; for (const x of A) if (x.alive) { px += x.pos.x; pz += x.pos.z; k++; }
+  if (k) player.pos.set(px / k, mapElevY(px / k, pz / k), pz / k);
+}
+// draw each host's current heading as a coloured polyline (toggle with P) — rebuilt only when a path
+// actually changes, not every frame
+function marchDrawPaths() {
+  if (!MARCH.showPaths) { if (MARCH.pathGroup) { scene.remove(MARCH.pathGroup); disposeGroup(MARCH.pathGroup); MARCH.pathGroup = null; MARCH._pathKey = null; } return; }
+  const key = MARCH.armies.map(a => a.alive && a.path ? a.path.gx + ',' + a.path.gz : '-').join('|');
+  if (MARCH.pathGroup && key === MARCH._pathKey) return;   // nothing moved to a new leg — keep the existing lines
+  MARCH._pathKey = key;
+  if (MARCH.pathGroup) { scene.remove(MARCH.pathGroup); disposeGroup(MARCH.pathGroup); MARCH.pathGroup = null; }
+  const g = new THREE.Group();
+  for (const a of MARCH.armies) {
+    if (!a.alive || !a.path || !a.path.pts || a.path.pts.length < 2) continue;
+    const pos = [];
+    for (const p of a.path.pts) pos.push(p.x, mapElevY(p.x, p.z) + 0.4, p.z);
+    const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.add(new THREE.Line(geo, new THREE.LineBasicMaterial({ color: a.faction.color, transparent: true, opacity: 0.7 })));
+  }
+  scene.add(g); MARCH.pathGroup = g;
+}
+// (re)build the whole sandbox — a FRESH random terrain + two cities + two hosts, exactly like the battle
+// editor rerolls its valley + armies on every Restart. No streamed world, no capitals, no water.
+function marchSetup() {
+  try { clearMapBattles(); } catch (e) {}                  // stand down any live clash from a previous run/reset
+  MARCH.log.length = 0; MARCH.clock = 0; marchLogRender();  // a fresh chronicle for the new field
+  for (const a of MARCH.armies) { if (a.fa) { clearFieldArmy(a); a.fa = null; } if (a.group) { scene.remove(a.group); disposeGroup(a.group); } }
+  for (const t of MARCH.towns) if (t.group) { scene.remove(t.group); disposeGroup(t.group); }
+  for (const v of (MARCH.villages || [])) if (v.group) { scene.remove(v.group); disposeGroup(v.group); }
+  if (MARCH.roadGroup) { scene.remove(MARCH.roadGroup); disposeGroup(MARCH.roadGroup); MARCH.roadGroup = null; }
+  if (MARCH.ground) { scene.remove(MARCH.ground); disposeGroup(MARCH.ground); MARCH.ground = null; }
+  MARCH.terr = marchRollTerrain();                         // fresh rolling country every restart
+  MARCH.ground = marchTerrain(); scene.add(MARCH.ground);
+
+  const sep = MARCH.cfg.sep || 64, ax = Math.random() * Math.PI * 2;   // a random axis…
+  const cs = Math.cos(ax), sn = Math.sin(ax);
+  // …but the pair sits OFF-centre and each city is jittered off the axis, so the two holds land in
+  // genuinely different spots every run instead of a tidy mirror image about the origin
+  const ocx = (Math.random() * 2 - 1) * sep * 0.35, ocz = (Math.random() * 2 - 1) * sep * 0.35, jit = () => (Math.random() * 2 - 1) * sep * 0.18;
+  const t0 = { x: ocx - cs * sep / 2 + jit(), z: ocz - sn * sep / 2 + jit() }, t1 = { x: ocx + cs * sep / 2 + jit(), z: ocz + sn * sep / 2 + jit() };
+  const defs = [{ color: 0x2f6fb0, name: 'Azure' }, { color: 0x9a2f2f, name: 'Crimson' }];
+  MARCH.towns = [
+    { x: t0.x, z: t0.z, faction: defs[0], name: defs[0].name + '’s Hold' },
+    { x: t1.x, z: t1.z, faction: defs[1], name: defs[1].name + '’s Hold' },
+  ];
+  // 'castle' = a compact walled keep — a clean, discrete city (a 'town'/'city' scatters a village of huts).
+  const tier = MARCH.cfg.tier || 'castle', tseed = (Math.random() * 0xffffffff) >>> 0;
+  for (let i = 0; i < MARCH.towns.length; i++) {
+    const t = MARCH.towns[i];
+    const g = buildSettlementGroup(t.x, t.z, tier, t.name, t.faction.color, (tseed ^ (i * 0x9e37) ^ 0x51ed) >>> 0);
+    scene.add(g); t.group = g;
+  }
+  // ROADS: a winding highway between the two cities, plus a wayside village on a spur — the world the
+  // hosts campaign through. The armies MARCH this road city-to-city, like real campaigning hosts.
+  const road = marchRoadPath(t0.x, t0.z, t1.x, t1.z); MARCH.road = road;
+  const RC = MARCH_ROAD_COL;                              // the real game road grey
+  const rg = new THREE.Group(); rg.add(marchRoadRibbon(road, 4.6, RC));
+  MARCH.villages = [];
+  if (Math.random() < 0.8) {                              // a wayside village off the midpoint, joined by a spur road
+    const mid = road[(road.length / 2) | 0], side = Math.random() < 0.5 ? 1 : -1, voff = (16 + Math.random() * 16) * side;
+    const vx = mid.x + (-sn) * voff, vz = mid.z + cs * voff;
+    if (Math.abs(vx) < MARCH.bound - 30 && Math.abs(vz) < MARCH.bound - 30) {
+      const vg = buildSettlementGroup(vx, vz, 'village', 'Wayside', 0x9a8f70, (tseed ^ 0x2bad) >>> 0);
+      scene.add(vg); MARCH.villages.push({ x: vx, z: vz, group: vg });
+      rg.add(marchRoadRibbon(marchRoadPath(mid.x, mid.z, vx, vz), 3.0, RC));
+    }
+  }
+  scene.add(rg); MARCH.roadGroup = rg;
+
+  // UNBALANCED HOSTS: usually a close fight, but ~45% of the time one host clearly outnumbers the other.
+  const base = MARCH.cfg.n || 44;
+  let sizes;
+  if (Math.random() < 0.45) { const weak = Math.round(base * (0.5 + Math.random() * 0.28)), strong = Math.round(base * (1.2 + Math.random() * 0.55)); sizes = Math.random() < 0.5 ? [strong, weak] : [weak, strong]; }
+  else sizes = [Math.round(base * (0.9 + Math.random() * 0.2)), Math.round(base * (0.9 + Math.random() * 0.2))];
+  sizes = sizes.map(v => clamp(v, 12, 90));
+
+  // each host marches the road from ITS city toward the enemy (its route = the road, own city first)
+  const routes = [road, road.slice().reverse()];
+  MARCH.armies = [0, 1].map(i => {
+    const t = MARCH.towns[i], route = routes[i], nn = sizes[i], start = route[Math.min(2, route.length - 1)];
+    return {
+      pos: new THREE.Vector3(start.x, mapElevY(start.x, start.z), start.z), size: nn, bornSize: nn, alive: true,
+      faction: t.faction, home: t, route, wp: 3, dir: 1, group: marchBandGroup(), _shownSize: -1,
+      state: 'patrol', path: null, heading: 0, inBattle: null, quality: 1, clashCd: 0, respawnT: 0, fa: null,
+      leader: makeBandLeader(nn, 3, true),
+    };
+  });
+  const mcx = (t0.x + t1.x) / 2, mcz = (t0.z + t1.z) / 2;
+  MARCH.orbit.target.set(mcx, mapElevY(mcx, mcz), mcz);   // frame the pair wherever they landed
+  MARCH.orbit.r = clamp(sep * 1.7, 70, 270);              // frame the two cities + the ground between
+  marchHudUpdate();
+}
+function marchFrame(now) {
+  const dt0 = Math.min((now - (MARCH.last || now)) / 1000, 0.05); MARCH.last = now;
+  frameNo++;
+  if (!MARCH.paused) {
+    const steps = clamp(MARCH.speed | 0, 1, 8);
+    for (let s = 0; s < steps; s++) {
+      marchTick(dt0);
+      updateMapBattles(dt0);      // numeric bar for a folded fight + battle teardown
+      updateLiveClashes(dt0);     // THE battle AI: warHostUpdate (commanders) + stepFighter (real melee) + resolution
+    }
+  }
+  // keep the spectator "player" parked on the fight so the live clash never folds itself to numbers
+  // (updateLiveClashes drops back to the pantomime if no band is within FIELD_ARMY.hideR of the player)
+  let cx = 0, cz = 0, all = 0;
+  for (const a of MARCH.armies) { if (a.alive) { cx += a.pos.x; cz += a.pos.z; all++; } }
+  if (all) player.pos.set(cx / all, mapElevY(cx / all, cz / all), cz / all);
+  // materialise / animate the WALKING crowds — but a host in a live clash is drawn by the clash's own
+  // real fighters, so skip it here (else two body sets fight over the same men)
+  for (const a of MARCH.armies) {
+    if (!a.alive || (a.inBattle && a.inBattle.live)) { if (a.fa) { clearFieldArmy(a); a.fa = null; } continue; }
+    if (!fieldArmies.get(a)) materialiseBand(a, FIELD_ARMY.capPerBand);
+    a.fa = fieldArmies.get(a);
+    if (a.fa) updateFieldArmyBodies(a, a.fa, dt0);
+  }
+  const live = all;
+  // the clash fighters spawn slash arcs / sparks / trails / popups — the main loop fades+disposes these
+  // every frame; the editor must too, or they pile up (the "pink blob" was un-cleared sword-swing arcs)
+  updateSparks(dt0); updateArcs(dt0); updateTrails(dt0); if (typeof updateBoltFX === 'function') updateBoltFX(dt0); updatePopups(dt0);
+  updateProjectiles(dt0);   // the clash archers' arrows fly + expire (else they stick in mid-air forever)
+  for (const bt of mapBattles) if (bt.marker) bt.marker.visible = false; // the real fighters ARE the battle here — never show the pink map discs
+  if (!MARCH.paused) MARCH.clock += dt0;
+  marchPollLog();           // narrate the commanders' orders + who falls, in realtime
+  if (MARCH._logDirty) { marchLogRender(); MARCH._logDirty = false; } // one DOM rebuild per frame, not per line
+  marchDrawPaths();
+  // spectator orbit camera, gently tracking the centroid of the action
+  const o = MARCH.orbit;
+  if (live) { const tx = cx / live, tz = cz / live; o.target.x = lerp(o.target.x, tx, 0.04); o.target.z = lerp(o.target.z, tz, 0.04); o.target.y = lerp(o.target.y, mapElevY(o.target.x, o.target.z), 0.04); }
+  const st = Math.sin(o.phi);
+  camera.position.set(o.target.x + o.r * st * Math.sin(o.theta), o.target.y + o.r * Math.cos(o.phi), o.target.z + o.r * st * Math.cos(o.theta));
+  camera.lookAt(o.target);
+  if (frameNo % 20 === 0) marchHudUpdate();
+  renderer.render(scene, camera);
+  requestAnimationFrame(loop);
+}
+function marchInstallControls() {
+  const o = MARCH.orbit; let drag = false, px = 0, py = 0;
+  const pointers = new Map(); let pinchD = 0;                 // track every finger so touch gets 1-finger orbit + 2-finger pinch-zoom
+  canvas.style.touchAction = 'none';                          // stop the browser from panning/zooming the page under our gestures
+  canvas.addEventListener('pointerdown', e => {
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size === 1) { drag = true; px = e.clientX; py = e.clientY; } else { drag = false; pinchD = 0; } // second finger → pinch, not orbit
+  });
+  window.addEventListener('pointermove', e => {
+    if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size >= 2) {                                 // pinch: fingers apart = zoom in, together = zoom out
+      const p = [...pointers.values()], d = Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
+      if (pinchD) o.r = clamp(o.r * pinchD / d, 12, 320);
+      pinchD = d; return;
+    }
+    if (!drag) return;
+    o.theta -= (e.clientX - px) * 0.01; o.phi = clamp(o.phi - (e.clientY - py) * 0.01, 0.2, 1.45); px = e.clientX; py = e.clientY;
+  });
+  const endPtr = e => { pointers.delete(e.pointerId); if (pointers.size < 2) pinchD = 0; if (!pointers.size) drag = false; };
+  window.addEventListener('pointerup', endPtr);
+  window.addEventListener('pointercancel', endPtr);
+  canvas.addEventListener('wheel', e => { o.r = clamp(o.r * (1 + Math.sign(e.deltaY) * 0.08), 12, 320); e.preventDefault(); }, { passive: false });
+  window.addEventListener('keydown', e => {
+    if (!MARCH.on) return;
+    if (e.key === ' ') { MARCH.paused = !MARCH.paused; marchHudUpdate(); }
+    else if (e.key === 'r' || e.key === 'R') { marchSetup(); }               // reroll terrain + cities + hosts (like the battle editor)
+    else if (e.key === 'p' || e.key === 'P') { MARCH.showPaths = !MARCH.showPaths; }
+    else return; e.preventDefault();
+  });
+}
+function marchHud() {
+  let p = document.getElementById('march-hud');
+  if (!p) { p = document.createElement('div'); p.id = 'march-hud'; document.body.appendChild(p); }
+  p.style.cssText = 'position:fixed;left:12px;top:12px;z-index:40;background:rgba(16,14,24,.86);border:1px solid #3a3247;border-radius:10px;padding:12px 14px;width:206px;font:13px system-ui;color:#e8def8';
+  const btn = (id, label) => '<button id="' + id + '" style="flex:1;padding:6px 8px;border:0;border-radius:6px;cursor:pointer;font-weight:700;background:#2a2438;color:#e8def8">' + label + '</button>';
+  p.innerHTML = '<div style="font-weight:800;color:#ffe089;margin-bottom:8px">🚶 March Editor</div>' +
+    '<div id="march-counts"></div>' +
+    '<div style="display:flex;gap:6px;margin-top:10px">' + btn('march-pause', '⏸ Pause') + btn('march-restart', '↻ Restart') + '</div>' +
+    '<div style="display:flex;align-items:center;gap:8px;margin-top:9px;font-size:12px">' +
+      '<span style="color:#c9bfda">⏩ Speed</span>' +
+      '<input id="march-speed" type="range" min="1" max="8" step="1" value="' + (MARCH.speed || 1) + '" style="flex:1;accent-color:#4d8dff;cursor:pointer">' +
+      '<span id="march-speed-lbl" style="font-weight:800;color:#ffe089;min-width:26px;text-align:right">' + (MARCH.speed || 1) + '×</span></div>' +
+    '<div style="display:flex;align-items:center;gap:8px;margin-top:7px;font-size:12px">' +
+      '<span style="color:#c9bfda">🏰 Distance</span>' +
+      '<input id="march-gap" type="range" min="30" max="140" step="2" value="' + (MARCH.cfg.sep || 64) + '" style="flex:1;accent-color:#7bd88f;cursor:pointer">' +
+      '<span id="march-gap-lbl" style="font-weight:800;color:#ffe089;min-width:30px;text-align:right">' + (MARCH.cfg.sep || 64) + 'u</span></div>' +
+    '<div style="margin-top:8px;font-size:11px;color:#9a90ab;line-height:1.4">drag orbit · scroll / pinch zoom · Space pause · R restart</div>';
+  p.querySelector('#march-pause').onclick = () => { MARCH.paused = !MARCH.paused; marchHudUpdate(); };
+  p.querySelector('#march-restart').onclick = () => marchSetup();
+  const sp = p.querySelector('#march-speed'); if (sp) sp.oninput = () => { MARCH.speed = clamp(parseInt(sp.value, 10) || 1, 1, 8); const l = document.getElementById('march-speed-lbl'); if (l) l.textContent = MARCH.speed + '×'; };
+  // settlement distance: drag to set how far apart the two cities muster, then rebuild the field at that spacing
+  const gp = p.querySelector('#march-gap');
+  if (gp) { gp.oninput = () => { const l = document.getElementById('march-gap-lbl'); if (l) l.textContent = gp.value + 'u'; };
+            gp.onchange = () => { MARCH.cfg.sep = clamp(parseInt(gp.value, 10) || 64, 30, 140); marchSetup(); }; }
+  // realtime battle log — leaders' commands + who falls
+  let lg = document.getElementById('march-log');
+  if (!lg) { lg = document.createElement('div'); lg.id = 'march-log'; document.body.appendChild(lg); }
+  lg.style.cssText = 'position:fixed;left:12px;bottom:12px;z-index:40;background:rgba(16,14,24,.82);border:1px solid #3a3247;border-radius:10px;padding:9px 12px;width:340px;max-width:44vw;font:12px system-ui;color:#e8def8';
+  lg.innerHTML = '<div style="font-weight:800;color:#ffe089;margin-bottom:2px">📜 Chronicle</div>' +
+    '<div id="march-log-body" style="max-height:190px;overflow-y:auto"></div>';
+  marchHudUpdate(); marchLogRender();
+}
+function marchHudUpdate() {
+  const el = document.getElementById('march-counts'); if (!el) return;
+  const pb = document.getElementById('march-pause'); if (pb) pb.textContent = MARCH.paused ? '▶ Resume' : '⏸ Pause';
+  const row = a => a ? `<div style="margin-top:2px"><span style="color:#${a.faction.color.toString(16).padStart(6, '0')}">●</span> ${a.home.name} — ${a.alive ? Math.round(a.size) + ' · ' + a.state : '<span style="color:#ff9b6b">routed</span>'}</div>` : '';
+  el.innerHTML = MARCH.armies.map(row).join('');
+}
+function marchBoot(cfg) {
+  MARCH.on = true; MARCH.cfg = { ...MARCH.cfg, ...(cfg || {}) };
+  mapLevel = 0;
+  try { setBattleDressing(false); } catch (e) {}
+  for (const c of scene.children.slice()) { if (!c.isLight) c.visible = false; }   // strip the boot-time world — this sandbox builds its OWN terrain
+  scene.fog = null; scene.background = new THREE.Color(0x9fb8d6);
+  document.getElementById('hud')?.classList.add('hidden');
+  document.getElementById('touch')?.classList.add('hidden');
+  document.querySelectorAll('.overlay').forEach(o => o.classList.add('hidden'));
+  editTerrainFn = marchTerrainY;                     // mapElevY (and terra().heightFn, so the cities seat) ride the SYNTHETIC terrain
+  if (typeof hemi !== 'undefined') hemi.intensity = 0.62;  // calmer key so the real snow/rock biome colours don't blow out to white
+  if (typeof sun !== 'undefined') sun.intensity = 0.95;
+  mode = 'map'; mapFieldMode = true; gameRunning = false; // fieldSimOn() true so the live clash stays REAL
+  try { npcChampionInit(); } catch (e) {}            // pull the trained champion policy so the clash commanders play it (θ_C/θ_S)
+  try { shuffleHeroDeck(); } catch (e) {}            // the clash roster draws named heroes from this deck (buildEnemyRoster → nextHero)
+  if (player.obj) player.obj.visible = false;
+  marchInstallControls();
+  marchHud();
+  marchSetup();                                      // roll a fresh random terrain + two cities + two hosts (battle-editor style)
+  MARCH.last = 0;
+  try { console.log('[march-editor]', JSON.stringify({ n: MARCH.armies[0] && MARCH.armies[0].bornSize, towns: MARCH.towns.map(t => t.name) })); } catch (e) {}
+}
+BV.march = (cfg) => { if (!MARCH.on) marchBoot(cfg || {}); return BV.marchStatus(); };
+BV.marchPause = (on) => { MARCH.paused = on === undefined ? !MARCH.paused : !!on; marchHudUpdate(); return MARCH.paused; };
+BV.marchStep = (n = 60, dt = 1 / 60) => { for (let i = 0; i < n; i++) { marchTick(dt); updateMapBattles(dt); updateLiveClashes(dt); } return BV.marchStatus(); }; // headless advance (incl. the live battle AI)
+BV.marchSpeed = (n) => { MARCH.speed = clamp((n | 0) || 1, 1, 8); return MARCH.speed; };
+BV.marchTune = (patch) => { Object.assign(MARCH.ai, patch || {}); return { ...MARCH.ai }; };  // dial how they walk, live
+BV.marchPaths = (on) => { MARCH.showPaths = on === undefined ? !MARCH.showPaths : !!on; return MARCH.showPaths; };
+BV.marchReset = () => { marchSetup(); return BV.marchStatus(); };   // reroll the whole sandbox (terrain + cities + hosts)
+BV.marchStatus = () => ({ on: MARCH.on, paused: MARCH.paused, speed: MARCH.speed, ai: { ...MARCH.ai },
+  armies: MARCH.armies.map(a => ({ town: a.home.name, size: Math.round(a.size), alive: a.alive, state: a.state,
+    pos: [Math.round(a.pos.x), Math.round(a.pos.z)], roadFrac: a.path ? undefined : null })) });
+
 // Boot. ?edit=<kind> (or window.BV_EDIT) opens the object editor; otherwise show the sign-in gate
 // and DEFER the universe boot until the player clicks "Enter the Vale". The game no longer auto-
 // enters: you sign in (or create an account) first, and entering loads your active character.
@@ -14222,6 +14869,13 @@ if (window.BV_BATTLE || (_editQ && _editQ.has('battle'))) {
                archerFrac: isFinite(af) ? clamp(af, 0, 0.7) : 0.34, maxArmy: isFinite(mxn) ? clamp(mxn, 40, 1000) : 200, // ?maxn= sets the army-size ceiling
                fixed: !!(_editQ && _editQ.has('fixed')), // ?fixed=1 pins the armies; default rerolls each restart
                sink: (_editQ && _editQ.get('log')) || null }); // ?log=<url>|server POSTs each finished battle
+} else if (window.BV_MARCH || (_editQ && _editQ.has('march'))) {
+  // ?march — army-walk editor: two hosts patrol two close towns on the real map + roads
+  const mn = _editQ ? parseInt(_editQ.get('n'), 10) : NaN;
+  const msd = _editQ ? parseInt(_editQ.get('seed'), 10) : NaN;
+  const msep = _editQ ? parseInt(_editQ.get('sep'), 10) : NaN;
+  marchBoot({ n: isFinite(mn) && mn > 0 ? clamp(mn, 6, 48) : 44, seed: isFinite(msd) ? msd >>> 0 : 1,
+              sep: isFinite(msep) ? clamp(msep, 24, 130) : 64, tier: (_editQ && _editQ.get('tier')) || 'castle' });
 } else if (window.BV_ANIM || (_editQ && _editQ.has('anim'))) {
   // ?anim — soldier animation editor: one fighter plays walk → run → sword up → swing → recover
   animBoot({ weapon: (_editQ && _editQ.get('weapon')) || 'sword',

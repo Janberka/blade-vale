@@ -323,3 +323,18 @@ stands up as real fighters gets the editor's commander brain.
 The long game (see `VISION.md`): every battle the world fights — including the ones NPCs fight
 against *you* — feeds the same dataset, and the served champion keeps climbing. The NPCs are
 learning to make war.
+
+---
+
+## 11. Adjacent benches
+
+- **March editor (`?march`)** — the sandbox for everything that happens *between* battles: two
+  NPC hosts patrol two real towns on real worldgen terrain (roads included) and clash where
+  their circuits cross. It tunes how armies **walk** — formation cohesion, road-following,
+  terrain handling, foot animation — with a pause/speed/gap HUD, a path overlay (`P`), a live
+  narration log, and `BV.march*` / `BV.marchTune(patch)` console dials
+  (`?march&seed=7&n=44&sep=26` pins a scenario).
+- **Battle markers on the map** — a battle you are *not* watching is shown by the screen-space
+  marker layer (`#markers` + `MK` in `game.js`): a pulsing ⚔ over a live two-faction
+  tug-of-war bar, constant pixel size at any zoom, hoverable/clickable. Painted symbols are
+  never 3D-scaled world objects.

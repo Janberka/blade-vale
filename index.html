@@ -230,6 +230,46 @@
   #auth-note { opacity: .6; font-size: 12px; margin-top: 10px; text-align: center; line-height: 1.5; }
   #auth-note b { color: #ffcf5b; }
 
+  /* Phones in landscape: ~330 CSS px of height once the URL bar takes its cut, and the desktop
+     title screen (64px title + flavour prose + two lines of key hints + the sign-in card) runs off
+     BOTH ends of it — the title clipped above, "Enter the Vale" below, and no way to scroll to
+     either. So on short viewports the overlay scrolls from the top instead of centring, the
+     flavour prose steps aside, and the fold is spent on the only two things a new tester needs:
+     the name of the game and the way in. The controls legend re-orders to sit under the card. */
+  @media (max-height: 560px) {
+    .overlay {
+      justify-content: flex-start; overflow-y: auto; overscroll-behavior: contain; gap: 10px;
+      padding: max(10px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+               max(10px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+    }
+    .overlay h1 { font-size: 32px; letter-spacing: 3px; }
+    .overlay p { font-size: 14px; line-height: 1.45; max-width: 620px; }
+    #start p { display: none; }                    /* flavour text — costs a third of the fold */
+    #start h1 { order: 1; margin-bottom: 2px; }
+    #start #auth-box { order: 2; margin-top: 0; padding: 12px 14px; }
+    #start #start-btn { order: 3; margin-top: 0; padding: 12px 34px; font-size: 17px; }
+    #start .keys { order: 4; font-size: 12px; line-height: 1.55; opacity: .6; }
+    #auth-box input { padding: 9px 12px; }
+    .auth-btn { padding: 10px 12px; }
+    #auth-note { margin-top: 7px; line-height: 1.4; }
+    #auth-msg { margin-top: 5px; min-height: 0; }
+  }
+  /* Small phones sideways (SE-class, ~320 CSS px tall): drop everything that isn't the way in,
+     so the title, both fields, and the buttons still land above the fold. */
+  @media (max-height: 400px) {
+    .overlay h1 { font-size: 26px; letter-spacing: 2px; }
+    #start #auth-box { padding: 10px 12px; }
+    #start #auth-note { display: none; }
+    #auth-form { gap: 8px; }
+  }
+  /* Touch: 16px inputs (anything smaller and mobile Safari fights the viewport lock on focus)
+     and finger-sized hit targets on the buttons a tester meets before they're even signed in. */
+  @media (pointer: coarse) {
+    #auth-box input { font-size: 16px; min-height: 44px; }
+    .auth-btn, #start-btn { min-height: 44px; }
+    #auth-who button { font-size: 15px; padding: 6px 2px; }
+  }
+
   /* ===== Characters (press U) — a right-side DRAWER: select, command, switch banners ===== */
   #chars { position: fixed; top: 0; right: 0; bottom: 0; width: 380px; max-width: 94vw;
     display: flex; flex-direction: column; text-align: left; z-index: 11;
@@ -335,6 +375,9 @@
   body.touch .desktop-keys { display: none; }
   .touch-keys { display: none; }
   body.touch .touch-keys { display: block; }
+  /* ...but the touch/desktop swap inside a sentence has to stay inline */
+  #auth-note .touch-keys { display: none; }
+  body.touch #auth-note .touch-keys { display: inline; }
   #touch { position: fixed; inset: 0; z-index: 7; pointer-events: none; }
   #touch.hidden { display: none; }
   #touch * { touch-action: none; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
@@ -461,7 +504,8 @@
     </div>
     <div id="auth-who" class="hidden">Signed in as <b id="auth-name"></b> · <button id="auth-logout">sign out</button></div>
     <div id="auth-msg"></div>
-    <div id="auth-note">Sign in (or create an account) to enter. Your characters live on the map — switch between them with <b>U</b> in game.</div>
+    <div id="auth-note">Sign in (or create an account) to enter. Your characters live on the map —
+      <span class="desktop-keys">switch between them with <b>U</b> in game.</span><span class="touch-keys">tap <b>Chars</b> in game to switch between them.</span></div>
   </div>
   <button class="btn hidden" id="start-btn">Enter the Vale</button>
 </div>

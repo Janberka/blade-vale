@@ -8855,6 +8855,15 @@ function updateMap(dt) {
         else { const wd = Math.hypot(wp.x - player.pos.x, wp.z - player.pos.z) || 1; _mDir.set((wp.x - player.pos.x) / wd, 0, (wp.z - player.pos.z) / wd); mdir = _mDir; }
       }
     }
+    // The thumb stick steers the column directly. Click-to-march is a mouse binding, and on a phone
+    // the stick swallows the tap that would have fired it (touchstart preventDefault kills the
+    // synthetic mouse events), so without this the strategic map has NO way to move: the knob slides
+    // under your thumb and the army just stands there. A stick push is therefore its own march order,
+    // and it overrides a planned route — you took the reins. Keyboard WASD stays action-only.
+    if (roaming && touchMove.active && dir.lengthSq() > 0) {
+      if (marchPath) clearMarch('You take the reins');
+      _mDir.copy(dir); mdir = _mDir;
+    }
     if (roaming && mdir.lengthSq() > 0) {
       player.vel.addScaledVector(mdir, player.speed * 1.5 * dt * 9);
       player.facing = angleLerp(player.facing, Math.atan2(mdir.x, mdir.z), dt * 12);

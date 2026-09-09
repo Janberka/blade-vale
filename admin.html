@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Blade Vale — Admin Map</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; background: #0b0e14; color: #e9eef5; font-family: "Trebuchet MS", system-ui, sans-serif; overflow: hidden; }
+  #wrap { display: flex; height: 100vh; }
+  #stage { flex: 1; position: relative; min-width: 0; }
+  #map { display: block; width: 100%; height: 100%; }
+  #status { position: absolute; left: 12px; top: 10px; font-size: 12px; letter-spacing: .5px; color: #9fb6d4;
+    background: rgba(8,12,20,.6); padding: 5px 10px; border-radius: 6px; }
+  #status b { color: #ffd34d; }
+  #status .off { color: #ff8a7a; }
+  aside { width: 300px; flex: 0 0 300px; background: #0e1320; border-left: 1px solid rgba(125,200,255,.14);
+    padding: 14px; overflow-y: auto; }
+  h1 { font-size: 15px; letter-spacing: 2px; text-transform: uppercase; color: #bfe0ff; margin-bottom: 2px; }
+  .sub { font-size: 11px; color: #7c93b2; margin-bottom: 12px; }
+  .sec { font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: #ffd34d; opacity: .8;
+    margin: 14px 0 6px; border-bottom: 1px solid rgba(255,211,77,.2); padding-bottom: 4px; }
+  .prow { display: flex; align-items: center; gap: 9px; padding: 6px 4px; border-radius: 6px; font-size: 13px; }
+  .prow:nth-child(odd) { background: rgba(255,255,255,.025); }
+  .dot { width: 12px; height: 12px; border-radius: 50%; flex: 0 0 12px; box-shadow: 0 0 0 1px rgba(0,0,0,.5); }
+  .pname { font-weight: 700; }
+  .pmeta { font-size: 11px; color: #88a0c0; }
+  .pright { margin-left: auto; text-align: right; font-size: 11px; color: #aebfd6; }
+  .empty { font-size: 12px; color: #6f86a4; font-style: italic; padding: 8px 4px; }
+  .crow { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 3px 4px; color: #cdddf3; }
+  .csq { width: 9px; height: 9px; border-radius: 2px; flex: 0 0 9px; }
+  .controls { margin-top: 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
+  .controls label { font-size: 12px; display: flex; align-items: center; gap: 5px; cursor: pointer; color: #b7c8df; }
+  .controls .btnrow { grid-column: 1 / -1; margin-top: 6px; }
+  .controls button { font-size: 12px; padding: 5px 10px; border-radius: 6px; cursor: pointer;
+    border: 1px solid rgba(255,120,120,.4); background: rgba(255,120,120,.1); color: #ffc4c4; }
+  .search { position: relative; margin-bottom: 4px; }
+  .search input { width: 100%; padding: 8px 10px; font-size: 13px; color: #e9eef5; background: #0b1120;
+    border: 1px solid rgba(125,200,255,.22); border-radius: 7px; outline: none; }
+  .search input:focus { border-color: rgba(125,200,255,.55); }
+  .results { position: absolute; left: 0; right: 0; top: 100%; margin-top: 4px; z-index: 5;
+    background: #0c1526; border: 1px solid rgba(125,200,255,.22); border-radius: 8px; overflow: hidden;
+    box-shadow: 0 10px 26px rgba(0,0,0,.5); max-height: 260px; overflow-y: auto; }
+  .results:empty { display: none; }
+  .ritem { display: flex; align-items: center; gap: 8px; padding: 7px 10px; font-size: 13px; cursor: pointer; }
+  .ritem:hover, .ritem.sel { background: rgba(125,200,255,.14); }
+  .ritem .rtag { margin-left: auto; font-size: 10px; letter-spacing: .5px; text-transform: uppercase; color: #7c93b2; }
+  .chip { display: none; align-items: center; gap: 8px; margin-bottom: 10px; padding: 7px 10px; font-size: 12px;
+    background: rgba(255,211,77,.1); border: 1px solid rgba(255,211,77,.35); border-radius: 7px; color: #ffe6a0; }
+  .chip.on { display: flex; }
+  .chip .x { margin-left: auto; cursor: pointer; font-weight: 700; color: #ffd34d; padding: 0 4px; }
+  .chip .x:hover { color: #fff; }
+  .prow { cursor: pointer; }
+  .prow:hover { background: rgba(125,200,255,.10); }
+  .prow.foc { outline: 1px solid rgba(255,211,77,.55); background: rgba(255,211,77,.08); }
+  .danger { margin-top: 8px; }
+  .danger .sec { color: #ff8a7a; border-bottom-color: rgba(255,138,122,.25); }
+  .danger .warn { font-size: 11px; color: #b0788a; margin-bottom: 8px; line-height: 1.45; }
+  .bigbtn { width: 100%; font-size: 13px; font-weight: 700; padding: 9px 12px; border-radius: 8px; cursor: pointer;
+    border: 1px solid rgba(255,90,60,.5); background: rgba(255,90,60,.12); color: #ffb3a3; }
+  .bigbtn:hover { background: rgba(255,90,60,.2); }
+  .bigbtn:disabled { opacity: .55; cursor: default; }
+  .confirmrow { display: flex; gap: 8px; }
+  .confirmrow button { flex: 1; font-size: 12px; font-weight: 700; padding: 9px 8px; border-radius: 8px; cursor: pointer; }
+  .btn-yes { border: 1px solid rgba(255,70,50,.7); background: rgba(255,70,50,.8); color: #fff; }
+  .btn-yes:hover { background: rgba(255,70,50,.95); }
+  .btn-no { border: 1px solid rgba(150,170,200,.35); background: rgba(255,255,255,.05); color: #cdddf3; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage">
+    <canvas id="map"></canvas>
+    <div id="status">connecting…</div>
+  </div>
+  <aside>
+    <h1>Admin Map</h1>
+    <div class="sub">Shared world · god's-eye overwatch</div>
+    <div class="search">
+      <input id="search" type="text" placeholder="Search a player or host…" autocomplete="off" spellcheck="false">
+      <div id="results" class="results"></div>
+    </div>
+    <div id="focusChip" class="chip"><span id="focusName"></span><span class="x" id="focusClear" title="Clear focus (Esc)">✕</span></div>
+    <div class="sec">Layers</div>
+    <div class="controls">
+      <label><input type="checkbox" id="t-terrain" checked> Terrain</label>
+      <label><input type="checkbox" id="t-border" checked> Borders</label>
+      <label><input type="checkbox" id="t-road" checked> Roads</label>
+      <label><input type="checkbox" id="t-hold" checked> Holds</label>
+      <label><input type="checkbox" id="t-army" checked> Armies</label>
+      <label><input type="checkbox" id="t-battle" checked> Battles</label>
+      <label><input type="checkbox" id="t-trail" checked> Trails</label>
+      <label><input type="checkbox" id="t-disc"> Discovered</label>
+      <div class="btnrow"><button id="clear">Clear trails</button></div>
+    </div>
+    <div class="sec">Realms <span id="ncount" style="opacity:.6"></span></div>
+    <div id="nations"><div class="empty">—</div></div>
+    <div class="sec">Players &amp; hosts <span id="pcount" style="opacity:.6"></span></div>
+    <div id="players"><div class="empty">waiting for the living world…</div></div>
+    <div class="danger">
+      <div class="sec">Danger</div>
+      <div class="warn">Move everyone to a fresh shared world (new terrain) and permanently delete the current one — all players, characters, warfare and progress are wiped. Accounts &amp; logins are kept.</div>
+      <button id="resetBtn" class="bigbtn">⟳ New world — reset &amp; move all users</button>
+      <div id="resetConfirm" class="confirmrow" style="display:none">
+        <button class="btn-yes" id="resetYes">Delete &amp; reset</button>
+        <button class="btn-no" id="resetNo">Cancel</button>
+      </div>
+    </div>
+  </aside>
+</div>
+<script>
+(function () {
+  'use strict';
+  var BASE = location.protocol + '//' + (location.hostname || 'localhost') + ':8787/api/v1';
+  var WORLD_MS = 1500, OVERVIEW_MS = 5000;
+  var CORE = 90;                       // the named-powers core (drawn as a faint box); overview.extent overrides
+  var CELL = 4, SIGHT = 5;             // discovered-area grid: 4u cells, ~5-cell sight radius
+  var PALETTE = ['#39d0ff', '#ffd34d', '#7dff9a', '#ff7a4a', '#d6a3ff', '#ff6b9d', '#8c9eff', '#c8ff6b', '#ff5a3c', '#5bd6c0'];
+  var HDR = { 'X-World': 'shared', 'X-Player-Token': 'admin-observer' };
+  var ROAD_STYLE = {                   // width (px @ unit scale) + tone per tier — pale worn tracks
+    major:  { w: 2.6, a: 0.95 }, medium: { w: 1.8, a: 0.85 },
+    small:  { w: 1.2, a: 0.72 }, path:   { w: 0.8, a: 0.55, dash: true }
+  };
+  var HOLD_R = { village: 1.6, town: 2.4, city: 3.4 };
+  var FOCUS_R = 26;                     // world half-radius shown when focused on someone (a ~52u window)
+
+  var canvas = document.getElementById('map'), ctx = canvas.getContext('2d');
+  var statusEl = document.getElementById('status');
+  var world = null, ov = null, extent = CORE;
+  var colorOf = {};                    // account_id -> player colour
+  var trails = {}, discovered = {};    // account_id -> trail pts / discovered cell set
+  var terrCanvas = null, terrSig = '', borderCanvas = null;
+  var show = { terrain: true, border: true, road: true, hold: true, army: true, battle: true, trail: true, disc: false };
+  var focus = null;                    // { type:'player'|'host', key, name } — the followed character
+  var easeC = null;                    // eased view centre {x,z} (smooth follow); null until first frame
+  var animOn = false;                  // rAF loop runs only while focused (follow + pulse)
+
+  ['terrain','border','road','hold','army','battle','trail','disc'].forEach(function (k) {
+    var el = document.getElementById('t-' + k);
+    if (el) el.onchange = function (e) { show[k] = e.target.checked; render(); };
+  });
+  document.getElementById('clear').onclick = function () { trails = {}; discovered = {}; render(); };
+
+  function colorFor(id, idx) { if (!colorOf[id]) colorOf[id] = PALETTE[idx % PALETTE.length]; return colorOf[id]; }
+  function facHue(s) { s = String(s || ''); var h = 0; for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return h % 360; }
+  function facCss(s) { return 'hsl(' + facHue(s) + ',55%,60%)'; }
+  function hslToRgb(h, s, l) {           // h 0..1
+    var r, g, b;
+    if (s === 0) { r = g = b = l; }
+    else {
+      var hue2rgb = function (p, q, t) { if (t < 0) t += 1; if (t > 1) t -= 1;
+        if (t < 1 / 6) return p + (q - p) * 6 * t; if (t < 1 / 2) return q;
+        if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6; return p; };
+      var q = l < 0.5 ? l * (1 + s) : l + s - l * s, p = 2 * l - q;
+      r = hue2rgb(p, q, h + 1 / 3); g = hue2rgb(p, q, h); b = hue2rgb(p, q, h - 1 / 3);
+    }
+    return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+  }
+  var _facRgb = {};
+  function facRgb(s) { return _facRgb[s] || (_facRgb[s] = hslToRgb(facHue(s) / 360, 0.55, 0.60)); }
+  function b64bytes(b64) {
+    var bin = atob(b64), n = bin.length, u = new Uint8Array(n);
+    for (var i = 0; i < n; i++) u[i] = bin.charCodeAt(i);
+    return u;
+  }
+  function esc(s) { return String(s == null ? '' : s).replace(/[<>&]/g, function (c) { return ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' })[c]; }); }
+
+  // world<->screen. Unfocused: the full ±extent square fitted into the stage (origin at centre).
+  // Focused: zoom to a ±FOCUS_R window centred on the eased follow point, so we track one character.
+  function fit() {
+    var W = canvas.width, H = canvas.height, pad = 18 * (window.devicePixelRatio || 1);
+    var s = Math.min((W - 2 * pad) / (extent * 2), (H - 2 * pad) / (extent * 2)), cx = 0, cz = 0;
+    var c = focus && (easeC || focusPos());
+    if (c) { s = (Math.min(W, H) / 2 - pad) / FOCUS_R; cx = c.x; cz = c.z; }
+    return {
+      x: function (wx) { return W / 2 + (wx - cx) * s; },
+      y: function (wz) { return H / 2 + (wz - cz) * s; },
+      s: s, cx: cx, cz: cz
+    };
+  }
+
+  // current world position of the focused character (server truth, from the live world poll)
+  function focusPos() {
+    if (!focus || !world) return null;
+    var e = focusEntity();
+    return e ? { x: e.x, z: e.z } : null;
+  }
+  // a stable identity for a "player" row. Live humans carry account_id; camped/idle characters
+  // (concatenated into world.players) carry neither account_id nor id, so fall back to the name.
+  function playerKey(p) { return p.account_id != null ? 'a' + p.account_id : 'n' + p.name; }
+  function focusEntity() {
+    if (!focus || !world) return null;
+    // compare as strings: roster-row clicks hand us the key from a DOM data-attribute (a string),
+    // while search / map-click pass it raw — match regardless of which path set focus.
+    var k = String(focus.key);
+    if (focus.type === 'player') {
+      var ps = world.players || [];
+      for (var i = 0; i < ps.length; i++) if (playerKey(ps[i]) === k) return ps[i];
+    } else {
+      var as = world.armies || [];
+      for (var j = 0; j < as.length; j++) if (String(as[j].id) === k) return as[j];
+    }
+    return null;
+  }
+
+  // ---- offscreen layer builders (rebuilt only when the overview payload changes) ----
+  function buildTerrain(terr) {
+    var sig = terr.res + ':' + terr.rgb.length;
+    if (sig === terrSig && terrCanvas) return;
+    terrSig = sig;
+    var res = terr.res, rgb = b64bytes(terr.rgb);
+    var c = document.createElement('canvas'); c.width = res; c.height = res;
+    var g = c.getContext('2d'), img = g.createImageData(res, res), d = img.data;
+    for (var i = 0, j = 0, k = 0; i < res * res; i++, j += 3, k += 4) {
+      d[k] = rgb[j]; d[k + 1] = rgb[j + 1]; d[k + 2] = rgb[j + 2]; d[k + 3] = 255;
+    }
+    g.putImageData(img, 0, 0);
+    terrCanvas = c;
+  }
+  function buildBorders(terr) {                 // territory: owner index+1 + heat, coloured per faction
+    var res = terr.res, owner = b64bytes(terr.owner), heat = b64bytes(terr.heat), names = terr.names || [];
+    var pal = names.map(facRgb);
+    var c = document.createElement('canvas'); c.width = res; c.height = res;
+    var g = c.getContext('2d'), img = g.createImageData(res, res), d = img.data;
+    for (var i = 0, k = 0; i < res * res; i++, k += 4) {
+      var o = owner[i];
+      if (!o) { d[k + 3] = 0; continue; }
+      var rgb = pal[o - 1] || [200, 200, 200];
+      d[k] = rgb[0]; d[k + 1] = rgb[1]; d[k + 2] = rgb[2];
+      d[k + 3] = Math.round(Math.min(1, heat[i] / 255) * 0.42 * 255);   // heat -> alpha, soft political wash
+    }
+    g.putImageData(img, 0, 0);
+    borderCanvas = c;
+  }
+
+  function render() {
+    // advance the follow-camera toward the target here (not only in the rAF loop) so tracking still
+    // works when requestAnimationFrame is throttled — every world poll re-renders and nudges it.
+    if (focus) { var tp = focusPos(); if (tp) { if (!easeC) easeC = { x: tp.x, z: tp.z }; else { easeC.x += (tp.x - easeC.x) * 0.16; easeC.z += (tp.z - easeC.z) * 0.16; } } }
+    var W = canvas.width, H = canvas.height, t = fit();
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#0a0d14'; ctx.fillRect(0, 0, W, H);
+
+    var x0 = t.x(-extent), y0 = t.y(-extent), side = extent * 2 * t.s;
+
+    // 1. terrain raster (the ground the game paints; water is already blue)
+    if (show.terrain && terrCanvas) {
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(terrCanvas, x0, y0, side, side);
+    } else {
+      ctx.fillStyle = '#0d1320'; ctx.fillRect(x0, y0, side, side);
+    }
+    // 2. political borders (translucent faction wash, softly upscaled)
+    if (show.border && borderCanvas) {
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(borderCanvas, x0, y0, side, side);
+    }
+
+    // 3. roads — routed polylines, pale worn tracks widened by tier
+    if (show.road && ov && ov.roads) {
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      for (var ri = 0; ri < ov.roads.length; ri++) {
+        var e = ov.roads[ri], st = ROAD_STYLE[e.tier] || ROAD_STYLE.small, pts = e.pts;
+        if (!pts || pts.length < 2) continue;
+        ctx.strokeStyle = 'rgba(214,197,158,' + st.a + ')';
+        ctx.lineWidth = Math.max(0.6, st.w * (t.s / 4));
+        ctx.setLineDash(st.dash ? [4, 3] : []);
+        ctx.beginPath(); ctx.moveTo(t.x(pts[0][0]), t.y(pts[0][1]));
+        for (var pi = 1; pi < pts.length; pi++) ctx.lineTo(t.x(pts[pi][0]), t.y(pts[pi][1]));
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+    }
+
+    // 4. the named-powers core outline
+    ctx.strokeStyle = 'rgba(125,200,255,.16)'; ctx.lineWidth = 1;
+    ctx.strokeRect(t.x(-CORE), t.y(-CORE), (2 * CORE) * t.s, (2 * CORE) * t.s);
+
+    // 5. discovered area — accumulated per-player fog reveal (optional)
+    if (show.disc) {
+      var half = (CELL * t.s) / 2 + 0.5;
+      Object.keys(discovered).forEach(function (id) {
+        ctx.fillStyle = colorOf[id] || '#39d0ff'; ctx.globalAlpha = 0.05;
+        discovered[id].forEach(function (key) {
+          var p = key.split(','), gx = +p[0] * CELL, gz = +p[1] * CELL;
+          ctx.fillRect(t.x(gx) - half, t.y(gz) - half, half * 2, half * 2);
+        });
+      });
+      ctx.globalAlpha = 1;
+    }
+
+    // 6. holds (server-owned settlements) — dot sized by tier, coloured by owner
+    if (show.hold && ov && ov.holds) {
+      for (var hi = 0; hi < ov.holds.length; hi++) {
+        var h = ov.holds[hi], hr = (HOLD_R[h.tier] || 1.6) * Math.max(0.6, t.s / 4);
+        ctx.beginPath(); ctx.arc(t.x(h.x), t.y(h.z), hr, 0, 7);
+        ctx.fillStyle = facCss(h.owner); ctx.fill();
+        ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(0,0,0,.55)'; ctx.stroke();
+        if (h.tier === 'city') {
+          ctx.fillStyle = '#eaf1fb'; ctx.font = '10px system-ui'; ctx.textAlign = 'center';
+          ctx.shadowColor = '#000'; ctx.shadowBlur = 3;
+          ctx.fillText(h.name, t.x(h.x), t.y(h.z) - hr - 3); ctx.shadowBlur = 0;
+        }
+      }
+    }
+
+    // 7. capitals (holds of the five powers) — diamonds + labels
+    var caps = (ov && ov.capitals) || (world && world.capitals) || [];
+    caps.forEach(function (c) {
+      var x = t.x(c.x), y = t.y(c.z), col = facCss(c.owner || c.owner_name || c.name || c.def_name);
+      ctx.fillStyle = col; ctx.strokeStyle = '#0b0e14'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(x, y - 8); ctx.lineTo(x + 8, y); ctx.lineTo(x, y + 8); ctx.lineTo(x - 8, y); ctx.closePath();
+      ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#dfe9f7'; ctx.font = 'bold 11px system-ui'; ctx.textAlign = 'center';
+      ctx.shadowColor = '#000'; ctx.shadowBlur = 3;
+      ctx.fillText(c.name || c.def_name || ('Hold ' + c.idx), x, y - 12); ctx.shadowBlur = 0;
+    });
+
+    // 8. armies — every server NPC: settlement patrols (small) + roaming hosts (larger)
+    if (show.army && world && world.armies) {
+      world.armies.forEach(function (a) {
+        var x = t.x(a.x), y = t.y(a.z), patrol = a.role === 'patrol';
+        ctx.fillStyle = facCss(a.faction); ctx.globalAlpha = patrol ? 0.6 : 0.9;
+        var r = patrol ? 2 : Math.max(3, Math.min(8, 3 + a.size / 18));
+        ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill();
+        if (!patrol) { ctx.globalAlpha = 1; ctx.lineWidth = 1.2; ctx.strokeStyle = 'rgba(0,0,0,.6)'; ctx.stroke(); }
+        ctx.globalAlpha = 1;
+      });
+    }
+
+    // 9. battles — the visible war (⚔ markers, great battles larger)
+    if (show.battle && world && world.battles) {
+      world.battles.forEach(function (b) {
+        var x = t.x(b.x), y = t.y(b.z), big = b.big;
+        ctx.beginPath(); ctx.arc(x, y, big ? 9 : 5, 0, 7);
+        ctx.fillStyle = 'rgba(255,140,60,' + (big ? 0.9 : 0.7) + ')'; ctx.fill();
+        ctx.fillStyle = '#fff'; ctx.font = (big ? 'bold 14px' : '11px') + ' system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('⚔', x, y + 0.5); ctx.textBaseline = 'alphabetic';
+      });
+    }
+
+    // 10. player trails + banners
+    if (show.trail) Object.keys(trails).forEach(function (id) {
+      var tr = trails[id]; if (tr.length < 2) return;
+      ctx.strokeStyle = colorOf[id] || '#39d0ff'; ctx.lineWidth = 2; ctx.globalAlpha = .55; ctx.setLineDash([]);
+      ctx.beginPath(); ctx.moveTo(t.x(tr[0].x), t.y(tr[0].z));
+      for (var i = 1; i < tr.length; i++) ctx.lineTo(t.x(tr[i].x), t.y(tr[i].z));
+      ctx.stroke(); ctx.globalAlpha = 1;
+    });
+    (world && world.players || []).forEach(function (p, i) {
+      var col = colorFor(playerKey(p), i), x = t.x(p.x), y = t.y(p.z);
+      // a real human: a 👤 in an identity-coloured ring, so live users stand out from NPC hosts
+      ctx.beginPath(); ctx.arc(x, y, 11, 0, 7);
+      ctx.fillStyle = 'rgba(11,14,20,.6)'; ctx.fill();
+      ctx.lineWidth = 2.5; ctx.strokeStyle = col; ctx.stroke();
+      ctx.font = '15px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.shadowColor = '#000'; ctx.shadowBlur = 4;
+      ctx.fillText('👤', x, y + 1); ctx.textBaseline = 'alphabetic'; ctx.shadowBlur = 0;
+      ctx.fillStyle = '#fff'; ctx.font = 'bold 13px system-ui'; ctx.textAlign = 'left';
+      ctx.shadowColor = '#000'; ctx.shadowBlur = 4;
+      ctx.fillText(p.name, x + 15, y + 4); ctx.shadowBlur = 0;
+    });
+
+    // 11. focus highlight — a pulsing gold ring + name over the followed character
+    if (focus) {
+      var fe = focusEntity();
+      if (fe) {
+        var fx = t.x(fe.x), fy = t.y(fe.z), ph = (Date.now() % 1200) / 1200, rr = 13 + ph * 9;
+        ctx.strokeStyle = 'rgba(255,211,77,' + (0.9 - ph * 0.7).toFixed(3) + ')'; ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.arc(fx, fy, rr, 0, 7); ctx.stroke();
+        ctx.strokeStyle = 'rgba(255,211,77,.95)'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(fx, fy, 11, 0, 7); ctx.stroke();
+        ctx.fillStyle = '#ffe6a0'; ctx.font = 'bold 13px system-ui'; ctx.textAlign = 'center';
+        ctx.shadowColor = '#000'; ctx.shadowBlur = 4;
+        ctx.fillText((focus.type === 'player' ? '👤 ' : '') + (fe.name || focus.name), fx, fy - 16); ctx.shadowBlur = 0;
+      }
+    }
+  }
+
+  function ingestWorld(w) {
+    world = w;
+    (w.players || []).forEach(function (p, i) {
+      var pk = playerKey(p);
+      colorFor(pk, i);
+      var tr = trails[pk] || (trails[pk] = []);
+      var last = tr[tr.length - 1];
+      if (!last || Math.abs(last.x - p.x) > 0.6 || Math.abs(last.z - p.z) > 0.6) {
+        tr.push({ x: p.x, z: p.z }); if (tr.length > 600) tr.shift();
+      }
+      var set = discovered[pk] || (discovered[pk] = new Set());
+      var cx = Math.round(p.x / CELL), cz = Math.round(p.z / CELL);
+      for (var dx = -SIGHT; dx <= SIGHT; dx++) for (var dz = -SIGHT; dz <= SIGHT; dz++)
+        if (dx * dx + dz * dz <= SIGHT * SIGHT) set.add((cx + dx) + ',' + (cz + dz));
+    });
+  }
+
+  function sidePanel() {
+    // Realms: the political map's factions (territory names) with hold-count + capital owner
+    var names = (ov && ov.territory && ov.territory.names) || [];
+    var holdsByOwner = {};
+    if (ov && ov.holds) ov.holds.forEach(function (h) { holdsByOwner[h.owner] = (holdsByOwner[h.owner] || 0) + 1; });
+    var capByName = {};
+    (ov && ov.capitals || []).forEach(function (c) { capByName[c.name] = c.owner; });
+    document.getElementById('ncount').textContent = names.length ? '· ' + names.length : '';
+    document.getElementById('nations').innerHTML = names.length ? names.map(function (n) {
+      var held = holdsByOwner[n] || 0, ownsCap = capByName[n] === n;
+      return '<div class="crow"><span class="csq" style="background:' + facCss(n) + '"></span>' + esc(n) +
+        '<span style="opacity:.6;margin-left:auto">' + (ownsCap ? '♛ ' : '') + held + ' holds</span></div>';
+    }).join('') : '<div class="empty">—</div>';
+
+    // living world: human banners (☆) + roaming hosts (patrols are on the map only, not listed)
+    var humans = (world && world.players) || [];
+    var hosts = ((world && world.armies) || []).filter(function (a) { return a.role !== 'patrol'; });
+    document.getElementById('pcount').textContent = (humans.length + hosts.length)
+      ? '· ' + humans.length + ' player · ' + hosts.length + ' hosts' : '';
+    var focSel = focus ? (focus.type + ':' + focus.key) : '';
+    var rows = humans.map(function (p, i) {
+      var pk = playerKey(p), sel = focSel === ('player:' + pk) ? ' foc' : '';
+      return '<div class="prow' + sel + '" data-ft="player" data-fk="' + esc(pk) + '"><span class="dot" style="background:' + colorFor(pk, i) + '"></span>' +
+        '<div><div class="pname">👤 ' + esc(p.name) + '</div>' +
+        '<div class="pmeta">' + esc(p.faction || 'Your Banner') + ' · human</div></div>' +
+        '<div class="pright">' + (p.size | 0) + ' men<br>(' + Math.round(p.x) + ', ' + Math.round(p.z) + ')</div></div>';
+    }).concat(hosts.sort(function (a, b) { return (b.renown || 0) - (a.renown || 0); }).slice(0, 40).map(function (a) {
+      var sel = focSel === ('host:' + a.id) ? ' foc' : '';
+      return '<div class="prow' + sel + '" data-ft="host" data-fk="' + a.id + '"><span class="dot" style="background:' + facCss(a.faction) + '"></span>' +
+        '<div><div class="pname">' + esc(a.name) + '</div>' +
+        '<div class="pmeta">' + esc(a.faction || '') + (a.intent ? ' · ' + esc(a.intent) : '') + '</div></div>' +
+        '<div class="pright">' + (a.size | 0) + ' men · ' + Math.round(a.renown || 0) + ' rn<br>(' + Math.round(a.x) + ', ' + Math.round(a.z) + ')</div></div>';
+    }));
+    document.getElementById('players').innerHTML = rows.length ? rows.join('') : '<div class="empty">the world is empty — start the server / reseed</div>';
+  }
+
+  // ---------- focus: follow one character with a zoomed, tracking camera ----------
+  function setFocus(type, key, name) {
+    focus = { type: type, key: key, name: name || '' };
+    var tp = focusPos();
+    easeC = tp ? { x: tp.x, z: tp.z } : (easeC || { x: 0, z: 0 });  // snap onto the target so it's centred at once
+    startAnim(); updateFocusChip(); sidePanel(); render();
+  }
+  function clearFocus() {
+    focus = null; easeC = null; stopAnim();
+    updateFocusChip(); sidePanel(); render();
+  }
+  function updateFocusChip() {
+    var chip = document.getElementById('focusChip');
+    if (!focus) { chip.className = 'chip'; return; }
+    var e = focusEntity(), where = e ? '' : ' · off-map';
+    var role = focus.type === 'player' ? 'player' : ((e && e.role === 'patrol') ? 'patrol' : 'host');
+    document.getElementById('focusName').innerHTML = '◎ Following <b>' + esc((e && e.name) || focus.name) +
+      '</b> <span style="opacity:.7">(' + role + where + ')</span>';
+    chip.className = 'chip on';
+  }
+  function startAnim() { if (!animOn) { animOn = true; requestAnimationFrame(step); } }
+  function stopAnim() { animOn = false; }
+  function step() { if (!animOn) return; render(); requestAnimationFrame(step); }
+
+  // ---------- search: match any live player or host by name, focus the pick ----------
+  var searchEl = document.getElementById('search'), resultsEl = document.getElementById('results'), selIdx = -1, curMatches = [];
+  function candidates() {
+    var out = [];
+    (world && world.players || []).forEach(function (p) { out.push({ type: 'player', key: playerKey(p), name: p.name, sub: (p.faction || 'Your Banner') + ' · human', ent: p }); });
+    (world && world.armies || []).forEach(function (a) {
+      out.push({ type: 'host', key: a.id, name: a.name, sub: (a.faction || '') + (a.role === 'patrol' ? ' · patrol' : (a.intent ? ' · ' + a.intent : ' · host')), ent: a });
+    });
+    return out;
+  }
+  function runSearch() {
+    var q = searchEl.value.trim().toLowerCase();
+    if (!q) { curMatches = []; resultsEl.innerHTML = ''; selIdx = -1; return; }
+    curMatches = candidates().filter(function (c) { return String(c.name || '').toLowerCase().indexOf(q) >= 0; })
+      .sort(function (a, b) { return (a.type === 'player' ? 0 : 1) - (b.type === 'player' ? 0 : 1); }).slice(0, 10);
+    selIdx = curMatches.length ? 0 : -1;
+    resultsEl.innerHTML = curMatches.map(function (c, i) {
+      var col = c.type === 'player' ? '#39d0ff' : facCss(c.ent.faction);
+      return '<div class="ritem' + (i === selIdx ? ' sel' : '') + '" data-i="' + i + '">' +
+        '<span class="dot" style="width:9px;height:9px;flex:0 0 9px;background:' + col + '"></span>' +
+        '<span>' + (c.type === 'player' ? '👤 ' : '') + esc(c.name) + ' <span style="opacity:.55;font-size:11px">' + esc(c.sub) + '</span></span>' +
+        '<span class="rtag">' + (c.type === 'player' ? 'player' : (c.ent.role === 'patrol' ? 'patrol' : 'host')) + '</span></div>';
+    }).join('');
+  }
+  function pickMatch(i) {
+    var c = curMatches[i]; if (!c) return;
+    setFocus(c.type, c.key, c.name);
+    searchEl.value = c.name; resultsEl.innerHTML = ''; curMatches = []; selIdx = -1; searchEl.blur();
+  }
+  searchEl.addEventListener('input', runSearch);
+  searchEl.addEventListener('focus', runSearch);
+  searchEl.addEventListener('keydown', function (e) {
+    if (e.key === 'ArrowDown') { selIdx = Math.min(curMatches.length - 1, selIdx + 1); e.preventDefault(); }
+    else if (e.key === 'ArrowUp') { selIdx = Math.max(0, selIdx - 1); e.preventDefault(); }
+    else if (e.key === 'Enter') { pickMatch(selIdx >= 0 ? selIdx : 0); return; }
+    else if (e.key === 'Escape') { searchEl.value = ''; resultsEl.innerHTML = ''; curMatches = []; searchEl.blur(); return; }
+    else return;
+    Array.prototype.forEach.call(resultsEl.children, function (el, i) { el.className = 'ritem' + (i === selIdx ? ' sel' : ''); });
+  });
+  resultsEl.addEventListener('mousedown', function (e) {   // mousedown beats the input's blur
+    var it = e.target.closest('.ritem'); if (it) { e.preventDefault(); pickMatch(+it.getAttribute('data-i')); }
+  });
+  document.getElementById('focusClear').onclick = clearFocus;
+  // click a roster row to follow it
+  document.getElementById('players').addEventListener('click', function (e) {
+    var row = e.target.closest('.prow'); if (!row) return;
+    var type = row.getAttribute('data-ft'), key = row.getAttribute('data-fk');
+    if (type === 'player') setFocus('player', key, '');
+    else setFocus('host', +key, '');
+  });
+  // click the map to follow the nearest character; click empty ground to release
+  canvas.addEventListener('click', function (e) {
+    var rect = canvas.getBoundingClientRect(), t = fit();
+    var px = (e.clientX - rect.left) * (canvas.width / rect.width), py = (e.clientY - rect.top) * (canvas.height / rect.height);
+    var best = null, bestD = 20 * (window.devicePixelRatio || 1);   // pick radius in device px
+    function consider(cand, x, z) { var d = Math.hypot(t.x(x) - px, t.y(z) - py); if (d < bestD) { bestD = d; best = cand; } }
+    (world && world.players || []).forEach(function (p) { consider({ type: 'player', key: playerKey(p), name: p.name }, p.x, p.z); });
+    (world && world.armies || []).forEach(function (a) { consider({ type: 'host', key: a.id, name: a.name }, a.x, a.z); });
+    if (best) setFocus(best.type, best.key, best.name); else if (focus) clearFocus();
+  });
+  window.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && focus && document.activeElement !== searchEl) clearFocus();
+  });
+
+  // ---------- danger: reset the shared world (delete current, move everyone to a fresh one) ----------
+  var resetBtn = document.getElementById('resetBtn'), resetConfirm = document.getElementById('resetConfirm');
+  function showResetConfirm(on) { resetBtn.style.display = on ? 'none' : ''; resetConfirm.style.display = on ? 'flex' : 'none'; }
+  resetBtn.onclick = function () { showResetConfirm(true); };
+  document.getElementById('resetNo').onclick = function () { showResetConfirm(false); };
+  document.getElementById('resetYes').onclick = function () {
+    var yes = document.getElementById('resetYes');
+    yes.disabled = true; yes.textContent = 'Resetting…';
+    statusEl.innerHTML = '⟳ resetting the shared world…';
+    fetch(BASE + '/admin/reset-world', { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, HDR), body: JSON.stringify({ confirm: 'RESET' }) })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        yes.disabled = false; yes.textContent = 'Delete & reset'; showResetConfirm(false);
+        if (!res.ok) { statusEl.innerHTML = '<span class="off">reset failed</span> — ' + esc((res.j && res.j.error) || 'error'); return; }
+        // drop everything we knew about the old world; the next polls fetch the brand-new one
+        world = null; ov = null; extent = CORE; clearFocus();
+        terrCanvas = null; terrSig = ''; borderCanvas = null;
+        trails = {}; discovered = {}; colorOf = {}; _facRgb = {};
+        searchEl.value = ''; resultsEl.innerHTML = ''; curMatches = [];
+        render();
+        statusEl.innerHTML = '✔ fresh shared world <b>#' + res.j.newWorldId + '</b> (terrain ' + res.j.terrainSeed + ') — building the new map…';
+        pollOverview(); pollWorld();
+      })
+      .catch(function () {
+        yes.disabled = false; yes.textContent = 'Delete & reset'; showResetConfirm(false);
+        statusEl.innerHTML = '<span class="off">reset failed</span> — backend unreachable';
+      });
+  };
+
+  function pollWorld() {
+    fetch(BASE + '/world?since=0&x=0&z=0&r=200', { headers: HDR })
+      .then(function (r) { return r.json(); })
+      .then(function (w) {
+        ingestWorld(w); sidePanel(); updateFocusChip(); render();
+        var patrols = (w.armies || []).filter(function (a) { return a.role === 'patrol'; }).length;
+        statusEl.innerHTML = 'shared world <b>#' + w.worldId + '</b> · <b>' + ((w.players || []).length) + '</b> players · <b>' +
+          ((w.armies || []).length) + '</b> armies (' + patrols + ' patrols) · <b>' + ((w.battles || []).length) +
+          '</b> battles · ' + new Date().toLocaleTimeString();
+      })
+      .catch(function () {
+        statusEl.innerHTML = '<span class="off">backend unreachable</span> — is <b>node server/index.js</b> running on :8787?';
+      });
+  }
+  function pollOverview() {
+    fetch(BASE + '/admin/overview', { headers: HDR })
+      .then(function (r) { return r.json(); })
+      .then(function (o) {
+        if (o && o.error) return;
+        ov = o; extent = o.extent || CORE;
+        if (o.terrain) buildTerrain(o.terrain);
+        if (o.territory) buildBorders(o.territory);
+        sidePanel(); render();
+      })
+      .catch(function () { /* overview is best-effort; the live layer still renders */ });
+  }
+
+  function resize() {
+    var dpr = window.devicePixelRatio || 1, st = document.getElementById('stage');
+    canvas.width = st.clientWidth * dpr; canvas.height = st.clientHeight * dpr;
+    render();
+  }
+  window.addEventListener('resize', resize);
+  resize();
+  pollOverview(); pollWorld();
+  setInterval(pollWorld, WORLD_MS);
+  setInterval(pollOverview, OVERVIEW_MS);
+})();
+</script>
+</body>
+</html>

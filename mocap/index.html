@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blade Vale — Mocap Puppet</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #10141c; color: #e8ecf4;
+    font: 13px/1.45 -apple-system, "Segoe UI", system-ui, sans-serif; }
+  #c { position: fixed; inset: 0; display: block; touch-action: none; }
+
+  #status { position: fixed; top: 12px; left: 12px; padding: 6px 12px; border-radius: 8px;
+    background: rgba(12,16,24,.78); border: 1px solid rgba(255,255,255,.14);
+    font-weight: 600; letter-spacing: .3px; }
+  #status.ok { border-color: rgba(110,220,140,.55); color: #9df0b4; }
+  #status.warn { border-color: rgba(240,200,90,.55); color: #f2d992; }
+  #status.err { border-color: rgba(240,110,110,.6); color: #f2a0a0; }
+  #note { position: fixed; top: 46px; left: 12px; color: #b9c4d8; text-shadow: 0 1px 2px #000; }
+
+  #pip { position: fixed; top: 12px; right: 12px; width: 240px; border-radius: 10px; overflow: hidden;
+    border: 1px solid rgba(255,255,255,.18); background: #000; box-shadow: 0 6px 24px rgba(0,0,0,.45); }
+  #pip video, #pip canvas { display: block; width: 100%; }
+  #pip canvas { position: absolute; inset: 0; }
+  #pip.mirrored video, #pip.mirrored canvas { transform: scaleX(-1); }
+  #pip.hidden { display: none; }
+
+  #hud { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%);
+    display: flex; gap: 10px; align-items: center; padding: 8px 14px; border-radius: 12px;
+    background: rgba(12,16,24,.78); border: 1px solid rgba(255,255,255,.14); white-space: nowrap; }
+  #hud button { background: #232c3d; color: #e8ecf4; border: 1px solid rgba(255,255,255,.18);
+    border-radius: 8px; padding: 5px 10px; font: inherit; cursor: pointer; }
+  #hud button:hover { background: #2e3a51; }
+  #hud label { display: flex; gap: 6px; align-items: center; color: #b9c4d8; }
+  #stats { color: #8fa0bd; min-width: 130px; text-align: right; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="status">loading…</div>
+<div id="note"></div>
+
+<div id="pip" class="mirrored hidden">
+  <video id="cam" playsinline muted></video>
+  <canvas id="overlay"></canvas>
+</div>
+
+<div id="hud">
+  <button id="btnMirror">mirror: on (M)</button>
+  <button id="btnCal" title="hold your head straight at the screen, then press">calibrate head (C)</button>
+  <button id="btnDemo">demo: off (D)</button>
+  <label>smooth <input id="smooth" type="range" min="0.05" max="1" step="0.05" value="0.4"
+    title="responsiveness: right = snappy, left = floaty"></label>
+  <span id="stats"></span>
+</div>
+
+<script src="vendor/three.min.js"></script>
+<script type="module" src="mocap.js"></script>
+</body>
+</html>

@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<!-- iOS has NO Fullscreen API. The only chrome-free fullscreen on iPhone is launching from a
+     home-screen icon as a web app: these tags tell iOS/Android to drop the browser UI when it does. -->
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Blade Vale" />
+<link rel="manifest" href="manifest.webmanifest" />
+<title>Blade Vale — Low Poly Hack &amp; Slash</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0b0e14; }
+  #game { display: block; width: 100vw; height: 100vh; }
+  body { font-family: "Trebuchet MS", "Segoe UI", system-ui, sans-serif; color: #e9eef5; user-select: none; }
+
+  /* Rotate gate: hidden by default, shown only on touch devices held in portrait. */
+  #rotate-gate { display: none; }
+  @media (orientation: portrait) and (pointer: coarse) {
+    #rotate-gate {
+      display: flex; position: fixed; inset: 0; z-index: 100000;
+      flex-direction: column; align-items: center; justify-content: center; gap: 22px;
+      background: #0b0e14; text-align: center; pointer-events: auto;
+    }
+    #hud, #det-panel { display: none !important; }
+  }
+  .rg-phone { font-size: 72px; animation: rg-rock 1.6s ease-in-out infinite; }
+  .rg-msg { font-size: 22px; letter-spacing: 1px; line-height: 1.5; opacity: .9; }
+  .rg-msg small { font-size: 14px; opacity: .6; letter-spacing: 2px; text-transform: uppercase; }
+  @keyframes rg-rock { 0%,55%,100% { transform: rotate(0); } 20%,40% { transform: rotate(-90deg); } }
+
+  #hud { position: fixed; inset: 0; pointer-events: none; }
+
+  .bar-wrap {
+    position: absolute; left: 24px; top: 22px; width: 320px;
+  }
+  .bar-label { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; opacity: .75; margin-bottom: 4px; text-shadow: 0 1px 2px #000; }
+  .bar { height: 20px; background: rgba(0,0,0,.45); border: 2px solid rgba(255,255,255,.25); border-radius: 4px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; width: 100%; }
+  #hp-fill { background: linear-gradient(90deg, #ff4d4d, #ff8a5b); }
+  #stam-wrap { margin-top: 10px; width: 240px; }
+  #stam-wrap .bar { height: 12px; }
+  #stam-fill { background: linear-gradient(90deg, #4dd2ff, #5b8bff); }
+
+  #stats { position: absolute; right: 24px; top: 22px; text-align: right; text-shadow: 0 2px 4px #000; }
+  #stats .big { font-size: 30px; font-weight: bold; }
+  #stats .sub { font-size: 14px; opacity: .8; letter-spacing: 1px; }
+  #wave-banner {
+    position: absolute; left: 50%; top: 18%; transform: translateX(-50%);
+    font-size: 44px; font-weight: bold; letter-spacing: 4px; text-transform: uppercase;
+    text-shadow: 0 3px 10px #000, 0 0 24px rgba(255,160,80,.6);
+    opacity: 0; transition: opacity .4s ease; white-space: nowrap;
+  }
+  #wave-sub {
+    position: absolute; left: 50%; top: calc(18% + 62px); transform: translateX(-50%);
+    font-size: 17px; font-style: italic; color: #ffd9a0; text-align: center;
+    max-width: 680px; line-height: 1.5; text-shadow: 0 2px 6px #000;
+    opacity: 0; transition: opacity .4s ease;
+  }
+
+  #combo { position: absolute; left: 50%; bottom: 90px; transform: translateX(-50%); font-size: 26px; font-weight: bold; color: #ffcf5b; text-shadow: 0 2px 6px #000; opacity: 0; transition: opacity .2s; }
+  /* a quiet ticker confirming a real-time field order — sits above the combo, edged green like the selection ring */
+  #cmd-toast { position: absolute; left: 50%; bottom: 128px; transform: translateX(-50%); font-size: 15px; font-weight: 600; letter-spacing: .3px; color: #cfe9ff; background: rgba(12,18,30,.72); border: 1px solid rgba(125,255,154,.55); border-radius: 999px; padding: 4px 14px; text-shadow: 0 1px 3px #000; white-space: nowrap; opacity: 0; transition: opacity .18s ease; pointer-events: none; z-index: 6; }
+  /* zone-strike prompt: shown when a squad's placed area overlaps an enemy party (action mode) */
+  #field-strike { position: absolute; left: 50%; top: 92px; transform: translateX(-50%); display: none; text-align: center; z-index: 12; pointer-events: none; max-width: 92vw; }
+  #field-strike .fs-head { display: inline-block; font-size: 15px; font-weight: 600; color: #ffe0b0; background: rgba(30,14,10,.82); border: 1px solid rgba(255,120,80,.8); border-radius: 10px; padding: 6px 16px; text-shadow: 0 1px 3px #000; box-shadow: 0 4px 18px rgba(0,0,0,.5); }
+  #field-strike .fs-btns { margin-top: 8px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; pointer-events: auto; }
+  #field-strike .fs-b { font: inherit; font-size: 14px; font-weight: 700; color: #fff; background: rgba(18,12,10,.86); border: 1.5px solid var(--gc, #ff7850); border-left: 5px solid var(--gc, #ff7850); border-radius: 8px; padding: 6px 13px; cursor: pointer; box-shadow: 0 3px 12px rgba(0,0,0,.45); transition: transform .08s ease, background .12s ease; }
+  #field-strike .fs-b:hover { background: rgba(40,22,16,.95); transform: translateY(-1px); }
+  #field-strike .fs-b.fs-all { border-color: #ff5a3c; border-left-color: #ff5a3c; color: #ffd0c0; }
+
+  #controls-hint {
+    position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%);
+    font-size: 13px; opacity: .55; letter-spacing: 1px; text-align: center; text-shadow: 0 1px 2px #000;
+  }
+
+  /* ===== Just-in-time onboarding hint (one-time, non-blocking, HUD-consistent) ===== */
+  #onboard {
+    position: absolute; left: 50%; top: 64px; transform: translateX(-50%) translateY(-8px);
+    width: min(440px, 88vw); box-sizing: border-box;
+    background: rgba(12,18,30,.86); border: 1px solid rgba(255,207,91,.5); border-radius: 10px;
+    padding: 13px 16px 12px; text-align: left; z-index: 8; pointer-events: none;
+    box-shadow: 0 8px 28px rgba(0,0,0,.55); text-shadow: 0 1px 3px #000;
+    opacity: 0; transition: opacity .35s ease, transform .35s ease; display: none;
+  }
+  #onboard.show { display: block; opacity: 1; transform: translateX(-50%) translateY(0); }
+  #onboard .ob-title { font-size: 14px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: #ffe2a8; margin-bottom: 6px; padding-right: 18px; }
+  #onboard .ob-body { font-size: 14px; line-height: 1.55; color: #e7eefb; opacity: .92; }
+  #onboard .ob-body b { color: #ffcf5b; }
+  #onboard .ob-foot { margin-top: 10px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  #onboard .ob-got { cursor: pointer; pointer-events: auto; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; font-weight: 700;
+    padding: 6px 16px; border: 1px solid #ffcf5b; border-radius: 6px; background: rgba(255,180,80,.14); color: #ffe2a8; }
+  #onboard .ob-got:hover { background: rgba(255,180,80,.3); }
+  #onboard .ob-skip { cursor: pointer; pointer-events: auto; font-size: 11px; letter-spacing: .5px; color: #9fb2cc; opacity: .8; background: none; border: none; text-decoration: underline; }
+  #onboard .ob-skip:hover { opacity: 1; color: #cfe9ff; }
+  #onboard .ob-x { position: absolute; top: 8px; right: 10px; cursor: pointer; pointer-events: auto; color: #9fb2cc; background: none; border: none; font-size: 17px; line-height: 1; opacity: .8; }
+  #onboard .ob-x:hover { opacity: 1; color: #fff; }
+  /* Landscape / short viewports (phones held sideways): the card must never run off-screen.
+     Pin it near the top, cap its height, and let long bodies scroll instead of overflowing. */
+  @media (max-height: 500px) {
+    #onboard { top: 8px; width: min(440px, 74vw);
+      max-height: calc(100vh - 16px); overflow-y: auto; padding: 9px 14px 8px; }
+    #onboard .ob-title { font-size: 12px; margin-bottom: 4px; }
+    #onboard .ob-body { font-size: 12px; line-height: 1.4; }
+    #onboard .ob-foot { margin-top: 7px; }
+  }
+
+  /* ===== The realm/hold card (click a hold on the map) + the border-hover tip ===== */
+  #realm { position: fixed; top: 64px; left: 14px; width: 292px; max-width: 88vw; z-index: 11;
+    text-align: left; color: #dfeaff; border-radius: 10px; overflow: hidden;
+    background: linear-gradient(180deg, rgba(14,18,30,.96), rgba(8,10,18,.97));
+    border: 1px solid rgba(125,200,255,.22); box-shadow: 0 14px 44px rgba(0,0,0,.5); pointer-events: auto; }
+  .rm-head { display: flex; align-items: center; gap: 10px; padding: 11px 12px 9px; border-bottom: 1px solid rgba(255,255,255,.08); }
+  .rm-head h1 { font-size: 17px; margin: 0; flex: 1; letter-spacing: .5px; color: #eaf2ff; text-transform: none;
+    background: none; -webkit-text-fill-color: currentColor; text-shadow: none; }
+  #rm-flag { width: 14px; height: 14px; border-radius: 4px; border: 1px solid rgba(255,255,255,.35); flex: 0 0 auto; }
+  .rm-x { cursor: pointer; background: none; border: 1px solid rgba(255,255,255,.2); color: #cdd6e6; border-radius: 7px;
+    width: 26px; height: 26px; font-size: 13px; line-height: 1; flex: 0 0 auto; }
+  .rm-x:hover { background: rgba(255,255,255,.1); }
+  #rm-body { padding: 4px 12px 12px; max-height: 62vh; overflow-y: auto; }
+  .rm-sec { padding: 8px 0 2px; }
+  .rm-sec + .rm-sec { border-top: 1px solid rgba(255,255,255,.07); margin-top: 8px; }
+  .rm-row { display: flex; align-items: baseline; gap: 8px; font-size: 13px; margin: 5px 0; }
+  .rm-row > span:first-child { color: #9fb2cc; }
+  .rm-row b { color: #eaf2ff; font-weight: 700; }
+  .rm-dim { color: #8894ab; font-size: 11.5px; margin-left: auto; }
+  .rm-tier { text-transform: uppercase; letter-spacing: 1.4px; font-size: 11px; color: #ffe2a8 !important; }
+  .rm-sub { margin-top: 9px; font-size: 11px; letter-spacing: 1.4px; text-transform: uppercase; color: #ffe2a8; }
+  .rm-btn { cursor: pointer; margin-top: 8px; width: 100%; padding: 8px 0; font-size: 12px; letter-spacing: 1.2px;
+    text-transform: uppercase; font-weight: 700; border: 1px solid #ffcf5b; border-radius: 6px;
+    background: rgba(255,180,80,.14); color: #ffe2a8; }
+  .rm-btn:hover { background: rgba(255,180,80,.3); }
+  .rm-st { text-transform: capitalize; }
+  .rm-st-war, .rm-st-hostile { color: #ff8d7a !important; }
+  .rm-st-alliance, .rm-st-nonaggression { color: #9fe6a0 !important; }
+  #terrtip { position: fixed; z-index: 12; pointer-events: none; padding: 6px 10px; border-radius: 7px;
+    font-size: 12.5px; color: #eaf2ff; white-space: nowrap;
+    background: rgba(10,14,24,.92); border: 1px solid rgba(125,200,255,.25); box-shadow: 0 6px 18px rgba(0,0,0,.4); }
+  #terrtip .tt-dot { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 7px;
+    border: 1px solid rgba(255,255,255,.4); vertical-align: baseline; }
+  #terrtip .tt-dim { color: #8894ab; font-size: 11px; }
+  #terrtip .tt-info { pointer-events: auto; cursor: pointer; margin-left: 7px; padding: 1px 5px; border-radius: 5px;
+    border: 1px solid rgba(125,200,255,.35); background: rgba(125,200,255,.12); font-size: 12px; line-height: 1.4; vertical-align: middle; }
+  #terrtip .tt-info:hover { background: rgba(125,200,255,.28); }
+
+  /* Screen-space marker layer: painted symbols (war/⚔, pins, warhost/order/rally flags, faction
+     flag symbols) live here — constant pixel size at any zoom, never scaled in 3D, and hoverable.
+     The layer itself ignores the pointer; each marker opts back in so it stays hover/click-able. */
+  #markers { position: fixed; inset: 0; z-index: 11; pointer-events: none; overflow: hidden; }
+  #markers .mk { position: absolute; left: 0; top: 0; pointer-events: auto; cursor: pointer;
+    transform: translate(-50%, -50%); transform-origin: center; will-change: transform;
+    user-select: none; -webkit-user-select: none; line-height: 1; white-space: nowrap;
+    filter: drop-shadow(0 2px 3px rgba(0,0,0,.55)); transition: filter .1s; }
+  #markers .mk.mk-hide { display: none; }
+  #markers .mk-glyph { font-size: 22px; }               /* emoji symbols: war ⚔, ☠, etc. */
+  #markers .mk:hover { filter: drop-shadow(0 0 6px rgba(125,200,255,.9)) brightness(1.15); z-index: 2; }
+  /* SVG map pin: constant size, tinted per marker via currentColor */
+  #markers .mk-pin { width: 20px; height: 26px; display: block; }
+  #markers .mk-flag { width: 22px; height: 22px; display: block; }
+  #markers .mk-lbl { font-size: 11px; font-weight: 600; color: #eaf2ff; padding: 1px 6px; border-radius: 6px;
+    background: rgba(10,14,24,.82); border: 1px solid rgba(125,200,255,.22); }
+  /* war/clash marker: ⚔ icon over a two-faction tug-of-war bar */
+  #markers .mk-battle { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  #markers .mk-battle .mkb-ico { font-size: 20px; color: #ffe089; animation: mkbpulse 1.1s ease-in-out infinite; }
+  #markers .mk-battle .mkb-bar { display: flex; width: 34px; height: 5px; border-radius: 3px; overflow: hidden;
+    border: 1px solid rgba(0,0,0,.55); box-shadow: 0 1px 2px rgba(0,0,0,.5); }
+  #markers .mk-battle .mkb-bar i { display: block; height: 100%; }
+  @keyframes mkbpulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.13); } }
+  #markers .mk-battle.mk-battle-big .mkb-ico { font-size: 30px; color: #ffd24a; }
+  #markers .mk-battle.mk-battle-big .mkb-bar { width: 46px; height: 6px; }
+  #markers .mk-battle .mkb-name { margin-top: 3px; font-size: 11px; font-weight: 700; color: #ffe6a6;
+    padding: 1px 7px; border-radius: 6px; background: rgba(10,14,24,.85); border: 1px solid rgba(255,210,74,.35);
+    max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
+
+  .overlay {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center;
+    background: radial-gradient(ellipse at center, rgba(20,26,38,.82), rgba(6,8,12,.96));
+    z-index: 10; gap: 18px; padding: 24px;
+  }
+  .overlay h1 { font-size: 64px; letter-spacing: 6px; text-transform: uppercase;
+    background: linear-gradient(180deg,#ffd98a,#ff7b4d); -webkit-background-clip: text; background-clip: text; color: transparent;
+    text-shadow: 0 6px 30px rgba(255,120,60,.35); }
+  .overlay p { font-size: 16px; opacity: .82; max-width: 540px; line-height: 1.6; }
+  .overlay .keys { font-size: 14px; opacity: .7; line-height: 2; }
+  .overlay .keys b { color: #ffcf5b; }
+  #warband-picker {
+    pointer-events: auto; margin-top: 6px; padding: 14px 26px;
+    border: 1px solid rgba(255,207,91,.35); border-radius: 8px;
+    background: rgba(0,0,0,.25);
+  }
+  #warband-picker .wp-title { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; color: #ffe2a8; margin-bottom: 10px; }
+  #warband-picker .wp-title span { opacity: .7; margin-left: 8px; }
+  .wp-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 6px 0; font-size: 15px; }
+  .wp-row span { width: 175px; text-align: left; opacity: .9; }
+  .wp-row button:disabled { cursor: default; }
+  .wp-row button {
+    cursor: pointer; width: 30px; height: 30px; border-radius: 6px;
+    border: 1px solid #ffcf5b; background: rgba(255,180,80,.12); color: #ffe2a8;
+    font-size: 18px; line-height: 1;
+  }
+  .wp-row button:hover { background: rgba(255,180,80,.3); }
+  .wp-row b { width: 26px; text-align: center; font-size: 18px; color: #ffcf5b; }
+  .btn {
+    pointer-events: auto; cursor: pointer; margin-top: 8px;
+    font-size: 20px; letter-spacing: 3px; text-transform: uppercase; font-weight: bold;
+    padding: 14px 44px; border: 2px solid #ffcf5b; border-radius: 6px;
+    background: rgba(255,180,80,.12); color: #ffe2a8; transition: all .15s ease;
+  }
+  .btn:hover { background: rgba(255,180,80,.28); transform: translateY(-2px); box-shadow: 0 8px 24px rgba(255,150,60,.3); }
+  .hidden { display: none !important; }
+
+  /* ===== Sign in (super-simple username/password) ===== */
+  #auth-box { pointer-events: auto; margin-top: 4px; font-size: 13px; width: min(360px, 90vw);
+    background: rgba(0,0,0,.32); border: 1px solid rgba(255,207,91,.35); border-radius: 12px; padding: 18px 20px; }
+  #auth-form { display: flex; flex-direction: column; gap: 10px; align-items: stretch; }
+  #auth-box input { background: rgba(0,0,0,.5); border: 1px solid rgba(255,207,91,.35); border-radius: 8px;
+    color: #e9eef5; padding: 11px 13px; font-size: 15px; width: 100%; outline: none; }
+  #auth-box input:focus { border-color: #ffcf5b; box-shadow: 0 0 0 2px rgba(255,207,91,.18); }
+  .auth-btns { display: flex; gap: 10px; }
+  .auth-btn { cursor: pointer; flex: 1; border: 1px solid #ffcf5b; background: rgba(255,180,80,.14); color: #ffe2a8;
+    border-radius: 8px; padding: 11px 14px; font-size: 14px; font-weight: 700; letter-spacing: 1px; }
+  .auth-btn:hover { background: rgba(255,180,80,.3); }
+  #auth-msg { margin-top: 8px; min-height: 16px; font-size: 13px; color: #ff9a9a; text-align: center; }
+  #auth-who { font-size: 16px; color: #c8ffd6; }
+  #auth-who button { cursor: pointer; background: none; border: none; color: #9fb2cc; text-decoration: underline; font-size: 13px; }
+  #auth-note { opacity: .6; font-size: 12px; margin-top: 10px; text-align: center; line-height: 1.5; }
+  #auth-note b { color: #ffcf5b; }
+
+  /* ===== Characters (press U) — a right-side DRAWER: select, command, switch banners ===== */
+  #chars { position: fixed; top: 0; right: 0; bottom: 0; width: 380px; max-width: 94vw;
+    display: flex; flex-direction: column; text-align: left; z-index: 11;
+    background: linear-gradient(180deg, rgba(18,15,28,.975), rgba(9,7,14,.985));
+    border-left: 1px solid rgba(214,163,255,.28); box-shadow: -16px 0 48px rgba(0,0,0,.55); }
+  #chars > * { flex: 0 0 auto; }
+  .ch-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 11px; border-bottom: 1px solid rgba(255,255,255,.08); }
+  .ch-head h1 { font-size: 20px; margin: 0; letter-spacing: 1px; color: #eaf2ff; text-transform: none; background: none; -webkit-text-fill-color: currentColor; text-shadow: none; }
+  .ch-x { cursor: pointer; background: none; border: 1px solid rgba(255,255,255,.2); color: #cdd6e6; border-radius: 7px; width: 30px; height: 30px; font-size: 15px; line-height: 1; }
+  .ch-x:hover { background: rgba(255,255,255,.1); }
+  .ch-tools { display: flex; align-items: center; gap: 12px; padding: 9px 16px; font-size: 12px; color: #b9c4d8; border-bottom: 1px solid rgba(255,255,255,.06); }
+  .ch-tools label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  #ch-bulk { display: none; flex-wrap: wrap; gap: 6px; align-items: center; padding: 10px 14px; background: rgba(125,200,255,.09); border-bottom: 1px solid rgba(125,200,255,.22); }
+  #ch-bulk.on { display: flex; }
+  #ch-bulk .ch-bulk-n { font-size: 12px; color: #bfe0ff; font-weight: 700; margin-right: 2px; }
+  #ch-bulk button { cursor: pointer; border: 1px solid rgba(155,220,120,.45); background: rgba(155,220,120,.14); color: #e7ffd8; border-radius: 6px; padding: 6px 10px; font-size: 12px; }
+  #ch-bulk button:hover { background: rgba(155,220,120,.28); }
+  #ch-body { display: flex; flex-direction: column; gap: 8px; padding: 10px 14px; overflow-y: auto; flex: 1 1 auto; }
+  .ch-card { pointer-events: auto; position: relative; text-align: left; padding: 10px 12px 10px 36px; border-radius: 10px;
+    background: rgba(255,255,255,.045); border: 1px solid rgba(214,163,255,.22); cursor: pointer; }
+  .ch-card.you { border-color: rgba(255,207,91,.55); background: rgba(255,207,91,.07); cursor: default; }
+  .ch-card.sel { border-color: rgba(125,200,255,.85); background: rgba(125,200,255,.13); }
+  .ch-card.member { border-color: rgba(180,170,255,.28); background: rgba(150,140,220,.06); padding-left: 12px; cursor: default; }
+  .ch-check { position: absolute; left: 12px; top: 12px; width: 16px; height: 16px; cursor: pointer; accent-color: #6bb8ff; }
+  .ch-name { font-size: 15px; font-weight: 700; color: #eaf2ff; }
+  .ch-name em { font-style: normal; font-size: 10px; color: #ffcf5b; letter-spacing: 1px; }
+  .ch-order { font-style: normal; font-size: 10px; color: #8fd0ff; letter-spacing: .5px; text-transform: uppercase; border: 1px solid rgba(125,200,255,.4); border-radius: 4px; padding: 0 4px; margin-left: 4px; }
+  .ch-meta { font-size: 11.5px; opacity: .72; margin: 4px 0 8px; }
+  .ch-row { display: flex; gap: 5px; flex-wrap: wrap; }
+  .ch-row button { cursor: pointer; border: 1px solid rgba(125,200,255,.4); background: rgba(125,200,255,.12);
+    color: #dcebff; border-radius: 6px; padding: 5px 9px; font-size: 11.5px; }
+  .ch-row button:hover { background: rgba(125,200,255,.26); }
+  .ch-row button:disabled { opacity: .34; cursor: default; }
+  #ch-new { pointer-events: auto; display: flex; gap: 7px; align-items: center; flex-wrap: wrap;
+    border-top: 1px solid rgba(255,255,255,.08); padding: 11px 14px; background: rgba(0,0,0,.22); }
+  #ch-new input { background: rgba(0,0,0,.4); border: 1px solid rgba(255,207,91,.35); border-radius: 6px;
+    color: #e9eef5; padding: 6px 9px; font-size: 12.5px; outline: none; }
+  #ch-new .ch-lbl { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: #ffe2a8; opacity: .8; }
+  #ch-msg { padding: 7px 16px 0; min-height: 15px; font-size: 12px; color: #ff9a9a; }
+
+  #gameover h1 { background: linear-gradient(180deg,#ff9a9a,#ff3d3d); -webkit-background-clip: text; background-clip: text; }
+  #damage-flash { position: fixed; inset: 0; background: radial-gradient(ellipse at center, transparent 35%, rgba(190,0,0,.75)); opacity: 0; pointer-events: none; z-index: 5; will-change: opacity; }
+
+  /* ===== Charsheet: a soldier's career (press V) ===== */
+  #charsheet { z-index: 11; background: radial-gradient(ellipse at center, rgba(14,18,28,.985), rgba(5,7,11,.995)); }
+  #charsheet h1 { font-size: 38px; }
+  #cs-body { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; max-width: 980px; max-height: 62vh; overflow-y: auto; padding: 6px; }
+  .cs-card { pointer-events: auto; width: 280px; text-align: left; padding: 12px 14px; border-radius: 10px;
+    background: rgba(255,255,255,.05); border: 1px solid rgba(125,200,255,.18); }
+  .cs-card.you { border-color: rgba(255,207,91,.55); background: rgba(255,207,91,.08); }
+  .cs-name { font-size: 17px; font-weight: 700; color: #eaf2ff; margin-bottom: 3px; }
+  .cs-name em { font-style: normal; opacity: .6; font-size: 13px; }
+  .cs-rank { float: right; font-size: 12px; color: #ffcf5b; letter-spacing: 1px; }
+  .cs-meta { font-size: 12px; opacity: .7; margin-bottom: 8px; }
+  .cs-skill { display: flex; align-items: center; gap: 8px; font-size: 12px; margin: 3px 0; }
+  .cs-skill span { width: 48px; opacity: .8; }
+  .cs-skill .cs-bar { flex: 1; height: 8px; background: rgba(0,0,0,.4); border-radius: 4px; overflow: hidden; }
+  .cs-skill .cs-bar > i { display: block; height: 100%; background: linear-gradient(90deg,#4dd2ff,#5b8bff); }
+  .cs-skill b { width: 24px; text-align: right; color: #cfe6ff; }
+  .cs-stat { font-size: 12px; color: #9adcff; margin-top: 7px; opacity: .9; }
+  .cs-destiny { font-size: 12px; color: #ffcf5b; margin-top: 6px; letter-spacing: .3px; }
+  .cs-empty { opacity: .6; padding: 20px; }
+  .cs-section { width: 100%; text-align: left; font-size: 13px; letter-spacing: 1.5px; text-transform: uppercase;
+    color: #ffd34d; opacity: .85; margin: 14px 0 4px; border-bottom: 1px solid rgba(255,211,77,.25); padding-bottom: 4px; }
+  .cs-card.champ { border-color: rgba(255,211,77,.5); box-shadow: 0 0 14px -6px rgba(255,211,77,.7); }
+  .cs-leads { font-size: 12px; color: #9aff6b; margin-top: 6px; }
+
+  /* ===== While you were away (living-world digest) ===== */
+  #whileaway { z-index: 12; background: radial-gradient(ellipse at center, rgba(14,18,28,.985), rgba(5,7,11,.995)); }
+  #wa-body { max-width: 720px; max-height: 56vh; overflow-y: auto; text-align: left; font-size: 14px; line-height: 1.7; padding: 4px; }
+  .wa-ev { padding: 5px 11px; border-left: 3px solid #ffcf5b; margin: 4px 0; background: rgba(255,255,255,.04); border-radius: 0 6px 6px 0; }
+  .wa-ev.cap { border-left-color: #6bd0ff; }
+  .wa-ev.fell { border-left-color: #ff8a8a; }
+  .wa-ev.rose { border-left-color: #9aff6b; color: #d8ffce; }
+  .wa-ev.fate { border-left-color: #d6a3ff; color: #efe0ff; }
+  /* world destiny / "age" banner atop the digest */
+  .wa-age { font-size: 22px; font-weight: 700; color: #e9d8ff; text-align: center; letter-spacing: 1px; margin: 2px 0 4px; }
+  .wa-prophecy { font-size: 14px; font-style: italic; color: #cbb6e8; text-align: center; margin-bottom: 8px; }
+  .wa-fates { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-bottom: 12px; }
+  .wa-fate { font-size: 11px; color: #d6a3ff; border: 1px solid rgba(214,163,255,.35); border-radius: 12px; padding: 2px 9px; background: rgba(214,163,255,.08); }
+
+  /* ===== Town management (develop a hold you own) ===== */
+  #town { z-index: 11; background: radial-gradient(ellipse at center, rgba(14,20,16,.985), rgba(5,8,6,.995)); }
+  #town h1 { font-size: 36px; }
+  #town-body { width: 100%; max-width: 470px; max-height: 64vh; overflow-y: auto; text-align: left; padding: 4px 6px; pointer-events: auto; }
+  .town-read { display: flex; flex-wrap: wrap; gap: 8px 18px; justify-content: center; font-size: 15px; margin-bottom: 6px; }
+  .town-read b { color: #ffe089; }
+  .town-read em { font-style: normal; font-size: 12px; opacity: .6; }
+  .town-brow { display: flex; align-items: center; gap: 12px; margin: 7px 0; }
+  .town-blabel { flex: 1; font-size: 14px; line-height: 1.45; }
+  .town-blabel b { color: #ffe2a8; }
+  .town-blabel em { font-style: normal; opacity: .55; font-size: 12px; }
+  .town-blabel small { opacity: .55; font-size: 11px; }
+  .town-bcost { font-size: 13px; opacity: .9; white-space: nowrap; }
+  .town-bbtn { cursor: pointer; border: 1px solid #ffcf5b; background: rgba(255,180,80,.14); color: #ffe2a8;
+    border-radius: 6px; padding: 8px 16px; font-size: 13px; font-weight: 700; letter-spacing: 1px; white-space: nowrap; }
+  .town-bbtn:hover { background: rgba(255,180,80,.3); }
+  .town-bbtn.off { opacity: .4; cursor: default; }
+
+  /* ===== Mobile touch controls ===== */
+  #game { touch-action: none; }                       /* play area never scrolls/zooms */
+  body.touch #controls-hint { display: none; }        /* keyboard hint is noise on a phone */
+  body.touch .desktop-keys { display: none; }
+  .touch-keys { display: none; }
+  body.touch .touch-keys { display: block; }
+  #touch { position: fixed; inset: 0; z-index: 7; pointer-events: none; }
+  #touch.hidden { display: none; }
+  #touch * { touch-action: none; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+  /* floating movement stick (left thumb) — visible in both map and battle */
+  #tj { position: absolute; left: 40px; bottom: 48px; width: 132px; height: 132px; border-radius: 50%;
+    border: 2px solid rgba(255,255,255,.20); background: rgba(10,16,26,.30); pointer-events: none; opacity: .55; transition: opacity .15s; }
+  #touch.dragging #tj { opacity: .9; }
+  #tj-knob { position: absolute; left: 50%; top: 50%; width: 58px; height: 58px; margin: -29px 0 0 -29px;
+    border-radius: 50%; background: rgba(255,207,91,.45); border: 2px solid rgba(255,226,168,.85); box-shadow: 0 2px 10px rgba(0,0,0,.5); }
+  /* button clusters — only the relevant one shows per mode */
+  #tbtns, #tmap { position: absolute; inset: 0; pointer-events: none; }
+  #touch:not(.battlemode) #tbtns { display: none; }
+  #touch:not(.mapmode) #tmap { display: none; }
+  /* on-foot field roam shows the combat buttons (battlemode) but keep the View toggle to pull back out */
+  #touch.fieldmode #tmap { display: block; }
+  #touch.fieldmode #tmap > .tbtn:not(#tb-ride) { display: none; }
+  .tbtn { position: absolute; pointer-events: auto; display: flex; align-items: center; justify-content: center;
+    border-radius: 50%; border: 2px solid rgba(255,207,91,.5); background: rgba(20,14,10,.5); color: #ffe2a8;
+    font-size: 13px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; text-shadow: 0 1px 2px #000; }
+  .tbtn:active, .tbtn.on { background: rgba(255,180,80,.6); color: #1a1208; }
+  #tb-attack { width: 96px; height: 96px; right: 22px;  bottom: 40px;  font-size: 17px; }
+  #tb-heavy  { width: 66px; height: 66px; right: 112px; bottom: 178px; border-color: rgba(255,120,80,.6);  color: #ffc7a8; }
+  #tb-block  { width: 66px; height: 66px; right: 120px; bottom: 100px; border-color: rgba(125,255,154,.55); color: #c8ffd6; }
+  #tb-dodge  { width: 62px; height: 62px; right: 30px;  bottom: 154px; border-color: rgba(120,210,255,.6);  color: #cfeaff; }
+  #tb-weapon { width: 52px; height: 52px; right: 96px;  bottom: 250px; font-size: 11px; }
+  /* map-mode kingdom actions — stacked pills, right side */
+  #tmap .tbtn { border-radius: 12px; width: 116px; height: 48px; right: 22px; font-size: 12px; }
+  #tb-ride    { bottom: 290px; border-color: rgba(255,211,77,.55);  color: #ffe089; }
+  #tb-town    { bottom: 234px; border-color: rgba(125,255,154,.5);  color: #c8ffd6; }
+  #tb-rally   { bottom: 178px; }
+  #tb-beacon  { bottom: 122px; border-color: rgba(125,200,255,.55); color: #cfe0ff; }
+  #tb-warband { bottom: 66px;  border-color: rgba(214,163,255,.5);  color: #e6d3ff; }
+  #tb-chars   { bottom: 10px;  border-color: rgba(255,207,91,.5);   color: #ffe2a8; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<!-- Screen-space painted markers (war icons, pins, flags): projected from world anchors, constant size -->
+<div id="markers"></div>
+
+<!-- iOS can't be rotated by script (no orientation-lock API); coarse-pointer devices held in
+     portrait get this full-screen nudge instead. Android installed-PWA is locked by the manifest. -->
+<div id="rotate-gate" aria-hidden="true">
+  <div class="rg-phone">📱</div>
+  <div class="rg-msg">Rotate your device<br /><small>Blade Vale plays in landscape</small></div>
+</div>
+
+<div id="hud" class="hidden">
+  <div class="bar-wrap">
+    <div class="bar-label">Health</div>
+    <div class="bar"><i id="hp-fill"></i></div>
+    <div id="stam-wrap">
+      <div class="bar-label" style="font-size:11px">Stamina</div>
+      <div class="bar"><i id="stam-fill"></i></div>
+    </div>
+  </div>
+  <div id="stats">
+    <div class="big" id="score">0</div>
+    <div class="sub">Score</div>
+    <div class="sub" id="enemy-count" style="margin-top:8px">Enemies: 0</div>
+    <div class="sub" id="party-stamina" style="margin-top:4px"></div>
+  </div>
+  <div id="wave-banner"></div>
+  <div id="wave-sub"></div>
+  <div id="combo"></div>
+  <div id="cmd-toast"></div>
+  <div id="field-strike"><div class="fs-head" id="fs-text"></div><div class="fs-btns" id="fs-btns"></div></div>
+  <div id="rally-banner" style="position:fixed; top:74px; left:50%; transform:translateX(-50%); display:none; padding:8px 18px; background:rgba(20,10,30,.80); border:1px solid #ffd34d; border-radius:10px; color:#ffe089; font-weight:700; letter-spacing:.4px; text-align:center; z-index:30; box-shadow:0 4px 18px rgba(0,0,0,.5); pointer-events:none; max-width:70vw"></div>
+  <div id="controls-hint"><b>SCROLL</b> to zoom the one view. ZOOMED OUT (free cursor): CLICK a spot to march by road · WASD roam · ride/click into a band to parley/pact · into a clash to join · into a stronghold to siege · <b>G</b> call to arms / crusade · <b>U</b> your characters · <b>F</b> find parties · take every capital to win &nbsp;|&nbsp; ZOOM IN to lock the mouse & fight: MOUSE aim · CLICK attack · RIGHT-CLICK heavy · CLICK ▼ to execute · F sword/bow · SHIFT block · C crouch · SPACE dodge · V warband · <b>Esc</b> frees the cursor to march</div>
+  <!-- one-time, just-in-time onboarding hint (populated by game.js) -->
+  <div id="onboard">
+    <button class="ob-x" id="ob-x" aria-label="Dismiss">×</button>
+    <div class="ob-title" id="ob-title"></div>
+    <div class="ob-body" id="ob-body"></div>
+    <div class="ob-foot">
+      <button class="ob-got" id="ob-got">Got it</button>
+      <button class="ob-skip" id="ob-skip">Skip all hints</button>
+    </div>
+  </div>
+</div>
+
+<div id="damage-flash"></div>
+
+<!-- ===== Mobile touch controls (shown only on touch devices, per mode) ===== -->
+<div id="touch" class="hidden">
+  <div id="tj"><div id="tj-knob"></div></div>
+  <div id="tbtns">
+    <button id="tb-attack" class="tbtn">ATK</button>
+    <button id="tb-heavy"  class="tbtn">HVY</button>
+    <button id="tb-block"  class="tbtn">BLOCK</button>
+    <button id="tb-dodge"  class="tbtn">DODGE</button>
+    <button id="tb-weapon" class="tbtn">SWAP</button>
+  </div>
+  <div id="tmap">
+    <button id="tb-ride"    class="tbtn">🐎 View</button>
+    <button id="tb-town"    class="tbtn">⚒ Town</button>
+    <button id="tb-rally"   class="tbtn">⚑ Rally</button>
+    <button id="tb-beacon"  class="tbtn">Beacon</button>
+    <button id="tb-warband" class="tbtn">Warband</button>
+    <button id="tb-chars"   class="tbtn">Chars</button>
+  </div>
+</div>
+
+<div id="start" class="overlay">
+  <h1>Blade Vale</h1>
+  <p>Roam the vale with your warband. Enemy bands wander the map — pick your fights, flee the ones you can't win, and clash in pitched battles where reinforcements march in wave after wave. Win, recruit, and march on.</p>
+  <div class="keys desktop-keys">
+    <div><b>WASD</b> — Move &nbsp;&nbsp; <b>Mouse</b> — Aim &nbsp;&nbsp; <b>Left-Click</b> — Attack / shoot &nbsp;&nbsp; <b>F</b> — Swap sword ↔ bow</div>
+    <div><b>Hold Shift</b> — Block &nbsp;&nbsp; <b>Hold C</b> — Crouch (duck arrows, sneak) &nbsp;&nbsp; <b>Space</b> — Dodge-roll &nbsp;&nbsp; <b>Esc</b> — Release mouse</div>
+  </div>
+  <div class="keys touch-keys">
+    <div><b>Left thumb</b> — Move / roam &nbsp;&nbsp; <b>Drag right side</b> — Look around</div>
+    <div><b>ATK</b> attack · <b>HVY</b> heavy · hold <b>BLOCK</b> · <b>DODGE</b> roll · <b>SWAP</b> sword↔bow · <b>CMD</b> command squads</div>
+    <div style="opacity:.8">Map: roam into a band to parley, a clash to join, a stronghold to siege · <b>Rally</b> = call to arms</div>
+  </div>
+  <div id="auth-box">
+    <div id="auth-form">
+      <input id="auth-user" placeholder="username" maxlength="24" autocomplete="username">
+      <input id="auth-pass" type="password" placeholder="password" maxlength="64" autocomplete="current-password">
+      <div class="auth-btns">
+        <button id="auth-login" class="auth-btn">Sign In</button>
+        <button id="auth-register" class="auth-btn">Create Account</button>
+      </div>
+    </div>
+    <div id="auth-who" class="hidden">Signed in as <b id="auth-name"></b> · <button id="auth-logout">sign out</button></div>
+    <div id="auth-msg"></div>
+    <div id="auth-note">Sign in (or create an account) to enter. Your characters live on the map — switch between them with <b>U</b> in game.</div>
+  </div>
+  <button class="btn hidden" id="start-btn">Enter the Vale</button>
+</div>
+
+<!-- reinforce-between-waves picker: lives here hidden, muster pulls it in when a wave clears -->
+<div id="warband-picker" class="hidden">
+  <div class="wp-title">Your warband <span id="wp-total">4</span> <span style="opacity:.7">·</span> <span id="wp-xp" style="color:#9adcff">XP 10</span></div>
+  <div class="wp-row"><span>Swordsmen <em style="opacity:.55;font-style:normal">8xp</em></span><button data-t="sword" data-d="-10">«</button><button data-t="sword" data-d="-1">−</button><b id="wp-sword">2</b><button data-t="sword" data-d="1">+</button><button data-t="sword" data-d="10">»</button></div>
+  <div class="wp-row"><span>Longswords <em style="opacity:.55;font-style:normal">14xp</em></span><button data-t="long" data-d="-10">«</button><button data-t="long" data-d="-1">−</button><b id="wp-long">0</b><button data-t="long" data-d="1">+</button><button data-t="long" data-d="10">»</button></div>
+  <div class="wp-row"><span>Archers <em style="opacity:.55;font-style:normal">11xp</em></span><button data-t="archer" data-d="-10">«</button><button data-t="archer" data-d="-1">−</button><b id="wp-archer">1</b><button data-t="archer" data-d="1">+</button><button data-t="archer" data-d="10">»</button></div>
+  <div class="wp-row"><span>Rock-throwers <em style="opacity:.55;font-style:normal">12xp</em></span><button data-t="thrower" data-d="-10">«</button><button data-t="thrower" data-d="-1">−</button><b id="wp-thrower">1</b><button data-t="thrower" data-d="1">+</button><button data-t="thrower" data-d="10">»</button></div>
+  <div class="wp-row"><span>Horsemen <em style="opacity:.55;font-style:normal">18xp</em></span><button data-t="horse" data-d="-10">«</button><button data-t="horse" data-d="-1">−</button><b id="wp-horse">0</b><button data-t="horse" data-d="1">+</button><button data-t="horse" data-d="10">»</button></div>
+</div>
+
+<div id="muster" class="overlay hidden">
+  <h1 style="font-size:44px">Wave Cleared</h1>
+  <p id="muster-info">A new fighter rallies to your banner.</p>
+  <!-- #warband-picker is moved here between waves -->
+  <button class="btn" id="next-wave-btn">Next Wave</button>
+</div>
+
+<div id="encounter" class="overlay hidden">
+  <h1 style="font-size:38px">Banners Meet</h1>
+  <p id="enc-info">A band bars your path.</p>
+  <div style="display:flex; gap:18px; flex-wrap:wrap; justify-content:center;">
+    <button class="btn" id="enc-attack">Attack</button>
+    <button class="btn" id="enc-ally" style="display:none">Propose Pact</button>
+    <button class="btn" id="enc-hail">Say Hi</button>
+  </div>
+</div>
+
+<div id="gameover" class="overlay hidden">
+  <h1>You Fell</h1>
+  <p id="go-summary">The vale claims another.</p>
+  <button class="btn" id="restart-btn">Fight Again</button>
+</div>
+
+<div id="whileaway" class="overlay hidden">
+  <h1>While You Were Away</h1>
+  <p id="wa-sub" style="opacity:.75;font-size:14px">The wars did not wait for you.</p>
+  <div id="wa-body"></div>
+  <button class="btn" id="wa-close">Ride On</button>
+</div>
+
+<div id="charsheet" class="overlay hidden">
+  <h1>Your Warband</h1>
+  <p style="opacity:.7;font-size:14px">Every soldier earns their name in battle — skill from real fighting, renown from kills and victories.</p>
+  <div id="cs-body"></div>
+  <button class="btn" id="cs-close">Close</button>
+</div>
+
+<div id="chars" class="hidden">
+  <div class="ch-head">
+    <h1>Your Characters</h1>
+    <button class="ch-x" id="ch-close" title="Close (U)">✕</button>
+  </div>
+  <div class="ch-tools">
+    <label><input type="checkbox" id="ch-all"> Select all</label>
+    <span id="ch-selcount" style="opacity:.6"></span>
+  </div>
+  <div id="ch-bulk">
+    <span class="ch-bulk-n" id="ch-bulk-n">0 selected</span>
+    <button data-bulk="rally" title="Ride inside your party as members — keeps their career, re-split later">Join my party</button>
+    <button data-bulk="follow" title="March with your banner">Follow me</button>
+    <button data-bulk="patrol" title="Circle their post">Patrol</button>
+    <button data-bulk="halt" title="Stand where they are">Halt</button>
+  </div>
+  <div id="ch-msg"></div>
+  <div id="ch-body"></div>
+  <div id="ch-new">
+    <button id="ch-random" class="auth-btn">✦ New</button>
+    <span class="ch-lbl">or split</span>
+    <input id="ch-new-name" placeholder="name" maxlength="24" style="width:104px">
+    <input id="ch-new-men" type="number" min="1" value="5" style="width:52px">
+    <button id="ch-split" class="auth-btn">Split off</button>
+  </div>
+</div>
+
+<div id="realm" class="hidden">
+  <div class="rm-head"><span id="rm-flag"></span><h1 id="rm-title">—</h1><button class="rm-x" id="rm-close" title="Close">✕</button></div>
+  <div id="rm-body"></div>
+</div>
+<div id="terrtip" class="hidden"></div>
+
+<div id="town" class="overlay hidden">
+  <h1>Manage Holding</h1>
+  <p id="town-sub" style="opacity:.75;font-size:14px">Develop your town to strengthen your realm.</p>
+  <div id="town-body"></div>
+  <button class="btn" id="town-close">Leave</button>
+</div>
+
+<script src="vendor/three.min.js?v=r128"></script>
+<script src="sim/world-sim.js?v=7"></script>
+<script src="sim/terra.js?v=2"></script>
+<script src="sim/settle.js?v=1"></script>
+<script src="sim/battle.js?v=1"></script>
+<script src="client-net.js?v=7"></script>
+<script src="net-battle.js?v=1"></script>
+<script src="game.js?v=88"></script>
+</body>
+</html>

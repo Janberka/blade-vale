@@ -1,0 +1,9 @@
+{
+  "name": "blade-vale-mocap",
+  "private": true,
+  "type": "module",
+  "description": "Sub-project: webcam pose tracking driving the Blade Vale soldier rig. No dependencies — MediaPipe + three.js are vendored, the solver is plain JS.",
+  "scripts": {
+    "test": "node --test test/"
+  }
+}

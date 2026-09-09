@@ -1,0 +1,30 @@
+# macOS
+.DS_Store
+
+node_modules/
+
+# runtime world state — the living world's SQLite DB (large, machine-local)
+world.db
+server/world.db
+server/world.db-shm
+server/world.db-wal
+server/world.db.bak-*
+server/db.sqlite3
+*.sqlite3
+
+# battle-AI training DB (separate subsystem, machine-local)
+train/ai.db
+train/ai.db-shm
+train/ai.db-wal
+
+# logs
+server/launchd.log
+server/run.log
+*.log
+
+.backup/
+
+# Claude Code local scratch / machine-local settings
+.claude/*.txt
+.claude/marker-test
+.claude/settings.local.json

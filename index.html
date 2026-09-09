@@ -411,6 +411,41 @@
   #tb-beacon  { bottom: 122px; border-color: rgba(125,200,255,.55); color: #cfe0ff; }
   #tb-warband { bottom: 66px;  border-color: rgba(214,163,255,.5);  color: #e6d3ff; }
   #tb-chars   { bottom: 10px;  border-color: rgba(255,207,91,.5);   color: #ffe2a8; }
+
+  /* Phone HUD. The six map pills stack 338px up the right edge — taller than a landscape phone —
+     so the score/army readout hides behind them and the top pill runs off the screen. The Command
+     button has the same problem against the thumb stick: left:24/bottom:54 lands inside the
+     stick's left:40/bottom:48 circle. Sideways-phone heights get the pills in two columns (width
+     is what a landscape phone has to spare, height is what it doesn't), a compact readout, and
+     the Command button moved clear of the stick. */
+  @media (max-height: 560px) {
+    body.touch #tmap .tbtn { width: 100px; height: 44px; font-size: 11px; }
+    body.touch #touch.mapmode #tb-ride    { right: 130px; bottom: 114px; }
+    body.touch #touch.mapmode #tb-town    { right: 22px;  bottom: 114px; }
+    body.touch #touch.mapmode #tb-rally   { right: 130px; bottom: 62px; }
+    body.touch #touch.mapmode #tb-beacon  { right: 22px;  bottom: 62px; }
+    body.touch #touch.mapmode #tb-warband { right: 130px; bottom: 10px; }
+    body.touch #touch.mapmode #tb-chars   { right: 22px;  bottom: 10px; }
+    /* On foot the pills are hidden but the view toggle stays, and its 290px perch is off-screen.
+       The whole right side is combat buttons and the top-right is the readout, so it goes to the
+       left band: below the bars, above where the thumb stick rests. */
+    body.touch #touch.fieldmode #tb-ride { right: auto; left: 14px; bottom: auto; top: 76px; }
+    /* the readout goes to a single line along the top edge: stacked, it reaches ~90px down and
+       the on-foot SWAP button starts at 38px */
+    body.touch #stats { right: 14px; top: 8px; display: flex; align-items: baseline; gap: 8px; }
+    body.touch #stats .big { font-size: 16px; }
+    body.touch #stats .sub { font-size: 11px; letter-spacing: .5px; margin-top: 0 !important; }
+    body.touch .bar-wrap { left: 14px; top: 12px; width: 190px; }
+    body.touch .bar { height: 14px; }
+    body.touch .bar-label { font-size: 10px; letter-spacing: 1px; margin-bottom: 2px; }
+    body.touch #stam-wrap .bar-label { font-size: 9px; }
+    body.touch #det-cmd-btn { left: 186px; bottom: 12px; }
+    /* the toast is nowrap and centred, so a long hint runs straight under the pill block */
+    body.touch #cmd-toast { bottom: 172px; font-size: 13px; white-space: normal; text-align: center;
+      max-width: min(72vw, 520px); border-radius: 14px; }
+    /* the forge launcher is inline-styled at right:12/bottom:12 — exactly where CHARS now sits */
+    body.touch #forge-btn { left: 12px !important; right: auto !important; }
+  }
 </style>
 </head>
 <body>

@@ -1825,6 +1825,9 @@ let pointerLocked = false;
 // touch-driven analog movement (mobile); feeds inputDir() alongside WASD
 const TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0 || /[?&]touch=1/.test(location.search);
 let touchMove = { f: 0, s: 0, active: false };
+// One place to say a control two ways. A phone has no scroll wheel, no WASD and no K key, so any
+// string that names one has to name the touch control instead — see ONBOARD.k, which delegates here.
+const kTouch = (key, touch) => (TOUCH ? touch : key);
 
 // third-person mouse look: pointer lock on the canvas, mouse steers the camera.
 // requestPointerLock returns a promise in modern browsers and REJECTS (async, so a
@@ -3560,7 +3563,8 @@ function setFieldMode(on, opts) {
     rebindGroupsToPool();
     renderDeck();
     reconcilePointerLock(false);                      // lock only if we're already in the aim zone (default zoom is free)
-    showCmdToast('Scroll to zoom — in to aim & fight, out to click-march · WASD move · K command');
+    showCmdToast(kTouch('Scroll to zoom — in to aim & fight, out to click-march · WASD move · K command',
+                        'Tap View to pull back · left thumb moves · drag the right side to look · Command for orders'));
     if (playerClash) dropIntoClash(); // your clash was simulating — settle it in person instead
   } else {
     abortFieldBattle();                              // pulling out mid-fight is a retreat — survivors re-form
@@ -3578,7 +3582,8 @@ function setFieldMode(on, opts) {
     gameRunning = false;
     cameraAngle = 0;                                  // stay north-up (it already is; keep it explicit)
     if (document.exitPointerLock) document.exitPointerLock();
-    if (!(opts && opts.silent)) showCmdToast('Strategic view — click to march your army · zoom in to lead on foot');
+    if (!(opts && opts.silent)) showCmdToast(kTouch('Strategic view — click to march your army · zoom in to lead on foot',
+                                                    'Strategic view — left thumb marches your army · tap View to lead on foot'));
   }
   applyDetailTier();                                 // action rung = street level; strategic = the miniature
   if (TOUCH && window.updateTouchHud) window.updateTouchHud();
@@ -4754,7 +4759,8 @@ function startFieldBattle(band) {
   renderDeck();
   showWaveBanner('⚔ Steel Rings Out', (band.faction ? band.faction.name : 'The enemy') + ' — ' +
     band.size + ' strong — turns on you right here. No quarter!');
-  showCmdToast('Orders — G whole army · 1–9 squads (shift = several) · T charge · Y follow · H hold · R regroup · B at-will · Z/X pace · O column/line · K command');
+  showCmdToast(kTouch('Orders — G whole army · 1–9 squads (shift = several) · T charge · Y follow · H hold · R regroup · B at-will · Z/X pace · O column/line · K command',
+                      'Orders — tap Command, pick a squad, then choose charge / follow / hold / regroup'));
 }
 // leaving the ground view entirely: the command layer folds away with it
 function closeFieldDeck() {
@@ -9381,7 +9387,8 @@ function toggleCmdMode(on) {
   else { cancelPatrolDraft(); cmdSelDet = null; _targetPick = null; cmdSubject = null; _pendingMapOrder = null; }
   const panel = document.getElementById('det-panel'); if (panel) panel.classList.toggle('hidden', !mapCmdMode);
   const btn = document.getElementById('det-cmd-btn'); if (btn) btn.classList.toggle('on', mapCmdMode);
-  if (mapCmdMode) { _targetPick = null; renderDetPanel(); showCmdToast('Command — give orders, form detachments, or pick a target. Esc to exit.'); }
+  if (mapCmdMode) { _targetPick = null; renderDetPanel(); showCmdToast(kTouch('Command — give orders, form detachments, or pick a target. Esc to exit.',
+                                                   'Command — give orders, form detachments, or pick a target. Tap Command again to exit.')); }
   else showCmdToast('Command menu closed');
 }
 
@@ -9389,7 +9396,8 @@ function cancelPatrolDraft() { patrolDraft = null; _disposeOverlayGroup(_draftMe
 function beginPatrolDraft() {
   if (!cmdSelDet) { showCmdToast('Pick a detachment first'); return; }
   patrolDraft = [];
-  showCmdToast('Patrol: click the map to drop waypoints, then Enter / right-click to set (Esc cancels)');
+  showCmdToast(kTouch('Patrol: click the map to drop waypoints, then Enter / right-click to set (Esc cancels)',
+                      'Patrol: tap the map to drop waypoints, then tap Command to set'));
 }
 function drawPatrolDraft() {
   _disposeOverlayGroup(_draftMesh); _draftMesh = null;
@@ -9544,7 +9552,7 @@ function renderDetPanel() {
     const k = el.dataset.do, d = cmdSubject;
     _targetPick = null; _pendingMapOrder = null; cancelPatrolDraft(); // one pending action at a time
     if (k === 'attack' || k === 'follow') { _pickSubject = d; _targetPick = k; }
-    else if (k === 'march' || k === 'hold') { _pendingMapOrder = k; showCmdToast('Click the map to set the ' + k + ' point (Esc cancels)'); }
+    else if (k === 'march' || k === 'hold') { _pendingMapOrder = k; showCmdToast(kTouch('Click the map to set the ' + k + ' point (Esc cancels)', 'Tap the map to set the ' + k + ' point')); }
     else if (k === 'patrol') { if (d) beginPatrolDraft(); }
     else if (k === 'garrison') { if (d) { const h = holdNear(d.pos.x, d.pos.z, 1e6); if (h) { garrisonDet(d, h); showCmdToast(d.name + ' → garrison nearest hold'); } else showCmdToast('No hold in range'); } }
     else if (k === 'followme') { if (d) { orderDet(d, 'follow'); showCmdToast(d.name + ' → follow you'); } }
@@ -9628,7 +9636,7 @@ function initDetCmdUI() {
     #det-panel .tgt-empty { padding: 10px 2px; color: #9aa6bb; font-size: 12px; }
   `;
   document.head.appendChild(style);
-  const btn = document.createElement('button'); btn.id = 'det-cmd-btn'; btn.textContent = '⚑ Command (K)';
+  const btn = document.createElement('button'); btn.id = 'det-cmd-btn'; btn.textContent = kTouch('⚑ Command (K)', '⚑ Command');
   btn.addEventListener('click', () => toggleCmdMode());
   document.body.appendChild(btn);
   const panel = document.createElement('div'); panel.id = 'det-panel'; panel.className = 'hidden';
@@ -10596,7 +10604,7 @@ const ONBOARD = (() => {
     if (skip) skip.addEventListener('click', skipAll);
   }
   // touch-aware key phrasing: tap-buttons on a phone, keys on desktop
-  const k = (key, touch) => (typeof TOUCH !== 'undefined' && TOUCH) ? touch : key;
+  const k = (key, touch) => kTouch(key, touch);   // one definition, in the touch block
   return { show, hide, tick, skipAll, reset, seen, skipped, k };
 })();
 // the four core-path hints, keyed by game state. Each fires once.

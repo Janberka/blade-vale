@@ -18,6 +18,7 @@ const { db } = require('./db');
 const WorldSim = require('../sim/world-sim.js');
 const D = require('./diplomacy');
 const Chunks = require('./chunks');
+const Terra = require('../sim/terra.js');
 
 const NATIONS = ['Aurelia', 'Khorvane', 'Sahir', 'Wendmark', 'Maridor']; // keep in sync with tick.js
 const PLAYER = 'Your Banner';
@@ -122,6 +123,15 @@ function defendingHome(relMap, p, o) {
     Math.hypot(o.x - p.home_x, o.z - p.home_z) < HOME_SANCTUM;
 }
 function tseedOf(worldId) { const tp = Chunks.tseedParams(worldId); return tp ? tp.tseed : null; }
+// the terrain kernel for a world (cached by tseed) so movers can ask "is this point a lake?" — the SAME
+// deterministic isWater the client draws with, so an army never marches over water a player can see.
+let _twCache = { tseed: null, T: null };
+function terraForWorld(worldId) {
+  const ts = tseedOf(worldId);
+  if (ts == null) return null;
+  if (_twCache.tseed !== ts) _twCache = { tseed: ts, T: Terra.make(ts) };
+  return _twCache.T;
+}
 
 // every settlement the war can touch: generated holds (current terrain) + the five capitals
 function settlements(worldId) {
@@ -278,6 +288,7 @@ function askToLeave(worldId, tick, patrol, host, ownByFaction, nudged, upd) {
 // an enemy on our soil is chased down, a neutral column is turned back, a friend is let pass.
 function tickPatrols(worldId, tick, armies, relMap, busy, steered, grid, ownByFaction, nudged, visitorCount, settTier, battles, settGrid) {
   const upd = db.prepare('UPDATE warlords SET x=?, z=?, tx=?, tz=?, focus_x=?, focus_z=?, focus_key=?, focus_until=? WHERE id=?');
+  const T = terraForWorld(worldId);                                       // the watch skirts lakes just like walls
   for (const p of armies) {
     if (p.role !== 'patrol' || busy.has(p.id) || steered.has(p.id)) continue;
     if (p.home_x == null) continue;
@@ -325,15 +336,21 @@ function tickPatrols(worldId, tick, armies, relMap, busy, steered, grid, ownByFa
       p.tz = clamp(fz + Math.sin(a) * leash, -MAP_HALF, MAP_HALF);
     }
     const dx = p.tx - p.x, dz = p.tz - p.z, d = Math.hypot(dx, dz) || 1, step = Math.min(PATROL_SPEED, d);
-    p.x = clamp(p.x + dx / d * step + rand(-0.4, 0.4), -MAP_HALF, MAP_HALF);
-    p.z = clamp(p.z + dz / d * step + rand(-0.4, 0.4), -MAP_HALF, MAP_HALF);
+    let nx = clamp(p.x + dx / d * step + rand(-0.4, 0.4), -MAP_HALF, MAP_HALF);
+    let nz = clamp(p.z + dz / d * step + rand(-0.4, 0.4), -MAP_HALF, MAP_HALF);
+    if (T && T.isWater(nx, nz)) {                    // ride the shore, not the water
+      if (!T.isWater(nx, p.z)) nz = p.z;
+      else if (!T.isWater(p.x, nz)) nx = p.x;
+      else { nx = p.x; nz = p.z; }
+    }
+    p.x = nx; p.z = nz;
     // the watch skirts other armies' battles and never rides THROUGH foreign walls — its own post
     // (home + current focus) is its business, everything else it goes around
     if (battles || settGrid) {
       _kcExempt.clear();
       if (p.home_key) _kcExempt.add(p.home_key);
       if (p.focus_key) _kcExempt.add(p.focus_key);
-      keepClear(p, battles || [], settGrid, _kcExempt);
+      keepClear(p, battles || [], settGrid, _kcExempt, T);
     }
     upd.run(p.x, p.z, p.tx, p.tz, p.focus_x, p.focus_z, p.focus_key, p.focus_until, p.id);
   }
@@ -530,10 +547,16 @@ function campaignSteered(worldId) {
   }
   return s;
 }
-function stepToward(upd, r, tx, tz, speed) {
+function stepToward(upd, r, tx, tz, speed, T) {
   const dx = tx - r.x, dz = tz - r.z, d = Math.hypot(dx, dz) || 1, step = Math.min(speed, d);
-  r.x = clamp(r.x + dx / d * step + rand(-0.5, 0.5), -MAP_HALF, MAP_HALF);
-  r.z = clamp(r.z + dz / d * step + rand(-0.5, 0.5), -MAP_HALF, MAP_HALF);
+  let nx = clamp(r.x + dx / d * step + rand(-0.5, 0.5), -MAP_HALF, MAP_HALF);
+  let nz = clamp(r.z + dz / d * step + rand(-0.5, 0.5), -MAP_HALF, MAP_HALF);
+  if (T && T.isWater(nx, nz)) {                    // never ford open water — skirt the shore on whichever axis stays dry
+    if (!T.isWater(nx, r.z)) nz = r.z;
+    else if (!T.isWater(r.x, nz)) nx = r.x;
+    else { nx = r.x; nz = r.z; }
+  }
+  r.x = nx; r.z = nz;
   upd.run(r.x, r.z, tx, tz, r.id);
 }
 function targetOwner(worldId, c) {
@@ -573,7 +596,13 @@ function decideDefense(worldId, tick, c, armies, busy) {
 function tickCampaigns(worldId, tick, armies, relMap, busy) {
   const byId = new Map(armies.map(a => [a.id, a]));
   const upd = db.prepare('UPDATE warlords SET x=?, z=?, tx=?, tz=? WHERE id=?');
+  const updPos = db.prepare('UPDATE warlords SET x=?, z=? WHERE id=?');   // keep-clear slide after a march step
   const save = db.prepare('UPDATE campaigns SET stage=?, members_json=?, relief_json=?, defense=?, stage_tick=?, done=? WHERE id=?');
+  const T = terraForWorld(worldId);                                       // marching hosts skirt lakes...
+  const settGrid = buildSettGrid(settlements(worldId));                   // ...and go around foreign walls they aren't besieging
+  const battles = activeBattles(worldId);
+  // one march step + the post-step keep-out (lakes, others' battles, walls that aren't the target)
+  const march = (r, tx, tz, exempt) => { stepToward(upd, r, tx, tz, CAMP.MARCH_SPEED, T); if (keepClear(r, battles, settGrid, exempt, T)) updPos.run(r.x, r.z, r.id); };
   for (const c of activeCampaigns(worldId)) {
     let members = JSON.parse(c.members_json).filter(id => byId.has(id));
     let relief = JSON.parse(c.relief_json).filter(id => byId.has(id));
@@ -584,13 +613,14 @@ function tickCampaigns(worldId, tick, armies, relMap, busy) {
       save.run('done', JSON.stringify(members), JSON.stringify(relief), defense, tick, 1, c.id);
       continue;
     }
+    const exempt = new Set(c.target_key ? [c.target_key] : []); // the host may close on the walls it came to storm
     if (stage === 'muster') {
       let gathered = true;
       for (const id of members) {
         const r = byId.get(id);
         if (busy.has(id)) continue;
         const d = Math.hypot(r.x - c.muster_x, r.z - c.muster_z);
-        if (d > CAMP.MUSTER_R) { gathered = false; stepToward(upd, r, c.muster_x, c.muster_z, CAMP.MARCH_SPEED); }
+        if (d > CAMP.MUSTER_R) { gathered = false; march(r, c.muster_x, c.muster_z, exempt); }
       }
       if (gathered || tick - stageTick > CAMP.MUSTER_TIMEOUT) {
         stage = 'march'; stageTick = tick;
@@ -605,9 +635,9 @@ function tickCampaigns(worldId, tick, armies, relMap, busy) {
       for (const id of members) {
         const r = byId.get(id);
         if (busy.has(id)) continue;
-        stepToward(upd, r, id === leader.id ? c.target_x : leader.x, id === leader.id ? c.target_z : leader.z, CAMP.MARCH_SPEED);
+        march(r, id === leader.id ? c.target_x : leader.x, id === leader.id ? c.target_z : leader.z, exempt);
       }
-      for (const id of relief) { const r = byId.get(id); if (!busy.has(id)) stepToward(upd, r, c.target_x, c.target_z, CAMP.MARCH_SPEED); }
+      for (const id of relief) { const r = byId.get(id); if (!busy.has(id)) march(r, c.target_x, c.target_z, exempt); }
       if (Math.hypot(leader.x - c.target_x, leader.z - c.target_z) <= CAMP.ARRIVE_R) {
         stage = 'siege'; stageTick = tick;
         const t = targetOwner(worldId, c) || { owner: 'Garrison', garrison: 4 };
@@ -763,11 +793,11 @@ function pickStrategy(a, ctx) {
   return { kind: 'roam', label: '', x: a.x + rand(-25, 25), z: a.z + rand(-25, 25), dwell: [2, 4] };
 }
 // walk a standoff arc around an anchor: close to the ring, then pace along it (border patrol look)
-function stepRing(upd, a, ax, az, stand) {
+function stepRing(upd, a, ax, az, stand, T) {
   const dx = a.x - ax, dz = a.z - az, d = Math.hypot(dx, dz) || 1;
   let ang = Math.atan2(dz, dx);
   if (Math.abs(d - stand) < 4) ang += (a.id % 2 ? STRAT.PACE : -STRAT.PACE);   // on station — walk the line
-  stepToward(upd, a, ax + Math.cos(ang) * stand, az + Math.sin(ang) * stand, STRAT.HOST_SPEED);
+  stepToward(upd, a, ax + Math.cos(ang) * stand, az + Math.sin(ang) * stand, STRAT.HOST_SPEED, T);
 }
 // the per-tick strategic pass for every free host (called from tick.js in place of the old
 // march-at-the-nearest-rival drift; busy = mid-battle, steered = marching under campaign banners)
@@ -781,6 +811,7 @@ function strategizeHosts(worldId, tick, armies, relMap, busy, steered) {
   const grid = buildGrid(armies);
   const battles = activeBattles(worldId);                                 // bystanders give these a wide berth
   const settGrid = buildSettGrid(setts);
+  const T = terraForWorld(worldId);                                       // lake test — hosts skirt water, never cross it
   for (const a of armies) {
     if (a.role !== 'host' || a.faction === PLAYER || busy.has(a.id) || steered.has(a.id)) continue;
     // temperament: the champion genome's distribution, individualized by this warlord's own nature
@@ -837,15 +868,15 @@ function strategizeHosts(worldId, tick, armies, relMap, busy, steered) {
       let fd2 = 36;
       for (const s of setts) { const d2 = (s.x - a.focus_x) * (s.x - a.focus_x) + (s.z - a.focus_z) * (s.z - a.focus_z); if (d2 < fd2) { fd2 = d2; foot = FOOT_R[s.tier] != null ? FOOT_R[s.tier] : FOOT_R.village; anchorKey = s.key; } }
     }
-    if (cur.kind === 'hunt' && foeHost) stepToward(upd, a, foeHost.x, foeHost.z, STRAT.HOST_SPEED);
-    else if (cur.kind === 'mass' && ally) stepToward(upd, a, ally.x, ally.z, STRAT.HOST_SPEED);   // live-follow the rallying stack
-    else if (cur.kind === 'probe') stepRing(upd, a, a.focus_x, a.focus_z, foot + STRAT.STAND_BASE + caut * STRAT.STAND_CAUT);
-    else if (cur.kind === 'guard') stepRing(upd, a, a.focus_x, a.focus_z, foot + 10);
-    else stepToward(upd, a, a.focus_x, a.focus_z, STRAT.HOST_SPEED);       // storm / withdraw / mass-anchor / roam
+    if (cur.kind === 'hunt' && foeHost) stepToward(upd, a, foeHost.x, foeHost.z, STRAT.HOST_SPEED, T);
+    else if (cur.kind === 'mass' && ally) stepToward(upd, a, ally.x, ally.z, STRAT.HOST_SPEED, T);   // live-follow the rallying stack
+    else if (cur.kind === 'probe') stepRing(upd, a, a.focus_x, a.focus_z, foot + STRAT.STAND_BASE + caut * STRAT.STAND_CAUT, T);
+    else if (cur.kind === 'guard') stepRing(upd, a, a.focus_x, a.focus_z, foot + 10, T);
+    else stepToward(upd, a, a.focus_x, a.focus_z, STRAT.HOST_SPEED, T);       // storm / withdraw / mass-anchor / roam
     // a bystander skirts other armies' battles and walled towns — a STORM order may enter its target
     _kcExempt.clear();
     if ((cur.kind === 'storm' || cur.kind === 'withdraw') && anchorKey) _kcExempt.add(anchorKey);
-    if (keepClear(a, battles, settGrid, _kcExempt)) updPos.run(a.x, a.z, a.id);
+    if (keepClear(a, battles, settGrid, _kcExempt, T)) updPos.run(a.x, a.z, a.id);
   }
 }
 
@@ -866,13 +897,15 @@ function buildSettGrid(setts) {
   for (const s of setts) { const k = ((s.x / SETT_CELL) | 0) + ':' + ((s.z / SETT_CELL) | 0); let a = g.get(k); if (!a) g.set(k, a = []); a.push(s); }
   return g;
 }
-function keepClear(a, battles, settGrid, exempt) {
+function keepClear(a, battles, settGrid, exempt, T) {
   let moved = false;
   for (const b of battles) {
     const dx = a.x - b.x, dz = a.z - b.z, d = Math.hypot(dx, dz);
     if (d >= BATTLE_STANDOFF) continue;
     const k = BATTLE_STANDOFF / (d || 1);
-    a.x = clamp(b.x + dx * k, -MAP_HALF, MAP_HALF); a.z = clamp(b.z + dz * k, -MAP_HALF, MAP_HALF); moved = true;
+    const px = clamp(b.x + dx * k, -MAP_HALF, MAP_HALF), pz = clamp(b.z + dz * k, -MAP_HALF, MAP_HALF);
+    if (T && T.isWater(px, pz)) continue;                  // don't shove a column into a lake to clear a fight
+    a.x = px; a.z = pz; moved = true;
   }
   if (settGrid) {
     const cx = (a.x / SETT_CELL) | 0, cz = (a.z / SETT_CELL) | 0;
@@ -885,7 +918,9 @@ function keepClear(a, battles, settGrid, exempt) {
         const dx = a.x - s.x, dz = a.z - s.z, d = Math.hypot(dx, dz);
         if (d >= R) continue;
         const k = R / (d || 1);
-        a.x = clamp(s.x + dx * k, -MAP_HALF, MAP_HALF); a.z = clamp(s.z + dz * k, -MAP_HALF, MAP_HALF); moved = true;
+        const px = clamp(s.x + dx * k, -MAP_HALF, MAP_HALF), pz = clamp(s.z + dz * k, -MAP_HALF, MAP_HALF);
+        if (T && T.isWater(px, pz)) continue;              // ...nor into a lake to clear a wall
+        a.x = px; a.z = pz; moved = true;
       }
     }
   }

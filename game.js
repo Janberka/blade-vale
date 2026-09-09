@@ -679,6 +679,181 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
 }
 const SWORD_BASE_X = 1.4;
 
+// ---------- Cavalry builder ----------
+// A horseman = the REAL humanoid rig (so every pose/swing works unchanged) seated astride a
+// low-poly horse. parts keeps all the rider channels the animator expects, plus:
+//   parts.mount      — the horse Object3D (setTint traverses it, so hit-flash tints the horse too)
+//   parts.mount.userData.rig — the horse's animation pivots (legs/knees/neck/tail/body)
+//   parts.mount.userData.speed01 — 0 walk … 1 full gallop, stamped per-frame by mountSteer
+// Movement identity: FAST in a straight line, POOR manoeuvre — mountSteer caps yaw by speed and
+// drags momentum onto the facing (hooves grip, no strafing), so a galloping horse carves wide arcs.
+const MOUNT = {
+  phaseMul: 0.42,   // horse stride clock vs the humanoid walkPhase (longer, slower strides)
+  turnStand: 3.0,   // rad/s yaw at a stand — can wheel on the spot
+  turnFull: 0.85,   // rad/s yaw at full gallop — a wide carved arc (radius ≈ v/ω ≈ 17u)
+  grip: 6,          // 1/s — how fast momentum is dragged onto the facing (kills sideways slip)
+  chargeDmg: 0.5,   // bonus damage fraction at full tilt — the lance-shock of a real charge
+};
+// horse coats: picked per-build for herd variety; the caparison/saddle cloth carries the faction color
+const HORSE_COATS = [0x5a4632, 0x6e5138, 0x3e3630, 0x7a6a55];
+function buildCavalry(palette, scale = 1, weapon = 'longsword') {
+  const g = new THREE.Group();
+  const horse = new THREE.Group();
+  g.add(horse);
+  const coat = mat(HORSE_COATS[(Math.random() * HORSE_COATS.length) | 0], { shared: false });
+  const darkM = mat(0x2a221c, { shared: false });   // mane, tail, hooves, muzzle
+  const clothM = mat(palette.cloth, { shared: false }); // faction-colored saddle blanket
+
+  // Proportions from a riding horse (~1.5m withers vs a 1.8m man → man 3.4u tall):
+  // withers ~2.55u, barrel top ~2.45u, barrel bottom ~1.35u, nose-to-tail ~3.4u.
+  // --- barrel: one capsule along Z, chest + rump spheres fill the ends ---
+  const body = new THREE.Group(); body.position.y = 1.92; horse.add(body);
+  const barrel = softCapsule(0.55, 1.3, coat, 8);
+  barrel.rotation.x = Math.PI / 2; barrel.scale.set(0.94, 1, 0.92); // scale.z squashes along world-Y after the tip
+  body.add(barrel);
+  const chest = sphereMesh(0.5, coat, 8, 6); chest.position.set(0, 0.04, 0.92); chest.scale.set(0.82, 0.96, 0.85); body.add(chest);
+  const rump = sphereMesh(0.52, coat, 8, 6); rump.position.set(0, 0.05, -0.92); rump.scale.set(0.86, 0.98, 0.9); body.add(rump);
+
+  // --- neck + head: pivot at the barrel's front-top so the whole neck drives with the stride ---
+  const neck = new THREE.Group(); neck.position.set(0, 2.28, 0.98); horse.add(neck);
+  const neckBase = 0.78;                           // +x tips a +Y limb FORWARD — the neck rises ahead of the withers
+  neck.rotation.x = neckBase;
+  const neckMesh = softCapsule(0.2, 0.52, coat, 7);
+  neckMesh.position.y = 0.32; neckMesh.scale.set(0.82, 1, 1.15); neck.add(neckMesh);
+  // mane: a thin dark crest along the neck's back edge
+  const mane = boxMesh(0.07, 0.62, 0.17, darkM); mane.position.set(0, 0.34, -0.2); mane.rotation.x = 0.1; neck.add(mane);
+  const headG = new THREE.Group(); headG.position.set(0, 0.72, 0.06); headG.rotation.x = -0.38; neck.add(headG); // muzzle settles ~25° below level
+  const skull = sphereMesh(0.185, coat, 8, 6); skull.scale.set(0.85, 0.95, 1.5); headG.add(skull);
+  const muzzle = sphereMesh(0.12, darkM, 7, 5); muzzle.position.set(0, -0.03, 0.32); muzzle.scale.set(0.8, 0.8, 1.15); headG.add(muzzle);
+  for (const side of [-1, 1]) { // ears
+    const ear = new THREE.Mesh(cachedGeo('horseEar', () => new THREE.ConeGeometry(0.05, 0.16, 4)), coat);
+    ear.position.set(0.09 * side, 0.16, -0.16); ear.rotation.x = -0.35; headG.add(ear);
+  }
+  const bridle = boxMesh(0.2, 0.04, 0.3, darkM); bridle.position.set(0, 0.06, 0.14); headG.add(bridle);
+
+  // --- tail: pivot at the rump top; streams out at the gallop ---
+  const tail = new THREE.Group(); tail.position.set(0, 2.32, -1.28); horse.add(tail);
+  const tailBase = 0.95;                           // hangs down-and-back at rest
+  tail.rotation.x = tailBase;
+  const tailMesh = softCapsule(0.085, 0.55, darkM, 6);
+  tailMesh.position.y = -0.38; tailMesh.scale.set(1, 1, 1.25); tail.add(tailMesh);
+
+  // --- legs: hip/shoulder pivot → upper → knee pivot → cannon + hoof (same joint idiom as makeLeg) ---
+  function makeHorseLeg(x, z, hind) {
+    const leg = new THREE.Group(); leg.position.set(x, 1.88, z); horse.add(leg);
+    const upper = new THREE.Mesh(cachedGeo(hind ? 'hLegUpH' : 'hLegUpF', () =>
+      new THREE.CylinderGeometry(hind ? 0.2 : 0.165, 0.1, 0.8, 6)), coat);
+    upper.position.y = -0.42; leg.add(upper);
+    const knee = new THREE.Group(); knee.position.y = -0.86; leg.add(knee);
+    const cannon = new THREE.Mesh(cachedGeo('hLegLo', () =>
+      new THREE.CylinderGeometry(0.09, 0.072, 0.72, 6)), coat);
+    cannon.position.y = -0.38; knee.add(cannon);
+    const hoof = new THREE.Mesh(cachedGeo('hHoof', () =>
+      new THREE.CylinderGeometry(0.1, 0.115, 0.16, 6)), darkM);
+    hoof.position.y = -0.8; knee.add(hoof);
+    return { leg, knee };
+  }
+  const FL = makeHorseLeg(0.27, 0.82, false), FR = makeHorseLeg(-0.27, 0.82, false);
+  const HL = makeHorseLeg(0.29, -0.85, true), HR = makeHorseLeg(-0.29, -0.85, true);
+
+  // --- saddle: faction-colored blanket + seat, sat on the barrel top ---
+  const blanket = boxMesh(0.78, 0.07, 1.0, clothM); blanket.position.set(0, 2.44, -0.06); horse.add(blanket);
+  const saddle = boxMesh(0.5, 0.13, 0.62, darkM); saddle.position.set(0, 2.53, -0.06); horse.add(saddle);
+  const cantle = boxMesh(0.44, 0.14, 0.1, darkM); cantle.position.set(0, 2.62, -0.34); horse.add(cantle);
+
+  // shadow budget, same policy as the humanoid: only the big silhouette parts cast
+  horse.traverse(c => { if (c.isMesh) { c.castShadow = false; c.receiveShadow = false; } });
+  for (const c of [barrel, chest, rump, neckMesh, skull, saddle]) c.castShadow = true;
+
+  // --- the rider: the real humanoid rig, legs posed astride (saddleRider re-asserts each frame) ---
+  const rider = buildHumanoid(palette, 0.88, weapon);
+  rider.group.position.set(0, 1.06, -0.06);        // crotch (hipY 1.7×0.88) lands on the saddle seat
+  g.add(rider.group);
+
+  horse.userData.rig = {
+    body, neck, head: headG, tail, neckBase, tailBase,
+    legFL: FL.leg, kneeFL: FL.knee, legFR: FR.leg, kneeFR: FR.knee,
+    legHL: HL.leg, kneeHL: HL.knee, legHR: HR.leg, kneeHR: HR.knee,
+    speed01: 0,
+  };
+  const parts = Object.assign({}, rider.parts, { mount: horse });
+  saddleRider(parts);
+  g.scale.setScalar(scale);
+  return { group: g, parts };
+}
+// seat the rider's legs astride the barrel (thighs forward, shins down the flanks, knees splayed).
+// Re-asserted every gait tick so nothing (restLegs targets, the editor's stride reset) can unseat him.
+function saddleRider(parts) {
+  parts.hipL.rotation.set(-0.95, 0, 0.42);
+  parts.hipR.rotation.set(-0.95, 0, -0.42);
+  parts.kneeL.rotation.x = 1.2;
+  parts.kneeR.rotation.x = 1.2;
+}
+// Horse gait: blends a 4-beat walk (legs evenly phased) into a rotary gallop (hind pair drives,
+// front pair reaches half a stride later) by speed01. phase is the fighter's walkPhase clock;
+// the stride clock runs slower (MOUNT.phaseMul) because a horse's stride is long.
+const MOUNT_OFF_WALK = { HL: 0, FL: Math.PI * 0.5, HR: Math.PI, FR: Math.PI * 1.5 };
+const MOUNT_OFF_GALLOP = { HL: 0, HR: 0.45, FL: Math.PI, FR: Math.PI + 0.45 };
+function mountGait(parts, phase, sp01) {
+  const M = parts.mount.userData.rig;
+  saddleRider(parts);
+  const t = phase * MOUNT.phaseMul;
+  const g2 = clamp(sp01 != null ? sp01 : M.speed01, 0, 1);
+  const amp = lerp(0.34, 0.8, g2);                  // stride sweep
+  const foldK = lerp(0.4, 1.25, g2);                // hooves tuck hard at the gallop
+  for (const k of ['FL', 'FR', 'HL', 'HR']) {
+    const off = lerp(MOUNT_OFF_WALK[k], MOUNT_OFF_GALLOP[k], g2);
+    const front = k[0] === 'F';
+    // rotation.x: positive swings a hanging limb BACK, negative reaches forward (same as the man's hips)
+    M['leg' + k].rotation.x = -Math.sin(t + off) * amp * (front ? 1 : 0.92) + (front ? 0.04 : -0.06);
+    // cannon folds (hoof tucks back-up) through the swing-forward, snaps straight for the plant
+    M['knee' + k].rotation.x = Math.max(0, Math.cos(t + off - 0.7)) * (front ? 1.05 : 0.85) * foldK * amp;
+  }
+  M.body.rotation.x = Math.sin(t + 0.4) * 0.055 * g2;                       // gallop rock
+  M.neck.rotation.x = M.neckBase + 0.16 * g2 + Math.sin(t + 0.8) * (0.05 + 0.11 * g2); // neck drives each stride
+  M.tail.rotation.x = M.tailBase + 0.45 * g2 + Math.sin(t) * 0.08;          // tail streams at speed
+}
+// standing horse: legs settle square, neck/tail ease back to rest, rider stays in the saddle
+function mountRest(parts, dt) {
+  const M = parts.mount.userData.rig;
+  saddleRider(parts);
+  const s = clamp(dt * 6, 0, 1);
+  for (const k of ['FL', 'FR', 'HL', 'HR']) {
+    const leg = M['leg' + k], knee = M['knee' + k];
+    leg.rotation.x = lerp(leg.rotation.x, k[0] === 'F' ? 0.04 : -0.06, s);
+    knee.rotation.x = lerp(knee.rotation.x, 0, s);
+  }
+  M.body.rotation.x = lerp(M.body.rotation.x, 0, s);
+  M.neck.rotation.x = lerp(M.neck.rotation.x, M.neckBase, s);
+  M.tail.rotation.x = lerp(M.tail.rotation.x, M.tailBase, s);
+  M.speed01 = Math.max(0, M.speed01 - dt * 2);
+}
+// Mounted physics, applied AFTER the fighter AI has steered: the AI's facing/impulses are re-filtered
+// through what a horse can actually do. Yaw rate collapses as speed grows (a galloping horse cannot
+// spin), and velocity is dragged onto the facing so it never strafes — together those make the wide,
+// committed arcs (and overshot charges) that are cavalry's cost for its straight-line speed.
+function mountSteer(f, prevFacing, dt) {
+  const sp = Math.hypot(f.vel.x, f.vel.z);
+  const top = f.def.speed * 0.84;                    // effective top speed under the velocity damping
+  const k = clamp(sp / Math.max(top, 1e-3), 0, 1);
+  const maxYaw = lerp(MOUNT.turnStand, MOUNT.turnFull, k) * dt;
+  f.facing = prevFacing + clamp(angleDelta(prevFacing, f.facing), -maxYaw, maxYaw);
+  if (sp > 0.05) {
+    const fx = Math.sin(f.facing), fz = Math.cos(f.facing);
+    const fwd = f.vel.x * fx + f.vel.z * fz;         // forward momentum survives; sideways bleeds off
+    const keep = Math.max(fwd, sp * 0.25);           // even wheeling, it keeps walking its line
+    const gk = clamp(dt * MOUNT.grip, 0, 1);
+    f.vel.x = lerp(f.vel.x, fx * keep, gk);
+    f.vel.z = lerp(f.vel.z, fz * keep, gk);
+  }
+  f.parts.mount.userData.rig.speed01 = k;
+}
+// a def with mounted:true fields a horse+rider instead of a foot rig
+function buildFighterBody(def, palette) {
+  return def.mounted ? buildCavalry(palette, def.scale, def.weapon || 'longsword')
+                     : buildHumanoid(palette, def.scale, def.weapon || 'sword');
+}
+
 // ---------- Pose system ----------
 // Named guard positions. Characters SNAP between these with short eased blends —
 // windup telegraphs, strikes whip through, recovery settles back to guard.
@@ -741,7 +916,9 @@ function updateAnimator(anim, dt) {
 }
 
 // Procedural legs: walk cycle with knee flex during the swing-through.
+// A mounted rig routes to the horse gait instead — the rider's legs stay in the saddle.
 function walkLegs(parts, phase, amp = 0.55, crouch = 0) {
+  if (parts.mount) { mountGait(parts, phase, parts.mount.userData.rig.speed01 || (amp > 0.8 ? 1 : 0.55)); return; }
   const a = Math.sin(phase) * amp;
   parts.hipL.rotation.x = a - 0.6 * crouch;             // crouch folds into the
   parts.hipR.rotation.x = -a - 0.6 * crouch;            // target, not stacked on
@@ -757,6 +934,10 @@ function walkLegs(parts, phase, amp = 0.55, crouch = 0) {
 // `lean` (optional) additively pitches the torso forward — used by the run cycle
 // to sell a sprint; walking passes 0 and leaves the pose's own lean untouched.
 function walkArms(parts, phase, amp = 0.14, lean = 0) {
+  if (parts.mount) { // a rider doesn't pump his arms — he leans into the gallop instead
+    parts.upperBody.rotation.x += lean * 0.6 + Math.sin(phase * MOUNT.phaseMul + 0.4) * 0.04;
+    return;
+  }
   const a = Math.sin(phase) * amp;
   parts.shoulderR.rotation.x -= a;
   parts.shoulderL.rotation.x += a;
@@ -778,6 +959,7 @@ const GAIT = {
 const STRIDE_START_DECAY = 0.35; // seconds for the start-lean burst to fade back to straight
 // Settle legs into a stance: fencing stagger when fighting, neutral otherwise.
 function restLegs(parts, dt, fighting, crouch = 0) {
+  if (parts.mount) { mountRest(parts, dt); return; }
   // weapon-side (right) foot leads, matching the guard's shoulder twist
   const t = fighting
     ? { hipL: 0.28, hipR: -0.22, kneeL: 0.38, kneeR: 0.30 }
@@ -1163,6 +1345,11 @@ const ENEMY_TYPES = {
             moves: ['chop'], weapon: 'rock',
             ranged: { kind: 'rock', range: 12, minRange: 4, projSpeed: 14 },
             palette: { skin: 0x97876b, cloth: 0x59442e, accent: 0x33271a, blade: 0x8d8f95 } },
+  // cavalry: near double an infantryman's pace, but mountSteer makes every turn a wide arc —
+  // devastating on the charge (chargeDmg), easy to sidestep once it overshoots
+  lancer: { hp: 140, speed: 16, dmg: 20, range: 3.0, atkWind: 0.32, atkRec: 0.45, cd: 0.7, scale: 1.05, score: 320,
+            moves: ['slashR', 'slashL'], weapon: 'longsword', mounted: true,
+            palette: { skin: 0xa08a6b, cloth: 0x5a2a1a, accent: 0x2e150c, blade: 0xc8d4e0 } },
 };
 
 // ---------- Enemy heroes: named champions who lead the host ----------
@@ -1233,10 +1420,10 @@ function spawnEnemy(type, x, z, hero, char = null) {
       projSpeed: def.ranged.projSpeed * (m.projSpeed || 1), range: def.ranged.range * (m.range || 1) };
   }
   if (char) def = materializeDef(def, char); // a battle-hardened enemy hits harder too
-  const h = buildHumanoid(def.palette, def.scale, def.weapon || 'sword');
+  const h = buildFighterBody(def, def.palette);
   scene.add(h.group);
   const bar = makeHealthBar();
-  bar.position.y = 3.6 * def.scale;
+  bar.position.y = (def.mounted ? 4.5 : 3.6) * def.scale;
   h.group.add(bar);
   const e = {
     team: 'enemy',
@@ -1268,7 +1455,7 @@ function spawnEnemy(type, x, z, hero, char = null) {
       h.parts.head.add(horn);
     }
     const label = makeNameSprite(hero.name);
-    label.position.y = 3.6 * def.scale + 0.7;
+    label.position.y = (def.mounted ? 4.5 : 3.6) * def.scale + 0.7;
     h.group.add(label);
   }
   // juggernauts never stagger; everyone else's stagger threshold scales with their bulk
@@ -1290,19 +1477,23 @@ const ALLY_ARCHER = { hp: 70, speed: 10, dmg: 14, range: 2.0, atkWind: 0.5, atkR
                    moves: ['slashR'], weapon: 'bow', ranged: { kind: 'arrow', range: 70, minRange: 12, projSpeed: 52 }, cls: 'archer' };
 const ALLY_THROWER = { hp: 100, speed: 7.5, dmg: 18, range: 2.4, atkWind: 0.55, atkRec: 0.4, cd: 1.8, scale: 1.15,
                    moves: ['chop'], weapon: 'rock', ranged: { kind: 'rock', range: 12, minRange: 4, projSpeed: 14 }, cls: 'thrower' };
+// horsemen: ~1.7× an infantryman's pace and a charge-shock damage bonus, paid for with the
+// worst manoeuvre on the field (mountSteer: speed-capped yaw + no strafing → wide arcs)
+const ALLY_HORSE = { hp: 150, speed: 17, dmg: 22, range: 3.0, atkWind: 0.3, atkRec: 0.42, cd: 0.65, scale: 1.05,
+                   moves: ['slashR', 'slashL'], weapon: 'longsword', cls: 'horse', mounted: true };
 
 // XP economy: each wave you earn XP from kills (minus losses), and spend it at
 // the muster to recruit. A bigger army costs more XP; a costly victory earns
 // less, so it grows slower. Wealth is conserved: xp + (cost of fielded roster).
-const WARBAND_KEYS = ['sword', 'long', 'archer', 'thrower'];
-const UNIT_COST = { sword: 8, long: 14, archer: 11, thrower: 12 };
+const WARBAND_KEYS = ['sword', 'long', 'archer', 'thrower', 'horse'];
+const UNIT_COST = { sword: 8, long: 14, archer: 11, thrower: 12, horse: 18 };
 const KILL_XP = 8;    // per enemy slain that wave — tuned for fast army growth
 const HERO_XP = 40;   // per champion slain
 const LOSS_XP = 12;   // lost per fallen warband member
 const BAND_XP = 5;    // victory bounty per soldier in the host you broke
 const BAND_XP_FLOOR = 35; // even a 3-bandit pack is worth hunting down
 const STARTING_WEALTH = 90; // a strong opening warband + spare to spend
-const warbandComp = { sword: 2, long: 0, archer: 1, thrower: 1 };
+const warbandComp = { sword: 2, long: 0, archer: 1, thrower: 1, horse: 0 };
 let xp = 0;
 let waveKills = 0, waveHeroKills = 0, waveLosses = 0; // this-wave tally for XP
 function warbandTotal() { return WARBAND_KEYS.reduce((s, k) => s + warbandComp[k], 0); }
@@ -1313,7 +1504,7 @@ function warbandCost(comp = warbandComp) { return WARBAND_KEYS.reduce((s, k) => 
 function detSize(det) { return WARBAND_KEYS.reduce((s, k) => s + (det.comp[k] || 0), 0); }
 function armyTotal() { return warbandTotal() + detachments.reduce((s, d) => s + detSize(d), 0); }
 function resetEconomy() {
-  warbandComp.sword = 2; warbandComp.long = 0; warbandComp.archer = 1; warbandComp.thrower = 1;
+  warbandComp.sword = 2; warbandComp.long = 0; warbandComp.archer = 1; warbandComp.thrower = 1; warbandComp.horse = 0;
   xp = STARTING_WEALTH - warbandCost();
   waveKills = waveHeroKills = waveLosses = 0;
 }
@@ -1323,6 +1514,7 @@ function warbandLoadout() {
   for (let i = 0; i < warbandComp.long; i++) defs.push(ALLY_LONGSWORD);
   for (let i = 0; i < warbandComp.archer; i++) defs.push(ALLY_ARCHER);
   for (let i = 0; i < warbandComp.thrower; i++) defs.push(ALLY_THROWER);
+  for (let i = 0; i < warbandComp.horse; i++) defs.push(ALLY_HORSE);
   return defs;
 }
 // blue/teal faction so they read as "your side" against the red marauders
@@ -1367,8 +1559,8 @@ function leaderCharById(id) {
   for (const c of warbandRoster) if (c.id === id) return c;
   return null;
 }
-const ALLY_DEF_BY_CLASS = { sword: ALLY_DEF, long: ALLY_LONGSWORD, archer: ALLY_ARCHER, thrower: ALLY_THROWER };
-function classKeyOf(arch) { return (arch === 'long' || arch === 'archer' || arch === 'thrower') ? arch : 'sword'; }
+const ALLY_DEF_BY_CLASS = { sword: ALLY_DEF, long: ALLY_LONGSWORD, archer: ALLY_ARCHER, thrower: ALLY_THROWER, horse: ALLY_HORSE };
+function classKeyOf(arch) { return (arch === 'long' || arch === 'archer' || arch === 'thrower' || arch === 'horse') ? arch : 'sword'; }
 
 const GIVEN_NAMES = ['Aldric','Bram','Cedwyn','Doran','Eadric','Falk','Garrec','Hale','Ivo','Joren','Kell','Lorne','Maddoc','Nael','Osric','Perrin','Quenn','Roderic','Sefton','Tomas','Ulf','Varin','Wend','Yorin','Ansel','Brand','Corin','Dunmar','Edra','Freya','Gerda','Halla','Ingrid','Jorah','Kara','Linnet','Mira','Nessa','Orla','Petra','Romilda','Sigrun','Thora','Ysolde'];
 const BYNAMES = ['the Bold','the Quiet','Ironhand','the Younger','Oakheart','the Swift','Stonefist','the Grim','Redmane','the Tall','Hawkeye','the Patient','Coldbrook','the Stout','Wolfsbane','the Lucky','Greycloak','the Fierce','Longstride','the Sly','Brightblade','the Steady','Hardwin','the Wary','Blackbriar','Frostbeard','Stormcrow'];
@@ -1559,16 +1751,16 @@ function spawnAlly(x, z, palette, def = ALLY_DEF, char = null) {
   if (!char) char = makeChar(defKey(def), { team: 'ally' }); // legacy callers still get a name
   def = materializeDef(def, char);                            // a grown soldier fields harder stats
   if (coopMult > 1.001) { def = Object.assign({}, def); def.dmg = Math.round(def.dmg * coopMult); def.hp = Math.round(def.hp * coopMult); } // fighting shoulder-to-shoulder with allies: harder hits, more grit
-  const h = buildHumanoid(palette, def.scale, def.weapon || 'sword');
+  const h = buildFighterBody(def, palette);
   scene.add(h.group);
   const bar = makeHealthBar(0x6bff8a); // green bar marks a friendly
-  bar.position.y = 3.6 * def.scale;
+  bar.position.y = (def.mounted ? 4.5 : 3.6) * def.scale;
   h.group.add(bar);
   // a name floats over every soldier you lead — but a borrowed co-op ally's whole warband collapses
   // to just their leader's name; you don't need to know every one of their soldiers' names
   if (!char.borrowed || char.isBorrowedLeader) {
     const label = makeNameSprite(char.borrowed ? char.name + ' (' + char.allyFaction + ')' : char.name);
-    label.scale.set(3.4, 0.42, 1); label.position.y = 3.6 * def.scale + 0.5;
+    label.scale.set(3.4, 0.42, 1); label.position.y = (def.mounted ? 4.5 : 3.6) * def.scale + 0.5;
     h.group.add(label);
   }
   const a = {
@@ -1639,6 +1831,7 @@ let touchMove = { f: 0, s: 0, active: false };
 // try/catch can't see it) when the call isn't tied to a live user gesture — swallow it.
 function grabPointer() {
   if (typeof MARCH !== 'undefined' && MARCH.on) return;   // the march editor is a spectator sandbox — never seize the mouse
+  if (typeof FORGE !== 'undefined' && (FORGE.on || FORGE.selecting)) return; // forge sessions/picker are free-cursor — never seize the mouse
   if (!canvas.requestPointerLock) return;
   try { const p = canvas.requestPointerLock(); if (p && p.catch) p.catch(() => {}); } catch (e) { /* needs a user gesture */ }
 }
@@ -2348,6 +2541,11 @@ function fighterStrike(f) {
   const fdir = new THREE.Vector3(Math.sin(f.facing), 0, Math.cos(f.facing));
   const scs = fieldSimOn() ? FIELD_SCALE : 1; // miniature-scale reach in a field fight
   const reach = (f.def.range + f.def.scale * 0.6) * scs;
+  let dmg = f.aura ? Math.round(f.def.dmg * f.aura.dmgMul) : f.def.dmg;
+  if (f.def.mounted) { // charge shock: a blow at full tilt lands up to +50% harder
+    const spK = clamp(Math.hypot(f.vel.x, f.vel.z) / (f.def.speed * 0.84), 0, 1);
+    dmg = Math.round(dmg * (1 + MOUNT.chargeDmg * spK));
+  }
   // cleave: hit every opposing combatant in the frontal arc
   const foes = f.foes || (f.team === 'ally' ? enemies : opposingPlayerSide);
   for (const t of foes) {
@@ -2357,7 +2555,7 @@ function fighterStrike(f) {
     if (d > reach + ((t.def ? t.def.scale : 1) - 1) * scs) continue;
     if (d > 0.001) to.normalize();
     if (fdir.dot(to) < 0.2) continue;
-    damageCombatant(t, f.aura ? Math.round(f.def.dmg * f.aura.dmgMul) : f.def.dmg, f);
+    damageCombatant(t, dmg, f);
   }
   if (f.team === 'enemy') { // enemy swings near the player rumble the camera even on a miss
     const pd = f.pos.distanceTo(player.pos);
@@ -2415,6 +2613,7 @@ function escortStep(f, dt) {
 function stepFighter(f, dt) {
   if (f.flash > 0) { f.flash -= dt; setTint(f.parts, f.flash > 0 ? (f.team === 'ally' ? 0x99aacc : 0x887766) : null); }
 
+  const prevFacing = f.facing; // mounted units re-filter the AI's turn through mountSteer below
   const tgt = f.target;
   const hasTgt = tgt && tgt.alive;
   let dist = Infinity, desiredFacing = f.facing;
@@ -2659,6 +2858,7 @@ function stepFighter(f, dt) {
   }
 
   // physics
+  if (f.def.mounted) mountSteer(f, prevFacing, dt); // fast in a line, wide in the turn
   f.vel.multiplyScalar(Math.pow(0.0008, dt));
   let fBaseY = 0;
   if (fieldSimOn()) { // overworld escort: confine to land + ride the terrain height, like the hero
@@ -2684,7 +2884,9 @@ function stepFighter(f, dt) {
   if (animate) {
     if (f.moving) {
       walkLegs(f.parts, f.walkPhase);
-      f.obj.position.y = fBaseY + Math.abs(Math.cos(f.walkPhase)) * 0.05 * f.def.scale;
+      f.obj.position.y = fBaseY + (f.def.mounted
+        ? Math.max(0, Math.sin(f.walkPhase * MOUNT.phaseMul + 1.6)) * (0.03 + 0.1 * f.parts.mount.userData.rig.speed01) * f.def.scale // gallop suspension hop
+        : Math.abs(Math.cos(f.walkPhase)) * 0.05 * f.def.scale);
     } else {
       restLegs(f.parts, dt, true);
     }
@@ -3266,7 +3468,20 @@ function onZoomChanged(gesture) {
   reconcilePointerLock(gesture);
   applyDetailTier();
 }
-const FIELD_ARMY = { showR: 36, hideR: 44, capPerBand: 48, capTotal: 220 }; // nearby flags -> FULL soldier crowds (walk up and see the whole host)
+// Every host the character can SEE is drawn as soldiers in formation, not a flag: showR reaches the
+// action-tier fog wall (ACTION_VIEW.fogFar = 135, defined below), so armies emerge from the haze as
+// marching crowds. The global body budget is spent NEAREST FIRST, and a host's crowd thins with
+// distance (capPerBand inside nearR → capFar at the fog line) so the horizon only costs bodies where
+// they're a few pixels tall. Past labelR a materialised host keeps its floating name/count label —
+// the strategic info its flag used to carry; walk closer and the men speak for themselves.
+// liveR: a clash upgrades to the REAL fighter sim only this close (the old walk-up radius) — from
+// farther out a watched clash stays a crowd pantomime, so the live-fighter budget serves ringside seats.
+const FIELD_ARMY = { showR: 130, hideR: 150, nearR: 42, liveR: 36, capPerBand: 48, capFar: 14, capTotal: 320, labelR: 55 };
+// bodies a host at distance d earns — the full crowd inside nearR, tapering to a squad block at the fog line
+function fieldBandCap(d) {
+  const t = clamp((d - FIELD_ARMY.nearR) / (FIELD_ARMY.showR - FIELD_ARMY.nearR), 0, 1);
+  return Math.round(lerp(FIELD_ARMY.capPerBand, FIELD_ARMY.capFar, t));
+}
 // when TWO hosts of a map-battle are both materialised near you, their crowds stop waving swords at
 // air and instead pair off man-to-man: each soldier picks an enemy body, closes the gap, and trades
 // real windup->strike->recover swings (the same MOVES poses the hero uses). The numeric resolver still
@@ -3276,6 +3491,21 @@ const FIELD_ARMY = { showR: 36, hideR: 44, capPerBand: 48, capTotal: 220 }; // n
 const FIELD_MELEE = { reach: 1.55, close: 2.6, move: 3.2, wind: [0.26, 0.5], rec: 0.34, cool: [0.35, 1.0],
                       flinch: 0.34, knock: 0.16, sfxChance: 0.14, deathDur: 1.05 };
 const fieldArmies = new Map();       // band -> { bodies:[...] } — materialised hosts near the hero
+// On the strategic rungs your LEAD column stands as a real formation too (on foot the company walks as
+// real allies instead). A pseudo-band rides player.pos/warbandComp and feeds the same crowd path a
+// detachment does; the '★ N' label floats over the formation, the 6-marcher token collapses behind it.
+let playerFieldBand = null;
+function ensurePlayerFieldBand() {
+  if (!playerFieldBand) playerFieldBand = {
+    isDetachment: true, isPlayerColumn: true, name: 'Your banner', faction: PLAYER_REALM,
+    color: PLAYER_REALM.color, pos: player.pos, comp: warbandComp, size: 1,
+    alive: true, inBattle: null, group: null, leader: null };
+  playerFieldBand.group = player.mapToken;   // label/visibility ride the real token (rebound: token can be rebuilt)
+  playerFieldBand.comp = warbandComp;        // a new universe rebuilds this object — track it
+  playerFieldBand.pos = player.pos;
+  playerFieldBand.size = Math.max(1, warbandTotal());
+  return playerFieldBand;
+}
 // true only while the overworld is driven as a character — makes updatePlayer / stepFighter / updateCamera
 // ride terrain elevation (mapElevY) + land-confinement (landStep) instead of the flat battle arena
 function fieldSimOn() { return mapFieldMode && mode === 'map'; }
@@ -3313,6 +3543,7 @@ function setFieldMode(on, opts) {
     player.obj.rotation.set(0, player.facing, 0);
     setPlayerWeaponVisual();                          // weapon drawn, exactly like battle
     spawnFieldCompany();                              // your company falls in behind you
+    if (playerFieldBand) clearFieldArmy(playerFieldBand); // the lead column's crowd stand-in yields to the real company
     if (player.mapToken) player.mapToken.visible = false; // hide the strategic banner...
     setDetVisible(false);                             // ...and any detachment columns
     if (typeof clearFindFlares === 'function') clearFindFlares(); // locator flares are a top-down aid
@@ -3336,7 +3567,8 @@ function setFieldMode(on, opts) {
     closeFieldDeck();                                // the command tab belongs to the ground view
     clearAllies();                                   // the on-foot escort folds back into the banner
     clearAllLiveClashes();                           // real NPC-clash fighters fold back to band numbers
-    clearAllFieldArmies();                           // nearby hosts go back to being banner tokens
+    // materialised host crowds PERSIST — armies stand as formations on the strategic rungs too
+    // (updateFieldArmies keeps driving them; only the tier-0 chart folds them back to tokens)
     fieldStrike = null; hideStrikeHud();             // the strike prompt is a ground-view overlay
     if (typeof planGroups !== 'undefined') for (const g of planGroups) { disposeZoneOverlay(g); disposeHoldMarker(g); g.zone = null; g.anchor = null; } // squad areas were staged on this ground
     player.obj.visible = false;
@@ -3364,11 +3596,16 @@ function factionFieldPalette(faction, lead) {
 }
 function makeFieldExtra(faction, weapon, opts) {
   const lead = !!(opts && opts.lead), sc = FIELD_SCALE * ((opts && opts.scale) || 1);
-  const h = buildHumanoid(factionFieldPalette(faction, lead), sc, weapon);
+  const pal = factionFieldPalette(faction, lead);
+  if (opts && opts.accent != null && !lead) pal.accent = opts.accent; // a detachment's men wear its squad color
+  const def = opts && opts.def;                       // a class def fields the TRUE rig (archer, horseman…)
+  const h = def ? buildFighterBody(def, pal) : buildHumanoid(pal, sc, weapon);
+  if (def) h.group.scale.multiplyScalar(sc);          // buildFighterBody bakes battle scale; bring it to person-vs-city scale
   if (lead) { const bn = makeBanner(faction && faction.color != null ? faction.color : 0x8a1a1a); bn.scale.setScalar(0.92); bn.position.set(0.05, 0, 0.35); h.group.add(bn); } // a standard rising over the commander
   scene.add(h.group);
   return { group: h.group, parts: h.parts, anim: makeAnimator(h.parts), phase: rand(0, 6.28),
            back: 0, side: 0, swing: rand(0.3, 1.2), swinging: false, isCommander: lead,
+           mounted: !!(def && def.mounted),
            // per-man melee state (used only while its host is a materialised clash):
            wx: null, wz: null, duel: null, reCd: rand(0, 0.4), mstate: 'engage',
            mt: rand(0.1, 0.8), flinch: 0, dead: false, deadT: 0, tinted: false };
@@ -3377,7 +3614,10 @@ function clearFieldArmy(band) {
   const fa = fieldArmies.get(band); if (!fa) return;
   for (const b of fa.bodies) { scene.remove(b.group); disposeGroup(b.group); }
   fieldArmies.delete(band);
-  if (band.group) band.group.visible = true;          // banner returns (clash markers are re-shown centrally below)
+  if (band.group) {                                   // banner returns (clash markers are re-shown centrally below)
+    if (band.group.userData.labelOnly) { band.group.userData.labelOnly = false; for (const ch of band.group.children) ch.visible = true; }
+    band.group.visible = band.isDetachment ? !fieldSimOn() : true; // det columns are map-only (setDetVisible)
+  }
 }
 function clearAllFieldArmies() {
   for (const band of [...fieldArmies.keys()]) clearFieldArmy(band);
@@ -3399,6 +3639,19 @@ function materialiseBand(band, budget) {
   bodies.push(cmd);
   const squads = [];
   const troop = n - 1;
+  // what each visible man IS:
+  //  · a player detachment fields its TRUE muster — the class mix split off the warband, horsemen and
+  //    all — sampled evenly across the roster (WARBAND_KEYS order clusters the horse into the rear block)
+  //  · an enemy host keeps the 1-in-6 archer silhouette, and a sizable one trails a lancer wing at the
+  //    tail — the same ~8% of the roster the real battle would field
+  let detSlots = null;
+  if (band.isDetachment && band.comp) {
+    detSlots = [];
+    for (const k of WARBAND_KEYS) for (let i = 0, m = band.comp[k] || 0; i < m; i++) detSlots.push(k);
+    if (!detSlots.length) detSlots = null;
+  }
+  const lancers = (!detSlots && typeof ENEMY_TYPES !== 'undefined' && ENEMY_TYPES.lancer && n >= 24)
+    ? Math.max(2, Math.round(troop * 0.08)) : 0;
   if (troop > 0) {
     const nsq = Math.max(1, Math.min(4, Math.round(troop / 14)));            // bigger hosts break into more groups
     const per = Math.ceil(troop / nsq);
@@ -3409,13 +3662,22 @@ function materialiseBand(band, budget) {
       const rows = Math.ceil(m / files);
       squads.push({ back: back0, ax: 0, az: 0, dir: null });                 // live anchor (world) + heading, snapped on first update
       for (let j = 0; j < m; j++) {
-        const w = ((placed + j) % 6 === 0) ? 'bow' : 'sword';                // a few archers for silhouette variety
-        const b = makeFieldExtra(band.faction, w);
+        const gi = placed + j;                                                // index across the whole troop
+        let b;
+        if (detSlots) {
+          const k = detSlots[Math.min(detSlots.length - 1, Math.floor(gi * detSlots.length / troop))];
+          b = makeFieldExtra(band.faction, null, { def: ALLY_DEF_BY_CLASS[k] || ALLY_DEF, accent: band.color });
+        } else if (gi >= troop - lancers) {
+          b = makeFieldExtra(band.faction, null, { def: ENEMY_TYPES.lancer });
+        } else {
+          b = makeFieldExtra(band.faction, gi % 6 === 0 ? 'bow' : 'sword');  // a few archers for silhouette variety
+        }
         b.squad = s;
         const row = (j / files) | 0, col = j % files;
         const rowN = Math.min(files, m - row * files);                        // the short rear rank stays centred
-        b.lb = row * rankSp + rand(-0.1, 0.1) * fs;                           // local back WITHIN the squad (front rank = 0); faint jitter
-        b.ls = (col - (rowN - 1) / 2) * fileSp + rand(-0.12, 0.12) * fs;
+        const sp = b.mounted ? 2.0 : 1;                                       // a horse needs room — mounted slots spread wider
+        b.lb = row * rankSp * sp + rand(-0.1, 0.1) * fs;                      // local back WITHIN the squad (front rank = 0); faint jitter
+        b.ls = (col - (rowN - 1) / 2) * fileSp * sp + rand(-0.12, 0.12) * fs;
         bodies.push(b);
       }
       back0 += rows * rankSp + gap;                                          // the next squad forms up behind this one
@@ -3519,6 +3781,7 @@ function updateFieldArmyBodies(band, fa, dt) {
   const moving = !foe && (mx * mx + mz * mz) > 1e-5;
   const faceTo = foe ? Math.atan2(foe.pos.x - band.pos.x, foe.pos.z - band.pos.z)
               : moving ? Math.atan2(mx, mz)
+              : band.isPlayerColumn ? player.facing // your own column holds YOUR heading at the halt
               : Math.atan2(player.pos.x - band.pos.x, player.pos.z - band.pos.z); // idle: turn toward the traveller
   // the commander dresses rigidly to the heading; rank 0 of each squad leads, deeper ranks trail behind
   const fdx = Math.sin(faceTo), fdz = Math.cos(faceTo);   // forward
@@ -3566,9 +3829,10 @@ function updateFieldArmyBodies(band, fa, dt) {
     b.group.position.set(b.wx, mapElevY(b.wx, b.wz), b.wz);
     b.group.rotation.x = 0;
     b.group.rotation.y = yaw + (foe && !dueling ? Math.sin(b.phase * 1.7) * 0.3 : 0);
-    // crowd LOD (full-size hosts are big now): near = every frame, mid = third-frame, far = frozen pose
+    // crowd LOD (hosts now stand up all the way to the fog wall): near = every frame, mid = third-frame,
+    // far = sixth-frame, past ~100u = frozen pose (a few fogged pixels don't earn a walk cycle)
     const camD2 = b.group.position.distanceToSquared(camera.position);
-    const animate = camD2 < 1600 ? true : camD2 < 4900 ? ((frameNo + bi) % 3 === 0) : false;
+    const animate = camD2 < 1600 ? true : camD2 < 4900 ? ((frameNo + bi) % 3 === 0) : camD2 < 10000 ? ((frameNo + bi) % 6 === 0) : false;
     if (!animate) continue;
     if (b.flinch > 0) {                                 // reeling from a blow — interrupts his own swing
       b.flinch -= dt; setPose(b.anim, 'hurt', 0.06);
@@ -3593,27 +3857,95 @@ function updateFieldArmyBodies(band, fa, dt) {
     updateAnimator(b.anim, dt);
   }
 }
+// While a host is drawn as soldiers, its token collapses to just the floating label — up close the men
+// speak for themselves (token hidden entirely), past labelR the name/count stays readable over the crowd.
+// On the strategic rungs the label stays at ANY distance (the map is for reading who's who).
+// Not materialised -> the full token returns (except det columns, which stay map-only).
+function setTokenLabelMode(band, materialised, d) {
+  const g = band.group; if (!g) return;
+  const label = g.userData.label;
+  const on = !!(materialised && label && (d > FIELD_ARMY.labelR || !fieldSimOn()));
+  if (on !== !!g.userData.labelOnly) {
+    g.userData.labelOnly = on;
+    for (const ch of g.children) ch.visible = on ? ch === label : true;
+  }
+  g.visible = materialised ? on : (band.isDetachment ? !fieldSimOn() : true);
+}
+// Crowds live on BOTH rungs of the map — on foot AND the strategic miniature. Only the far overview
+// (past Z_CHART, where a man is sub-pixel) and non-map modes fold everyone back to tokens/icons.
+// Hysteresis so a scroll resting on the edge doesn't thrash the whole crowd layer.
+let _crowdRung = true;
+function crowdRungOn() {
+  const lim = Z_CHART + (_crowdRung ? Z_HYST : -Z_HYST);
+  _crowdRung = mode === 'map' && (fieldSimOn() || fieldZoomT <= lim);
+  return _crowdRung;
+}
 function updateFieldArmies(dt) {
-  if (!fieldSimOn()) { if (fieldArmies.size) clearAllFieldArmies(); return; }
-  for (const band of [...fieldArmies.keys()]) if (!band.alive || !parties.includes(band)) clearFieldArmy(band); // died / despawned
-  let total = 0; for (const fa of fieldArmies.values()) total += fa.bodies.length;
+  if (!crowdRungOn()) { if (fieldArmies.size) clearAllFieldArmies(); return; }
+  for (const band of [...fieldArmies.keys()]) if (!band.alive || !(parties.includes(band) || (band.isDetachment && detachments.includes(band)) || band === playerFieldBand)) clearFieldArmy(band); // died / despawned / merged back
   const px = player.pos.x, pz = player.pos.z;
   // a clash you can see from both sides is fought for REAL — the same fighter AI you use, leader and all.
   // BOTH battle sources upgrade: the client's own mapBattles AND the shared world's server battles
   // (srvBattles) — in the shared world every NPC-vs-NPC fight is a server battle, so without this the
-  // living war would only ever pantomime.
-  for (const bt of mapBattles) if (!bt.live && !bt.done) maybeStartLiveClash(bt, px, pz);
-  for (const e of srvBattles.values()) if (!e.bt.live && !e.bt.done) maybeStartLiveClash(e.bt, px, pz, e);
-  for (const band of parties) {
+  // living war would only ever pantomime. Upgrades stay a RINGSIDE (on-foot) affair: from the strategic
+  // rungs a watched clash is the crowd pantomime — the resolver owns it, the men act it.
+  if (fieldSimOn()) {
+    for (const bt of mapBattles) if (!bt.live && !bt.done) maybeStartLiveClash(bt, px, pz);
+    for (const e of srvBattles.values()) if (!e.bt.live && !e.bt.done) maybeStartLiveClash(e.bt, px, pz, e);
+  }
+  // every army in sight — roaming bands AND your own detachments — nearest first, so the closest
+  // hosts always win the body budget
+  const cands = [];
+  // strategic rungs: your LEAD column stands as a formation too (on foot it's the real ally company)
+  const pb = (!fieldSimOn() && player.mapToken && !playerClash) ? ensurePlayerFieldBand() : null;
+  if (pb) cands.push({ band: pb, d: 0, fa: fieldArmies.get(pb) });
+  else if (playerFieldBand && fieldArmies.has(playerFieldBand)) clearFieldArmy(playerFieldBand);
+  for (let src = 0; src < 2; src++) for (const band of src ? detachments : parties) {
     if (!band.alive) continue;
     if (fieldBattle && band === fieldBattle.band) continue; // its men are REAL fighters right now, not extras
     if (band.inBattle && band.inBattle.live) { if (fieldArmies.get(band)) clearFieldArmy(band); continue; } // its men are live clash fighters
     const d = Math.hypot(band.pos.x - px, band.pos.z - pz);
-    const has = fieldArmies.get(band);
-    if (!has && d <= FIELD_ARMY.showR && total < FIELD_ARMY.capTotal) total += materialiseBand(band, FIELD_ARMY.capTotal - total);
-    else if (has && d >= FIELD_ARMY.hideR) { clearFieldArmy(band); continue; }
     const fa = fieldArmies.get(band);
-    if (fa) updateFieldArmyBodies(band, fa, dt);
+    if (fa && d >= FIELD_ARMY.hideR) { clearFieldArmy(band); continue; } // clearFieldArmy restores the token
+    if (!fa && d > FIELD_ARMY.showR) continue;
+    cands.push({ band, d, fa });
+  }
+  // YOUR columns dress first (they're few and player-bounded — an NPC swarm must never starve your own
+  // detachment of bodies), then everyone else nearest-first
+  cands.sort((a, b) => (a.band.isDetachment === b.band.isDetachment) ? a.d - b.d : (a.band.isDetachment ? -1 : 1));
+  let total = 0; for (const fa of fieldArmies.values()) total += fa.bodies.length;
+  let spawnBudget = 4; // hosts STOOD UP per frame — a zoom flip re-dresses a whole region over a few frames, not one hitch
+  let farIdx = -1; for (let i = cands.length - 1; i >= 0; i--) if (cands[i].fa && !cands[i].band.inBattle && !cands[i].band.isDetachment) { farIdx = i; break; } // eviction candidate (never your own column)
+  for (const c of cands) {
+    const earned = fieldBandCap(c.d), sizeR = Math.round(c.band.size) || 1;
+    if (!c.fa) {
+      const want = Math.min(earned, sizeR);
+      let room = FIELD_ARMY.capTotal - total;
+      // walking up to a starved flag (or fielding your own column anywhere): rob the farthest
+      // NPC crowd — well out of arm's reach — to dress this one
+      if (room < want && (c.d < FIELD_ARMY.nearR || c.band.isDetachment) && farIdx >= 0 && (cands[farIdx].d > FIELD_ARMY.nearR * 2 || c.band.isDetachment)) {
+        const far = cands[farIdx];
+        total -= far.fa.bodies.length; clearFieldArmy(far.band); far.fa = null; farIdx = -1;
+        room = FIELD_ARMY.capTotal - total;
+      }
+      // never field a token scrap — a "host" of 1-2 bodies reads worse than the flag it replaced
+      if (room >= Math.min(want, 6) && spawnBudget > 0) {
+        spawnBudget--;
+        total += materialiseBand(c.band, Math.min(want, room)); c.fa = fieldArmies.get(c.band);
+      }
+    } else if (!c.band.inBattle && c.d < 70) {
+      // marched close to a thinned far-crowd (or it grew): re-dress it at the strength it now earns —
+      // but only when the freed bodies + spare room genuinely allow growth (no per-frame churn at a full budget)
+      const want = Math.min(sizeR, earned, FIELD_ARMY.capTotal - total + c.fa.bodies.length);
+      if (c.fa.cap + 6 < want && spawnBudget > 0) {
+        spawnBudget--;
+        total -= c.fa.bodies.length; clearFieldArmy(c.band);
+        total += materialiseBand(c.band, want);
+        c.fa = fieldArmies.get(c.band);
+      }
+    }
+    if (c.fa) updateFieldArmyBodies(c.band, c.fa, dt);
+    setTokenLabelMode(c.band, !!c.fa, c.d); // crowd -> label-only past labelR; no crowd (budget) -> full token
   }
   // clash icons: hide a battle's marker only while one of its hosts is drawn as a real crowd, else show it.
   // Centralised here so it self-heals — a band dying mid-clash (which nulls band.inBattle) can't strand a marker.
@@ -3974,6 +4306,14 @@ BV.testClash = (n = 40, dist = 16) => {
   const bt = startMapBattle(a, b);
   return { id: bt.id, a: a.faction.name, b: b.faction.name, per: n };
 };
+// test hook: grant the warband n horsemen (free) and refresh the fielded company, so cavalry
+// can be ridden with immediately — BV.cav(8) then fight anything (or BV.testClash for NPC lancers)
+BV.cav = (n = 6) => {
+  warbandComp.horse += n; ensureWarbandRoster();
+  if (fieldSimOn()) spawnFieldCompany();
+  try { renderWarbandPicker(); } catch (e) {}
+  return { horse: warbandComp.horse, total: warbandTotal() };
+};
 // test/console hook: what every fielded NPC host's commander is doing right now
 // screen-space marker layer QA: live count, and a demo pin at a world point to eyeball projection
 BV.markers = () => ({ live: MK.items.size, tier: _appliedTier });
@@ -4004,11 +4344,11 @@ function liveFighterCount() { let n = 0; for (const lc of liveClashes) n += lc.A
 function spawnClashFighter(faction, type, x, z, lead) {
   let def = ENEMY_TYPES[type] || ENEMY_TYPES.grunt;
   if (lead) def = { ...def, hp: Math.round(def.hp * 2.4), dmg: Math.round(def.dmg * 1.5), score: def.score };
-  const h = buildHumanoid(factionFieldPalette(faction, lead), def.scale, def.weapon || 'sword');
+  const h = buildFighterBody(def, factionFieldPalette(faction, lead));
   h.group.scale.multiplyScalar(FIELD_SCALE);
   if (lead) { const bn = makeBanner(faction && faction.color != null ? faction.color : 0x8a1a1a); bn.scale.setScalar(0.92); bn.position.set(0.05, 0, 0.35); h.group.add(bn); }
   scene.add(h.group);
-  const bar = makeHealthBar(); bar.position.y = 3.6 * def.scale; h.group.add(bar);
+  const bar = makeHealthBar(); bar.position.y = (def.mounted ? 4.5 : 3.6) * def.scale; h.group.add(bar);
   const f = {
     team: 'npc', obj: h.group, parts: h.parts, anim: makeAnimator(h.parts), bar, def, type, char: null,
     pos: new THREE.Vector3(x, 0, z), vel: new THREE.Vector3(), facing: 0,
@@ -4069,7 +4409,7 @@ function maybeStartLiveClash(bt, px, pz, srvE) {
   if (liveFighterCount() > LIVE_CLASH_TOTAL_CAP - 16) return;   // budget spent on nearer clashes
   if (playerClash && playerClash.bt === bt) return;            // the player's OWN clash rides its own system (drop-in)
   if (bt.sideA.bands.some(b => b.isPlayerBand) || bt.sideB.bands.some(b => b.isPlayerBand)) return;
-  const near = (side) => side.bands.some(b => b.alive && Math.hypot(b.pos.x - px, b.pos.z - pz) <= FIELD_ARMY.showR);
+  const near = (side) => side.bands.some(b => b.alive && Math.hypot(b.pos.x - px, b.pos.z - pz) <= FIELD_ARMY.liveR);
   if (!(near(bt.sideA) && near(bt.sideB))) return;
   startLiveClash(bt, srvE);
 }
@@ -4509,6 +4849,10 @@ function endFieldWithdrawal(fb) {
   showWaveBanner(routed ? '🏳 They Break and Run!' : '🏇 The Enemy Withdraws',
     routed ? 'Their nerve is gone — the field is yours.'
       : 'Their commander refuses the fight and saves ' + Math.max(1, survivors) + ' of his men. The field is yours.');
+  // holding the field is a WIN — award XP and open the muster, exactly like a clean wipe (endFieldBattle).
+  // WAR HOST makes a beaten host rout/withdraw instead of dying to the last man, so THIS is now the common
+  // way an on-foot fight is won; without it a victory paid no XP and never showed the recruit-per-XP picker.
+  showMuster();
 }
 // take a hold: ownership flips, the world (and the server) hears of it, the garrison is halved
 function captureHold(cap) {
@@ -5371,6 +5715,7 @@ function buildScatter(group, cx, cz) {
     rm.castShadow = rm.receiveShadow = true;
     group.add(rm); made.push(rm);
   }
+  if (street) registerScatterSolids(group, trees, rocks, tMul, rMul);   // trees + rocks now stop a man on foot
   return made;
 }
 
@@ -5578,6 +5923,7 @@ function refreshDetailBubble() {
     const street = scatterStreetFor(kx, kz);        // scatter swaps whole-chunk (instances are cheap)
     const hyper = scatterHyperFor(kx, kz);          // ...and again when the hi-poly inner band crosses it
     if (rec.scTier !== _appliedTier || rec.scStreet !== street || rec.scHyper !== hyper) {
+      if (rec.group.userData.scatterSolids) { unregisterSolids(rec.group.userData.scatterSolids); rec.group.userData.scatterSolids = null; } // drop old colliders before rebuild
       for (const m of rec.sc || []) { rec.group.remove(m); if (m.dispose) m.dispose(); }
       rec.sc = buildScatter(rec.group, kx, kz); rec.scTier = _appliedTier; rec.scStreet = street; rec.scHyper = hyper;
     }
@@ -5768,6 +6114,7 @@ function buildChunk(cx, cz) {
 }
 function disposeChunk(key) {
   const c = mapChunks.get(key); if (!c) return;
+  if (c.group.userData.scatterSolids) unregisterSolids(c.group.userData.scatterSolids); // pull this chunk's tree/rock colliders
   mapTerrain.remove(c.group); disposeGroup(c.group); // disposeGroup frees the overlay material + its texture too
   for (const h of c.holds) { _dropStreet(h); _dropIcon(h); const i = settlements.indexOf(h); if (i >= 0) settlements.splice(i, 1); } // street/icon layers live under mapTerrain, not the chunk group
   const ci = key.indexOf(','), kx = +key.slice(0, ci), kz = +key.slice(ci + 1); // drop this chunk's cells (bound the Map)
@@ -7417,7 +7764,8 @@ function makeColumn(comp, color, labelText) {
   const marchers = [];
   slots.forEach((k, i) => {
     const def = ALLY_DEF_BY_CLASS[k];
-    const hum = buildHumanoid(ALLY_PALETTES[i % ALLY_PALETTES.length], COLUMN_SCALE, def.weapon);
+    const hum = buildFighterBody(def, ALLY_PALETTES[i % ALLY_PALETTES.length]);
+    hum.group.scale.setScalar(COLUMN_SCALE);
     const row = Math.floor(i / 2), col = i % 2;
     hum.group.position.set((col - 0.5) * 1.0, 0, -1.1 - row * 0.95); // trail behind the banner (local -z = back)
     const anim = makeAnimator(hum.parts);
@@ -7441,6 +7789,7 @@ function animateColumn(g, moving, dt) {
 // distance LOD: far columns drop their bodies and show only the banner + count
 function columnLOD(g, distSq) {
   const ms = g.userData.marchers; if (!ms) return;
+  if (g.userData.labelOnly) return; // a materialised host's token is label-only — don't resurrect its marchers
   const show = distSq < COLUMN_LOD2;
   for (const m of ms) if (m.group.visible !== show) m.group.visible = show;
 }
@@ -7451,7 +7800,7 @@ function refreshDetLabel(det) { if (det.group) setColumnLabel(det.group, '✦ ' 
 function newDetachment() {
   const id = ++detachCounter;
   return { id, name: 'Detachment ' + id, color: GROUP_COLORS[(id - 1) % GROUP_COLORS.length],
-    comp: { sword: 0, long: 0, archer: 0, thrower: 0 }, roster: [], size: 0,
+    comp: { sword: 0, long: 0, archer: 0, thrower: 0, horse: 0 }, roster: [], size: 0,
     pos: new THREE.Vector3(), facing: player.facing, group: null,
     order: 'follow', target: null, chase: null, route: [], routeIdx: 0, routeDir: 1, routeMesh: null, targetMesh: null,
     pace: 'march', garrisonHold: null, faction: PLAYER_REALM, isDetachment: true,
@@ -7961,6 +8310,19 @@ function unregisterSolids(entry) {
   if (!entry._solids) return;
   for (const [k, a] of _solidGrid) { let w = 0; for (const o of a) if (o._e !== entry) a[w++] = o; a.length = w; if (!w) _solidGrid.delete(k); }
   entry._solids = null;
+}
+// street-level trunks + boulders become foot colliders in the SAME grid the walls/houses use, so a man
+// on foot can't walk through a tree or a rock. Radii sit between trunk and canopy — tight enough to weave
+// a copse, solid enough that a grove reads as a thicket you go around. Only at street tier (where the eye
+// sees individual trees); the strategic map keeps its empty grid so bands still route by tokens.
+const SCATTER_TREE_R = 0.6, SCATTER_ROCK_R = 0.9, SCATTER_R_MIN = 0.5, SCATTER_R_MAX = 1.3;
+function registerScatterSolids(group, trees, rocks, tMul, rMul) {
+  const entry = {}, obs = [];
+  for (const t of trees) obs.push({ _e: entry, x: t[0], z: t[1], r: clamp(SCATTER_TREE_R * t[3] * tMul, SCATTER_R_MIN, SCATTER_R_MAX) });
+  for (const rk of rocks) obs.push({ _e: entry, x: rk[0], z: rk[1], r: clamp(SCATTER_ROCK_R * rk[2] * rMul, SCATTER_R_MIN, SCATTER_R_MAX) });
+  if (!obs.length) return;
+  registerSolids(entry, obs);
+  group.userData.scatterSolids = entry;
 }
 // point inside any obstacle near (x,z): a building circle (point-in-circle) or a wall segment
 // (point-to-segment distance < the wall's half-thickness)
@@ -8526,6 +8888,7 @@ function updateMap(dt) {
         clamp(1.05 + warbandTotal() / 90, 1.05, 2.6));
       animateColumn(player.mapToken, marching, dt); // the lead column marches as you ride
     }
+    updateFieldArmies(dt); // armies in sight stand as soldier formations on the miniature too
   }
   // tally the ground actually covered (hero OR banner) → grow the vista (haze, zoom, stream-radius all follow)
   const pMoved = Math.hypot(player.pos.x - opx, player.pos.z - opz);
@@ -8692,6 +9055,7 @@ function buildEnemyRoster(size, level) {
   add('brute', Math.round(size * 0.12));
   add('longsword', Math.round(size * 0.12));
   add('rogue', Math.round(size * 0.12));
+  add('lancer', Math.round(size * 0.08)); // a wing of cavalry rides with any sizable host
   while (roster.length < size) roster.push({ type: 'grunt' });
   roster.length = size;
   const nHeroes = size >= 40 ? 2 : size >= 16 ? 1 : 0;
@@ -8705,7 +9069,7 @@ function defKey(def) {
 // ---------- Allied reinforcements: pacted bands & answered banners fight on YOUR side ----------
 // A "borrowed" soldier fields like one of yours but never folds into your persistent warband (it
 // belongs to its own nation/ally) — applyBattleGrowth drops them, and their deaths don't dock your XP.
-const ALLY_RECRUIT_MIX = ['sword', 'sword', 'long', 'archer', 'sword', 'long', 'thrower'];
+const ALLY_RECRUIT_MIX = ['sword', 'sword', 'long', 'archer', 'sword', 'horse', 'long', 'thrower'];
 function makeBorrowedChar(classKey, factionName, level) {
   const c = makeChar(classKey, { team: 'ally', notability: 1 });
   c.borrowed = true; c.allyFaction = factionName || 'Allies';
@@ -8751,8 +9115,8 @@ const selected = new Set();        // allies currently selected
 let planGroups = [];               // squads: [{ id, name, color, order, anchor, lastPreset }]
 let planGroupCounter = 0, activeGroupId = null;
 const GROUP_COLORS = [0xffd34d, 0x4dd2ff, 0xff7bd0, 0x9aff6b, 0xffa24d, 0xc08bff, 0xff6b6b, 0x6bd0ff, 0xd0ff6b];
-const CLASS_KEYS = ['sword', 'long', 'archer', 'thrower'];
-const CLASS_NAME = { sword: 'Swords', long: 'Longswords', archer: 'Archers', thrower: 'Throwers' };
+const CLASS_KEYS = ['sword', 'long', 'archer', 'thrower', 'horse'];
+const CLASS_NAME = { sword: 'Swords', long: 'Longswords', archer: 'Archers', thrower: 'Throwers', horse: 'Horsemen' };
 const ORDERS = [['attack', 'Charge'], ['follow', 'Follow'], ['hold', 'Hold'], ['regroup', 'Regroup'], ['free', 'Free']];
 const ORDER_LABEL = { attack: 'Charging', follow: 'Following you', hold: 'Holding', zone: 'Holding zone', regroup: 'Regrouping', free: 'At will' };
 const PACES = [['march', '🐢 March'], ['rush', '⚡ Rush']];
@@ -8800,7 +9164,7 @@ function updateGroupRing(a) {
 }
 // ----- group CRUD -----
 function newGroup() {
-  const g = { id: ++planGroupCounter, name: 'Group ' + planGroupCounter, color: GROUP_COLORS[(planGroupCounter - 1) % GROUP_COLORS.length], order: 'free', pace: 'march', anchor: null, zone: null, zoneMesh: null, holdMarker: null, recipe: { sword: 0, long: 0, archer: 0, thrower: 0 }, lastPreset: null, leaderId: null };
+  const g = { id: ++planGroupCounter, name: 'Group ' + planGroupCounter, color: GROUP_COLORS[(planGroupCounter - 1) % GROUP_COLORS.length], order: 'free', pace: 'march', anchor: null, zone: null, zoneMesh: null, holdMarker: null, recipe: { sword: 0, long: 0, archer: 0, thrower: 0, horse: 0 }, lastPreset: null, leaderId: null };
   planGroups.push(g); activeGroupId = g.id;
   renderDeck();
   return g;
@@ -8971,7 +9335,7 @@ let _targetPick = null;   // null | 'follow' | 'attack' — while set, the Comma
 let _pickSubject = null;  // which unit the picked party order applies to (null = lead column, else a detachment)
 let cmdSubject = null;    // the unit the Orders section is aimed at (null = lead column / your army, else a detachment)
 let _pendingMapOrder = null; // null | 'march' | 'hold' — armed action waiting for a map click to set its point
-const detSplitRecipe = { sword: 0, long: 0, archer: 0, thrower: 0 };
+const detSplitRecipe = { sword: 0, long: 0, archer: 0, thrower: 0, horse: 0 };
 const _disposeOverlayGroup = (g) => { if (!g) return; scene.remove(g); g.traverse(o => { if (o.geometry && !o.geometry.userData.cached) o.geometry.dispose(); if (o.material) { if (o.material.map) o.material.map.dispose(); o.material.dispose(); } }); };
 
 function setDetPace(det, pace) { det.pace = pace; renderDetPanel(); }
@@ -9311,7 +9675,7 @@ initDetCmdUI();
 
 // ----- remembered squads: persist composition + orders, re-bind to a fresh muster each battle -----
 function refreshGroupRecipe(g) {
-  const r = { sword: 0, long: 0, archer: 0, thrower: 0 };
+  const r = { sword: 0, long: 0, archer: 0, thrower: 0, horse: 0 };
   for (const a of allies) if (a.alive && a.group === g.id) { const k = defKey(a.def); if (r[k] != null) r[k]++; }
   g.recipe = r;
 }
@@ -9561,7 +9925,7 @@ function allyAtPoint(cx, cy) {
 }
 // ----- rendering -----
 // ----- always-on New Group builder: dial how many of each UNASSIGNED class to pull, then Create -----
-let newGroupPick = { sword: 0, long: 0, archer: 0, thrower: 0 };
+let newGroupPick = { sword: 0, long: 0, archer: 0, thrower: 0, horse: 0 };
 function newGroupPickTotal() { let n = 0; for (const k of CLASS_KEYS) n += newGroupPick[k] || 0; return n; }
 function renderNewGroupForm() {
   const rows = document.getElementById('ng-rows'); if (!rows) return;
@@ -9588,7 +9952,7 @@ function createGroupFromPick() {
   const total = newGroupPickTotal(); if (total <= 0) return;
   const g = newGroup();                                   // fresh squad (sets it active + re-renders)
   for (const key of CLASS_KEYS) if (newGroupPick[key] > 0) assignToGroup(g, key, newGroupPick[key]);
-  newGroupPick = { sword: 0, long: 0, archer: 0, thrower: 0 };
+  newGroupPick = { sword: 0, long: 0, archer: 0, thrower: 0, horse: 0 };
   selectGroup(g);                                         // ring it so the next order targets the new squad
   showCmdToast(g.name + ' formed — ' + total + ' soldier' + (total > 1 ? 's' : ''));
 }
@@ -9695,7 +10059,7 @@ function renderArmyBar() {
     bar.appendChild(b);
   }
 }
-let splitN = 4, splitRecipe = { sword: 0, long: 2, archer: 2, thrower: 0 };
+let splitN = 4, splitRecipe = { sword: 0, long: 2, archer: 2, thrower: 0, horse: 0 };
 function renderSplit() {
   const pop = document.getElementById('split-pop'); if (!pop) return;
   const recipeStr = CLASS_KEYS.filter(k => splitRecipe[k] > 0).map(k => splitRecipe[k] + ' ' + CLASS_NAME[k]).join(' + ') || '(pick classes)';
@@ -10439,6 +10803,9 @@ function loop(now) {
   if (BATTLE.on) return battleFrame(now); // battle-editor mode: two armies fighting in a valley, own sim + orbit
   if (MARCH.on) return marchFrame(now);  // march-editor mode: two hosts patrol real towns/roads — tune how they WALK
   if (EDIT.on) return editFrame(now);   // object-editor mode: orbit + render one model, skip the game sim
+  if (FORGE.on) return forgeFrame(now); // master editor: a forked slice of the live world, simulating in isolation
+  if (FORGE.autoArm && mode === 'map' && !encounter && !mapCmdMode) { FORGE.autoArm = false; forgeEnterSelect(); } // ?forge: arm the picker on the first map frame (any rung — gameRunning is action-only)
+  else if (FORGE.selecting) forgeSelectFrame();  // live game keeps running under the picker — track hover/preview
   const rawMs = now - last;
   const dt = Math.min((now - last) / 1000, 0.05);
   last = now;
@@ -10926,6 +11293,21 @@ BV.pickFight = () => { // start an in-place fight with the nearest materialised 
   }
   if (best) startFieldBattle(best);
   return best ? { faction: best.faction && best.faction.name, size: best.size, dist: +bd.toFixed(1) } : null;
+};
+BV.fieldArmies = () => { // every host currently standing as soldiers, nearest first
+  let bodies = 0; const per = [];
+  for (const [b, fa] of fieldArmies) {
+    bodies += fa.bodies.length;
+    per.push({ name: (b.leader && b.leader.name) || b.name || 'band', det: !!b.isDetachment,
+               d: +Math.hypot(b.pos.x - player.pos.x, b.pos.z - player.pos.z).toFixed(1),
+               bodies: fa.bodies.length, mounts: fa.bodies.filter(x => x.mounted).length, size: Math.round(b.size) });
+  }
+  per.sort((a, b) => a.d - b.d);
+  return { bands: fieldArmies.size, bodies, capTotal: FIELD_ARMY.capTotal, showR: FIELD_ARMY.showR, per };
+};
+BV.detach = (recipe) => { // peel men into a detachment (test hook for the on-foot det crowds)
+  const det = detach(recipe || { sword: 8 });
+  return det ? { name: det.name, size: det.size, comp: { ...det.comp } } : null;
 };
 // zone-strike hooks: inspect the current overlap prompt + fire it (per-squad by index, or 'all')
 BV.strike = () => { updateFieldStrike(1); return fieldStrike ? { faction: fieldStrike.band.faction && fieldStrike.band.faction.name,
@@ -11690,6 +12072,7 @@ let presenceT = 0;
 let _holdsTick = 0;
 function applyServerHolds(holds) {
   if (!holds || !holds.length) return;
+  if (typeof FORGE !== 'undefined' && FORGE.on) return; // a forge session froze the live view — reconcile on exit instead
   const byKey = new Map();
   for (const h of holds) { heldOwners.set(h.holdKey, h.owner); byKey.set(h.holdKey, h.owner); }
   for (const cap of settlements) {
@@ -11709,7 +12092,8 @@ function sendPresenceMaybe(dt) {
     // the poll carries your position so the server ships the patrols around YOU; the .then
     // reconciles armies/battles/campaigns into the live view (the war moves while you watch)
     window.net.loadWorld(undefined, player.pos.x, player.pos.z).then(() => {
-      if (mode !== 'map') return;
+      if (mode !== 'map' || FORGE.on) return; // a forge session froze the live view — don't reconcile into it
+
       renderOtherPlayers();
       syncServerBands();
       syncServerBattles();
@@ -12148,7 +12532,7 @@ function doCreateRandomChar() {
   const tmpNames = new Set();
   const hero = makeChar('sword', { team: 'ally', notability: 3, nameSet: tmpNames });
   const kinds = ['sword', 'sword', 'sword', 'archer', 'thrower', 'long'];
-  const roster = [], comp = { sword: 0, long: 0, archer: 0, thrower: 0 };
+  const roster = [], comp = { sword: 0, long: 0, archer: 0, thrower: 0, horse: 0 };
   for (let i = 0; i < men; i++) {
     const c = makeChar(kinds[(Math.random() * kinds.length) | 0], { team: 'ally', nameSet: tmpNames });
     roster.push(serChar(c)); comp[classKeyOf(c.archetype)]++;
@@ -12172,7 +12556,7 @@ function doSplitChar() {
   if (n > warbandTotal()) return chMsg('you only have ' + warbandTotal() + ' men riding with you');
   const moved = takeMenLocal(n);                        // the actual soldiers ride under the new banner
   const hero = makeChar('sword', { team: 'ally', name: name, notability: 3 });
-  const comp = { sword: 0, long: 0, archer: 0, thrower: 0 };
+  const comp = { sword: 0, long: 0, archer: 0, thrower: 0, horse: 0 };
   for (const s of moved) comp[classKeyOf(s.archetype)]++;
   window.net.splitChar({ name: name, archetype: 'sword', men: n, x: player.pos.x + 3, z: player.pos.z + 3,
     state: { hero: serChar(hero), comp: comp, roster: moved } })
@@ -12297,13 +12681,13 @@ const STATIONS = [
   { key: 'sellsword', title: 'Sellsword Captain', weight: 3, menLo: 18,  menHi: 30,  holdings: 0, pacts: 1, renownLo: 30,  renownHi: 90,  regionLo: 1, regionHi: 2, enemyFactor: 1.15, encounter: 'field',
     mix: { sword: 0.50, long: 0.12, archer: 0.22, thrower: 0.16 }, blurb: 'A free company under contract — paid to win other men’s wars.' },
   { key: 'knight',   title: 'Hedge Knight',      weight: 3, menLo: 24,  menHi: 42,  holdings: 0, pacts: 1, renownLo: 60,  renownHi: 140, regionLo: 1, regionHi: 2, enemyFactor: 1.0,  encounter: 'field',
-    mix: { sword: 0.55, long: 0.18, archer: 0.15, thrower: 0.12 }, blurb: 'A sworn sword and a small retinue, riding for land and renown.' },
+    mix: { sword: 0.43, long: 0.18, archer: 0.15, thrower: 0.12, horse: 0.12 }, blurb: 'A sworn sword and a small retinue, riding for land and renown.' },
   { key: 'baron',    title: 'Marcher Baron',     weight: 2, menLo: 45,  menHi: 70,  holdings: 1, pacts: 1, renownLo: 140, renownHi: 300, regionLo: 2, regionHi: 3, enemyFactor: 0.95, encounter: 'defend',
-    mix: { sword: 0.50, long: 0.20, archer: 0.18, thrower: 0.12 }, blurb: 'Lord of a border hold — one castle to keep and a rival across the river.' },
+    mix: { sword: 0.40, long: 0.20, archer: 0.18, thrower: 0.12, horse: 0.10 }, blurb: 'Lord of a border hold — one castle to keep and a rival across the river.' },
   { key: 'prince',   title: 'Prince',            weight: 2, menLo: 100, menHi: 150, holdings: 1, pacts: 2, renownLo: 300, renownHi: 520, regionLo: 3, regionHi: 4, enemyFactor: 0.9,  encounter: 'field',
-    mix: { sword: 0.45, long: 0.22, archer: 0.20, thrower: 0.13 }, blurb: 'Heir to a realm — a host of a hundred at your back and a throne to claim.' },
+    mix: { sword: 0.32, long: 0.22, archer: 0.20, thrower: 0.13, horse: 0.13 }, blurb: 'Heir to a realm — a host of a hundred at your back and a throne to claim.' },
   { key: 'king',     title: 'High King',         weight: 1, menLo: 160, menHi: 240, holdings: 2, pacts: 2, renownLo: 520, renownHi: 900, regionLo: 4, regionHi: 5, enemyFactor: 0.8,  encounter: 'siege',
-    mix: { sword: 0.42, long: 0.24, archer: 0.20, thrower: 0.14 }, blurb: 'Crowned and warlike — two holds, sworn vassals, and a grand campaign.' },
+    mix: { sword: 0.27, long: 0.24, archer: 0.20, thrower: 0.14, horse: 0.15 }, blurb: 'Crowned and warlike — two holds, sworn vassals, and a grand campaign.' },
 ];
 const ENCOUNTER_VERB = {
   none:   () => `The open road — raise your band`,
@@ -12317,7 +12701,7 @@ let currentStation = null;
 function _rngInt(rng, lo, hi) { return lo + Math.floor(rng() * (hi - lo + 1)); }
 function _shuffleIdx(rng, n) { const a = []; for (let i = 0; i < n; i++) a.push(i); for (let i = n - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); const t = a[i]; a[i] = a[j]; a[j] = t; } return a; }
 function _compFromMix(total, mix) {
-  const comp = { sword: 0, long: 0, archer: 0, thrower: 0 }; let used = 0;
+  const comp = { sword: 0, long: 0, archer: 0, thrower: 0, horse: 0 }; let used = 0;
   for (const k of WARBAND_KEYS) { comp[k] = Math.max(0, Math.round(total * (mix[k] || 0))); used += comp[k]; }
   comp.sword += total - used; if (comp.sword < 0) { comp.thrower += comp.sword; comp.sword = 0; } // never below zero
   if (comp.thrower < 0) comp.thrower = 0;
@@ -12555,6 +12939,10 @@ const EDIT_KINDS = {
   warrior: { kind: 'humanoid', weapon: 'sword', duo: true }, swordsman: { kind: 'humanoid', weapon: 'sword', duo: true },
   archer: { kind: 'humanoid', weapon: 'bow', duo: true }, humanoid: { kind: 'humanoid', weapon: 'sword', duo: true },
   fighter: { kind: 'humanoid', weapon: 'sword', duo: true }, banner: { kind: 'banner' },
+  // cavalry (single figure — the before/after duo is a foot-rig affair)
+  horseman: { kind: 'humanoid', weapon: 'longsword', mounted: true }, cavalry: { kind: 'humanoid', weapon: 'longsword', mounted: true },
+  horse: { kind: 'humanoid', weapon: 'longsword', mounted: true }, rider: { kind: 'humanoid', weapon: 'longsword', mounted: true },
+  lancer: { kind: 'humanoid', weapon: 'longsword', mounted: true },
   gate: { kind: 'gate' }, gatehouse: { kind: 'gate' }, citygate: { kind: 'gate' },
 };
 function parseEditSpec(word, q) {
@@ -12563,6 +12951,7 @@ function parseEditSpec(word, q) {
     if (q.get('tier')) spec.tier = q.get('tier');
     const sd = q.get('seed'); if (sd != null && sd !== '') spec.seed = parseInt(sd, 10) >>> 0;
     if (q.get('weapon')) spec.weapon = q.get('weapon');
+    if (q.get('horse') === '1' || q.get('mounted') === '1') spec.mounted = true;
     const duo = q.get('duo'); if (duo === '0' || duo === 'false') spec.duo = false; else if (duo === '1' || duo === 'true') spec.duo = true;
     if (q.get('spin') === '0' || q.get('spin') === 'false') spec.spin = false;
     if (q.get('big') === '1') spec.big = true;
@@ -12592,6 +12981,10 @@ function editBuild(spec) {
   if (spec.kind === 'humanoid') {
     const pal = spec.palette || { skin: 0xe0b088, cloth: 0x356fb0, accent: 0x223a66, blade: 0xeaf2ff };
     const wep = spec.weapon || 'sword', sc = spec.scale || 1;
+    if (spec.mounted) { // one horseman on the stage; walk/run buttons play the horse walk/gallop
+      const h = buildCavalry(pal, sc, wep);
+      return { obj: h.group, seated: false, partsList: [h.parts], roots: [h.group] };
+    }
     if (spec.duo) {
       // BEFORE/AFTER duo: two figures side by side. Soldier 1 is the frozen baseline (no variant);
       // soldier 2 carries variant:'after' so a design edit to buildHumanoid can be gated to it alone.
@@ -12675,7 +13068,7 @@ function editPosePanel() {
     for (const a of EDIT.anims) setPose(a, EDIT.pose, 0.25);
     editPosePanel();
   };
-  const clearStride = () => { for (const p2 of EDIT.partsList) for (const k of ['hipL', 'hipR', 'kneeL', 'kneeR']) p2[k].rotation.x = 0; };
+  const clearStride = () => { for (const p2 of EDIT.partsList) { if (p2.mount) { saddleRider(p2); continue; } for (const k of ['hipL', 'hipR', 'kneeL', 'kneeR']) p2[k].rotation.x = 0; } };
   p.querySelector('#edit-walk').onclick = () => {
     EDIT.walk = !EDIT.walk; if (EDIT.walk) EDIT.run = false;
     EDIT.strideT = 0; // (re)starting a cycle replays the start-lean burst
@@ -12760,7 +13153,9 @@ function animUpdate(dt) {
     const k = Math.max(0, 1 - ANIM.strideT / STRIDE_START_DECAY);
     const lean = g.lean * k * k;
     for (const p of EDIT.partsList) { walkLegs(p, ANIM.walkPhase, g.leg); walkArms(p, ANIM.walkPhase, g.arm, lean); }
-    bob = Math.abs(Math.cos(ANIM.walkPhase)) * g.bob;
+    bob = (EDIT.parts && EDIT.parts.mount)
+      ? Math.max(0, Math.sin(ANIM.walkPhase * MOUNT.phaseMul + 1.6)) * g.bob * 2.2
+      : Math.abs(Math.cos(ANIM.walkPhase)) * g.bob;
   } else {
     for (const p of EDIT.partsList) restLegs(p, dt, true);
   }
@@ -12863,7 +13258,7 @@ function animPanelSync() {
 }
 // stand up the whole editor stage on a single soldier, then start the timeline
 function animBoot(opts = {}) {
-  editorBoot({ kind: 'humanoid', weapon: opts.weapon || 'sword', duo: false, scale: 1, seed: opts.seed || 3, spin: false, anim: true });
+  editorBoot({ kind: 'humanoid', weapon: opts.weapon || 'sword', mounted: !!opts.mounted, duo: false, scale: 1, seed: opts.seed || 3, spin: false, anim: true });
 }
 
 function editFrameCam() {
@@ -12948,7 +13343,9 @@ function editFrame(now) {
       for (const p of EDIT.partsList) { walkLegs(p, EDIT.walkPhase, g.leg); walkArms(p, EDIT.walkPhase, g.arm, lean); }
       bobAmp = g.bob;
     }
-    const bob = bobAmp ? Math.abs(Math.cos(EDIT.walkPhase)) * bobAmp : 0;
+    const bob = bobAmp ? (EDIT.parts && EDIT.parts.mount
+      ? Math.max(0, Math.sin(EDIT.walkPhase * MOUNT.phaseMul + 1.6)) * bobAmp * 2.2   // horse suspension hop
+      : Math.abs(Math.cos(EDIT.walkPhase)) * bobAmp) : 0;
     EDIT.roots.forEach((r, i) => { r.position.y = (EDIT.rootBaseY[i] || 0) + bob; });
   }
   const st = Math.sin(o.phi);
@@ -14552,19 +14949,49 @@ function marchClashResolved(lc) {
   marchPollHost(lc.hostA, bt.sideA, lc.A);
   marchPollHost(lc.hostB, bt.sideB, lc.B);
 }
+const _hx6 = (c) => '#' + c.toString(16).padStart(6, '0');
 // the battle is over (via wipe OR fold-to-numeric) — finishMapBattle is the ONE choke point for both, so
-// narrate the outcome here, once. aWins is set by the time this runs.
+// narrate the outcome AND advance the WAR here, once. aWins is set by the time this runs.
 function marchBattleFinished(bt) {
   if (!bt || bt.aWins == null) return;
   const wf = (bt.aWins ? bt.sideA : bt.sideB).faction, lf = (bt.aWins ? bt.sideB : bt.sideA).faction;
-  if (wf && lf) marchLog(`🏆 <b style="color:#${wf.color.toString(16).padStart(6, '0')}">${wf.name}</b> has broken <b style="color:#${lf.color.toString(16).padStart(6, '0')}">${lf.name}</b> — the field is theirs!`, '#ffe089');
+  if (!wf || !lf) return;
+  marchLog(`🏆 <b style="color:${_hx6(wf.color)}">${wf.name}</b> has broken <b style="color:${_hx6(lf.color)}">${lf.name}</b> — the field is theirs!`, '#ffe089');
+  if (MARCH.war.over) return;
+  // every field defeat costs the beaten side ground: its HOLD loses strength. A battered hold musters
+  // fewer men next time (marchRemuster), so the war SNOWBALLS toward a conclusion instead of looping.
+  const losTown = MARCH.towns.find(t => t.faction === lf);
+  if (!losTown) return;
+  losTown.hp = Math.max(0, losTown.hp - (18 + Math.random() * 12));
+  marchLog(`🏰 <b style="color:${_hx6(lf.color)}">${losTown.name}</b> is shaken — ${Math.round(losTown.hp)}% strength`, '#c9906b');
+  marchHudUpdate();
+  if (losTown.hp <= 0) marchWarWon(wf, lf, losTown);
 }
+// a hold has fallen — its side loses the WAR, the other wins. Freeze, banner, then auto-start a new war.
+function marchWarWon(win, los, losTown) {
+  MARCH.war.over = true; MARCH.war.winner = win; MARCH.war.endAt = MARCH.clock + 8;
+  try { const om = losTown && losTown.group && losTown.group.userData.ownerMats; if (om) for (const m of om) m.color.setHex(win.color); } catch (e) {} // the conquered hold flies the victor's colours
+  marchLog(`🏰🏆 <b style="color:${_hx6(win.color)}">${win.name}</b> has STORMED ${los.name}’s Hold — the WAR IS WON!`, '#ffe089');
+  marchBanner(`${win.name} wins the war`, win.color);
+  marchHudUpdate();
+}
+function marchBanner(text, color) {
+  let el = document.getElementById('march-banner');
+  if (!text) { if (el) el.style.display = 'none'; return; }   // clear: just hide (no colour needed)
+  if (!el) { el = document.createElement('div'); el.id = 'march-banner'; document.body.appendChild(el); }
+  el.style.cssText = 'position:fixed;left:50%;top:24%;transform:translateX(-50%);z-index:60;padding:14px 30px;border-radius:14px;' +
+    'background:rgba(14,12,20,.86);border:2px solid ' + _hx6(color || 0xffe089) + ';color:#fff;font:800 30px system-ui;letter-spacing:1px;' +
+    'text-shadow:0 2px 8px #000;box-shadow:0 8px 40px rgba(0,0,0,.6);white-space:nowrap';
+  el.innerHTML = '🏆 ' + text; el.style.display = 'block';
+}
+// how many men a host raises when it re-musters — a WEAKENED hold fields fewer (the war's snowball)
+function marchMusterSize(a) { const t = a.home, f = t ? t.hp / t.maxHp : 1; return Math.max(8, Math.round(a.bornSize * (0.4 + 0.6 * f))); }
 function marchRespawn(a) {
   const t = a.home; const p = marchLand(t.x + (Math.random() - 0.5) * 6, t.z + (Math.random() - 0.5) * 6);
   a.pos.set(p.x, mapElevY(p.x, p.z), p.z);
   a.group = marchBandGroup();        // killBand disposed the old banner when this host was broken
-  a.size = a.bornSize; a.alive = true; a.state = 'patrol'; a.inBattle = null; a.path = null; a.clashCd = 0; a._shownSize = -1; a.wp = 3;
-  a.leader = makeBandLeader(a.bornSize, 3, true);
+  a.size = marchMusterSize(a); a.alive = true; a.state = 'patrol'; a.inBattle = null; a.path = null; a.clashCd = 0; a._shownSize = -1; a.wp = 3;
+  a.leader = makeBandLeader(a.size, 3, true);
 }
 // the brain — one authoritative sim step. THIS is the code the editor exists to improve.
 function marchTick(dt) {
@@ -14594,8 +15021,8 @@ function marchTick(dt) {
       if (!a.inBattle) { a.state = 'withdraw'; a.path = null; a.clashCd = MARCH.ai.clashCd; } // finishMapBattle resolved it — survivor falls back
       continue;
     }
-    if (a.state === 'withdraw') {                          // routed/beaten — fall back to home city, RE-MUSTER to full, then march out again
-      if (marchFollow(a, a.home.x, a.home.z, MARCH.ai.marchSpeed, dt)) { a.state = 'patrol'; a.path = null; a.size = a.bornSize; a.wp = 3; }
+    if (a.state === 'withdraw') {                          // beaten survivor — fall back to home city, RE-MUSTER (scaled by the hold's strength), march out again
+      if (marchFollow(a, a.home.x, a.home.z, MARCH.ai.marchSpeed, dt)) { a.state = 'patrol'; a.path = null; a.size = marchMusterSize(a); a.wp = 3; }
       continue;
     }
     // patrol = MARCH the road from its city toward the enemy (like a campaigning host); it advances
@@ -14647,9 +15074,10 @@ function marchSetup() {
   const t0 = { x: ocx - cs * sep / 2 + jit(), z: ocz - sn * sep / 2 + jit() }, t1 = { x: ocx + cs * sep / 2 + jit(), z: ocz + sn * sep / 2 + jit() };
   const defs = [{ color: 0x2f6fb0, name: 'Azure' }, { color: 0x9a2f2f, name: 'Crimson' }];
   MARCH.towns = [
-    { x: t0.x, z: t0.z, faction: defs[0], name: defs[0].name + '’s Hold' },
-    { x: t1.x, z: t1.z, faction: defs[1], name: defs[1].name + '’s Hold' },
+    { x: t0.x, z: t0.z, faction: defs[0], name: defs[0].name + '’s Hold', hp: 100, maxHp: 100 },
+    { x: t1.x, z: t1.z, faction: defs[1], name: defs[1].name + '’s Hold', hp: 100, maxHp: 100 },
   ];
+  MARCH.war = { over: false, winner: null, endAt: 0 }; marchBanner('');   // a fresh campaign
   // 'castle' = a compact walled keep — a clean, discrete city (a 'town'/'city' scatters a village of huts).
   const tier = MARCH.cfg.tier || 'castle', tseed = (Math.random() * 0xffffffff) >>> 0;
   for (let i = 0; i < MARCH.towns.length; i++) {
@@ -14700,7 +15128,7 @@ function marchSetup() {
 function marchFrame(now) {
   const dt0 = Math.min((now - (MARCH.last || now)) / 1000, 0.05); MARCH.last = now;
   frameNo++;
-  if (!MARCH.paused) {
+  if (!MARCH.paused && !MARCH.war.over) {   // the sim freezes on the victory beat, then a fresh war begins
     const steps = clamp(MARCH.speed | 0, 1, 8);
     for (let s = 0; s < steps; s++) {
       marchTick(dt0);
@@ -14708,6 +15136,7 @@ function marchFrame(now) {
       updateLiveClashes(dt0);     // THE battle AI: warHostUpdate (commanders) + stepFighter (real melee) + resolution
     }
   }
+  if (MARCH.war.over && !MARCH.paused && MARCH.clock >= MARCH.war.endAt) { marchSetup(); return marchFrame(now); } // new campaign
   // keep the spectator "player" parked on the fight so the live clash never folds itself to numbers
   // (updateLiveClashes drops back to the pantomime if no band is within FIELD_ARMY.hideR of the player)
   let cx = 0, cz = 0, all = 0;
@@ -14806,8 +15235,16 @@ function marchHud() {
 function marchHudUpdate() {
   const el = document.getElementById('march-counts'); if (!el) return;
   const pb = document.getElementById('march-pause'); if (pb) pb.textContent = MARCH.paused ? '▶ Resume' : '⏸ Pause';
-  const row = a => a ? `<div style="margin-top:2px"><span style="color:#${a.faction.color.toString(16).padStart(6, '0')}">●</span> ${a.home.name} — ${a.alive ? Math.round(a.size) + ' · ' + a.state : '<span style="color:#ff9b6b">routed</span>'}</div>` : '';
-  el.innerHTML = MARCH.armies.map(row).join('');
+  // each hold shows a STRENGTH bar (the war meter) + its host's live size/state; a hold at 0 has fallen
+  const row = (a, t) => {
+    const col = '#' + (t.faction.color).toString(16).padStart(6, '0'), hp = Math.max(0, Math.round(t.hp)), fw = clamp(t.hp / t.maxHp, 0, 1) * 100;
+    const status = MARCH.war.over && t.hp <= 0 ? '<span style="color:#ff7a6b">FALLEN</span>'
+      : a && a.alive ? Math.round(a.size) + ' men · ' + a.state : '<span style="color:#ff9b6b">re-mustering</span>';
+    return `<div style="margin-top:5px"><span style="color:${col}">●</span> <b>${t.name}</b> <span style="color:#9aa4b4">${status}</span>` +
+      `<div style="height:6px;margin-top:2px;background:rgba(0,0,0,.4);border-radius:3px;overflow:hidden"><i style="display:block;height:100%;width:${fw}%;background:${col}"></i></div></div>`;
+  };
+  el.innerHTML = MARCH.towns.map((t, i) => row(MARCH.armies.find(a => a.home === t), t)).join('') +
+    (MARCH.war.over ? `<div style="margin-top:6px;color:#ffe089;font-weight:700">🏆 ${MARCH.war.winner.name} wins — new war…</div>` : '');
 }
 function marchBoot(cfg) {
   MARCH.on = true; MARCH.cfg = { ...MARCH.cfg, ...(cfg || {}) };
@@ -14841,6 +15278,962 @@ BV.marchReset = () => { marchSetup(); return BV.marchStatus(); };   // reroll th
 BV.marchStatus = () => ({ on: MARCH.on, paused: MARCH.paused, speed: MARCH.speed, ai: { ...MARCH.ai },
   armies: MARCH.armies.map(a => ({ town: a.home.name, size: Math.round(a.size), alive: a.alive, state: a.state,
     pos: [Math.round(a.pos.x), Math.round(a.pos.z)], roadFrac: a.path ? undefined : null })) });
+
+// ============================================================================
+//  FORGE — the master editor. Select anything you SEE in the live game (a city,
+//  a slice of coast, two soldiers dueling, a marching host) and fork it into an
+//  isolated session: a mini-world limited to the selection that keeps simulating
+//  its natural behavior (hosts keep marching, sighting, fighting — the REAL
+//  battle AI: startMapBattle/startLiveClash/warHost, same as the live game) but
+//  NEVER writes back to the live world. Exit restores the live game exactly
+//  where it froze. The stage is built IN WORLD COORDINATES at the crop's real
+//  location, so mapElevY/terra()/isWater/settlement seating are all already
+//  correct with zero overrides — the hidden live world sleeps underneath.
+//  Phase 1: select → fork → observe (pause/speed/reset + orbit cam).
+// ============================================================================
+const FORGE = {
+  on: false,           // SESSION active (render-loop dispatch — the live loop is bypassed)
+  selecting: false,    // SELECT overlay active (live game keeps running under the picker)
+  autoArm: false,      // ?forge — arm the picker on the first live map frame
+  session: null,       // { snap, bounds, stage, ground, ring, bands, clock, paused, speed }
+  orbit: { target: new THREE.Vector3(), r: 90, theta: 0.7, phi: 0.9 },
+  seedLock: true,      // sessions ride a seeded LCG on Math.random → Reset replays identically
+  ai: { senseR: 40, marchSpeed: 8.0, slopeSlow: 2.6, arrive: 3.0, clashCd: 5, edgeInset: 4 },
+  keys: new Set(), last: 0, _restore: null, _rng0: 0,
+  hover: null, drag: null, pending: null,
+  _controlsOn: false, _guardOn: false, _hoverRing: null, _previewRect: null, _pickT: 0,
+};
+const _forgeNativeRandom = Math.random;   // the real RNG — restored unconditionally on exit
+function forgeSeedRandom(seed) { let s = (seed >>> 0) || 1; Math.random = () => { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; return s / 4294967296; }; }
+
+// ---- bounds ----
+const FORGE_MAX_SIDE = 280, FORGE_MIN_SIDE = 30;
+function forgeClampBounds(b) {
+  const cx = (b.minX + b.maxX) / 2, cz = (b.minZ + b.maxZ) / 2;
+  const w = clamp(b.maxX - b.minX, FORGE_MIN_SIDE, FORGE_MAX_SIDE), d = clamp(b.maxZ - b.minZ, FORGE_MIN_SIDE, FORGE_MAX_SIDE);
+  return { minX: cx - w / 2, maxX: cx + w / 2, minZ: cz - d / 2, maxZ: cz + d / 2 };
+}
+function forgeClampXZ(x, z) {
+  const b = FORGE.session.bounds, i = FORGE.ai.edgeInset;
+  return [clamp(x, b.minX + i, b.maxX - i), clamp(z, b.minZ + i, b.maxZ - i)];
+}
+// what a selection forks: an entity pick grows a natural stage around its subject
+function forgeBoundsFor(sel) {
+  if (sel.kind === 'crop') return forgeClampBounds(sel.rect);
+  if (sel.kind === 'city') {
+    const R = Math.max((SG_SPEC[sel.hold.tier || 'capital'] || SG_SPEC.village).R * 2, 55);
+    return forgeClampBounds({ minX: sel.hold.x - R, maxX: sel.hold.x + R, minZ: sel.hold.z - R, maxZ: sel.hold.z + R });
+  }
+  if (sel.kind === 'band') {
+    let minX = sel.band.pos.x - 60, maxX = sel.band.pos.x + 60, minZ = sel.band.pos.z - 60, maxZ = sel.band.pos.z + 60;
+    const bt = sel.band.inBattle;   // a band already at war brings its whole battle along
+    if (bt) for (const b of bt.sideA.bands.concat(bt.sideB.bands)) {
+      if (!b.alive) continue;
+      minX = Math.min(minX, b.pos.x - 60); maxX = Math.max(maxX, b.pos.x + 60);
+      minZ = Math.min(minZ, b.pos.z - 60); maxZ = Math.max(maxZ, b.pos.z + 60);
+    }
+    return forgeClampBounds({ minX, maxX, minZ, maxZ });
+  }
+  if (sel.kind === 'duel') {
+    let minX = 1e9, maxX = -1e9, minZ = 1e9, maxZ = -1e9;
+    for (const arr of [sel.lc.A, sel.lc.B]) for (const f of arr) {
+      if (!f.alive) continue;
+      minX = Math.min(minX, f.pos.x - 18); maxX = Math.max(maxX, f.pos.x + 18);
+      minZ = Math.min(minZ, f.pos.z - 18); maxZ = Math.max(maxZ, f.pos.z + 18);
+    }
+    return forgeClampBounds({ minX, maxX, minZ, maxZ });
+  }
+  return null;
+}
+
+// ---- snapshot: PLAIN DATA only (JSON round-trips) — the stage builds from THIS, never from live
+// state, which is what makes Reset an honest replay of the captured moment ----
+function forgeSnapshot(bounds, sel) {
+  const b = bounds, inB = (x, z) => x >= b.minX && x <= b.maxX && z >= b.minZ && z <= b.maxZ;
+  const kind = (sel && sel.kind) || 'crop';
+  const snap = {
+    v: 1, kind, bounds: { ...b }, worldSeed: worldSeed(), mapLevel, universeSeed,
+    sessionSeed: (_forgeNativeRandom() * 0xffffffff) >>> 0,
+    focus: sel && sel.kind === 'band' ? { x: sel.band.pos.x, z: sel.band.pos.z }
+         : sel && sel.kind === 'city' ? { x: sel.hold.x, z: sel.hold.z }
+         : { x: (b.minX + b.maxX) / 2, z: (b.minZ + b.maxZ) / 2 },
+    holds: [], bands: [], battles: [], fighters: null,
+  };
+  // holds (settlements + capitals) whose FOOTPRINT touches the crop — a city the box slices through
+  // still counts (its rendered meshes get razor-cut by the clone path; the record feeds the HUD/sim)
+  for (const en of _allHoldEntries()) {
+    const hr = Math.max((SG_SPEC[en.tier || 'capital'] || SG_SPEC.village).R * 1.15, 9);
+    if (en.x + hr < b.minX || en.x - hr > b.maxX || en.z + hr < b.minZ || en.z - hr > b.maxZ) continue;
+    snap.holds.push({ key: en.key || null, name: (en.def && en.def.name) || 'Hold', tier: en.tier || 'capital',
+      ownerName: en.owner && en.owner.name, ownerColor: en.owner ? en.owner.color : 0x9a8f70,
+      x: en.x, z: en.z, garrison: en.garrison | 0,
+      site: en.site ? { cx: en.site.cx, cz: en.site.cz, idx: en.site.idx } : null });
+  }
+  if (kind === 'duel') {   // the man-to-man rung: capture the EXACT fighters (type/hp/position/facing)
+    const cap = (arr) => arr.filter(f => f.alive).map(f => ({ type: f.type || 'grunt', x: f.pos.x, z: f.pos.z,
+      hpFrac: clamp(f.hp / Math.max(1, f.maxHp), 0.05, 1), facing: f.facing || 0, isHero: !!f.isHero }));
+    const bt = sel.lc.bt;
+    snap.fighters = { A: cap(sel.lc.A), B: cap(sel.lc.B),
+      facA: { name: bt.sideA.faction.name, color: bt.sideA.faction.color },
+      facB: { name: bt.sideB.faction.name, color: bt.sideB.faction.color } };
+    return snap;
+  }
+  // battles first (so their bands are captured with their battle, even a step outside the rect)…
+  const took = new Set();
+  for (const bt of mapBattles) {
+    if (!inB(bt.cx, bt.cz) || bt.done) continue;
+    const rec = { t: bt.t, duration: bt.duration, aBands: [], bBands: [] };
+    for (const [side, list] of [[bt.sideA, rec.aBands], [bt.sideB, rec.bBands]]) {
+      for (const bd of side.bands) {
+        if (!bd.alive || bd.isPlayerBand || bd.isDetachment) continue;
+        list.push(snap.bands.length); took.add(bd); snap.bands.push(forgeCaptureBand(bd));
+      }
+    }
+    if (rec.aBands.length && rec.bBands.length) snap.battles.push(rec);
+  }
+  // …then the free bands riding through the crop. The player's own banner never forks (locked rule).
+  for (const p of parties) {
+    if (!p.alive || p.isPlayerBand || p.isDetachment || p.garrisonOf || took.has(p) || !inB(p.pos.x, p.pos.z)) continue;
+    snap.bands.push(forgeCaptureBand(p));
+  }
+  return snap;
+}
+function forgeCaptureBand(p) {
+  return { name: (p.leader && p.leader.name) || null, factionName: (p.faction && p.faction.name) || 'Host',
+    factionColor: p.faction ? p.faction.color : 0x9a2f2f, size: Math.max(2, Math.round(p.size)),
+    quality: p.quality || 1, level: p.level || (mapLevel || 1), x: p.pos.x, z: p.pos.z,
+    heading: (typeof p.wanderDir === 'number' ? p.wanderDir : 0) };
+}
+
+// ---- the picker (SELECT mode — live game keeps running underneath) ----
+const _forgePv = new THREE.Vector3();
+function forgeScreenXY(x, y, z) {
+  _forgePv.set(x, y, z).project(camera);
+  if (_forgePv.z > 1) return null;   // behind the camera
+  return [( _forgePv.x * 0.5 + 0.5) * innerWidth, (-_forgePv.y * 0.5 + 0.5) * innerHeight];
+}
+// screen → ground with terrain refinement: intersect a flat plane, then re-seat the plane at the
+// hit's real elevation and intersect again (≤3 rounds) — fixes the flat-plane error on relief
+function forgeGroundPointAt(cx, cy) {
+  let p = groundPointAt(cx, cy);
+  if (!p) return null;
+  for (let k = 0; k < 3; k++) {
+    const y = mapElevY(p.x, p.z);
+    const ray = new THREE.Raycaster(), ndc = new THREE.Vector2((cx / innerWidth) * 2 - 1, -(cy / innerHeight) * 2 + 1);
+    ray.setFromCamera(ndc, camera);
+    const q = new THREE.Vector3();
+    if (!ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -y), q)) break;
+    if (Math.hypot(q.x - p.x, q.z - p.z) < 0.5) { p = q; break; }
+    p = q;
+  }
+  return p;
+}
+// unified pick priority: a live-clash fighter (the duel rung) > a marching band > a hold.
+// A bare ground click is NOT a pick — terrain is selected by dragging a box.
+function forgePickAt(cx, cy) {
+  let best = null, bd = 36 * 36;
+  for (const lc of liveClashes) {
+    for (const arr of [lc.A, lc.B]) for (const f of arr) {
+      if (!f.alive) continue;
+      const s = forgeScreenXY(f.pos.x, mapElevY(f.pos.x, f.pos.z) + 1.2, f.pos.z); if (!s) continue;
+      const dd = (s[0] - cx) ** 2 + (s[1] - cy) ** 2;
+      if (dd < bd) { bd = dd; best = { kind: 'duel', lc, f }; }
+    }
+  }
+  if (best) return best;
+  bd = 36 * 36;
+  for (const p of parties) {
+    if (!p.alive || p.isPlayerBand || p.garrisonOf) continue;
+    const s = forgeScreenXY(p.pos.x, mapElevY(p.pos.x, p.pos.z) + 1.2, p.pos.z); if (!s) continue;
+    const dd = (s[0] - cx) ** 2 + (s[1] - cy) ** 2;
+    if (dd < bd) { bd = dd; best = { kind: 'band', band: p }; }
+  }
+  if (best) return best;
+  const g = forgeGroundPointAt(cx, cy);
+  if (g) { const h = holdAtPoint(g.x, g.z); if (h) return { kind: 'city', hold: h }; }
+  return null;
+}
+function forgeSelLabel(sel) {
+  if (!sel) return '';
+  if (sel.kind === 'duel') { const n = clashLivingCount(sel.lc.A) + clashLivingCount(sel.lc.B); return '⚔ fighters (' + n + ' in the melee)'; }
+  if (sel.kind === 'band') return '🚩 ' + ((sel.band.leader && sel.band.leader.name) || sel.band.faction.name) + ' — ' + Math.round(sel.band.size) + ' men';
+  if (sel.kind === 'city') return '🏰 ' + ((sel.hold.def && sel.hold.def.name) || 'Hold') + ' (' + (sel.hold.tier || 'capital') + ')';
+  if (sel.kind === 'crop') { const w = Math.round(sel.rect.maxX - sel.rect.minX), d = Math.round(sel.rect.maxZ - sel.rect.minZ); return '⬚ land ' + w + '×' + d; }
+  return '';
+}
+
+function forgeEnterSelect() {
+  if (FORGE.on || FORGE.selecting) return;
+  // any map-rung view can forge — even mid-fight (your own battle simply freezes with the live
+  // world and resumes on exit). Only true modals refuse: a parley/encounter or command mode.
+  if (mode !== 'map' || encounter || (typeof mapCmdMode !== 'undefined' && mapCmdMode)) {
+    try { showCmdToast(encounter ? '⚒ Forge: finish the parley first' : mapCmdMode ? '⚒ Forge: leave command mode (K) first' : '⚒ Forge: return to the map first'); } catch (e) {}
+    return;
+  }
+  FORGE.selecting = true; FORGE.hover = null; FORGE.drag = null; FORGE.pending = null;
+  try { if (document.pointerLockElement) document.exitPointerLock(); } catch (e) {}
+  forgeInstallGuard();
+  forgeHint('⚒ FORGE — click a city / army / soldier, or drag a box of land · Enter forge · Esc cancel');
+  forgeBtnSync();
+}
+function forgeCancelSelect() {
+  FORGE.selecting = false; FORGE.hover = null; FORGE.drag = null; FORGE.pending = null;
+  forgeHint(null); forgeChip(null); forgeHoverRing(null); forgePreviewRect(null);
+  forgeBtnSync();
+}
+function forgeConfirmSelect() {
+  const pd = FORGE.pending; if (!pd) return;
+  const snap = forgeSnapshot(pd.bounds, pd.sel);
+  forgeCancelSelect();
+  forgeEnterSession(snap);
+}
+// per-frame (from the live loop): keep hover ring / preview rect tracking their moving subjects
+function forgeSelectFrame() {
+  const h = FORGE.hover;
+  if (h && !FORGE.pending) {
+    if (h.kind === 'band' && h.band.alive) forgeHoverRing(h.band.pos.x, h.band.pos.z, 5);
+    else if (h.kind === 'city') forgeHoverRing(h.hold.x, h.hold.z, Math.max(8, (SG_SPEC[h.hold.tier || 'capital'] || SG_SPEC.village).R * 1.1));
+    else if (h.kind === 'duel' && h.f && h.f.alive) forgeHoverRing(h.f.pos.x, h.f.pos.z, 2.2);
+    else forgeHoverRing(null);
+  }
+}
+// the one capture-phase event filter for both picker and session — kills the live game's own
+// click-to-march / hover / keybinds while the forge owns the screen, lets the forge HUD breathe
+function forgeInstallGuard() {
+  if (FORGE._guardOn) return; FORGE._guardOn = true;
+  for (const t of ['mousedown', 'mousemove', 'mouseup', 'click', 'dblclick', 'contextmenu', 'keydown', 'keyup'])
+    window.addEventListener(t, forgeGuard, true);
+}
+function forgeGuard(e) {
+  if (FORGE.on) return forgeGuardSession(e);
+  if (FORGE.selecting) return forgeGuardSelect(e);
+}
+function forgeGuardSelect(e) {
+  const onHud = e.target && e.target.closest && e.target.closest('#forge-chip, #forge-hint, #forge-btn');
+  if (onHud) return;                                        // the chip's own buttons handle themselves
+  if (e.type === 'keydown') {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const t = e.target; if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+    const c = e.code;
+    if (c === 'Escape') { e.preventDefault(); e.stopPropagation(); if (FORGE.pending) { FORGE.pending = null; forgeChip(null); forgePreviewRect(null); } else forgeCancelSelect(); return; }
+    if (c === 'Enter') { e.preventDefault(); e.stopPropagation(); forgeConfirmSelect(); return; }
+    if (c === 'KeyY' || c === 'Backslash') { e.preventDefault(); e.stopPropagation(); forgeCancelSelect(); return; }
+    // swallow the map-mode binds so panels/zoom don't shift mid-selection; WASD/Shift still ride
+    if (['KeyK', 'KeyL', 'KeyP', 'KeyG', 'KeyJ', 'KeyF', 'KeyU', 'KeyV', 'KeyO'].includes(c)) { e.preventDefault(); e.stopPropagation(); }
+    return;
+  }
+  if (e.target !== canvas) return;                           // only canvas gestures are picking gestures
+  if (e.type === 'mousedown' && e.button === 0) {
+    FORGE.drag = { x0: e.clientX, y0: e.clientY, x1: e.clientX, y1: e.clientY, moved: false };
+    e.stopPropagation();
+  } else if (e.type === 'mousemove') {
+    const d = FORGE.drag;
+    if (d) {
+      d.x1 = e.clientX; d.y1 = e.clientY;
+      if (!d.moved && Math.abs(d.x1 - d.x0) + Math.abs(d.y1 - d.y0) > 6) d.moved = true;
+      if (d.moved) {
+        const now = performance.now();
+        if (now - (FORGE._pickT || 0) > 60) {
+          FORGE._pickT = now;
+          const r = forgeDragRect(d);
+          if (r) forgePreviewRect(r, 0x7dc8ff);
+        }
+      }
+    } else {
+      const now = performance.now();                          // hover pick, throttled
+      if (now - (FORGE._pickT || 0) > 80 && !FORGE.pending) {
+        FORGE._pickT = now;
+        FORGE.hover = forgePickAt(e.clientX, e.clientY);
+        forgeHint(FORGE.hover ? '⚒ ' + forgeSelLabel(FORGE.hover) + ' — click to choose' :
+          '⚒ FORGE — click a city / army / soldier, or drag a box of land · Enter forge · Esc cancel');
+        if (!FORGE.hover) forgeHoverRing(null);
+      }
+    }
+    e.stopPropagation();
+  } else if (e.type === 'mouseup' && e.button === 0) {
+    const d = FORGE.drag; FORGE.drag = null;
+    if (d && d.moved) {
+      const r = forgeDragRect(d);
+      if (r) forgeSetPending({ kind: 'crop', rect: r });
+    } else {
+      const sel = forgePickAt(e.clientX, e.clientY);
+      if (sel) forgeSetPending(sel); else { FORGE.pending = null; forgeChip(null); forgePreviewRect(null); }
+    }
+    e.stopPropagation();
+  } else if (e.type === 'click' || e.type === 'dblclick' || e.type === 'contextmenu') {
+    e.stopPropagation(); if (e.type === 'contextmenu') e.preventDefault();
+  }
+}
+function forgeGuardSession(e) {
+  const onHud = e.target && e.target.closest && e.target.closest('#forge-hud');
+  if (onHud) return;                                         // the forge panel's own controls
+  if (e.type === 'keydown' || e.type === 'keyup') {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;          // browser/system chords pass
+    const t = e.target; if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+    const c = e.code;
+    if (c === 'KeyW' || c === 'KeyA' || c === 'KeyS' || c === 'KeyD') {   // pan the orbit target
+      if (e.type === 'keydown') FORGE.keys.add(c); else FORGE.keys.delete(c);
+      e.stopPropagation(); return;
+    }
+    if (e.type === 'keydown') {
+      if (c === 'Space') forgeSetPaused(!FORGE.session.paused);
+      else if (c === 'KeyR') forgeReset();
+      else if (c === 'Escape') { e.preventDefault(); e.stopPropagation(); forgeExit(); return; } // swallow it — the live game's Esc handlers stay quiet
+    }
+    e.stopPropagation(); e.preventDefault();                 // the live game's binds stay quiet
+    return;
+  }
+  // mouse gestures on the canvas belong to the orbit controls (pointer events) — silence the
+  // live game's mouse-driven handlers (click-to-march, hover tips, attacks)
+  if (e.target === canvas) { e.stopPropagation(); if (e.type === 'contextmenu') e.preventDefault(); }
+}
+function forgeDragRect(d) {
+  const p0 = forgeGroundPointAt(d.x0, d.y0), p1 = forgeGroundPointAt(d.x1, d.y1);
+  if (!p0 || !p1) return null;
+  return { minX: Math.min(p0.x, p1.x), maxX: Math.max(p0.x, p1.x), minZ: Math.min(p0.z, p1.z), maxZ: Math.max(p0.z, p1.z) };
+}
+function forgeSetPending(sel) {
+  const bounds = forgeBoundsFor(sel);
+  if (!bounds) return;
+  FORGE.pending = { sel, bounds };
+  forgeHoverRing(null);
+  forgePreviewRect(bounds, 0xffe089);
+  forgeChip('⚒ Forge ' + forgeSelLabel(sel) + '?');
+}
+
+// ---- selection visuals: an entity hover ring + a terrain-conforming bounds rectangle ----
+function forgeHoverRing(x, z, r) {
+  if (x === null || x === undefined) { if (FORGE._hoverRing) FORGE._hoverRing.visible = false; return; }
+  if (!FORGE._hoverRing) {
+    const geo = new THREE.RingGeometry(0.86, 1.0, 40); geo.rotateX(-Math.PI / 2);
+    FORGE._hoverRing = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0x7dc8ff, transparent: true, opacity: 0.9, depthWrite: false, depthTest: false }));
+    scene.add(FORGE._hoverRing);
+  }
+  FORGE._hoverRing.visible = true;
+  FORGE._hoverRing.scale.setScalar(r || 4);
+  FORGE._hoverRing.position.set(x, mapElevY(x, z) + 0.35, z);
+}
+// four bright polylines seated on the terrain (the map has real relief — a flat rect would sink into hills)
+function forgeRectLines(b, colorHex, lift) {
+  const g = new THREE.Group(), L = lift == null ? 0.6 : lift;
+  const edge = (x0, z0, x1, z1) => {
+    const n = Math.max(8, Math.round(Math.hypot(x1 - x0, z1 - z0) / 6)), pos = [];
+    for (let i = 0; i <= n; i++) { const t = i / n, x = lerp(x0, x1, t), z = lerp(z0, z1, t); pos.push(x, mapElevY(x, z) + L, z); }
+    const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.add(new THREE.Line(geo, new THREE.LineBasicMaterial({ color: colorHex, transparent: true, opacity: 0.95 })));
+  };
+  edge(b.minX, b.minZ, b.maxX, b.minZ); edge(b.maxX, b.minZ, b.maxX, b.maxZ);
+  edge(b.maxX, b.maxZ, b.minX, b.maxZ); edge(b.minX, b.maxZ, b.minX, b.minZ);
+  return g;
+}
+function forgePreviewRect(b, colorHex) {
+  if (FORGE._previewRect) { scene.remove(FORGE._previewRect); disposeGroup(FORGE._previewRect); FORGE._previewRect = null; }
+  if (!b) return;
+  FORGE._previewRect = forgeRectLines(b, colorHex || 0x7dc8ff);
+  scene.add(FORGE._previewRect);
+}
+
+// ---- the SESSION: suspend the live world (recording everything touched), build the fork ----
+function forgeEnterSession(snap) {
+  if (FORGE.on || !snap) return;
+  if (FORGE.selecting) forgeCancelSelect();
+  const R = FORGE._restore = {
+    vis: scene.children.map(c => [c, c.visible]),
+    fog: scene.fog, bg: scene.background,
+    hemi: (typeof hemi !== 'undefined') ? hemi.intensity : null,
+    sun: (typeof sun !== 'undefined') ? sun.intensity : null,
+    hudHidden: !!(document.getElementById('hud') && document.getElementById('hud').classList.contains('hidden')),
+    touchHidden: !!(document.getElementById('touch') && document.getElementById('touch').classList.contains('hidden')),
+    markersDisp: (document.getElementById('markers') || { style: {} }).style.display || '',
+    mode, mapFieldMode, gameRunning,
+    playerPos: player.pos.clone(), playerVel: player.vel ? player.vel.clone() : null,
+    playerVis: player.obj ? player.obj.visible : true,
+    showR: FIELD_ARMY.showR, hideR: FIELD_ARMY.hideR,
+    mapBattles: null,
+    // the shared name/hero pools — forge leaders draw from them, so record + restore on exit
+    // (a fork never writes back, not even a used-up name or a spent hero card)
+    names: new Set(worldNameSet), heroDeck: heroDeck.slice(), heroIdx,
+    camFar: camera.far,
+    localClip: renderer.localClippingEnabled,
+    cmdBtnShown: !!(document.getElementById('det-cmd-btn') && document.getElementById('det-cmd-btn').classList.contains('show')),
+    // any live-game overlay that happens to be open (away-tidings digest, onboarding hints, ...)
+    // would sit ON TOP of the diorama — hide the open ones now, reopen them on exit
+    overlays: Array.from(document.querySelectorAll('.overlay:not(.hidden)')),
+  };
+  for (const o of R.overlays) o.classList.add('hidden');
+  // QUARANTINE the live world's wars: fold any real fighters back to their bands' numbers, then
+  // stash the battle records aside — the forge's own clashes ride the same global arrays, and on
+  // exit the stash returns untouched (timers frozen: updateMapBattles only runs inside a frame)
+  try { clearAllLiveClashes(); } catch (e) {}
+  try { clearAllFieldArmies(); } catch (e) {}
+  R.mapBattles = mapBattles.splice(0);
+  // suspend the live view (march-editor pattern) — hidden, never destroyed
+  for (const c of scene.children.slice()) { if (!c.isLight) c.visible = false; }
+  scene.fog = null; scene.background = new THREE.Color(0x9fb8d6);
+  if (typeof hemi !== 'undefined') hemi.intensity = 0.62;
+  if (typeof sun !== 'undefined') sun.intensity = 0.95;
+  const hud = document.getElementById('hud'); if (hud) hud.classList.add('hidden');
+  const tc = document.getElementById('touch'); if (tc) tc.classList.add('hidden');
+  const mk = document.getElementById('markers'); if (mk) mk.style.display = 'none';
+  const cb = document.getElementById('det-cmd-btn'); if (cb) cb.classList.remove('show'); // the floating Command chip stays out of the diorama
+  mode = 'map'; mapFieldMode = true; gameRunning = false;    // fieldSimOn() true → the clashes stay REAL
+  if (player.obj) player.obj.visible = false;
+  const b = snap.bounds;
+  FIELD_ARMY.showR = FIELD_ARMY.hideR = Math.hypot(b.maxX - b.minX, b.maxZ - b.minZ) + 20; // the whole slice is "watched"
+  FORGE.session = { snap, bounds: { ...b }, stage: null, ground: null, ring: null, bands: [], clock: 0, paused: false, speed: 1 };
+  FORGE.on = true;
+  forgeInstallGuard(); forgeInstallControls();
+  forgeHud();
+  forgeStageBuild();
+  FORGE.last = 0;
+  forgeBtnSync();
+  try { console.log('[forge]', JSON.stringify({ kind: snap.kind, holds: snap.holds.length, bands: snap.bands.length, battles: snap.battles.length })); } catch (e) {}
+}
+// (re)build the whole stage from the snapshot — also the Reset target. Consumes ONLY snap.
+function forgeStageBuild() {
+  const S = FORGE.session, snap = S.snap, b = S.bounds;
+  forgeStageClear();
+  if (FORGE.seedLock) forgeSeedRandom(snap.sessionSeed);     // every Reset replays the same session
+  // rewind the shared pools that leader-making consumes, or the second Reset draws DIFFERENT
+  // names/heroes than the first (a grown name set rejects differently → the RNG stream diverges)
+  if (!S._names) S._names = new Set(worldNameSet);
+  worldNameSet.clear(); for (const n of S._names) worldNameSet.add(n);
+  try { shuffleHeroDeck(); } catch (e) {}                    // deterministic deck — it rides the session LCG just seeded
+  S.stage = new THREE.Group();
+  // preferred: razor-cut clone of exactly what was rendered here (hex terrain, cities, walls —
+  // sliced mid-mesh at the box). Falls back to a kernel re-render only if nothing is streamed.
+  S.cloneGroup = forgeCloneWorldSlice(b);
+  if (S.cloneGroup) {
+    scene.add(S.cloneGroup);                                 // NOT under stage — clones share geometry, never disposed
+  } else {
+    S.ground = forgeTerrain(b); S.stage.add(S.ground);
+    forgeWaterSheet(b, S.stage);
+  }
+  S.ring = forgeRectLines({ minX: b.minX + 1, maxX: b.maxX - 1, minZ: b.minZ + 1, maxZ: b.maxZ - 1 }, 0xffe089, 0.8);
+  S.stage.add(S.ring);
+  scene.add(S.stage);
+  if (!S.cloneGroup) {                                       // clone path brings real cities + painted roads already
+    for (const h of snap.holds) if (h.x >= b.minX && h.x <= b.maxX && h.z >= b.minZ && h.z <= b.maxZ) forgeSpawnHold(h); // straddlers have no fallback ground
+    forgeRoads(snap, S.stage);
+  }
+  // actors: free bands march their captured intent; battles in progress resume as REAL clashes
+  for (const sb of snap.bands) S.bands.push(forgeSpawnBandActor(sb));
+  for (const bt of snap.battles) forgeRestoreBattle(bt);
+  if (snap.kind === 'duel' && snap.fighters) forgeStartDuel(snap.fighters);
+  const f = snap.focus;
+  FORGE.orbit.target.set(f.x, mapElevY(f.x, f.z), f.z);
+  FORGE.orbit.r = clamp(Math.hypot(b.maxX - b.minX, b.maxZ - b.minZ) * (snap.kind === 'duel' ? 0.45 : 0.9), 18, 320);
+  FORGE.orbit.theta = 0.7; FORGE.orbit.phi = 0.9;
+  camera.far = Math.max(900, FORGE.orbit.r * 4);             // the live map's tight far plane would clip the diorama from orbit
+  camera.updateProjectionMatrix();
+  S.clock = 0; S.paused = false;
+  forgeHudUpdate();
+}
+function forgeStageClear() {
+  const S = FORGE.session; if (!S) return;
+  try { clearMapBattles(); } catch (e) {}                    // forge battles only — the live ones are stashed
+  try { clearAllFieldArmies(); } catch (e) {}
+  for (const a of S.bands) if (a.group) { scene.remove(a.group); disposeGroup(a.group); }
+  S.bands.length = 0;
+  forgeUnclipMats();                                         // shared materials go back to unclipped
+  if (S.cloneGroup) { scene.remove(S.cloneGroup); S.cloneGroup = null; } // clones share geo/mats with the live world — remove, NEVER dispose
+  if (S.stage) { scene.remove(S.stage); disposeGroup(S.stage); S.stage = null; S.ground = null; S.ring = null; }
+}
+// tear down the fork and hand the screen back to the live game, exactly as recorded
+function forgeExit() {
+  if (!FORGE.on) return;
+  const R = FORGE._restore;
+  forgeStageClear();
+  // expire the forge's leftover FX fast (slash arcs, sparks, arrows, popups) so nothing lingers
+  for (let i = 0; i < 6; i++) {
+    try { updateSparks(2); updateArcs(2); updateTrails(2); if (typeof updateBoltFX === 'function') updateBoltFX(2); updatePopups(2); updateProjectiles(2); } catch (e) {}
+  }
+  Math.random = _forgeNativeRandom;                          // unconditionally — never leak the LCG
+  if (R) {
+    for (const [c, v] of R.vis) if (c.parent === scene) c.visible = v;
+    scene.fog = R.fog; scene.background = R.bg;
+    if (R.hemi != null && typeof hemi !== 'undefined') hemi.intensity = R.hemi;
+    if (R.sun != null && typeof sun !== 'undefined') sun.intensity = R.sun;
+    const hud = document.getElementById('hud'); if (hud) hud.classList.toggle('hidden', R.hudHidden);
+    const tc = document.getElementById('touch'); if (tc) tc.classList.toggle('hidden', R.touchHidden);
+    const mk = document.getElementById('markers'); if (mk) mk.style.display = R.markersDisp;
+    mode = R.mode; mapFieldMode = R.mapFieldMode; gameRunning = R.gameRunning;
+    player.pos.copy(R.playerPos); if (R.playerVel && player.vel) player.vel.copy(R.playerVel);
+    if (player.obj) player.obj.visible = R.playerVis;
+    FIELD_ARMY.showR = R.showR; FIELD_ARMY.hideR = R.hideR;
+    mapBattles.push(...R.mapBattles);                        // the live wars pick up where they froze
+    worldNameSet.clear(); for (const n of R.names) worldNameSet.add(n); // forge-drawn names return to the pool
+    heroDeck = R.heroDeck; heroIdx = R.heroIdx;
+    camera.far = R.camFar; camera.updateProjectionMatrix();
+    renderer.localClippingEnabled = R.localClip;
+    const cb = document.getElementById('det-cmd-btn'); if (cb) cb.classList.toggle('show', R.cmdBtnShown);
+    if (R.overlays) for (const o of R.overlays) o.classList.remove('hidden'); // reopen what the fork interrupted
+  }
+  FORGE.session = null; FORGE._restore = null; FORGE.on = false; FORGE.keys.clear();
+  const p = document.getElementById('forge-hud'); if (p) p.remove();
+  forgeBtnSync();
+  last = performance.now();                                  // don't integrate the forged minutes as one live dt
+}
+
+// ---- stage, preferred path: RAZOR-CUT the rendered world. Clone the actual on-screen chunk
+// groups (hex-prism terrain + scatter + territory sheet + settlement meshes + street twins) and
+// the always-loaded capitals, then clip every material hard at the crop bounds with 4 clipping
+// planes — cities and wall runs are sliced mid-mesh exactly where the box crossed them. The clones
+// share geometry/materials with the (hidden) live originals: NEVER dispose them, and the planes go
+// on the SHARED materials (safe — the originals don't render while forged) and come off on clear. ----
+function forgeCloneWorldSlice(b) {
+  const S = FORGE.session;
+  const planes = [
+    new THREE.Plane(new THREE.Vector3(1, 0, 0), -b.minX), new THREE.Plane(new THREE.Vector3(-1, 0, 0), b.maxX),
+    new THREE.Plane(new THREE.Vector3(0, 0, 1), -b.minZ), new THREE.Plane(new THREE.Vector3(0, 0, -1), b.maxZ),
+  ];
+  const root = new THREE.Group(); root.name = 'forge-clone';
+  const roots = [];                                          // [origGroup, forceVisible:[origSubGroup,...]]
+  for (const [key, en] of mapChunks) {
+    const [cx, cz] = key.split(',').map(Number);
+    const x0 = cx * CHUNK, z0 = cz * CHUNK;
+    if (x0 > b.maxX || x0 + CHUNK < b.minX || z0 > b.maxZ || z0 + CHUNK < b.minZ) continue;
+    roots.push([en.group, (en.holds || []).map(h => h.group).filter(Boolean)]);
+  }
+  for (const n of nations) {                                 // capitals sit outside the chunks, always loaded
+    if (!n.group) continue;
+    const R = 100;
+    if (n.x + R < b.minX || n.x - R > b.maxX || n.z + R < b.minZ || n.z - R > b.maxZ) continue;
+    roots.push([n.group, [n.group]]);
+  }
+  if (!roots.length) return null;                            // nothing streamed here — caller falls back to the kernel render
+  const mats = new Set();
+  for (const [orig, forceVis] of roots) {
+    const c = orig.clone(true);                              // shares geometry + materials — render-identical
+    c.visible = true;
+    for (const g of forceVis) {                              // holds hidden behind rung-0 icons still deserve their meshes
+      const i = orig.children.indexOf(g);
+      if (i >= 0 && c.children[i]) c.children[i].visible = true;
+    }
+    c.traverse(o => { if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => mats.add(m)); });
+    root.add(c);
+  }
+  S._clippedMats = [];
+  for (const m of mats) {
+    S._clippedMats.push([m, m.clippingPlanes || null]);
+    m.clippingPlanes = planes; m.clipShadows = true; m.needsUpdate = true;
+  }
+  renderer.localClippingEnabled = true;
+  return root;
+}
+function forgeUnclipMats() {
+  const S = FORGE.session; if (!S || !S._clippedMats) return;
+  for (const [m, prev] of S._clippedMats) { m.clippingPlanes = prev; m.clipShadows = false; m.needsUpdate = true; }
+  S._clippedMats = null;
+}
+
+// ---- stage, fallback path (crop outside the streamed view — e.g. a far headless BV.forge):
+// rebuild terrain / water / holds / roads in world coordinates off the LIVE kernel ----
+function forgeTerrain(b) {
+  const w = b.maxX - b.minX, d = b.maxZ - b.minZ, skirt = Math.max(w, d) * 0.12;
+  const W = w + skirt * 2, D = d + skirt * 2;
+  const nx = clamp(Math.round(W * 1.2), 48, 256), nz = clamp(Math.round(D * 1.2), 48, 256);
+  const geo = new THREE.PlaneGeometry(W, D, nx, nz); geo.rotateX(-Math.PI / 2);
+  const cx = (b.minX + b.maxX) / 2, cz = (b.minZ + b.maxZ) / 2;
+  const p = geo.attributes.position, col = new Float32Array(p.count * 3), c = new THREE.Color();
+  const rgb = [0, 0, 0], T = terra(), sky = new THREE.Color(0x9fb8d6);
+  for (let i = 0; i < p.count; i++) {
+    const wx = cx + p.getX(i), wz = cz + p.getZ(i);
+    p.setY(i, mapElevY(wx, wz));                             // REAL elevation — sea reads as sunken blue ground
+    T.groundColorRGB(wx, wz, rgb); c.setRGB(rgb[0], rgb[1], rgb[2]); // REAL biome colour
+    const ex = Math.max(0, b.minX - wx, wx - b.maxX, b.minZ - wz, wz - b.maxZ);
+    if (ex > 0) c.lerp(sky, clamp(ex / skirt, 0, 1) * 0.85); // the skirt fades to sky — a deliberate diorama edge
+    col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3)); geo.computeVertexNormals();
+  const m = new THREE.Mesh(geo, new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: true, shininess: 2, specular: 0x000000 }));
+  m.position.set(cx, 0, cz);
+  m.receiveShadow = true;
+  return m;
+}
+function forgeWaterSheet(b, stage) {
+  const T = terra(), SEA = (typeof Terra !== 'undefined' && Terra.SEA_LEVEL != null) ? Terra.SEA_LEVEL : 0.38;
+  let wet = false;                                           // probe a coarse lattice for any sea in the crop
+  for (let i = 0; i <= 8 && !wet; i++) for (let j = 0; j <= 8; j++) {
+    if (T.elevationAt(lerp(b.minX, b.maxX, i / 8), lerp(b.minZ, b.maxZ, j / 8)) < SEA) { wet = true; break; }
+  }
+  if (!wet) return;
+  const seaY = T.elevToY(SEA);
+  const g = new THREE.Mesh(new THREE.PlaneGeometry(b.maxX - b.minX, b.maxZ - b.minZ),
+    new THREE.MeshBasicMaterial({ color: 0x2f86b4, transparent: true, opacity: 0.38, depthWrite: false }));
+  g.rotation.x = -Math.PI / 2;
+  g.position.set((b.minX + b.maxX) / 2, seaY + 0.06, (b.minZ + b.maxZ) / 2);
+  stage.add(g);
+}
+// re-emit a captured hold through the REAL generators: the kernel site + the same seed formulas
+// (makeSettlement/makeCapital) rebuild the byte-identical walls/keeps/houses at its true spot
+function forgeSpawnHold(h) {
+  let site = null;
+  try { if (h.site) site = terra().settlementSites(h.site.cx, h.site.cz).find(s => s.idx === h.site.idx) || null; } catch (e) {}
+  const holdLike = { x: h.x, z: h.z, tier: h.tier, def: { name: h.name || 'Hold' },
+    owner: { name: h.ownerName || 'Free', color: h.ownerColor != null ? h.ownerColor : 0x9a8f70 }, site, key: h.key };
+  let g = null;
+  try { g = site ? makeSettlement(holdLike) : makeCapital(holdLike); }
+  catch (e) { try { console.warn('[forge] hold rebuild failed', e); } catch (e2) {} }
+  if (g) FORGE.session.stage.add(g);
+}
+// the road between holds, routed by the REAL kernel A* at world coords and ribboned onto the stage
+function forgeRoads(snap, stage) {
+  const hs = snap.holds; if (!hs || hs.length < 2) return;
+  const T = terra(); if (!T.travelPath) return;
+  for (let i = 0; i < hs.length; i++) for (let j = i + 1; j < hs.length; j++) {
+    const a = hs[i], c = hs[j];
+    if (Math.hypot(a.x - c.x, a.z - c.z) > 220) continue;
+    try {
+      const r = T.travelPath(a.x, a.z, c.x, c.z, 9000);
+      if (r && r.pts && r.pts.length >= 2) stage.add(marchRoadRibbon(r.pts, 4.2, MARCH_ROAD_COL));
+    } catch (e) {}
+  }
+}
+
+// ---- actors: band-like hosts that satisfy the whole real battle plumbing ----
+function forgeBandGroup() { const g = new THREE.Group(); g.visible = false; scene.add(g); return g; } // an invisible banner anchor (killBand/setBandLabel/materialiseBand all touch band.group)
+function forgeSpawnBandActor(sb) {
+  const [x, z] = forgeClampXZ(sb.x, sb.z);
+  const a = {
+    pos: new THREE.Vector3(x, mapElevY(x, z), z), size: sb.size, bornSize: sb.size, alive: true,
+    faction: { name: sb.factionName, color: sb.factionColor }, home: null,
+    state: 'march', target: null, heading: sb.heading || 0,
+    group: forgeBandGroup(), _shownSize: -1, inBattle: null, path: null,
+    quality: sb.quality || 1, level: sb.level || 1, clashCd: 0, speed: 0, wanderT: 1, wanderDir: sb.heading || 0,
+    leader: makeBandLeader(sb.size, sb.level || 3, true),
+  };
+  if (sb.name && a.leader) a.leader.name = sb.name;
+  // the captured intent: keep marching the way it was headed — clamped into the slice, then wander
+  const reach = Math.min(80, Math.hypot(FORGE.session.bounds.maxX - FORGE.session.bounds.minX, FORGE.session.bounds.maxZ - FORGE.session.bounds.minZ) * 0.4);
+  const [tx, tz] = forgeClampXZ(x + Math.sin(a.heading) * reach, z + Math.cos(a.heading) * reach);
+  a.target = { x: tx, z: tz };
+  return a;
+}
+function forgeWanderTarget(a) {
+  const b = FORGE.session.bounds;
+  for (let t = 0; t < 8; t++) {
+    const ang = Math.random() * Math.PI * 2, r = 20 + Math.random() * 50;
+    const [x, z] = forgeClampXZ(a.pos.x + Math.sin(ang) * r, a.pos.z + Math.cos(ang) * r);
+    if (!isWater(x, z)) return { x, z };
+  }
+  return { x: (b.minX + b.maxX) / 2, z: (b.minZ + b.maxZ) / 2 };
+}
+// terrain-aware step with the SOFT BOUNDARY: per-axis clamp at the slice edge = slide along it
+function forgeStepTo(a, tx, tz, speed, dt) {
+  const dx = tx - a.pos.x, dz = tz - a.pos.z, d = Math.hypot(dx, dz);
+  if (d < 1e-4) return 0;
+  const e = 1.2, gx = (mapElevY(a.pos.x + e, a.pos.z) - mapElevY(a.pos.x - e, a.pos.z)) / (2 * e);
+  const gz = (mapElevY(a.pos.x, a.pos.z + e) - mapElevY(a.pos.x, a.pos.z - e)) / (2 * e);
+  const sp = speed / (1 + Math.hypot(gx, gz) * FORGE.ai.slopeSlow);
+  const step = Math.min(d, sp * dt);
+  const [nx, nz] = forgeClampXZ(a.pos.x + dx / d * step, a.pos.z + dz / d * step);
+  a.pos.set(nx, mapElevY(nx, nz), nz);
+  a.heading = Math.atan2(dx, dz);
+  return d - step;
+}
+// two forge hosts sight each other → the REAL battle takes over (identical to the march editor's clash)
+function forgeStartClash(a, b) {
+  const posA = marchBodyPositions(a), posB = marchBodyPositions(b);
+  const bt = startMapBattle(a, b);
+  if (bt.marker) bt.marker.visible = false;                  // the real fighters ARE the battle here
+  if (liveFighterCount() > LIVE_CLASH_TOTAL_CAP - 16) return; // fighter budget spent on other forge clashes — this one runs numeric (same gate as maybeStartLiveClash)
+  startLiveClash(bt);
+  if (bt.lc) {
+    marchShiftSide(bt.lc.A, bt.lc.hostA, a.pos.x, a.pos.z);
+    marchShiftSide(bt.lc.B, bt.lc.hostB, b.pos.x, b.pos.z);
+    if (posA.length) marchRunFromMarch(bt.lc.A, posA, a.pos.x - b.pos.x, a.pos.z - b.pos.z);
+    if (posB.length) marchRunFromMarch(bt.lc.B, posB, b.pos.x - a.pos.x, b.pos.z - a.pos.z);
+  }
+  a.state = b.state = 'clash';
+}
+// a battle captured mid-fight resumes as a REAL clash between the re-raised bands at its old progress
+function forgeRestoreBattle(rec) {
+  const S = FORGE.session;
+  const aB = rec.aBands.map(i => S.bands[i]).filter(Boolean), bB = rec.bBands.map(i => S.bands[i]).filter(Boolean);
+  if (!aB.length || !bB.length) return;
+  const bt = startMapBattle(aB[0], bB[0]);
+  for (let i = 1; i < aB.length; i++) joinMapBattle(bt, aB[i], 'sideA');
+  for (let i = 1; i < bB.length; i++) joinMapBattle(bt, bB[i], 'sideB');
+  bt.t = clamp(rec.t * (bt.duration / Math.max(0.001, rec.duration)), 0, bt.duration * 0.9);
+  if (bt.marker) bt.marker.visible = false;
+  if (liveFighterCount() > LIVE_CLASH_TOTAL_CAP - 16) return; // over the fighter budget — resumes as the numeric bar
+  startLiveClash(bt);
+  if (bt.lc) {
+    marchShiftSide(bt.lc.A, bt.lc.hostA, aB[0].pos.x, aB[0].pos.z);
+    marchShiftSide(bt.lc.B, bt.lc.hostB, bB[0].pos.x, bB[0].pos.z);
+  }
+  for (const x of aB.concat(bB)) x.state = 'clash';
+}
+// the duel rung: the EXACT captured fighters (type/hp/facing/position), wired as a real live clash —
+// same stepFighter melee, same commander brains when there's an army's worth to command
+function forgeStartDuel(sf) {
+  const S = FORGE.session;
+  const mid = (arr) => { let x = 0, z = 0; for (const f of arr) { x += f.x; z += f.z; } const n = Math.max(1, arr.length); return { x: x / n, z: z / n }; };
+  const cA = mid(sf.A), cB = mid(sf.B);
+  const a = forgeSpawnBandActor({ name: null, factionName: sf.facA.name, factionColor: sf.facA.color, size: Math.max(1, sf.A.length), quality: 1, level: 1, x: cA.x, z: cA.z, heading: 0 });
+  const b = forgeSpawnBandActor({ name: null, factionName: sf.facB.name, factionColor: sf.facB.color, size: Math.max(1, sf.B.length), quality: 1, level: 1, x: cB.x, z: cB.z, heading: 0 });
+  S.bands.push(a, b);
+  const bt = startMapBattle(a, b);
+  if (bt.marker) bt.marker.visible = false;
+  const A = [], B = [];
+  const raise = (list, fac, arr) => {
+    for (const s of list) {
+      const [x, z] = forgeClampXZ(s.x, s.z);
+      const f = spawnClashFighter(fac, s.type, x, z, s.isHero);
+      f.hp = Math.max(1, Math.round(s.hpFrac * f.maxHp));
+      f.facing = s.facing;
+      arr.push(f);
+    }
+  };
+  raise(sf.A, a.faction, A); raise(sf.B, b.faction, B);
+  for (const f of A) f.foes = B;
+  for (const f of B) f.foes = A;
+  const lc = { bt, A, B, overflowA: 0, overflowB: 0, leadA: A.find(f => f.isHero) || null, leadB: B.find(f => f.isHero) || null,
+    age: 0, srv: null, n0A: A.length, n0B: B.length, kA: 1, kB: 1 };
+  lc.hostA = warHostRaise(A, { foeX: cB.x, foeZ: cB.z, foeList: () => lc.B, foeCount: () => clashLivingCount(lc.B), reserveFn: () => 0 });
+  lc.hostB = warHostRaise(B, { foeX: cA.x, foeZ: cA.z, foeList: () => lc.A, foeCount: () => clashLivingCount(lc.A), reserveFn: () => 0 });
+  if (lc.hostA) lc.hostA.foeHost = lc.hostB;
+  if (lc.hostB) lc.hostB.foeHost = lc.hostA;
+  bt.live = true; bt.lc = lc;
+  liveClashes.push(lc);
+  a.state = b.state = 'clash';
+}
+
+// ---- the sim: one authoritative step (headless-safe — BV.forgeStep drives this directly) ----
+function forgeTick(dt) {
+  const S = FORGE.session; if (!S) return;
+  for (const a of S.bands) if (a.clashCd > 0) a.clashCd -= dt;
+  // sighting: hostile hosts that spot each other hand the fight to the REAL battle system
+  for (let i = 0; i < S.bands.length; i++) for (let j = i + 1; j < S.bands.length; j++) {
+    const a = S.bands[i], b = S.bands[j];
+    if (!a.alive || !b.alive || a.inBattle || b.inBattle || a.clashCd > 0 || b.clashCd > 0) continue;
+    if (a.faction.name === b.faction.name) continue;
+    if (Math.hypot(a.pos.x - b.pos.x, a.pos.z - b.pos.z) < FORGE.ai.senseR) forgeStartClash(a, b);
+  }
+  for (const a of S.bands) {
+    if (!a.alive) continue;
+    if (a.state === 'clash') {                               // the live clash owns movement + outcome
+      if (!a.inBattle) { a.state = 'march'; a.clashCd = FORGE.ai.clashCd; a.target = forgeWanderTarget(a); }
+      continue;
+    }
+    if (!a.target) a.target = forgeWanderTarget(a);
+    if (forgeStepTo(a, a.target.x, a.target.z, FORGE.ai.marchSpeed, dt) <= FORGE.ai.arrive) a.target = forgeWanderTarget(a);
+  }
+  // the SOFT BOUNDARY on every real fighter and crowd body: slide along the slice edge, never leave
+  for (const lc of liveClashes) {
+    for (const arr of [lc.A, lc.B]) for (const f of arr) {
+      if (!f.alive) continue;
+      const [nx, nz] = forgeClampXZ(f.pos.x, f.pos.z);
+      if (nx !== f.pos.x || nz !== f.pos.z) { f.pos.x = nx; f.pos.z = nz; if (f.obj) { f.obj.position.x = nx; f.obj.position.z = nz; } }
+    }
+  }
+  for (const a of S.bands) {
+    const fa = fieldArmies.get(a); if (!fa) continue;
+    for (const bd of fa.bodies) {
+      if (bd.dead || bd.wx == null) continue;
+      const [nx, nz] = forgeClampXZ(bd.wx, bd.wz);
+      bd.wx = nx; bd.wz = nz;
+    }
+  }
+  // park the spectator "player" on the action so updateLiveClashes never folds a watched fight
+  let px = 0, pz = 0, k = 0;
+  for (const a of S.bands) if (a.alive) { px += a.pos.x; pz += a.pos.z; k++; }
+  for (const lc of liveClashes) if (lc.bt) { px += lc.bt.cx; pz += lc.bt.cz; k++; }
+  if (k) player.pos.set(px / k, 0, pz / k);
+  else player.pos.set(S.snap.focus.x, 0, S.snap.focus.z);
+  S.clock += dt;
+}
+function forgeFrame(now) {
+  const dt0 = Math.min((now - (FORGE.last || now)) / 1000, 0.05); FORGE.last = now;
+  frameNo++;
+  const S = FORGE.session;
+  try {
+    if (S && !S.paused) {
+      const steps = clamp(S.speed | 0, 1, 8);
+      for (let s = 0; s < steps; s++) {
+        forgeTick(dt0);
+        updateMapBattles(dt0);   // numeric teardown/resolution plumbing
+        updateLiveClashes(dt0);  // THE battle AI: warHostUpdate + stepFighter + resolution
+      }
+    }
+  } catch (e) { try { console.error('[forge]', e); } catch (e2) {} if (S) S.paused = true; forgeHudUpdate(); }
+  // materialise / animate the WALKING crowds; a host in a live clash is drawn by the clash's fighters
+  if (S) for (const a of S.bands) {
+    if (!a.alive || (a.inBattle && a.inBattle.live)) { if (fieldArmies.get(a)) clearFieldArmy(a); continue; }
+    if (!fieldArmies.get(a)) materialiseBand(a, FIELD_ARMY.capPerBand);
+    const fa = fieldArmies.get(a);
+    if (fa) updateFieldArmyBodies(a, fa, dt0);
+  }
+  // clash FX fade + arrows fly (the main loop usually does this; the forge frame must too)
+  updateSparks(dt0); updateArcs(dt0); updateTrails(dt0); if (typeof updateBoltFX === 'function') updateBoltFX(dt0); updatePopups(dt0);
+  updateProjectiles(dt0);
+  for (const bt of mapBattles) if (bt.marker) bt.marker.visible = false;
+  // spectator orbit camera: drag orbit / wheel zoom / WASD pans the target across the slice
+  const o = FORGE.orbit;
+  if (FORGE.keys.size && S) {
+    const sp = clamp(o.r, 20, 320) * 0.55 * dt0;
+    let fx = 0, fz = 0;
+    if (FORGE.keys.has('KeyW')) { fx -= Math.sin(o.theta); fz -= Math.cos(o.theta); }
+    if (FORGE.keys.has('KeyS')) { fx += Math.sin(o.theta); fz += Math.cos(o.theta); }
+    if (FORGE.keys.has('KeyA')) { fx -= Math.cos(o.theta); fz += Math.sin(o.theta); }
+    if (FORGE.keys.has('KeyD')) { fx += Math.cos(o.theta); fz -= Math.sin(o.theta); }
+    const m = 26;                                            // the camera may roam a little past the rim
+    o.target.x = clamp(o.target.x + fx * sp, S.bounds.minX - m, S.bounds.maxX + m);
+    o.target.z = clamp(o.target.z + fz * sp, S.bounds.minZ - m, S.bounds.maxZ + m);
+  }
+  o.target.y = lerp(o.target.y, mapElevY(o.target.x, o.target.z), 0.1);
+  const st = Math.sin(o.phi);
+  camera.position.set(o.target.x + o.r * st * Math.sin(o.theta), o.target.y + o.r * Math.cos(o.phi), o.target.z + o.r * st * Math.cos(o.theta));
+  camera.lookAt(o.target);
+  if (frameNo % 20 === 0) forgeHudUpdate();
+  renderer.render(scene, camera);
+  requestAnimationFrame(loop);
+}
+
+// ---- controls: march-editor orbit (drag / pinch / wheel), gated on FORGE.on ----
+function forgeInstallControls() {
+  if (FORGE._controlsOn) return; FORGE._controlsOn = true;
+  const o = FORGE.orbit; let drag = false, px = 0, py = 0;
+  const pointers = new Map(); let pinchD = 0;
+  canvas.addEventListener('pointerdown', e => {
+    if (!FORGE.on) return;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size === 1) { drag = true; px = e.clientX; py = e.clientY; } else { drag = false; pinchD = 0; }
+  });
+  window.addEventListener('pointermove', e => {
+    if (!FORGE.on) return;
+    if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size >= 2) {
+      const p = [...pointers.values()], d = Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
+      if (pinchD) o.r = clamp(o.r * pinchD / d, 10, 340);
+      pinchD = d; return;
+    }
+    if (!drag) return;
+    o.theta -= (e.clientX - px) * 0.01; o.phi = clamp(o.phi - (e.clientY - py) * 0.01, 0.2, 1.45); px = e.clientX; py = e.clientY;
+  });
+  const endPtr = e => { pointers.delete(e.pointerId); if (pointers.size < 2) pinchD = 0; if (!pointers.size) drag = false; };
+  window.addEventListener('pointerup', endPtr);
+  window.addEventListener('pointercancel', endPtr);
+  canvas.addEventListener('wheel', e => { if (!FORGE.on) return; o.r = clamp(o.r * (1 + Math.sign(e.deltaY) * 0.08), 10, 340); e.preventDefault(); e.stopPropagation(); }, { passive: false, capture: true });
+}
+
+// ---- HUD ----
+function forgeSetPaused(on) { const S = FORGE.session; if (S) { S.paused = !!on; forgeHudUpdate(); } }
+function forgeReset() { if (FORGE.on) { forgeStageBuild(); } }
+function forgeHud() {
+  let p = document.getElementById('forge-hud');
+  if (!p) { p = document.createElement('div'); p.id = 'forge-hud'; document.body.appendChild(p); }
+  p.style.cssText = 'position:fixed;left:12px;top:12px;z-index:40;background:rgba(16,14,24,.86);border:1px solid #3a3247;border-radius:10px;padding:12px 14px;width:212px;font:13px system-ui;color:#e8def8';
+  const btn = (id, label) => '<button id="' + id + '" style="flex:1;padding:6px 8px;border:0;border-radius:6px;cursor:pointer;font-weight:700;background:#2a2438;color:#e8def8">' + label + '</button>';
+  p.innerHTML = '<div style="font-weight:800;color:#ffe089;margin-bottom:8px">⚒ Forge</div>' +
+    '<div id="forge-info" style="font-size:12px;color:#c9bfda;line-height:1.5"></div>' +
+    '<div style="display:flex;gap:6px;margin-top:10px">' + btn('forge-pause', '⏸ Pause') + btn('forge-reset', '↻ Reset') + btn('forge-exit', '⏏ Exit') + '</div>' +
+    '<div style="display:flex;align-items:center;gap:8px;margin-top:9px;font-size:12px">' +
+      '<span style="color:#c9bfda">⏩ Speed</span>' +
+      '<input id="forge-speed" type="range" min="1" max="8" step="1" value="1" style="flex:1;accent-color:#4d8dff;cursor:pointer">' +
+      '<span id="forge-speed-lbl" style="font-weight:800;color:#ffe089;min-width:26px;text-align:right">1×</span></div>' +
+    '<div style="margin-top:8px;font-size:11px;color:#9a90ab;line-height:1.4">drag orbit · wheel zoom · WASD pan · Space pause · R reset · Esc exit</div>';
+  p.querySelector('#forge-pause').onclick = () => forgeSetPaused(!FORGE.session.paused);
+  p.querySelector('#forge-reset').onclick = () => forgeReset();
+  p.querySelector('#forge-exit').onclick = () => forgeExit();
+  const sp = p.querySelector('#forge-speed');
+  if (sp) sp.oninput = () => { const S = FORGE.session; if (S) S.speed = clamp(parseInt(sp.value, 10) || 1, 1, 8); const l = document.getElementById('forge-speed-lbl'); if (l) l.textContent = (FORGE.session ? FORGE.session.speed : 1) + '×'; };
+  forgeHudUpdate();
+}
+function forgeHudUpdate() {
+  const S = FORGE.session, el = document.getElementById('forge-info'); if (!S || !el) return;
+  const pb = document.getElementById('forge-pause'); if (pb) pb.textContent = S.paused ? '▶ Resume' : '⏸ Pause';
+  const b = S.bounds, w = Math.round(b.maxX - b.minX), d = Math.round(b.maxZ - b.minZ);
+  const alive = S.bands.filter(a => a.alive);
+  const fighters = liveFighterCount();
+  const s = Math.floor(S.clock), tag = ((s / 60) | 0) + ':' + ('' + (s % 60)).padStart(2, '0');
+  el.innerHTML = '<b>' + (S.snap.kind || 'crop') + '</b> · ' + w + '×' + d + 'u · ' + tag +
+    '<br>' + S.snap.holds.length + ' holds · ' + alive.length + '/' + S.bands.length + ' hosts · ' + mapBattles.length + ' battles' +
+    (fighters ? '<br>⚔ ' + fighters + ' fighters on the field' : '') +
+    alive.slice(0, 4).map(a => '<br><span style="color:' + _hx6(a.faction.color) + '">●</span> ' + ((a.leader && a.leader.name) || a.faction.name) + ' · ' + Math.round(a.size) + ' · ' + a.state).join('');
+}
+// select-mode chrome: a hint bar up top + a confirm chip at the bottom
+function forgeHint(text) {
+  let el = document.getElementById('forge-hint');
+  if (!text) { if (el) el.remove(); return; }
+  if (!el) { el = document.createElement('div'); el.id = 'forge-hint'; document.body.appendChild(el); }
+  el.style.cssText = 'position:fixed;left:50%;top:14px;transform:translateX(-50%);z-index:41;padding:8px 18px;border-radius:10px;' +
+    'background:rgba(16,14,24,.88);border:1px solid rgba(255,224,137,.4);color:#ffe089;font:700 13px system-ui;white-space:nowrap;pointer-events:none';
+  el.textContent = text;
+}
+function forgeChip(text) {
+  let el = document.getElementById('forge-chip');
+  if (!text) { if (el) el.remove(); return; }
+  if (!el) { el = document.createElement('div'); el.id = 'forge-chip'; document.body.appendChild(el); }
+  el.style.cssText = 'position:fixed;left:50%;bottom:56px;transform:translateX(-50%);z-index:41;padding:10px 14px;border-radius:12px;display:flex;gap:10px;align-items:center;' +
+    'background:rgba(16,14,24,.92);border:1px solid rgba(255,224,137,.5);color:#e8def8;font:600 13px system-ui;white-space:nowrap';
+  el.innerHTML = '<span>' + text + '</span>' +
+    '<button id="forge-chip-go" style="padding:6px 14px;border:0;border-radius:8px;cursor:pointer;font-weight:800;background:#ffe089;color:#211c10">⚒ Forge</button>' +
+    '<button id="forge-chip-no" style="padding:6px 10px;border:0;border-radius:8px;cursor:pointer;font-weight:700;background:#2a2438;color:#e8def8">✕</button>';
+  el.querySelector('#forge-chip-go').onclick = () => forgeConfirmSelect();
+  el.querySelector('#forge-chip-no').onclick = () => { FORGE.pending = null; forgeChip(null); forgePreviewRect(null); };
+}
+// a small always-there toggle so the editor is discoverable without the keybind
+function forgeBtnSync() {
+  const el = document.getElementById('forge-btn'); if (!el) return;
+  el.textContent = FORGE.on ? '⏏ leave forge' : (FORGE.selecting ? '✕ cancel forge' : '⚒ forge');
+}
+(function forgeMakeBtn() {
+  if (typeof document === 'undefined' || !document.body) return;
+  const el = document.createElement('button'); el.id = 'forge-btn';
+  el.style.cssText = 'position:fixed;right:12px;bottom:12px;z-index:39;padding:7px 12px;border:1px solid rgba(255,224,137,.4);border-radius:9px;cursor:pointer;' +
+    'background:rgba(16,14,24,.82);color:#ffe089;font:700 12px system-ui;display:none';
+  el.onclick = () => { if (FORGE.on) forgeExit(); else if (FORGE.selecting) forgeCancelSelect(); else forgeEnterSelect(); };
+  document.body.appendChild(el);
+  setInterval(() => {   // visible whenever the live map (or a forge state) is on screen — never over the other editors.
+    // NOTE: mode === 'map' is the "playing" signal (the gate idles at mode 'menu'); gameRunning is only
+    // the ACTION-rung lever and is false on the strategic map, where this button must still show.
+    const ok = FORGE.on || FORGE.selecting || (mode === 'map' && player.alive && !BATTLE.on && !MARCH.on && !EDIT.on && !encounter);
+    el.style.display = ok ? '' : 'none';
+  }, 500);
+  forgeBtnSync();
+})();
+// the in-game toggle: Y (or \) arms the picker from the live map; Esc/Y again cancels
+window.addEventListener('keydown', (e) => {
+  if (e.code !== 'KeyY' && e.code !== 'Backslash') return;
+  if (FORGE.on || FORGE.selecting) return;                   // session/select keys ride the guard
+  if (mode !== 'map' || encounter || (typeof mapCmdMode !== 'undefined' && mapCmdMode) || !player.alive) return; // any map rung — gameRunning is action-only
+  const t = document.activeElement; if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+  e.preventDefault();
+  forgeEnterSelect();
+});
+
+// ---- BV hooks (headless-testable, marching orders identical to the other editors) ----
+BV.forge = (sel) => {   // {x,z,r} | {minX,maxX,minZ,maxZ} | {band:i} — enter a session directly, skipping SELECT
+  if (FORGE.on) return BV.forgeStatus();
+  let bounds = null, s = null;
+  if (sel && sel.band != null) { const p = parties.filter(q => q.alive && !q.isPlayerBand)[sel.band | 0]; if (p) { s = { kind: 'band', band: p }; bounds = forgeBoundsFor(s); } }
+  else if (sel && sel.r != null) bounds = forgeClampBounds({ minX: sel.x - sel.r, maxX: sel.x + sel.r, minZ: sel.z - sel.r, maxZ: sel.z + sel.r });
+  else if (sel && sel.minX != null) bounds = forgeClampBounds(sel);
+  if (!bounds) return { error: 'pass {x,z,r} or {minX,maxX,minZ,maxZ} or {band:i}' };
+  forgeEnterSession(forgeSnapshot(bounds, s));
+  return BV.forgeStatus();
+};
+BV.forgeStatus = () => ({ on: FORGE.on, selecting: FORGE.selecting,
+  env: { mode, fieldBattle: !!fieldBattle, encounter: !!encounter, cmd: !!(typeof mapCmdMode !== 'undefined' && mapCmdMode), gameRunning }, // why select might refuse
+  kind: FORGE.session ? FORGE.session.snap.kind : null,
+  bounds: FORGE.session ? { ...FORGE.session.bounds } : null,
+  clock: FORGE.session ? Math.round(FORGE.session.clock * 10) / 10 : 0,
+  paused: FORGE.session ? FORGE.session.paused : false,
+  speed: FORGE.session ? FORGE.session.speed : 1,
+  holds: FORGE.session ? FORGE.session.snap.holds.length : 0,
+  battles: mapBattles.length, fighters: liveFighterCount(),
+  bands: FORGE.session ? FORGE.session.bands.map(a => ({ faction: a.faction.name, size: Math.round(a.size), alive: a.alive, state: a.state,
+    pos: [Math.round(a.pos.x), Math.round(a.pos.z)] })) : [] });
+BV.forgeStep = (n = 60, dt = 1 / 60) => { if (!FORGE.on) return BV.forgeStatus(); for (let i = 0; i < n; i++) { forgeTick(dt); updateMapBattles(dt); updateLiveClashes(dt); } return BV.forgeStatus(); };
+BV.forgePause = (on) => { forgeSetPaused(on === undefined ? !(FORGE.session && FORGE.session.paused) : !!on); return FORGE.session ? FORGE.session.paused : false; };
+BV.forgeSpeed = (n) => { if (FORGE.session) FORGE.session.speed = clamp((n | 0) || 1, 1, 8); return FORGE.session ? FORGE.session.speed : 1; };
+BV.forgeReset = () => { forgeReset(); return BV.forgeStatus(); };
+BV.forgeExit = () => { forgeExit(); return BV.forgeStatus(); };
+BV.forgeSelect = (on) => { if (on === false) forgeCancelSelect(); else forgeEnterSelect(); return BV.forgeStatus(); };
+BV.forgeSnapshot = () => FORGE.session ? JSON.parse(JSON.stringify(FORGE.session.snap)) : null;
+BV.forgeFromSnap = (snap) => { if (!FORGE.on && snap && snap.bounds) forgeEnterSession(JSON.parse(JSON.stringify(snap))); return BV.forgeStatus(); }; // enter from a hand-built snapshot — proves the snap is honest plain data
 
 // Boot. ?edit=<kind> (or window.BV_EDIT) opens the object editor; otherwise show the sign-in gate
 // and DEFER the universe boot until the player clicks "Enter the Vale". The game no longer auto-
@@ -14879,10 +16272,12 @@ if (window.BV_BATTLE || (_editQ && _editQ.has('battle'))) {
 } else if (window.BV_ANIM || (_editQ && _editQ.has('anim'))) {
   // ?anim — soldier animation editor: one fighter plays walk → run → sword up → swing → recover
   animBoot({ weapon: (_editQ && _editQ.get('weapon')) || 'sword',
+             mounted: !!(_editQ && (_editQ.get('horse') === '1' || _editQ.get('mounted') === '1')),
              seed: (_editQ && parseInt(_editQ.get('seed'), 10) >>> 0) || 3 });
 } else if (window.BV_EDIT || _editWord) {
   editorBoot(window.BV_EDIT || parseEditSpec(_editWord, _editQ));
 } else {
+  if (_editQ && _editQ.has('forge')) FORGE.autoArm = true; // ?forge: boot the live game normally, then arm the master-editor picker on the first map frame
   refreshAuthGate(); // show login vs. signed-in Enter button (the sim idles behind the overlay)
 }
 

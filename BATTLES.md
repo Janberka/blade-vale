@@ -307,6 +307,22 @@ stands up as real fighters gets the editor's commander brain.
   commanders — you watch real doctrine-vs-doctrine fights (wings wheeling to flank, reserves
   committed, wavering wings pulled back). A side that chooses withdrawal and breaks contact
   folds back to numbers instead of being massacred.
+- **Armies in sight are soldiers, not flags** (`game.js`, search `FIELD_ARMY`): on foot *and on
+  the strategic map*, every host in sight — roaming bands, server patrols, your detachments,
+  *and your own lead column* (`playerFieldBand`, a pseudo-band riding `player.pos`/`warbandComp`
+  while zoomed out; on foot the company walks as real allies instead) — is drawn as a commander
+  leading squad blocks in formation, out to the fog wall (`showR: 130`). Only the far overview
+  (past `Z_CHART`) folds crowds back to tokens (`crowdRungOn`). The body budget (`capTotal`) is
+  spent nearest-first (your columns dress first) and a host's crowd thins with distance (48 men
+  close, a ~14-man block at the horizon), re-dressing as you approach — staggered a few hosts
+  per frame so a zoom flip never hitches. Past `labelR` (always, on the strategic rungs) the
+  floating name/count label stays over the crowd; up close on foot the men speak for
+  themselves. Detachments and the lead column field their **true class mix** (horsemen and all);
+  sizable enemy hosts trail a **lancer wing** (~8% of the roster, mirroring the battle muster).
+  A watched clash still only upgrades to the real fighter sim at ringside range (`liveR: 36`,
+  on foot only) — beyond that it's the crowd pantomime (`FIELD_MELEE` duels), so the
+  live-fighter budget serves the fights you're actually standing at. `BV.fieldArmies()` lists
+  every host currently standing as soldiers.
 - **The champion is fetched at boot** (`npcChampionInit` → `/api/v1/policy/champion`, plus the
   locally-trained `bv-champion` from localStorage); with no server the hosts fall back to the
   shipped baseline (identical to the genome defaults). `BV.warHosts()` shows every fielded
@@ -319,6 +335,16 @@ stands up as real fighters gets the editor's commander brain.
   temperament and doctrine weights from the same served champion θ_C. The map shows it as
   intents: "Hunting Garrec Frostbeard", "Massing with Doran Oakheart", "Probing the border at
   Wendmark", "Falling back in good order".
+- **Cavalry** (`game.js`, search `MOUNT`): a game-side class — **Horsemen** (`horse`, 18 XP) in
+  the warband and **lancers** (~8% of any sizable enemy roster; knight+ stations start with a
+  wing). The rider is the real humanoid rig seated on a procedural horse (`buildCavalry`), so
+  every pose/swing works from the saddle; `walkLegs`/`restLegs` route to a walk→gallop horse
+  gait. Movement identity: **~1.7× infantry pace and a charge-shock damage bonus (up to +50% at
+  full tilt), paid for with the worst manoeuvre on the field** — `mountSteer` caps yaw by speed
+  and drags momentum onto the facing (no strafing), so a committed charge carves wide arcs and
+  overshoots. Preview: `?edit=horseman` (walk/run buttons) or `?anim&horse=1`; in-game
+  `BV.cav(n)` grants n horsemen. Cavalry is NOT in the kernel (`sim/battle.js`) yet — the
+  self-play flywheel still trains on foot classes only.
 
 The long game (see `VISION.md`): every battle the world fights — including the ones NPCs fight
 against *you* — feeds the same dataset, and the served champion keeps climbing. The NPCs are

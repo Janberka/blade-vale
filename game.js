@@ -16215,6 +16215,7 @@ function forgeBtnSync() {
   const el = document.getElementById('forge-btn'); if (!el) return;
   el.textContent = FORGE.on ? '⏏ leave forge' : (FORGE.selecting ? '✕ cancel forge' : '⚒ forge');
 }
+const FORGE_BTN_ON = (typeof location !== 'undefined') && /[?&]forge=1/.test(location.search);
 (function forgeMakeBtn() {
   if (typeof document === 'undefined' || !document.body) return;
   const el = document.createElement('button'); el.id = 'forge-btn';
@@ -16225,7 +16226,10 @@ function forgeBtnSync() {
   setInterval(() => {   // visible whenever the live map (or a forge state) is on screen — never over the other editors.
     // NOTE: mode === 'map' is the "playing" signal (the gate idles at mode 'menu'); gameRunning is only
     // the ACTION-rung lever and is false on the strategic map, where this button must still show.
-    const ok = FORGE.on || FORGE.selecting || (mode === 'map' && player.alive && !BATTLE.on && !MARCH.on && !EDIT.on && !encounter);
+    // Hidden from players for now: it's a dev affordance sitting in the touch HUD's corner at a
+    // 68x31 target. Y (or \) still arms the picker, and ?forge=1 puts the button back — and once a
+    // forge state IS armed the button always shows, so there's a way out of it by tap.
+    const ok = FORGE.on || FORGE.selecting || (FORGE_BTN_ON && mode === 'map' && player.alive && !BATTLE.on && !MARCH.on && !EDIT.on && !encounter);
     el.style.display = ok ? '' : 'none';
   }, 500);
   forgeBtnSync();

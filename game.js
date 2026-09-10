@@ -16400,7 +16400,7 @@ const AF_TEAMS = [
   { name: 'VIOLET',  col: '#c77dff', pal: { skin: 0xd8a878, cloth: 0x7a3fbf, accent: 0x3f1f66, blade: 0xeaf2ff } },
   { name: 'IVORY',   col: '#f0ece0', pal: { skin: 0xe0b088, cloth: 0xd8d2c0, accent: 0x6b665a, blade: 0xeaf2ff } },
 ];
-const AF_LIM = { teamsMin: 2, teamsMax: 6, perMin: 1, perMax: 8 };
+const AF_LIM = { teamsMin: 2, teamsMax: 6, perMin: 1, perMax: 50, heroCap: 24 }; // above heroCap bodies the NPCs wear the plain rig
 // the feel of the pit — one table, like BATTLE_MELEE
 const AF_F = { hp: 100, move: 5.6, reach: 2.5, cone: 0.3, radius: 34, timeLimit: 120, countdown: 3,
   light: { wind: 0.24, strike: 0.10, rec: 0.28, dmg: [10, 15] },
@@ -16411,7 +16411,8 @@ const AF_F = { hp: 100, move: 5.6, reach: 2.5, cone: 0.3, radius: 34, timeLimit:
   accel: 7.13, friction: 0.0008, lunge: 2, heavyLunge: 3,      // velocity model borrowed from the field fighters (terminal speed ≈ move)
   dodge: { dur: 0.40, speed: 13, iframes: 0.32, cd: 0.55 },
   chargeMax: 0.85, heavyAt: 0.6, horseSpeed: 1.9, horseReach: 0.9 };
-const AF_PITS = { cosy: 34, wide: 50, vast: 68 };            // the ring's radius by lobby choice (radius is set per boot)                          // hold the attack to load it: a full hold (chargeMax s) is a heavy; past heavyAt it cracks guards
+const AF_PITS = { cosy: 34, wide: 50, vast: 68, colossal: 100 }; // the ring's radius by lobby choice (radius is set per boot; a big roster grows it)
+function afPitFor(pit, per) { const need = 26 + per * 0.9; let best = pit; for (const k of ['cosy', 'wide', 'vast', 'colossal']) { if (AF_PITS[k] >= Math.max(need, AF_PITS[pit] || 0)) { best = k; break; } best = k; } return AF_PITS[best] >= need ? best : 'colossal'; }                          // hold the attack to load it: a full hold (chargeMax s) is a heavy; past heavyAt it cracks guards
 const AF_TEAM_HEX = AF_TEAMS.map(t => parseInt(t.col.slice(1), 16));
 const AF_NET = { snapDt: 1 / 20, inDt: 1 / 20 };
 const AF = {
@@ -16616,23 +16617,30 @@ function afBuildWall() {
 }
 // team spawn points: evenly around the ring, each facing the centre
 function afSpawn(teamIdx, teams) {
-  const a = (teamIdx / teams) * TAU - Math.PI / 2, r = AF_F.radius * 0.7;
+  const a = (teamIdx / teams) * TAU - Math.PI / 2, r = AF_F.radius * 0.66;
   const cx = Math.cos(a) * r, cz = Math.sin(a) * r;
   return { cx, cz, yaw: Math.atan2(-cx, -cz) };
+}
+// a team musters as a rank-and-file block facing the centre: files across the front, ranks behind
+function afSlotOffset(slot, per) {
+  const files = clamp(Math.ceil(Math.sqrt(per * 1.8)), 1, 12), rank = Math.floor(slot / files), file = slot % files;
+  const nFiles = Math.min(files, per - rank * files);        // the last rank centres its short row
+  return { right: (file - (nFiles - 1) / 2) * 2.3, back: rank * 2.5 };
 }
 
 // ---- fighters ----
 function afFreshInput() { return { mx: 0, mz: 0, yaw: 0, atk: 0, heavy: 0, dodge: 0, block: false, hold: false, swap: 0 }; } // atk = release count (a tap between samples still lands); hold = the button is down (charging)
 function afMakeBody(entry, idx, r) {
   const td = AF_TEAMS[entry.t], mounted = entry.weapon === 'horse', weapon = entry.weapon === 'bow' ? 'bow' : 'sword';
-  const rigOpts = { hero: true, both: true, plume: AF_TEAM_HEX[entry.t] };
+  const big = AF.cfg.teams * AF.cfg.per > AF_LIM.heroCap;
+  const rigOpts = { hero: entry.kind !== 'npc' || !big, both: true, plume: AF_TEAM_HEX[entry.t] }; // a hundred capes would melt a phone: only the humans dress up in a big fight
   const h = mounted ? buildCavalry(td.pal, 1, 'sword', rigOpts) : buildHumanoid(td.pal, 1, weapon, rigOpts); const group = h.group || h;
   group.rotation.order = 'YXZ';                              // yaw first, then a body-local tilt/roll (somersaults, crumples)
-  const sp = afSpawn(entry.t, AF.cfg.teams), rgx = -Math.cos(sp.yaw), rgz = Math.sin(sp.yaw), off = (entry.s - (AF.cfg.per - 1) / 2) * 2.3;
+  const sp = afSpawn(entry.t, AF.cfg.teams), rgx = -Math.cos(sp.yaw), rgz = Math.sin(sp.yaw), so = afSlotOffset(entry.s, AF.cfg.per), off = so.right, back = so.back * (mounted ? 1.3 : 1);
   const b = { id: idx, idx, team: entry.t, teamDef: td, name: entry.name, kind: entry.kind, peer: entry.peer || null, weapon,
     ctrl: entry.kind === 'npc' ? 'ai' : 'input', inp: afFreshInput(),
     group, parts: h.parts, anim: makeAnimator(h.parts),
-    x: sp.cx + rgx * off, z: sp.cz + rgz * off, yaw: sp.yaw, phase: r() * TAU, tiltX: 0,
+    x: sp.cx + rgx * off - Math.sin(sp.yaw) * back, z: sp.cz + rgz * off - Math.cos(sp.yaw) * back, yaw: sp.yaw, phase: r() * TAU, tiltX: 0,
     hp: AF_F.hp, maxHp: AF_F.hp, state: 'idle', atk: null, combo: 0, comboT: 0, blocking: false,
     dodgeT: 0, dodgeCd: 0, ddx: 0, ddz: 0, iframes: 0, flinch: 0, stagger: 0, dead: false, deadT: 0, tinted: false, kills: 0,
     vx: 0, vz: 0, poise: AF_F.maxPoise, maxPoise: AF_F.maxPoise, queued: false, cd: 0, waiting: false, slotAngle: 0, retreatT: 0, bob: 0,
@@ -16715,7 +16723,7 @@ function afCommit(b, dt) {
   }
   const y = afY(b.x, b.z) + (b.moving && !b.dead && !b.mounted ? Math.abs(Math.cos(b.phase)) * g.bob : 0);
   b.group.position.set(b.x, y, b.z); b.group.rotation.set(b.tiltX || 0, b.yaw, b.roll || 0);
-  if (b.tag) { b.tag.position.set(b.x, y + (b.tagH || 2.25), b.z); b.bar.quaternion.copy(camera.quaternion); b.bar.userData.fill.scale.x = clamp(b.hp / b.maxHp, 0, 1); b.tag.visible = !b.dead; }
+  if (b.tag) { b.tag.visible = !b.dead && camera.position.distanceToSquared(b.group.position) < (AF.bodies.length > AF_LIM.heroCap ? 900 : 4e4); b.tag.position.set(b.x, y + (b.tagH || 2.25), b.z); b.bar.quaternion.copy(camera.quaternion); b.bar.userData.fill.scale.x = clamp(b.hp / b.maxHp, 0, 1); }
 }
 // ONE control routine for everyone: reads b.inp (keyboard, NPC brain, or a remote player's record).
 // sim=true means this client is the authority (hits land); a guest driving its own body passes false.
@@ -17183,7 +17191,7 @@ function afTick(dt) {
   const alive = new Map();
   for (const b of AF.bodies) if (!b.dead) alive.set(b.team, (alive.get(b.team) || 0) + 1);
   if (alive.size <= 1) afFinish(alive.size ? [...alive.keys()][0] : -1);
-  else if (AF.t >= AF_F.timeLimit) { const st = afStandings(); afFinish(st[0].alive === st[1].alive && st[0].hp === st[1].hp ? -1 : st[0].team); }
+  else if (AF.t >= AF_F.timeLimit * (AF.bodies.length > AF_LIM.heroCap ? 2 : 1)) { const st = afStandings(); afFinish(st[0].alive === st[1].alive && st[0].hp === st[1].hp ? -1 : st[0].team); }
 }
 // nobody overlaps — they shove (heavier when it's you, so you can wade through a press)
 function afSeparate() {
@@ -17510,7 +17518,7 @@ function afHud() {
 function afUpdateHud() {
   const p = AF.hudEl; if (!p || !AF.on) return;
   const tally = new Map(); for (const b of AF.bodies) { const t = tally.get(b.team) || { alive: 0, total: 0 }; t.total++; if (!b.dead) t.alive++; tally.set(b.team, t); }
-  const rem = Math.max(0, AF_F.timeLimit - AF.t), mm = Math.floor(rem / 60), ss = Math.floor(rem % 60);
+  const rem = Math.max(0, AF_F.timeLimit * (AF.bodies.length > AF_LIM.heroCap ? 2 : 1) - AF.t), mm = Math.floor(rem / 60), ss = Math.floor(rem % 60);
   let html = '<div style="display:flex;justify-content:space-between;gap:14px;margin-bottom:6px"><b style="color:#ffe089">⚔ Arena</b><span style="color:#c9bfda">' + (AF.phase === 'countdown' ? 'ready…' : mm + ':' + (ss < 10 ? '0' : '') + ss) + '</span></div>';
   for (let t = 0; t < AF.cfg.teams; t++) { const c = tally.get(t) || { alive: 0, total: 0 }, me = AF.me && AF.me.team === t;
     html += '<div style="display:flex;justify-content:space-between;gap:10px;margin-top:2px' + (c.alive ? '' : ';opacity:.45') + '"><span style="color:' + AF_TEAMS[t].col + ';font-weight:800">' + AF_TEAMS[t].name + (me ? ' ◉' : '') + '</span><span style="font-weight:800">' + c.alive + '<span style="opacity:.5;font-weight:400">/' + c.total + '</span></span></div>'; }
@@ -17745,7 +17753,7 @@ function afLobbyRender() {
   document.getElementById('al-teams-n').textContent = L.teams; document.getElementById('al-per-n').textContent = L.per;
   for (const id of ['al-teams-minus', 'al-teams-plus', 'al-per-minus', 'al-per-plus']) document.getElementById(id).disabled = !host;
   for (const w of ['sword', 'bow', 'horse']) { const el = document.getElementById('al-wpn-' + w); if (el) el.classList.toggle('on', L.weapon === w); }
-  for (const pt of ['cosy', 'wide', 'vast']) { const el = document.getElementById('al-pit-' + pt); if (el) { el.classList.toggle('on', L.pit === pt); el.disabled = !host; } }
+  for (const pt of ['cosy', 'wide', 'vast', 'colossal']) { const el = document.getElementById('al-pit-' + pt); if (el) { el.classList.toggle('on', L.pit === pt); el.disabled = !host; } }
   for (const tm of ['day', 'dusk', 'night']) { const el = document.getElementById('al-time-' + tm); if (el) { el.classList.toggle('on', L.time === tm); el.disabled = !host; } }
   for (const wx of ['clear', 'rain']) { const el = document.getElementById('al-wx-' + wx); if (el) { el.classList.toggle('on', L.weather === wx); el.disabled = !host; } }
   const sub = document.getElementById('al-sub'); if (sub) sub.textContent = host ? 'Choose the teams, invite players who are online, and every empty place is taken by a fighter of the vale.' : L.host + ' set the teams — pick a side, pick a weapon, and wait for the bell.';
@@ -17754,8 +17762,9 @@ function afLobbyRender() {
   grid.innerHTML = L.slots.map((row, t) => {
     const td = AF_TEAMS[t], free = row.indexOf(null) >= 0, mine = !!me && row.indexOf(me) >= 0;
     return '<div class="al-team" style="--tc:' + td.col + '"><div class="al-tname"><span>' + td.name + '</span>' + (!host && free && !mine ? '<button data-team="' + t + '">join</button>' : '') + '</div>' +
-      row.map(s => s ? '<div class="al-slot ' + (s === me ? 'you' : 'player') + '"><span>' + (s === me ? 'You' : s.name) + '</span><span class="al-tag">' + (s.weapon === 'bow' ? '🏹' : s.weapon === 'horse' ? '🐎' : '🗡') + (s.kind === 'host' && s !== me ? ' host' : '') + '</span></div>'
-                        : '<div class="al-slot npc"><span>fighter of the vale</span><span class="al-tag">npc</span></div>').join('') + '</div>';
+      (L.per > 8 ? row.filter(Boolean) : row).map(s => s ? '<div class="al-slot ' + (s === me ? 'you' : 'player') + '"><span>' + (s === me ? 'You' : s.name) + '</span><span class="al-tag">' + (s.weapon === 'bow' ? '🏹' : s.weapon === 'horse' ? '🐎' : '🗡') + (s.kind === 'host' && s !== me ? ' host' : '') + '</span></div>'
+                        : '<div class="al-slot npc"><span>fighter of the vale</span><span class="al-tag">npc</span></div>').join('') +
+      (L.per > 8 ? '<div class="al-slot npc"><span>' + row.filter(x => !x).length + ' fighters of the vale</span><span class="al-tag">npc</span></div>' : '') + '</div>';
   }).join('');
   for (const btn of grid.querySelectorAll('button[data-team]')) btn.onclick = () => { if (window.coop) window.coop.send({ k: 'team', t: parseInt(btn.getAttribute('data-team'), 10) }); };
   // who's online
@@ -17775,7 +17784,8 @@ function afLobbyRender() {
   document.getElementById('al-inv-name').disabled = !(host && online); document.getElementById('al-inv-btn').disabled = !(host && online);
   const startBtn = document.getElementById('al-start'); startBtn.classList.toggle('hidden', !host);
   const humans = L.slots.flat().filter(Boolean).length, total = L.teams * L.per;
-  startBtn.textContent = humans > 1 ? 'Start Fight · ' + humans + ' players + ' + (total - humans) + ' NPCs' : 'Start Fight · you + ' + (total - 1) + ' NPCs';
+  const pitNote = afPitFor(L.pit, L.per) !== L.pit ? ' · ' + afPitFor(L.pit, L.per) + ' pit' : '';
+  startBtn.textContent = (humans > 1 ? 'Start Fight · ' + humans + ' players + ' + (total - humans) + ' NPCs' : 'Start Fight · you + ' + (total - 1) + ' NPCs') + pitNote;
   document.getElementById('al-back').textContent = host ? 'Back' : 'Leave';
 }
 function afInvite(name) {
@@ -17824,7 +17834,7 @@ function afStartFight() {
   }
   const humans = roster.filter(x => x.kind === 'player').length;
   AF.role = humans ? 'host' : 'solo';
-  const spec = { k: 'go', seed: (Math.random() * 0xffffffff) >>> 0, teams: L.teams, per: L.per, time: L.time, weather: L.weather, pit: L.pit, roster };
+  const spec = { k: 'go', seed: (Math.random() * 0xffffffff) >>> 0, teams: L.teams, per: L.per, time: L.time, weather: L.weather, pit: afPitFor(L.pit, L.per), roster };
   if (humans) afSend(spec);
   afCloseLobbyUi();
   afBoot(spec);
@@ -17836,11 +17846,12 @@ function afStartFight() {
     L[key] = clamp(L[key] + d, lim[0], lim[1]); afResize(L); afLobbyRender(); afLobbyBroadcast(); };
   g('al-teams-minus').onclick = () => bump('teams', -1); g('al-teams-plus').onclick = () => bump('teams', 1);
   g('al-per-minus').onclick = () => bump('per', -1); g('al-per-plus').onclick = () => bump('per', 1);
+  if (g('al-per-minus10')) g('al-per-minus10').onclick = () => bump('per', -10); if (g('al-per-plus10')) g('al-per-plus10').onclick = () => bump('per', 10);
   const setOpt = (key, v) => { const L = AF.lobby; if (!L || L.role !== 'host') return; L[key] = v; afLobbyRender(); afLobbyBroadcast(); };
   const wpn = w => { const L = AF.lobby; if (!L) return; L.weapon = w;
     if (L.role === 'host') { const s = afHostSeat(); if (s) s.weapon = w; afLobbyRender(); afLobbyBroadcast(); } else { if (window.coop) window.coop.send({ k: 'weapon', w }); afLobbyRender(); } };
   g('al-wpn-sword').onclick = () => wpn('sword'); g('al-wpn-bow').onclick = () => wpn('bow'); if (g('al-wpn-horse')) g('al-wpn-horse').onclick = () => wpn('horse');
-  for (const pt of ['cosy', 'wide', 'vast']) { const el = g('al-pit-' + pt); if (el) el.onclick = () => setOpt('pit', pt); }
+  for (const pt of ['cosy', 'wide', 'vast', 'colossal']) { const el = g('al-pit-' + pt); if (el) el.onclick = () => setOpt('pit', pt); }
   for (const tm of ['day', 'dusk', 'night']) { const el = g('al-time-' + tm); if (el) el.onclick = () => setOpt('time', tm); }
   for (const wx of ['clear', 'rain']) { const el = g('al-wx-' + wx); if (el) el.onclick = () => setOpt('weather', wx); }
   g('al-inv-btn').onclick = () => { const i = g('al-inv-name'); afInvite(i.value); i.value = ''; };

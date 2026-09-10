@@ -16419,14 +16419,14 @@ const AF_ARCH = {
   duelist:   { label: 'duelist',   weapon: 'sword', hp: 85,  poise: 35, move: 1.15, dmg: 0.9,  scale: 0.96, heavyBias: 0.05, block: 0.1,  dodge: 0.7,  circ: 0.85, reach: 0,   shield: false, bow: true,  feint: 0.35 },
   guardsman: { label: 'guardsman', weapon: 'sword', hp: 120, poise: 60, move: 0.9,  dmg: 1.0,  scale: 1.04, heavyBias: 0.25, block: 0.8,  dodge: 0.08, circ: 0.3,  reach: 0,   shield: true,  bow: true,  wall: true, bigShield: true },
   archer:    { label: 'archer',    weapon: 'bow',   hp: 90,  poise: 40, move: 1.05, dmg: 1.0,  scale: 0.98, heavyBias: 0.1,  block: 0.2,  dodge: 0.4,  circ: 0.5,  reach: 0,   shield: true,  bow: true  },
-  rider:     { label: 'rider',     weapon: 'horse', hp: 110, poise: 55, move: 1.0,  dmg: 1.0,  scale: 1.0,  heavyBias: 0.2,  block: 0.2,  dodge: 0.1,  circ: 0.3,  reach: 0,   shield: true,  bow: true  },
+  rider:     { label: 'rider',     weapon: 'horse', hp: 150, poise: 80, move: 1.0,  dmg: 1.0,  scale: 1.0,  heavyBias: 0.2,  block: 0.2,  dodge: 0.1,  circ: 0.3,  reach: 0,   shield: true,  bow: true  },
 };
 // a village skirmish is mostly plain swordsmen; a legion fields ranks of archers and wings of horse —
 // the mix below slides from one to the other as the roster grows (k: 0 at a handful a side, 1 by ~40)
 function afArchWeights(per) {
   const k = clamp((per - 3) / 40, 0, 1);
-  return [['swordsman', lerp(30, 14, k)], ['brute', lerp(15, 12, k)], ['duelist', lerp(15, 9, k)],
-          ['guardsman', lerp(15, 13, k)], ['archer', lerp(15, 32, k)], ['rider', lerp(10, 26, k)]];
+  return [['swordsman', lerp(30, 19, k)], ['brute', lerp(15, 13, k)], ['duelist', lerp(15, 9, k)],
+          ['guardsman', lerp(15, 15, k)], ['archer', lerp(15, 22, k)], ['rider', lerp(10, 22, k)]];
 }
 function afRollArch(r, allowRider, per) {
   const table = afArchWeights(per || 8); let tot = 0; for (const [k, w] of table) if (k !== 'rider' || allowRider) tot += w;
@@ -16745,7 +16745,7 @@ function afCommit(b, dt) {
     if (b.moving && b.dodgeT <= 0) b.roll = Math.sin(b.phase) * 0.035; else if (b.moving || b.atk || b.dodgeT > 0) b.roll = 0;
     if (b.moving && b.dodgeT <= 0) {                         // a footfall: dust at the planted foot (near the camera only)
       const step = Math.floor(b.phase / Math.PI);
-      if (step !== b.lastStep) { b.lastStep = step; if (sp > 3 && camera.position.distanceToSquared(b.group.position) < (AF.bodies.length > AF_LIM.heroCap ? 120 : 900)) spawnSparks(tmpV.set(b.x, afY(b.x, b.z) + 0.15, b.z), 0xc9b79a, AF.bodies.length > AF_LIM.heroCap ? 1 : 2); }
+      if (step !== b.lastStep) { b.lastStep = step; if (sp > 3 && camera.position.distanceToSquared(b.group.position) < (AF.bodies.length > AF_LIM.heroCap ? 120 : 900)) afSparks(tmpV.set(b.x, afY(b.x, b.z) + 0.15, b.z), 0xc9b79a, AF.bodies.length > AF_LIM.heroCap ? 1 : 2); }
     }
   }
   const y = afY(b.x, b.z) + (b.moving && !b.dead && !b.mounted ? Math.abs(Math.cos(b.phase)) * g.bob : 0);
@@ -16896,8 +16896,8 @@ function afRide(b, dt, I, mm, canMove, sim) {
   if (sim && sp01 > 0.5) for (const o of AF.bodies) {   // the charge: a foot soldier in the horse's path is bowled over
     if (o.dead || o === b || o.team === b.team || o.mounted || o.trampleT > 0) continue;
     const dx = o.x - b.x, dz = o.z - b.z, dd = Math.hypot(dx, dz); if (dd > 1.8 || (dx * fx + dz * fz) / (dd || 1) < 0.2) continue;
-    o.trampleT = 1.4; afDamage(o, 4 + 7 * sp01, b, false, false, false, 0.85); spawnPopup(o.group.position, 'TRAMPLED', '#ffb347');
-    spawnSparks(tmpV.set(o.x, afY(o.x, o.z) + 0.3, o.z), 0xc9b79a, 8);
+    o.trampleT = 1.4; afDamage(o, 4 + 7 * sp01, b, false, false, false, 0.85); afPopup(o.group.position, 'TRAMPLED', '#ffb347');
+    afSparks(tmpV.set(o.x, afY(o.x, o.z) + 0.3, o.z), 0xc9b79a, 8);
   }
 }
 // after a swing or a roll, if a foe is at your elbow but not in front of you, the camera swings onto him —
@@ -16945,37 +16945,37 @@ function afDamage(t, amt, from, heavy, exec, arrow, k) {   // heavy: cracks guar
   if (t.dead || AF.over) return;
   const weight = k != null ? k : heavy ? 1 : 0;
   const pos = t.group.position;
-  if (t.iframes > 0) { spawnPopup(pos, 'dodge', '#9fd6ff'); return; }
+  if (t.iframes > 0) { afPopup(pos, 'dodge', '#9fd6ff'); return; }
   const ax = from.x - t.x, az = from.z - t.z, ad = Math.hypot(ax, az) || 1;
   const facing = (ax * Math.sin(t.yaw) + az * Math.cos(t.yaw)) / ad;
   let blocked = 0;
   tmpV.set(t.x, afY(t.x, t.z) + 1.3, t.z);
   if (t.blocking && facing > 0.15) {
-    if (heavy) { blocked = 2; t.stagger = AF_F.guardBreak; t.poise = t.maxPoise; t.blocking = false; t.atk = null; amt *= 0.5; t.vx -= ax / ad * AF_F.knock; t.vz -= az / ad * AF_F.knock; spawnPopup(pos, 'GUARD BREAK', '#ffb347'); try { SFX.clang(pos, true); } catch (e) {} }
+    if (heavy) { blocked = 2; t.stagger = AF_F.guardBreak; t.poise = t.maxPoise; t.blocking = false; t.atk = null; amt *= 0.5; t.vx -= ax / ad * AF_F.knock; t.vz -= az / ad * AF_F.knock; afPopup(pos, 'GUARD BREAK', '#ffb347'); try { SFX.clang(pos, true); } catch (e) {} }
     else {
-      blocked = 1; amt *= AF_F.blockMul; spawnPopup(pos, 'block', '#ffe089'); try { SFX.clang(pos); } catch (e) {}
+      blocked = 1; amt *= AF_F.blockMul; afPopup(pos, 'block', '#ffe089'); try { SFX.clang(pos); } catch (e) {}
       if (!arrow) {                                          // BLADE LOCK: steel bites steel, both freeze for a beat, then the shove — and the attacker's swing is spent
         from.clashT = 0.3; from.clashAtk = true; from.clashDx = ax / ad; from.clashDz = az / ad; from.atk = null; from.charge = null; from.queued = false; from.vx = from.vz = 0;
         t.clashT = 0.22; t.clashAtk = false; t.clashDx = -ax / ad; t.clashDz = -az / ad; t.vx = t.vz = 0;
-        tmpV.set((t.x + from.x) / 2, afY(t.x, t.z) + 1.4, (t.z + from.z) / 2); spawnSparks(tmpV, 0xffffff, 12); spawnSparks(tmpV, 0xffdf6b, 8);
+        tmpV.set((t.x + from.x) / 2, afY(t.x, t.z) + 1.4, (t.z + from.z) / 2); afSparks(tmpV, 0xffffff, 12); afSparks(tmpV, 0xffdf6b, 8);
         if (from === AF.me || t === AF.me) { addShake(0.14); AF.hitstop = Math.max(AF.hitstop, 0.05); }
       }
     }
-    spawnSparks(tmpV, 0xffdf6b, 6);
+    afSparks(tmpV, 0xffdf6b, 6);
   } else {
     t.atk = null; t.charge = null; t.queued = false; t.blocking = false;
     const k = lerp(AF_F.knock, AF_F.heavyKnock, weight); t.vx -= ax / ad * k; t.vz -= az / ad * k; // an impulse, not a teleport
     if (t.stagger <= 0) {                                    // poise: chip it and he flinches; break it and he reels wide open
       t.poise -= arrow ? AF_F.lightPoise * 0.4 : lerp(AF_F.lightPoise, AF_F.heavyPoise, weight);
-      if (t.poise <= 0) { t.poise = t.maxPoise; t.stagger = AF_F.staggerDur; spawnPopup(pos, 'STAGGERED', '#ffb347'); }
+      if (t.poise <= 0) { t.poise = t.maxPoise; t.stagger = AF_F.staggerDur; afPopup(pos, 'STAGGERED', '#ffb347'); }
       else t.flinch = Math.max(t.flinch, AF_F.flinch);
     }
-    spawnSparks(tmpV, exec ? 0xff3b2b : 0xff5a3c, exec ? 14 : 8); try { SFX.hit(pos, heavy); } catch (e) {}
+    afSparks(tmpV, exec ? 0xff3b2b : 0xff5a3c, exec ? 14 : arrow ? 3 : 8); try { SFX.hit(pos, heavy); } catch (e) {}
     t.hitT = 0.25; t.hitSide = Math.sign(ax * Math.cos(t.yaw) - az * Math.sin(t.yaw)) || 1;   // thrown back and away from the blow
     t.flashT = 0.07;                                         // an impact frame: the body flares white for a beat
     if (t === AF.me) AF.hurt = Math.min(1, AF.hurt + (heavy ? 0.9 : 0.55));
     afSplat(t.x, t.z, heavy || exec ? 1.1 : 0.7);
-    spawnPopup(pos, exec ? 'EXECUTE ' + Math.round(amt) : String(Math.round(amt)), exec ? '#ff5a3c' : heavy ? '#ffd27a' : '#ff7d6f');
+    afPopup(pos, exec ? 'EXECUTE ' + Math.round(amt) : String(Math.round(amt)), exec ? '#ff5a3c' : heavy ? '#ffd27a' : '#ff7d6f');
   }
   t.hp -= amt;
   if ((from === AF.me || t === AF.me) && AF.role !== 'guest') afJuice(from, t, amt, heavy, blocked); // your blows and your wounds rattle the camera
@@ -16993,7 +16993,7 @@ function afJuice(from, t, amt, heavy, blocked) {
 function afKill(t, by, quiet) {                          // quiet: a guest mirroring the host's verdict (the kill event carries the log line)
   t.dead = true; t.hp = 0; t.deadT = 0; t.atk = null; t.blocking = false; t.dodgeT = 0; t.tiltX = 0;
   if (by && by !== t) by.kills++;
-  if (!quiet) { try { SFX.kill(t.group.position); } catch (e) {} spawnSparks(tmpV.set(t.x, afY(t.x, t.z) + 1.6, t.z), 0xff6b6b, 14); }
+  if (!quiet) { try { SFX.kill(t.group.position); } catch (e) {} afSparks(tmpV.set(t.x, afY(t.x, t.z) + 1.6, t.z), 0xff6b6b, 14); }
   afSplat(t.x, t.z, 1.6); afSplat(t.x + Math.sin(t.yaw) * 0.8, t.z + Math.cos(t.yaw) * 0.8, 1.0);
   t.deadSide = Math.random() < 0.5 ? -1 : 1; setPose(t.anim, 'relax', 0.35);
   if (!quiet && (by === AF.me || t === AF.me) && AF.role !== 'guest') { addShake(FEEL.killShake); AF.hitstop = Math.max(AF.hitstop, FEEL.killStop); addFovPunch(FEEL.fovPunchKill); }
@@ -17019,6 +17019,14 @@ function afStepDead(b, dt) {
   if (k > 0.7 && !b.tinted) { setTint(b.parts, 0x1a1214); b.tinted = true; }
   if (b.tag) b.tag.visible = false;
 }
+// the juice is BUDGETED: a volley of a hundred arrows landing at once used to paint the whole screen with sparks.
+// Sparks thin with distance from the camera and stop at a live cap; far-off damage numbers are skipped.
+function afSparks(pos, col, n) {
+  if (sparks.length > 180) return;
+  const d = camera.position.distanceTo(pos); if (d > 50) return;
+  spawnSparks(pos, col, Math.max(1, Math.round(n * clamp(1.15 - d / 40, 0.25, 1) * (sparks.length > 90 ? 0.5 : 1))));
+}
+function afPopup(pos, text, col) { if (popups.length > 6 && camera.position.distanceTo(pos) > 24) return; spawnPopup(pos, text, col); }
 // blood on the sand: pooled flat discs that soak in and slowly fade (the pit remembers the fight)
 const _afSplats = [];
 function afSplat(x, z, size) {
@@ -17166,7 +17174,7 @@ function afCaptainThink(T, dt) {
 // full does a man WAIT — circling to a slot in his mark's rear arc and committing only from behind, where guards can't reach.
 function afAssignTargets() {
   const live = AF.bodies.filter(b => !b.dead), ai = live.filter(b => b.ctrl === 'ai'), counts = new Map();
-  const adj = (f, o) => Math.hypot(o.x - f.x, o.z - f.z) - (f.target === o ? 0.8 : 0);
+  const adj = (f, o) => Math.hypot(o.x - f.x, o.z - f.z) - (f.target === o ? 0.8 : 0) - (f.mounted && o.weapon === 'bow' && !o.mounted ? 10 : 0); // cavalry's job: ride down the bowmen behind the line
   for (const f of ai) { let bd = Infinity; for (const o of live) if (o.team !== f.team) bd = Math.min(bd, adj(f, o)); f._claim = bd; }
   ai.sort((a, b) => a._claim - b._claim);
   for (const f of ai) {
@@ -17467,8 +17475,8 @@ function afApplyEvent(ev) {
   if (ev.k === 'hit' && b) {
     const by = AF.bodies[ev.by];
     tmpV.set(b.x, afY(b.x, b.z) + 1.3, b.z);
-    if (ev.b) { spawnSparks(tmpV, 0xffdf6b, 6); spawnPopup(b.group.position, ev.b === 2 ? 'GUARD BREAK' : 'block', ev.b === 2 ? '#ffb347' : '#ffe089'); try { SFX.clang(b.group.position, ev.b === 2); } catch (e) {} }
-    else { spawnSparks(tmpV, 0xff5a3c, 8); spawnPopup(b.group.position, String(ev.d), ev.h ? '#ffd27a' : '#ff7d6f'); try { SFX.hit(b.group.position, !!ev.h); } catch (e) {}
+    if (ev.b) { afSparks(tmpV, 0xffdf6b, 6); afPopup(b.group.position, ev.b === 2 ? 'GUARD BREAK' : 'block', ev.b === 2 ? '#ffb347' : '#ffe089'); try { SFX.clang(b.group.position, ev.b === 2); } catch (e) {} }
+    else { afSparks(tmpV, 0xff5a3c, 8); afPopup(b.group.position, String(ev.d), ev.h ? '#ffd27a' : '#ff7d6f'); try { SFX.hit(b.group.position, !!ev.h); } catch (e) {}
       if (by) { b.hitT = 0.25; b.hitSide = Math.sign((by.x - b.x) * Math.cos(b.yaw) - (by.z - b.z) * Math.sin(b.yaw)) || 1; } b.flashT = 0.07; if (b === AF.me) AF.hurt = Math.min(1, AF.hurt + (ev.h ? 0.9 : 0.55)); afSplat(b.x, b.z, ev.h ? 1.1 : 0.7); }
     if (by && (by === AF.me || b === AF.me)) afJuice(by, b, ev.d, !!ev.h, ev.b);   // my blow / my wound: the guest feels it too
   } else if (ev.k === 'kill' && b) {
@@ -17476,7 +17484,7 @@ function afApplyEvent(ev) {
     afLogLine((by ? by.name + ' fells ' : '') + b.name, b.teamDef.col);
     afCrowdReact(by === AF.me || b === AF.me);
     try { SFX.kill(b.group.position); } catch (e) {}
-    spawnSparks(tmpV.set(b.x, afY(b.x, b.z) + 1.6, b.z), 0xff6b6b, 14); afSplat(b.x, b.z, 1.6); b.deadSide = Math.random() < 0.5 ? -1 : 1; setPose(b.anim, 'relax', 0.35);
+    afSparks(tmpV.set(b.x, afY(b.x, b.z) + 1.6, b.z), 0xff6b6b, 14); afSplat(b.x, b.z, 1.6); b.deadSide = Math.random() < 0.5 ? -1 : 1; setPose(b.anim, 'relax', 0.35);
     if (by === AF.me || b === AF.me) { addShake(FEEL.killShake); AF.hitstop = Math.max(AF.hitstop, FEEL.killStop); addFovPunch(FEEL.fovPunchKill); }
     if (b === AF.me && !b.dead) afKill(b, null, true);
   } else if (ev.k === 'arrow') {
@@ -17904,7 +17912,17 @@ function afPlace(L, p, prefTeam) {                          // first free seat: 
 }
 function afRollNpcMix(L) {                                 // who the fighters of the vale will be, seat by seat (rolled by the host, shown to all)
   const r = _mulberry32((L.mixSeed = L.mixSeed || ((Math.random() * 0xffffffff) >>> 0)) ^ (L.teams * 977 + L.per * 31));
-  L.npcArch = []; for (let t = 0; t < L.teams; t++) { const row = []; for (let s = 0; s < L.per; s++) row.push(afRollArch(r, L.per >= 2, L.per)); L.npcArch.push(row); }
+  // DEAL the mix, don't roll it: each team gets the archetypes in exactly the table's proportions (largest-remainder
+  // rounding), shuffled into seats — independent rolls let one lobby field 30 bowmen where 19 were meant, and made
+  // one side's army a different shape from the other's. Both sides now muster the same kind of host.
+  const table = afArchWeights(L.per).filter(([k]) => k !== 'rider' || L.per >= 2), tot = table.reduce((a, [, w]) => a + w, 0);
+  const shares = table.map(([k, w]) => ({ k, n: Math.floor(w / tot * L.per), rem: (w / tot * L.per) % 1 }));
+  let left = L.per - shares.reduce((a, x) => a + x.n, 0); shares.slice().sort((a, b) => b.rem - a.rem).forEach(x => { if (left > 0) { x.n++; left--; } });
+  L.npcArch = []; for (let t = 0; t < L.teams; t++) {
+    const row = []; for (const x of shares) for (let i = 0; i < x.n; i++) row.push(x.k);
+    for (let i = row.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); const tmp = row[i]; row[i] = row[j]; row[j] = tmp; }
+    L.npcArch.push(row);
+  }
 }
 function afSeat(peer, name) { const L = AF.lobby; if (afFindSeat(peer)) return; afPlace(L, { kind: 'player', name: String(name || 'Ally').slice(0, 24), peer, weapon: 'sword' }); L.invites.set(name, 'joined'); }
 function afUnseat(peer) { const L = AF.lobby; for (const row of L.slots) for (let i = 0; i < row.length; i++) if (row[i] && row[i].peer === peer) { L.invites.delete(row[i].name); row[i] = null; } }

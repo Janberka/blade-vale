@@ -3398,6 +3398,20 @@ function updateCamera(dt) {
 let mapCamFocus = null;   // { x, z, t }
 function focusMapOn(x, z, secs) { mapCamFocus = { x: x, z: z, t: secs || 5 }; }
 function clearMapFocus() { mapCamFocus = null; }
+// ---------- Screen fit: a rung has to mean the same READ on a phone as on a desktop ----------
+// The strategic rig is framed in WORLD units (camLift/camBack), but what a player can actually read
+// is how big a thing lands in SCREEN pixels — and with a fixed vertical FOV that is set by the
+// viewport's HEIGHT alone. A landscape phone has roughly half a desktop window's height, so every
+// rung squeezed the SAME patch of land into half the pixels: settlements shrank to specks, armies to
+// dust, and the haze — tuned against the desktop framing — closed over the middle of the screen. The
+// map stopped carrying information at exactly the rung the touch View button parks you on.
+// So scale the whole rig — lift, pullback, and the haze that goes with them — by the viewport height.
+// A rung then means "this much readable detail" rather than "this many world units": a short screen
+// sees LESS land at the size a tall screen sees it, which is the trade that makes it legible at all.
+const MAP_FIT_H = 800;      // the viewport height the world-unit lift/pullback numbers were tuned against
+                            // (a desktop window sits at or above it, so desktop framing is untouched)
+const MAP_FIT_MIN = 0.5;    // floor: a phone still needs situational view, so never pull in past half
+function mapScreenFit() { return clamp(innerHeight / MAP_FIT_H, MAP_FIT_MIN, 1); }
 // The map camera is a single north-looking rig, centered on the character — zooming out with P just
 // pulls it farther back along the SAME view ray (lift and pull-back scaled by one multiplier), so
 // switching rungs is a pure dolly: the camera glides out/in along one line and never rotates.
@@ -3408,7 +3422,7 @@ function updateMapCamera(dt) {
   const fx = mapCamFocus ? mapCamFocus.x : player.pos.x;   // frame a focused spot, else your own banner
   const fz = mapCamFocus ? mapCamFocus.z : player.pos.z;
   const gy = mapElevY(fx, fz); // ride the relief so the cam clears hills and peaks
-  const mul = Math.pow(MAP_ZOOM_STEP, mapZoomLevel); // farther out each extra zoom-out level, same ray
+  const mul = Math.pow(MAP_ZOOM_STEP, mapZoomLevel) * mapScreenFit(); // farther out each extra zoom-out level, same ray — fitted to the screen so a rung reads alike everywhere
   camBase.x = lerp(camBase.x, fx, k);
   camBase.y = lerp(camBase.y, gy + vlerp(VISTA.camLift) * mul, k);
   camBase.z = lerp(camBase.z, fz + vlerp(VISTA.camBack) * mul, k);
@@ -6333,6 +6347,7 @@ function stepTerritory() {
   }
   for (const rec of mapChunks.values()) if (rec.tiles) paintChunkTerritory(rec);
   refreshOwnedPins();                                 // conquests pin/unpin on the same cadence
+  refreshHoldPlates();                                // ...and a conquered hold's plate re-colours with it
 }
 // lay the SUBTLE faction politics over the tile's realistic terrain — only the top-face vertices are
 // tinted (cliff sides stay pure terrain), re-derived from the stored base each generation so a tile
@@ -7044,6 +7059,12 @@ const MK = (() => {
     el.className = 'mk' + (opt.className ? ' ' + opt.className : '');
     const m = { el, opt, x: 0, y: 0, shown: false };
     setContent(m, opt);
+    // Born hidden. update() only ADDS mk-hide when a marker was previously shown, so one created in a
+    // frame where visible() is already false (a pin or plate for a hold streamed in at street level,
+    // say) never got the class — and with no transform yet, it sat parked in the top-left corner of
+    // the screen, on top of the HUD, until the tier changed. Start with the class and let the first
+    // visible frame take it off, which update() already does.
+    el.classList.add('mk-hide');
     if (opt.title) el.title = opt.title;
     if (opt.onClick) el.addEventListener('click', (e) => { e.stopPropagation(); opt.onClick(e, m); });
     if (opt.onHover) el.addEventListener('mouseenter', () => opt.onHover(true, m));
@@ -7124,6 +7145,49 @@ function refreshOwnedPins() {
     _ownedPins.set(en, pin);
   }
   for (const [en, pin] of _ownedPins) if (!live.has(en)) { pin.remove(); _ownedPins.delete(en); }
+}
+
+// ---------- Hold name plates: a map that doesn't name its places isn't a map ----------
+// Settlement names only ever existed on the tier-0 chart icon (buildHoldIcon), and there as a 3D
+// sprite that shrinks with the camera — on a rung the zoom axis never actually reaches, since
+// detailTier() answers 1 for every strategic zoom. So the whole pulled-back view was an unlabelled
+// diorama: wall rings and specks, with nothing to say which place is which or who holds it. Small
+// screens just make that plain — you can see the world fine, you simply can't read it.
+// These plates ride the screen-space marker layer instead, so a name is the same legible size at any
+// zoom on any screen, carries its owner's colour, and can be tapped to open the hold. Villages stay
+// unnamed — they're indicators, not places you navigate by (the rule buildHoldIcon already used).
+const _holdPlates = new Map();     // hold entry -> its screen-space name plate
+function refreshHoldPlates() {
+  if (!mapTerrain) return;
+  const live = new Set();
+  for (const en of _allHoldEntries()) {
+    const tier = en.tier || 'capital';
+    const name = en.def && en.def.name;
+    if (tier === 'village' || !name) continue;
+    live.add(en);
+    let pl = _holdPlates.get(en);
+    if (!pl) {
+      const spec = SG_SPEC[tier] || SG_SPEC.village;
+      pl = MK.add({
+        className: 'mk-plate' + (tier === 'capital' || tier === 'city' ? ' mk-plate-big' : ''),
+        html: '<span class="mk-plate-name"></span>',
+        // just clear of the roofs, and below the pin's own perch (top + 2.5) so an owned
+        // hold reads pin-over-name instead of the two fighting for the same pixels
+        anchor: () => ({ x: en.x, z: en.z, y: mapElevY(en.x, en.z) + (spec.top || 5) * 0.95 }),
+        title: name, onClick: () => openHoldPanel(en),
+        visible: () => _appliedTier !== 2,   // street level speaks for itself; a plate is a map aid
+      });
+      pl.name = ''; pl.ownerCol = undefined;
+      _holdPlates.set(en, pl);
+    }
+    if (pl.name !== name) { pl.name = name; pl.el.querySelector('.mk-plate-name').textContent = name; }
+    const oc = en.owner ? en.owner.color : null;      // the political read: whose place this is
+    if (pl.ownerCol !== oc) {
+      pl.ownerCol = oc;
+      pl.el.style.borderLeftColor = oc == null ? 'rgba(125,200,255,.35)' : _hex6(oc);
+    }
+  }
+  for (const [en, pl] of _holdPlates) if (!live.has(en)) { pl.remove(); _holdPlates.delete(en); }
 }
 
 // ---------- Strategic map: persistent capitals + streamed chunks ----------
@@ -8825,7 +8889,7 @@ function applyVista(moved, dt) {
       scene.fog.far = vlerp(VISTA.fogFar) * dmul;
     }
   } else {
-    const dmul = Math.pow(MAP_ZOOM_STEP, mapZoomLevel); // command mode keeps the strategic dolly + its fog
+    const dmul = Math.pow(MAP_ZOOM_STEP, mapZoomLevel) * mapScreenFit(); // command mode keeps the strategic dolly + its fog — the fit moves the eye, so the haze rides in with it
     scene.fog.near = vlerp(VISTA.fogNear) * dmul;
     scene.fog.far = vlerp(VISTA.fogFar) * dmul;
   }

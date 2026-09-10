@@ -17270,6 +17270,14 @@ function afSepFrom(b, R) {                                  // soft spacing from
   return [sx, sz];
 }
 // an NPC's swing is a HOLD like anyone's: a tap for a light, a long visible load for a heavy (so you can read it and roll)
+// an archer giving ground backs away from EVERY foe near him (weighted by closeness) and leans toward his own side —
+// straight away from his target used to walk him into the next team in a free-for-all
+function afArcherRetreat(b, T) {
+  let rx = 0, rz = 0;
+  for (const o of AF.bodies) { if (o.dead || o.team === b.team) continue; const ox = b.x - o.x, oz = b.z - o.z, d2 = ox * ox + oz * oz; if (d2 > 100 || d2 < 1e-4) continue; const d = Math.sqrt(d2), w = 1 / Math.max(1, d); rx += ox / d * w; rz += oz / d * w; }
+  if (T && T.center) { const cx = T.center.x - b.x, cz = T.center.z - b.z, cd = Math.hypot(cx, cz); if (cd > 3) { rx += cx / cd * 0.35; rz += cz / cd * 0.35; } }
+  const m = Math.hypot(rx, rz) || 1; return [rx / m * 0.8, rz / m * 0.8];
+}
 function afAiSwing(b, heavy) { b.aiHoldT = heavy ? AF_F.chargeMax + 0.05 : 0.06; }
 function afThink(b, dt) {
   const I = b.inp, F = AF_F; I.mx = 0; I.mz = 0; I.block = false;
@@ -17327,7 +17335,7 @@ function afThink(b, dt) {
   if (b.weapon === 'bow') {                                  // archers keep their distance, loose, and drift sideways between shots
     b.shotCd -= dt;
     const canShoot = b.shotCd <= 0 && !busy;
-    if (d < 7) { I.mx = (-ux + sx) * 0.7; I.mz = (-uz + sz) * 0.7; if (canShoot && d > 3) { b.aiHoldT = 0.3; b.shotCd = 1.1 + Math.random() * 0.8; } } // give ground — but a swordsman who keeps coming gets shot in the face
+    if (d < 7) { const [rx, rz] = afArcherRetreat(b, T); I.mx = rx + sx * 0.5; I.mz = rz + sz * 0.5; if (canShoot && d > 3) { b.aiHoldT = 0.3; b.shotCd = 1.1 + Math.random() * 0.8; } } // give ground — but a swordsman who keeps coming gets shot in the face
     else if (d > 14) { I.mx = ux + sx; I.mz = uz + sz; if (canShoot && d < 22) { b.aiHoldT = 0.35 + b.skill * 0.4; b.shotCd = 1.7 + Math.random() * 1.2 * (1.3 - b.skill * 0.5); } } // close to a decisive range, loosing on the way
     else { I.mx = tx * 0.25 + sx; I.mz = tz * 0.25 + sz; if (canShoot) { b.aiHoldT = 0.35 + b.skill * 0.4; b.shotCd = 1.7 + Math.random() * 1.2 * (1.3 - b.skill * 0.5); } } // a longer draw for the better archer
     return;

@@ -1994,7 +1994,21 @@ if (TOUCH) {
   bindBtn('tb-dodge', requestDodge);
   bindBtn('tb-block', () => { keys['ShiftLeft'] = true; }, () => { keys['ShiftLeft'] = false; });
   bindBtn('tb-weapon', toggleWeapon);
-  bindBtn('tb-ride', () => { if (mode === 'map' && !encounter && !mapCmdMode) overworldZoom(fieldZoomT > Z_LOCK ? 1 : -1); }); // toggle zoom: aim <-> navigate (mobile has no pointer lock; drag-look covers aim)
+  // The ONE zoom control a phone has (no wheel, no pinch), so it has to land on a rung, not nudge
+  // toward one. It used to call overworldZoom(±1) — a 0.14 step whose DIRECTION flipped at Z_LOCK,
+  // so from the aim zone it walked out to -0.12, flipped, walked back to -0.26, flipped again, and
+  // ping-ponged there forever: the strategic map (t > Z_LOCK, and the miniature only past ~0.2) was
+  // literally unreachable on touch, and with it click/stick-to-march, the map pills, and every
+  // kingdom action. Now it jumps to the far side each tap: on foot -> the navigate rung, out on the
+  // map -> back into the aim zone.
+  bindBtn('tb-ride', () => {
+    if (mode !== 'map' || encounter || mapCmdMode || commandPanelOpen) return;
+    clearMapFocus();
+    const pullOut = fieldSimOn();                       // on foot? then this tap means "show me the map"
+    fieldZoomT = pullOut ? Z_NAV_RUNG : FIELD_COMBAT_ZOOM;
+    onZoomChanged(!pullOut);                            // dropping in is the zoom-IN gesture
+    if (window.updateTouchHud) window.updateTouchHud();
+  });
   bindBtn('tb-rally', () => { if (mode === 'map' && !encounter) raiseCall(); });
   bindBtn('tb-beacon', () => { if (mode === 'map' && !encounter) openBeaconPanel(); });
   bindBtn('tb-warband', () => toggleCharsheet());
@@ -2009,6 +2023,9 @@ if (TOUCH) {
     touchRoot.classList.toggle('mapmode', c.inMap);
     touchRoot.classList.toggle('battlemode', c.inBattle);
     touchRoot.classList.toggle('fieldmode', !!c.field); // on-foot map roam: battle buttons + the View toggle stay reachable
+    // the zoom button is the only way between the two halves of the game on a phone — say which way it goes
+    const ride = document.getElementById('tb-ride');
+    if (ride) ride.textContent = c.field ? '🗺 Map' : '⚔ Lead';
     if (!c.any && moveId !== null) { moveId = null; hideStick(); } // dropped into a menu mid-drag
   };
 }
@@ -3433,6 +3450,8 @@ const Z_LOCK = -0.15;               // zoom-in past this locks the mouse for aim
 const Z_CHART = 0.55;               // zoom-out past this drops to the chart/icon overview
 const Z_HYST = 0.05;                // hysteresis half-band around each edge
 const FIELD_COMBAT_ZOOM = -0.4;     // a live fight snaps the zoom to here (well inside the aim zone)
+const Z_NAV_RUNG = 0.30;            // the resting NAVIGATE rung (miniature map): clear of Z_LOCK, well short
+                                    // of Z_CHART — where the touch View button parks when you pull out
 const FIELD_DIST_NEAR = 3.0, FIELD_DIST_DEF = 8.5, FIELD_DIST_FAR = 180;    // *FIELD_SCALE — far now pulls all the way out to a strategic overview (replaces the old map dolly)
 const FIELD_HEIGHT_NEAR = 3.4, FIELD_HEIGHT_DEF = 5.5, FIELD_HEIGHT_FAR = 250; // *FIELD_SCALE; near ≈ the rig's own head height so a close shot sits AT eye level; far climbs high above the relief for a whole-region survey
 const FIELD_SHOULDER_NEAR = 0.85, FIELD_SHOULDER_DEF = 0.7, FIELD_SHOULDER_FAR = 0.5; // side offset shrinks as we pull out so the far overview centres on the hero

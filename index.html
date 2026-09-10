@@ -445,6 +445,12 @@
       max-width: min(72vw, 520px); border-radius: 14px; }
     /* the forge launcher is inline-styled at right:12/bottom:12 — exactly where CHARS now sits */
     body.touch #forge-btn { left: 12px !important; right: auto !important; }
+    /* Command opens the whole order layer and was a 108x31 pill; the panel's own controls ran to 10
+       buttons under 32px in a 296px drawer that already scrolls 557px of content on a 390px screen.
+       (These live in a <style> game.js injects, so body.touch out-specifies them.) */
+    body.touch #det-cmd-btn { min-height: 44px; padding: 10px 18px; font-size: 14px; }
+    body.touch #det-panel button { min-height: 40px; padding: 8px 10px; }
+    body.touch #det-panel { gap: 10px; padding: 12px 10px; overscroll-behavior: contain; }
   }
 </style>
 </head>

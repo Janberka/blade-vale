@@ -651,8 +651,22 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
     return b;
   }
 
-  let held, bow = null;
-  if (weapon === 'bow') {
+  let held, bow = null, shield = null;
+  const makeShield = () => {                                  // sword-and-board: heater shield strapped to the left hand
+    const sh = new THREE.Mesh(cachedGeo('heaterShield', () => {
+      const s = new THREE.Shape();
+      s.moveTo(-0.34, 0.42); s.lineTo(0.34, 0.42); s.lineTo(0.3, 0.02);
+      s.lineTo(0, -0.5); s.lineTo(-0.3, 0.02); s.closePath();
+      return new THREE.ExtrudeGeometry(s, { depth: 0.06, bevelEnabled: false });
+    }), plate);
+    sh.position.set(0.08, -0.02, 0.12);
+    sh.userData.fixedGrip = true; // the wrist channel must not spin the shield
+    armL.hand.add(sh); casters.push(sh); return sh;
+  };
+  if (opts.both) {                                            // the arena: bow AND sword-and-board, swapped in the hand mid-fight
+    bow = makeBow(); held = makeSword(false); shield = makeShield();
+    const ranged = weapon === 'bow'; bow.visible = ranged; held.visible = !ranged; shield.visible = !ranged;
+  } else if (weapon === 'bow') {
     // archers (and the player) carry a bow AND a sheathed sidearm sword
     bow = makeBow();           // left hand, shown by default
     held = makeSword(false);   // right hand, hidden until drawn for melee
@@ -664,18 +678,7 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
     armR.hand.add(held);
   } else {
     held = makeSword(weapon === 'longsword');
-    if (weapon === 'sword') { // sword-and-board: heater shield strapped to the left hand
-      const shield = new THREE.Mesh(cachedGeo('heaterShield', () => {
-        const s = new THREE.Shape();
-        s.moveTo(-0.34, 0.42); s.lineTo(0.34, 0.42); s.lineTo(0.3, 0.02);
-        s.lineTo(0, -0.5); s.lineTo(-0.3, 0.02); s.closePath();
-        return new THREE.ExtrudeGeometry(s, { depth: 0.06, bevelEnabled: false });
-      }), plate);
-      shield.position.set(0.08, -0.02, 0.12);
-      shield.userData.fixedGrip = true; // the wrist channel must not spin the shield
-      armL.hand.add(shield);
-      casters.push(shield);
-    }
+    if (weapon === 'sword') shield = makeShield();
   }
   const sword = held;
 
@@ -690,7 +693,7 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
   return {
     group: g,
     parts: {
-      torso, head, upperBody, sword, bow, headPivot, cape,
+      torso, head, upperBody, sword, bow, shield, headPivot, cape,
       shoulderL: armL.shoulder, elbowL: armL.elbow,
       shoulderR: armR.shoulder, elbowR: armR.elbow,
       hipL: legL.hip, kneeL: legL.knee,
@@ -2055,6 +2058,7 @@ if (TOUCH) {
 }
 
 function toggleWeapon() {
+  if (AF.on) { AF.locIn.swap++; return; }         // arena: the SWAP touch button (F on desktop goes through the arena's own handler)
   if (!gameRunning || !player.alive || player.attacking || player.shooting || player.rolling) return;
   player.weapon = player.weapon === 'sword' ? 'bow' : 'sword';
   setPlayerWeaponVisual();
@@ -16413,7 +16417,7 @@ const AF = {
   on: false, role: 'solo',                 // 'solo' (no peers) | 'host' | 'guest'
   phase: 'lobby',                          // 'lobby' | 'countdown' | 'fight' | 'over'
   bodies: [], arrows: [], ground: null, props: [], seed: 1, cfg: { teams: 2, per: 3 }, roster: [],
-  me: null, keys: new Set(), locIn: { mx: 0, mz: 0, yaw: 0, atk: 0, heavy: 0, dodge: 0, block: false, hold: false },
+  me: null, keys: new Set(), locIn: { mx: 0, mz: 0, yaw: 0, atk: 0, heavy: 0, dodge: 0, block: false, hold: false, swap: 0 },
   cam: { yaw: 0, pitch: 0.3, dist: 6.5 }, orbit: { theta: 0.4, phi: 0.9, r: 62, drag: false },
   last: 0, t: 0, countdown: 0, over: false, winner: -1, standings: null, hudEl: null, events: [],
   inputs: new Map(), snapAcc: 0, inAcc: 0, lastSnap: 0, installed: false, log: [], torches: [], motes: null, hurt: 0, fov: CAM_BASE_FOV,
@@ -16616,10 +16620,10 @@ function afSpawn(teamIdx, teams) {
 }
 
 // ---- fighters ----
-function afFreshInput() { return { mx: 0, mz: 0, yaw: 0, atk: 0, heavy: 0, dodge: 0, block: false, hold: false }; } // atk = release count (a tap between samples still lands); hold = the button is down (charging)
+function afFreshInput() { return { mx: 0, mz: 0, yaw: 0, atk: 0, heavy: 0, dodge: 0, block: false, hold: false, swap: 0 }; } // atk = release count (a tap between samples still lands); hold = the button is down (charging)
 function afMakeBody(entry, idx, r) {
   const td = AF_TEAMS[entry.t], weapon = entry.weapon === 'bow' ? 'bow' : 'sword';
-  const h = buildHumanoid(td.pal, 1, weapon, { hero: true, plume: AF_TEAM_HEX[entry.t] }); const group = h.group || h;
+  const h = buildHumanoid(td.pal, 1, weapon, { hero: true, both: true, plume: AF_TEAM_HEX[entry.t] }); const group = h.group || h;
   group.rotation.order = 'YXZ';                              // yaw first, then a body-local tilt/roll (somersaults, crumples)
   const sp = afSpawn(entry.t, AF.cfg.teams), rgx = -Math.cos(sp.yaw), rgz = Math.sin(sp.yaw), off = (entry.s - (AF.cfg.per - 1) / 2) * 2.3;
   const b = { id: idx, idx, team: entry.t, teamDef: td, name: entry.name, kind: entry.kind, peer: entry.peer || null, weapon,
@@ -16630,7 +16634,7 @@ function afMakeBody(entry, idx, r) {
     dodgeT: 0, dodgeCd: 0, ddx: 0, ddz: 0, iframes: 0, flinch: 0, stagger: 0, dead: false, deadT: 0, tinted: false, kills: 0,
     vx: 0, vz: 0, poise: AF_F.maxPoise, maxPoise: AF_F.maxPoise, queued: false, cd: 0, waiting: false, slotAngle: 0, retreatT: 0, bob: 0,
     gait: null, hitT: 0, hitSide: 0, lookYaw: 0, headYaw: 0, capeX: 0.12, phase0: r() * TAU, roll: 0, lastStep: 0, flashT: 0, sway: r() * TAU, clashT: 0, clashAtk: false, clashDx: 0, clashDz: 0,
-    charge: null, chargeMove: 0, prevHold: false, releaseNow: false, aiHoldT: 0,
+    charge: null, chargeMove: 0, prevHold: false, releaseNow: false, aiHoldT: 0, prefBow: weapon === 'bow', swapT: 0, seenSwap: 0,
     seenAtk: 0, seenHeavy: 0, seenDodge: 0,
     // NPC brain traits (seeded so a replay of the same seed fields the same temperaments)
     skill: 0.35 + r() * 0.5, heavyBias: 0.12 + r() * 0.2, target: null, aiT: r() * 0.3, strafe: r() < 0.5 ? -1 : 1, strafeT: 0.5 + r(), swingT: 0.4 + r() * 0.5, holdBlock: 0, reactedTo: null, shotCd: 1 + r(),
@@ -16646,6 +16650,13 @@ function afMakeBody(entry, idx, r) {
   const bar = makeHealthBar(parseInt(td.col.slice(1), 16)); bar.visible = true; bar.scale.setScalar(0.6); tag.add(bar);
   b.tag = tag; b.bar = bar; scene.add(tag);
   return b;
+}
+// sheathe one, draw the other: bow in the left hand, or sword and shield (the arm settles for a beat)
+function afSetWeapon(b, w) {
+  if (b.weapon === w) return;
+  b.weapon = w; const p = b.parts, ranged = w === 'bow';
+  if (p.bow) p.bow.visible = ranged; if (p.sword) p.sword.visible = !ranged; if (p.shield) p.shield.visible = !ranged;
+  b.charge = null; b.atk = null; b.queued = false; b.swapT = 0.35; b.anim.ease = null; setPose(b.anim, ranged ? 'relax' : 'guard', 0.2);
 }
 function afStateCode(b) {
   if (b.dead) return 8;
@@ -16746,12 +16757,14 @@ function afDrive(b, dt, sim) {
   // facing: everyone turns, nobody snaps — a player's aim leads, an NPC's intent follows
   b.yaw = angleLerp(b.yaw, I.yaw, clamp(dt * (human ? 14 : 9), 0, 1));
   if (human) b.lookYaw = I.yaw; else if (b.target && !b.target.dead) b.lookYaw = Math.atan2(b.target.x - b.x, b.target.z - b.z); else b.lookYaw = b.yaw;
+  if (I.swap !== b.seenSwap) { b.seenSwap = I.swap; if (!b.atk && b.clashT <= 0) afSetWeapon(b, b.weapon === 'bow' ? 'sword' : 'bow'); }
+  if (b.swapT > 0) { b.swapT -= dt; b.charge = null; }         // hands busy changing weapons
   if (b.charge && I.block) { b.charge = null; b.cd = 0.05; b.anim.ease = null; }   // block-cancel out of a load
   // HOLD to load, RELEASE to swing. A press starts the load (the arm goes up, and past ~0.35 s coils into the heavy
   // windup); the release swings with a weight k = hold time / chargeMax — a tap is a quick light, a full hold a heavy.
   const holdNow = !!I.hold, pressed = holdNow && !b.prevHold, tapped = I.atk !== b.seenAtk;
   if (!b.atk) {
-    if (!b.charge && (pressed || tapped)) {
+    if (!b.charge && (pressed || tapped) && b.swapT <= 0) {
       if (!human || b.cd <= 0) { b.charge = { t: 0, heavyPose: false }; b.chargeMove = b.combo % 3; b.anim.ease = null;
         setPose(b.anim, b.weapon === 'bow' ? 'aimBow' : MOVES[AF_MOVES[b.chargeMove]].windup, 0.1); b.blocking = false;
         b.releaseNow = tapped && !holdNow;                   // a tap that came and went between samples: swing at once
@@ -16939,7 +16952,10 @@ function afStepDead(b, dt) {
 const _afSplats = [];
 function afSplat(x, z, size) {
   if (_afSplats.length > 90) { const o = _afSplats.shift(); scene.remove(o.m); }
-  const m = new THREE.Mesh(cachedGeo('af-splat', () => new THREE.CircleGeometry(1, 9)), new THREE.MeshBasicMaterial({ color: 0x5a0e0e, transparent: true, opacity: 0, depthWrite: false }));
+  if (!AF._splatTex) { const c = document.createElement('canvas'); c.width = c.height = 64; const ctx = c.getContext('2d'); const gr = ctx.createRadialGradient(32, 32, 4, 32, 32, 32); gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.55, 'rgba(255,255,255,0.85)'); gr.addColorStop(1, 'rgba(255,255,255,0)'); ctx.fillStyle = gr; ctx.fillRect(0, 0, 64, 64);
+    for (let i = 0; i < 14; i++) { const a = Math.random() * TAU, r = 18 + Math.random() * 12; ctx.beginPath(); ctx.arc(32 + Math.cos(a) * r, 32 + Math.sin(a) * r, 2 + Math.random() * 4, 0, TAU); ctx.fillStyle = 'rgba(255,255,255,0.9)'; ctx.fill(); }   // spatter
+    AF._splatTex = new THREE.CanvasTexture(c); }
+  const m = new THREE.Mesh(cachedGeo('af-splat', () => new THREE.PlaneGeometry(2, 2)), new THREE.MeshBasicMaterial({ color: 0x5a0e0e, map: AF._splatTex, transparent: true, opacity: 0, depthWrite: false }));
   m.rotation.x = -Math.PI / 2; m.rotation.z = Math.random() * TAU;
   m.position.set(x + (Math.random() - 0.5) * 0.6, afY(x, z) + 0.04, z + (Math.random() - 0.5) * 0.6);
   m.scale.setScalar(size * (0.7 + Math.random() * 0.6) * 0.3);
@@ -17033,6 +17049,10 @@ function afThink(b, dt) {
   I.yaw = Math.atan2(dx, dz);
   b.strafeT -= dt; if (b.strafeT <= 0) { b.strafeT = 0.8 + Math.random() * 1.4; b.strafe = Math.random() < 0.5 ? -1 : 1; }
   const tx = -uz * b.strafe, tz = ux * b.strafe;             // tangent around the mark
+  if (b.prefBow && !busy) {                                 // an archer draws steel when a foe is in his face, and the bow again once clear
+    if (b.weapon === 'bow' && d < 4.2) I.swap++;
+    else if (b.weapon === 'sword' && d > 11 && b.hp > b.maxHp * 0.3) I.swap++;
+  }
   if (b.weapon === 'bow') {                                  // archers keep their distance, loose, and drift sideways between shots
     b.shotCd -= dt;
     const canShoot = b.shotCd <= 0 && !busy;
@@ -17096,7 +17116,7 @@ function afReadLocalInput() {
   // HOLD the attack to load it, RELEASE to swing: the held mouse button or the held ATK touch button
   const atkEl = TOUCH ? document.getElementById('tb-attack') : null;
   I.hold = !!(AF.mouseDown || (atkEl && atkEl.classList.contains('on')));
-  return I;
+  return I;                                                  // (F / the SWAP button bump I.swap in the handlers)
 }
 
 // ---- the sim tick (host / solo): brains, drives, arrows, resolution ----
@@ -17189,6 +17209,7 @@ function afApplySnap(s) {
     const b = AF.bodies[row[0]]; if (!b) continue;
     const x = row[1] / 100, z = row[2] / 100, yaw = row[3] / 100, hp = row[4], code = row[5];
     b.kills = row[7] || 0;
+    if (b !== AF.me && row[8] != null) { const w = row[8] ? 'bow' : 'sword'; if (b.weapon !== w) afSetWeapon(b, w); }
     if (b === AF.me) {                                       // my body: the host owns hp/death/stuns; position is softly corrected
       b.hp = hp;
       if (code === 8 && !b.dead) afKill(b, null, true);
@@ -17231,14 +17252,14 @@ function afNetTick(dt) {
   if (AF.role === 'host') {
     AF.snapAcc += dt; if (AF.snapAcc < AF_NET.snapDt) return; AF.snapAcc = 0;
     const rows = [];
-    for (const b of AF.bodies) rows.push([b.idx, Math.round(b.x * 100), Math.round(b.z * 100), Math.round(b.yaw * 100), Math.round(b.hp), afStateCode(b), b.atk ? b.atk.move : b.charge ? (b.charge.heavyPose ? 3 : b.chargeMove) : 0, b.kills]);
+    for (const b of AF.bodies) rows.push([b.idx, Math.round(b.x * 100), Math.round(b.z * 100), Math.round(b.yaw * 100), Math.round(b.hp), afStateCode(b), b.atk ? b.atk.move : b.charge ? (b.charge.heavyPose ? 3 : b.chargeMove) : 0, b.kills, b.weapon === 'bow' ? 1 : 0]);
     afSend({ k: 'snap', t: +AF.t.toFixed(2), ph: AF.phase, b: rows, ev: AF.events });
     AF.events = [];
   } else if (AF.role === 'guest') {
     AF.events = [];
     AF.inAcc += dt; if (AF.inAcc < AF_NET.inDt) return; AF.inAcc = 0;
     const I = AF.locIn;
-    afSend({ k: 'in', mx: +I.mx.toFixed(2), mz: +I.mz.toFixed(2), yaw: +I.yaw.toFixed(3), atk: I.atk, heavy: I.heavy, dodge: I.dodge, block: I.block ? 1 : 0, hold: I.hold ? 1 : 0 });
+    afSend({ k: 'in', mx: +I.mx.toFixed(2), mz: +I.mz.toFixed(2), yaw: +I.yaw.toFixed(3), atk: I.atk, heavy: I.heavy, dodge: I.dodge, block: I.block ? 1 : 0, hold: I.hold ? 1 : 0, swap: I.swap });
   } else AF.events = [];
 }
 function afOnFightMsg(m) {
@@ -17246,7 +17267,7 @@ function afOnFightMsg(m) {
   if (AF.role === 'host' && d.k === 'in') {
     let inp = AF.inputs.get(m.from);
     if (!inp) { inp = afFreshInput(); AF.inputs.set(m.from, inp); const b = AF.bodies.find(x => x.peer === m.from); if (b) b.inp = inp; }
-    inp.mx = +d.mx || 0; inp.mz = +d.mz || 0; inp.yaw = +d.yaw || 0; inp.atk = d.atk | 0; inp.heavy = d.heavy | 0; inp.dodge = d.dodge | 0; inp.block = !!d.block; inp.hold = !!d.hold;
+    inp.mx = +d.mx || 0; inp.mz = +d.mz || 0; inp.yaw = +d.yaw || 0; inp.atk = d.atk | 0; inp.heavy = d.heavy | 0; inp.dodge = d.dodge | 0; inp.block = !!d.block; inp.hold = !!d.hold; inp.swap = d.swap | 0;
   } else if (AF.role === 'guest') {
     if (d.k === 'snap') afApplySnap(d);
     else if (d.k === 'over' && !AF.over) afFinish(d.winner, d.standings);
@@ -17397,15 +17418,23 @@ function afInstallControls() {
     const k = e.key.toLowerCase();
     if ('wasd'.includes(k) && k.length === 1) AF.keys.add(k);
     if (e.key === 'Shift') AF.keys.add('shift');
+    if (k === 'f' && !e.repeat) AF.locIn.swap++;             // sword <-> bow
   });
   window.addEventListener('keyup', e => { const k = e.key.toLowerCase(); if ('wasd'.includes(k) && k.length === 1) AF.keys.delete(k); if (e.key === 'Shift') AF.keys.delete('shift'); });
   window.addEventListener('blur', () => AF.keys.clear());
-  if (TOUCH) {                                              // the right half of the screen steers the cam (touch has no pointer lock)
-    let lookId = null, lx = 0;
-    canvas.addEventListener('touchstart', e => { if (!AF.on) return; for (const t of e.changedTouches) if (t.clientX > innerWidth * 0.5 && lookId === null) { lookId = t.identifier; lx = t.clientX; } }, { passive: true });
-    addEventListener('touchmove', e => { if (!AF.on || lookId === null) return; for (const t of e.changedTouches) if (t.identifier === lookId) { AF.cam.yaw -= (t.clientX - lx) * 0.005; lx = t.clientX; } }, { passive: true });
+  if (TOUCH) {                                              // touch has no pointer lock: the right half of the screen steers the cam —
+    // and so does the thumb that is HOLDING a button (ATK while loading, BLOCK while guarding), because with the
+    // other thumb on the stick there is no third finger: press, drag to aim, release to swing where you face.
+    let lookId = null, lx = 0, ly = 0;
+    const grab = (t, target) => {
+      if (lookId !== null) return;
+      const onBtn = target && target.closest && target.closest('#tbtns button');
+      if (onBtn || (target === canvas && t.clientX > innerWidth * 0.5)) { lookId = t.identifier; lx = t.clientX; ly = t.clientY; }
+    };
+    addEventListener('touchstart', e => { if (!AF.on) return; for (const t of e.changedTouches) grab(t, e.target); }, { passive: true, capture: true });
+    addEventListener('touchmove', e => { if (!AF.on || lookId === null) return; for (const t of e.changedTouches) if (t.identifier === lookId) { AF.cam.yaw -= (t.clientX - lx) * 0.0055; AF.cam.pitch = clamp(AF.cam.pitch + (t.clientY - ly) * 0.003, -0.1, 1.1); lx = t.clientX; ly = t.clientY; } }, { passive: true, capture: true });
     const end = e => { for (const t of e.changedTouches) if (t.identifier === lookId) lookId = null; };
-    addEventListener('touchend', end); addEventListener('touchcancel', end);
+    addEventListener('touchend', end, { capture: true }); addEventListener('touchcancel', end, { capture: true });
   }
 }
 
@@ -17443,7 +17472,7 @@ function afUpdateHud() {
       const hp = clamp(b.hp / b.maxHp, 0, 1);
       me.innerHTML = '<div style="display:flex;justify-content:space-between;gap:12px"><b style="color:' + b.teamDef.col + '">' + b.name + '</b><span style="color:#c9bfda">' + b.kills + ' kill' + (b.kills === 1 ? '' : 's') + '</span></div>' +
         '<div style="height:8px;margin:5px 0 4px;border-radius:4px;background:#2a2438;overflow:hidden"><div style="height:100%;width:' + Math.round(hp * 100) + '%;background:' + (hp > 0.35 ? '#8fd08f' : '#ff6a5a') + '"></div></div>' +
-        '<div style="font-size:11px;color:#9a90ab">' + (b.dead ? 'you fell — drag to look around' : TOUCH ? 'stick move · drag right side aim · hold ATK to load, release to swing · BLOCK · DODGE' : 'WASD move · mouse aim · hold click to load, release to ' + (b.weapon === 'bow' ? 'loose' : 'strike') + ' · Shift / right-click block · Space dodge' + (document.pointerLockElement === canvas ? '' : ' · <b style="color:#ffe089">click to aim</b>')) + '</div>';
+        '<div style="font-size:11px;color:#9a90ab">' + (b.dead ? 'you fell — drag to look around' : TOUCH ? 'stick move · drag right side aim · hold ATK to load, release to swing · SWAP sword/bow · BLOCK · DODGE' : 'WASD move · mouse aim · hold click to load, release to ' + (b.weapon === 'bow' ? 'loose' : 'strike') + ' · F ' + (b.weapon === 'bow' ? 'sword' : 'bow') + ' · Shift / right-click block · Space dodge' + (document.pointerLockElement === canvas ? '' : ' · <b style="color:#ffe089">click to aim</b>')) + '</div>';
     } else me.innerHTML = '<span style="color:#9a90ab">spectating</span>';
   }
 }
@@ -17783,6 +17812,15 @@ BV.arenaStatus = () => ({ on: AF.on, role: AF.role, phase: AF.phase, t: +AF.t.to
   me: AF.me ? AF.me.idx : null, lobby: AF.lobby ? { role: AF.lobby.role, teams: AF.lobby.teams, per: AF.lobby.per, seats: AF.lobby.slots.map(r => r.map(s => s ? s.name : null)) } : null, online: AF.online.map(p => p.name) });
 BV.arenaStep = (steps = 60, dt = 1 / 60) => { if (AF.phase === 'countdown') { AF.phase = 'fight'; AF.countdown = 0; } for (let i = 0; i < steps; i++) afTick(dt); return BV.arenaStatus(); };
 BV.arenaInput = (patch) => { Object.assign(AF.locIn, patch || {}); return { ...AF.locIn }; };
+BV.arenaShot = (w = 1280, h = 720) => {              // headless: render one frame at a fixed size (a hidden tab has none) and hand back a JPEG data URL
+  const sz = renderer.getSize(new THREE.Vector2()), pr = renderer.getPixelRatio();
+  renderer.setPixelRatio(1); renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
+  if (AF_POST.on) { AF_POST.w = 0; }
+  afFrame((AF.last || performance.now()) + 1, true);
+  const url = canvas.toDataURL('image/jpeg', 0.9);
+  renderer.setPixelRatio(pr); renderer.setSize(sz.x, sz.y, false); camera.aspect = sz.x / Math.max(1, sz.y); camera.updateProjectionMatrix(); if (AF_POST.on) AF_POST.w = 0;
+  return url;
+};
 BV.arenaPump = (frames = 60, dt = 1 / 60) => { for (let i = 0; i < frames; i++) afFrame((AF.last || performance.now()) + dt * 1000, true); return BV.arenaStatus(); }; // headless: run whole frames (sim + net + camera) without rAF
 
 // Boot. ?edit=<kind> (or window.BV_EDIT) opens the object editor; otherwise show the sign-in gate

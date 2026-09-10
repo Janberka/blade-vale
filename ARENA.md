@@ -14,7 +14,7 @@ Companion docs: `BATTLES.md` (the army-scale battle system this reuses primitive
 
 1. Sign in (or not — without an account you can still fight NPCs, you just can't invite anyone).
 2. Title screen → **⚔ Arena Fights**.
-3. In the lobby: **Teams** (2–6), **Fighters per team** (1–8), **Your weapon** (sword / bow), **Hour** (day / dusk / night) and **Sky** (clear / rain).
+3. In the lobby: **Teams** (2–6), **Fighters per team** (1–8), **Your weapon** (which one you start with — everyone carries both), **Hour** (day / dusk / night) and **Sky** (clear / rain).
    The team cards show every seat: you, invited players who accepted, and *fighter of the vale*
    (an NPC) for each empty seat.
 4. **Players online** lists everyone connected to the war-net right now. **Invite** sends them
@@ -37,6 +37,10 @@ and pick their own weapon; only the host changes the team layout and sends invit
 | Aim | mouse (click the pit to lock the cursor) | drag the right half of the screen |
 | Attack: **hold to load, release to swing** — a tap is a quick light (three chain into a combo), a full hold is a heavy that cracks a raised guard; the bow draws the same way | hold / release left click | hold / release ATK |
 | Block (hold; 85% less damage from the front) | Shift or right click | BLOCK |
+| Swap sword-and-shield ↔ bow (everyone carries both) | F | SWAP |
+
+On touch, the thumb that holds ATK or BLOCK also aims: press, drag to turn, release to swing where you
+face (the other thumb is on the stick, so there is no third finger).
 | Dodge roll (invulnerable for most of the roll) | Space | DODGE |
 
 When you fall you spectate: drag to orbit the pit, wheel to zoom. The fight ends when one

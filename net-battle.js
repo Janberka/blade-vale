@@ -28,19 +28,28 @@
 
   // acct = the signed-in username (the stable address arena invites are sent to); name = how the player is
   // shown. Re-connecting while already connected just re-announces the (possibly new) name/world.
-  coop.connect = function (name, world, acct) {
-    coop.name = name || 'Ally'; coop.acct = acct || coop.acct || null;
-    var hello = { t: 'hello', name: coop.name, world: world || 'default', acct: coop.acct || '' };
+  // the socket RECONNECTS by itself (a server restart used to strand every open lobby): after a drop it
+  // retries with a growing delay, re-announces itself, and emits 'reconnect' so the arena can re-host.
+  var wantLink = false, retryMs = 1500, retryTimer = null, lastHello = null, pending = [];
+  function scheduleRetry() {
+    if (!wantLink || retryTimer) return;
+    retryTimer = setTimeout(function () { retryTimer = null; if (wantLink && !coop.connected) coop.connect(coop.name, coop.world, coop.acct, true); }, retryMs);
+    retryMs = Math.min(retryMs * 1.6, 10000);
+  }
+  coop.connect = function (name, world, acct, isRetry) {
+    coop.name = name || 'Ally'; coop.acct = acct || coop.acct || null; coop.world = world || coop.world || 'default'; wantLink = true;
+    var hello = { t: 'hello', name: coop.name, world: coop.world, acct: coop.acct || '' }; lastHello = hello;
     if (coop.connected) { raw(hello); return Promise.resolve(true); }
+    if (ws && ws.readyState === 0) return new Promise(function (r) { pending.push(r); });   // a connect is already in flight: ride it
     coop.url = defaultUrl();
     return new Promise(function (resolve) {
-      var done = false, finish = function (ok) { if (!done) { done = true; resolve(ok); } };
+      var done = false, finish = function (ok) { if (!done) { done = true; resolve(ok); var ps = pending; pending = []; ps.forEach(function (r) { r(ok); }); } if (!ok) scheduleRetry(); };
       try { ws = new WebSocket(coop.url); } catch (e) { finish(false); return; }
       ws.onopen = function () { raw(hello); };
       ws.onmessage = function (ev) {
         var m; try { m = JSON.parse(ev.data); } catch (e) { return; }
         switch (m.t) {
-          case 'hello-ok': coop.connected = true; coop.id = m.id; finish(true); break;
+          case 'hello-ok': { var was = coop.everConnected; coop.connected = true; coop.everConnected = true; coop.id = m.id; retryMs = 1500; finish(true); if (was) emit('reconnect', m); break; }
           case 'hosting': coop.room = m.room; coop.isHost = true; emit('hosting', m); break;
           case 'joined': coop.room = m.room; coop.isHost = false; emit('joined', m); break;
           case 'beacons': emit('beacons', m); break;
@@ -55,7 +64,7 @@
           case 'invite-fail': emit('invite-fail', m); break;
         }
       };
-      ws.onclose = function () { coop.connected = false; coop.room = null; coop.isHost = false; coop.peers = []; emit('disconnect', {}); };
+      ws.onclose = function () { var wasUp = coop.connected; coop.connected = false; coop.room = null; coop.isHost = false; coop.peers = []; if (wasUp) emit('disconnect', {}); scheduleRetry(); };
       ws.onerror = function () { finish(false); };
       setTimeout(function () { finish(false); }, 2500);
     });
@@ -70,7 +79,7 @@
   coop.who = function () { raw({ t: 'who' }); };                                   // who is online (arena invites)
   coop.invite = function (to, cfg) { return raw({ t: 'invite', to: to, cfg: cfg || {} }); };
   coop.dm = function (to, data) { return raw({ t: 'dm', to: to, data: data }); };  // one player, no room needed
-  coop.close = function () { try { if (ws) ws.close(); } catch (e) {} ws = null; coop.connected = false; };
+  coop.close = function () { wantLink = false; if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; } try { if (ws) ws.close(); } catch (e) {} ws = null; coop.connected = false; };
 
   window.coop = coop;
 })();

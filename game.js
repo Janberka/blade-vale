@@ -17680,7 +17680,12 @@ function afNetWire() {
   C.on('joined', m => { if (AF.pendingRoom) { AF.pendingRoom = null; afOpenLobby('guest', m.beacon || {}); } });
   C.on('join-fail', () => { if (AF.pendingRoom) { AF.pendingRoom = null; afLobbyMsg('That fight is gone — the host left the lobby.'); afOpenLobby('host'); } });
   C.on('host-gone', () => { if (AF.on && AF.role === 'guest') { afBanner('HOST LEFT', 'the fight is over', 3); setTimeout(afLeaveToMenu, 2500); } else if (AF.lobby && AF.lobby.role === 'guest') { afLobbyMsg('The host closed the lobby.'); afOpenLobby('host'); } });
-  C.on('disconnect', () => { if (AF.on && AF.role !== 'solo') { afBanner('DISCONNECTED', 'lost the war-net', 3); setTimeout(afLeaveToMenu, 2500); } });
+  C.on('disconnect', () => { if (AF.on && AF.role !== 'solo') { afBanner('DISCONNECTED', 'lost the war-net', 3); setTimeout(afLeaveToMenu, 2500); } else if (AF.lobby) { afLobbyMsg('Lost the war-net — reconnecting…'); afLobbyRender(); } });
+  C.on('reconnect', () => {                                 // back on the net: a host re-opens its room, a guest has lost the host's room
+    if (AF.on) return;
+    if (AF.lobby && AF.lobby.role === 'host') { C.host({ arena: true, host: AF.lobby.host, teams: AF.lobby.teams, per: AF.lobby.per }); afLobbyMsg('Back on the war-net.'); C.who(); afLobbyRender(); }
+    else if (AF.lobby && AF.lobby.role === 'guest') { afLobbyMsg('The war-net dropped — the host\'s lobby is gone. Ask for a new challenge.'); afOpenLobby('host'); }
+  });
   C.on('msg', m => {
     const d = m.data; if (!d) return;
     if (AF.on) { afOnFightMsg(m); return; }
@@ -17772,11 +17777,11 @@ function afLobbyRender() {
   const list = document.getElementById('al-olist'), stat = document.getElementById('al-ostat');
   const seatedNames = new Set(); for (const row of L.slots) for (const s of row) if (s && s.kind === 'player') seatedNames.add(s.name);
   if (!signed) { list.innerHTML = 'Sign in on the title screen to invite other players. Without them, every seat is an NPC.'; stat.textContent = ''; }
-  else if (!online) { list.innerHTML = 'Reaching the war-net…'; stat.textContent = ''; }
+  else if (!online) { list.innerHTML = 'Reaching the war-net at ' + (window.coop ? window.coop.url.replace(/^ws[s]?:\/\//, '') : '?') + '… (retrying)'; stat.textContent = 'offline'; }
   else if (!host) { list.innerHTML = 'Only the host sends invitations.'; stat.textContent = ''; }
   else {
     const rows = AF.online.filter(p => p.name !== L.host);
-    stat.textContent = rows.length + ' online';
+    stat.textContent = rows.length + ' online · you are ' + L.host;
     list.innerHTML = rows.length ? rows.map(p => { const st = seatedNames.has(p.name) ? 'joined' : L.invites.get(p.name) || (p.busy ? 'in a fight' : '');
       return '<div class="al-orow"><span><b>' + p.name + '</b> <span style="opacity:.6;font-size:12px">' + st + '</span></span><button data-inv="' + p.name + '"' + (st === 'joined' || st === 'invited…' ? ' disabled' : '') + '>Invite</button></div>'; }).join('')
       : '<span style="opacity:.7">Nobody else is online right now. Invite by name below, or fight the NPCs.</span>';

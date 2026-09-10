@@ -192,6 +192,14 @@ turning the per-tick cost roughly linear. A 200-a-side legion (400 bodies) ticks
 roster (`afPitFor`), the clock doubles, and above 24 bodies only the humans wear the hero dressing
 and name tags show only up close, so a hundred fighters stay cheap (about 1 ms of sim per tick).
 
+**The gallop and the ride-down**: hold a horse at the top of its canter (about 10) and after a second
+it finds another gear — a surge to 15, with a GALLOP cue and a wider turn. The hooves keep time with
+the ground (stride rate follows speed, ~2.4 strides a second at a run), and a horse at speed goes
+*through* men on foot: each is thrown to the side of the horse's line and knocked flat for a second or
+so (`downT`), and costs the horse only a little way — a deep block still stops it eventually. A friend
+is shouldered aside, not ridden down. A guardsman bracing his shield toward the horse is the one thing
+that stops it dead (BRACED). A horse at speed is never shoved back by the man it hits.
+
 **Horsemen** (`afRide`): a rider steers, he does not strafe — the stick's forward component is the
 throttle along the facing, momentum is dragged onto the facing (hooves grip), and the yaw rate collapses
 as speed grows (a galloping horse carves a wide arc, `MOUNT`). Top speed is 1.9× a man's, the reach is

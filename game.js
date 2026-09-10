@@ -16699,6 +16699,7 @@ function afSetWeapon(b, w) {
 }
 function afStateCode(b) {
   if (b.dead) return 8;
+  if (b.downT > 0) return 13;
   if (b.clashT > 0) return 12;
   if (b.stagger > 0) return 11;
   if (b.flinch > 0) return 5;
@@ -16729,7 +16730,7 @@ function afCommit(b, dt) {
   if (b.flashT > 0) { b.flashT -= dt; if (!b.flashWhite) { setTint(p, 0xfff0e0); b.flashWhite = true; } if (b.flashT <= 0) { b.flashWhite = false; b.tinted = false; setTint(p, null); } }
   if (!b.dead) {
     p.upperBody.rotation.x += clamp(fwd / F.move, -1, 1) * 0.14 + Math.sin(rtNow * 2.1 + b.phase0) * 0.012; // lean into the run + breathe
-    if (!b.moving && !b.atk && b.dodgeT <= 0) {              // standing guard: the weight shifts from foot to foot
+    if (!b.moving && !b.atk && b.dodgeT <= 0 && !(b.downT > 0)) {   // standing guard: the weight shifts from foot to foot
       const w = Math.sin(rtNow * 0.9 + b.sway); p.upperBody.rotation.z += w * 0.03; p.hipL.rotation.x += w * 0.05; p.hipR.rotation.x -= w * 0.05; b.roll = w * 0.015;
     }
     if (b.hitT > 0) {                                        // the blow throws the shoulders back and the head snaps
@@ -16762,6 +16763,14 @@ function afDrive(b, dt, sim) {
   if (b.iframes > 0) b.iframes -= dt;
   if (b.stagger <= 0 && b.poise < b.maxPoise) b.poise = Math.min(b.maxPoise, b.poise + F.poiseRegen * dt); // poise recovers off the pressure
   b.moving = false;
+  if (b.downT > 0) {                                         // ridden down: flat on the sand, then up again
+    b.downT -= dt; b.atk = null; b.charge = null; b.blocking = false; b.queued = false;
+    const k = b.downT > 0.45 ? 1 : clamp(b.downT / 0.45, 0, 1);   // the last half-second: getting up
+    b.tiltX = -1.35 * k; b.roll = (b.downSide || 1) * 0.45 * k;
+    setPose(b.anim, 'hurt', 0.08); restLegs(b.parts, dt, true);
+    if (b.downT <= 0) { b.tiltX = 0; b.roll = 0; }
+    afIntegrate(b, dt); afCommit(b, dt); return;
+  }
   if (b.stagger > 0 || b.flinch > 0) {                     // reeling (flinch) or guard broken / poise gone (stagger: open to an execution)
     if (b.stagger > 0) b.stagger -= dt; else b.flinch -= dt;
     b.atk = null; b.charge = null; b.queued = false; b.blocking = false; b.tiltX = 0;
@@ -16797,7 +16806,7 @@ function afDrive(b, dt, sim) {
   // facing: everyone turns, nobody snaps — a player's aim leads, an NPC's intent follows (a horse wheels slower the faster it goes)
   if (b.trampleT > 0) b.trampleT -= dt;
   if (!b.mounted) b.yaw = angleLerp(b.yaw, I.yaw, clamp(dt * (human ? 14 : 9), 0, 1));
-  else { const maxYaw = lerp(MOUNT.turnStand, MOUNT.turnFull, b.sp01) * dt; b.yaw += clamp(angleDelta(b.yaw, I.yaw), -maxYaw, maxYaw); }
+  else { const maxYaw = lerp(MOUNT.turnStand, MOUNT.turnFull, b.sp01) * (1 - 0.35 * (b.gallop || 0)) * dt; b.yaw += clamp(angleDelta(b.yaw, I.yaw), -maxYaw, maxYaw); }
   if (human) b.lookYaw = I.yaw; else if (b.target && !b.target.dead) b.lookYaw = Math.atan2(b.target.x - b.x, b.target.z - b.z); else b.lookYaw = b.yaw;
   if (I.swap !== b.seenSwap) { b.seenSwap = I.swap; if (!b.atk && b.clashT <= 0) afSetWeapon(b, b.weapon === 'bow' ? 'sword' : 'bow'); }
   if (b.swapT > 0) { b.swapT -= dt; b.charge = null; }         // hands busy changing weapons
@@ -16885,19 +16894,43 @@ function afCape(b, p, dt, fwd, sp) {
 // RIDING: the stick's forward component is the throttle along the facing; momentum is dragged onto the facing
 // (hooves grip, no strafing); the gait clock runs on the horse; at speed the horse TRAMPLES foot soldiers it runs into.
 function afRide(b, dt, I, mm, canMove, sim) {
-  const F = AF_F, top = F.move * F.horseSpeed * (b.moveMul || 1), sp = Math.hypot(b.vx, b.vz), sp01 = clamp(sp / top, 0, 1);
-  b.sp01 = sp01; b.parts.mount.userData.rig.speed01 = sp01;
+  const F = AF_F, base = F.move * F.horseSpeed * (b.moveMul || 1), sp = Math.hypot(b.vx, b.vz), sp01 = clamp(sp / base, 0, 1);
   const fx = Math.sin(b.yaw), fz = Math.cos(b.yaw);
   const thr = mm > 1e-3 ? clamp((I.mx * fx + I.mz * fz) / Math.max(mm, 1e-3) * Math.min(1, mm), -0.45, 1) : 0;
+  // THE GALLOP: hold the horse at the top of its canter and it finds another gear — a surge to half again the
+  // speed. It builds over about a second, and bleeds away when you ease off, load a swing, or haul the head round.
+  if (thr > 0.7 && sp > base * 0.85 && canMove && !b.charge) b.gallop = Math.min(1, (b.gallop || 0) + dt / 1.1);
+  else b.gallop = Math.max(0, (b.gallop || 0) - dt * (thr < 0.3 ? 1.6 : 0.6));
+  if (b === AF.me) { if (b.gallop > 0.98 && !b._galloped) { b._galloped = true; addShake(0.07); afPopup(b.group.position, 'GALLOP', '#ffe089'); } else if (b.gallop < 0.5) b._galloped = false; }
+  const top = base * (1 + 0.5 * b.gallop);
+  b.sp01 = sp01; b.parts.mount.userData.rig.speed01 = clamp(sp / (base * 1.3), 0, 1);   // canter reads as a canter, full gait only at the gallop
   if (Math.abs(thr) > 0.05 && canMove) afMove(b, fx, fz, top * thr * (b.blocking || b.charge ? 0.55 : 1), dt);
   if (sp > 0.05) { const fwd = b.vx * fx + b.vz * fz, keep = Math.max(fwd, sp * 0.25), gk = clamp(dt * MOUNT.grip, 0, 1); b.vx = lerp(b.vx, fx * keep, gk); b.vz = lerp(b.vz, fz * keep, gk); }
   b.moving = sp > 0.4;
-  if (b.moving) { b.gait = GAIT.run; b.phase += dt * 10 * (0.35 + sp01); walkLegs(b.parts, b.phase, 0.6); } else restLegs(b.parts, dt, true);
-  if (sim && sp01 > 0.5) for (const o of AF.bodies) {   // the charge: a foot soldier in the horse's path is bowled over
-    if (o.dead || o === b || o.team === b.team || o.mounted || o.trampleT > 0) continue;
-    const dx = o.x - b.x, dz = o.z - b.z, dd = Math.hypot(dx, dz); if (dd > 1.8 || (dx * fx + dz * fz) / (dd || 1) < 0.2) continue;
-    o.trampleT = 1.4; afDamage(o, 4 + 7 * sp01, b, false, false, false, 0.85); afPopup(o.group.position, 'TRAMPLED', '#ffb347');
-    afSparks(tmpV.set(o.x, afY(o.x, o.z) + 0.3, o.z), 0xc9b79a, 8);
+  // the hooves keep time with the ground: stride rate follows speed (a ~4-unit stride), so a gallop is a blur, not a jog
+  if (b.moving) { b.gait = GAIT.run; b.phase += dt * (3 + 2.4 * sp); walkLegs(b.parts, b.phase, 0.6); } else restLegs(b.parts, dt, true);
+  if (sim && sp01 > 0.45) {                                // RIDDEN DOWN: a horse at speed goes THROUGH men on foot
+    const reach = 1.6 + 0.8 * sp01 + 0.4 * b.gallop;
+    for (const o of AF.bodies) {
+      if (o.dead || o === b || o.mounted || o.trampleT > 0) continue;
+      const dx = o.x - b.x, dz = o.z - b.z, dd = Math.hypot(dx, dz); if (dd > reach || (dx * fx + dz * fz) / (dd || 1) < 0.1) continue;
+      const side = (dx * fz - dz * fx) >= 0 ? 1 : -1, rgx = fz * side, rgz = -fx * side;   // which side of the horse's line he's on — he goes that way
+      o.trampleT = 1.2;
+      if (o.team === b.team) { o.vx += rgx * 6; o.vz += rgz * 6; continue; }            // a friend is shouldered aside, not ridden down
+      const braced = o.arch === 'guardsman' && o.blocking && ((b.x - o.x) * Math.sin(o.yaw) + (b.z - o.z) * Math.cos(o.yaw)) / (dd || 1) > 0.3;
+      if (braced) {                                          // a braced shield is the one thing that stops a horse
+        b.vx *= 0.45; b.vz *= 0.45; b.gallop = 0; o.vx += fx * 5; o.vz += fz * 5;
+        afPopup(o.group.position, 'BRACED', '#9fd6ff'); afSparks(tmpV.set(o.x, afY(o.x, o.z) + 1.3, o.z), 0xffffff, 10); try { SFX.clang(o.group.position, true); } catch (e) {}
+        if (b === AF.me || o === AF.me) addShake(0.25);
+        continue;
+      }
+      afDamage(o, (6 + 10 * sp01) * (1 + 0.5 * b.gallop), b, true, false, false, 0.9);
+      if (!o.dead) { o.downT = 1.1 + 0.5 * sp01; o.downSide = side; o.atk = null; o.charge = null; o.blocking = false; o.stagger = 0; o.flinch = 0; }
+      o.vx += rgx * (7 + 6 * sp01) + fx * 4; o.vz += rgz * (7 + 6 * sp01) + fz * 4;      // thrown aside and ahead of the hooves
+      b.vx *= 0.93; b.vz *= 0.93;                            // each man costs the horse a little way — a deep block does stop it, eventually
+      afPopup(o.group.position, 'RIDDEN DOWN', '#ffb347'); afSparks(tmpV.set(o.x, afY(o.x, o.z) + 0.3, o.z), 0xc9b79a, 10);
+      if (b === AF.me || o === AF.me) addShake(0.18);
+    }
   }
 }
 // after a swing or a roll, if a foe is at your elbow but not in front of you, the camera swings onto him —
@@ -17377,7 +17410,7 @@ function afSeparate() {
   const g = AF._grid;
   if (!g) { const L = AF.bodies; for (let i = 0; i < L.length; i++) { const b = L[i]; if (b.dead) continue; for (let j = i + 1; j < L.length; j++) { const o = L[j]; if (o.dead) continue;
     const R = 1.1 + (b.mounted ? 0.7 : 0) + (o.mounted ? 0.7 : 0), R2 = R * R; const dx = o.x - b.x, dz = o.z - b.z, d2 = dx * dx + dz * dz; if (d2 >= R2 || d2 < 1e-6) continue;
-    const d = Math.sqrt(d2), ov = R - d, nx = dx / d, nz = dz / d, wb = b.ctrl === 'ai' ? 1 : 2, wo = o.ctrl === 'ai' ? 1 : 2, tot = wb + wo;
+    const d = Math.sqrt(d2), ov = R - d, nx = dx / d, nz = dz / d, wb = b.mounted && b.sp01 > 0.45 ? 20 : b.ctrl === 'ai' ? 1 : 2, wo = o.mounted && o.sp01 > 0.45 ? 20 : o.ctrl === 'ai' ? 1 : 2, tot = wb + wo;
     b.x -= nx * ov * (wo / tot); b.z -= nz * ov * (wo / tot); o.x += nx * ov * (wb / tot); o.z += nz * ov * (wb / tot); } } return; }
   for (const b of AF.bodies) {
     if (b.dead) continue;
@@ -17387,7 +17420,7 @@ function afSeparate() {
         if (o.idx <= b.idx) continue;                        // handle each pair once
         const R = 1.1 + (b.mounted ? 0.7 : 0) + (o.mounted ? 0.7 : 0), R2 = R * R;
         const dx = o.x - b.x, dz = o.z - b.z, d2 = dx * dx + dz * dz; if (d2 >= R2 || d2 < 1e-6) continue;
-        const d = Math.sqrt(d2), ov = R - d, nx = dx / d, nz = dz / d, wb = b.ctrl === 'ai' ? 1 : 2, wo = o.ctrl === 'ai' ? 1 : 2, tot = wb + wo;
+        const d = Math.sqrt(d2), ov = R - d, nx = dx / d, nz = dz / d, wb = b.mounted && b.sp01 > 0.45 ? 20 : b.ctrl === 'ai' ? 1 : 2, wo = o.mounted && o.sp01 > 0.45 ? 20 : o.ctrl === 'ai' ? 1 : 2, tot = wb + wo;
         b.x -= nx * ov * (wo / tot); b.z -= nz * ov * (wo / tot); o.x += nx * ov * (wb / tot); o.z += nz * ov * (wb / tot);
       }
     }
@@ -17418,10 +17451,11 @@ function afGuestTick(dt) {
     if (b === AF.me && !b.dead) { afDrive(b, dt, false); continue; }
     if (b.dead) { afStepDead(b, dt); continue; }
     if (!b.remoteSeen) { afCommit(b, dt); continue; }
-    const k = clamp(dt * 14, 0, 1);
+    const k = clamp(dt * 14, 0, 1), ox = b.x, oz = b.z;
     b.x = lerp(b.x, b.tx, k); b.z = lerp(b.z, b.tz, k);
     b.yaw = angleLerp(b.yaw, b.tyaw, k);
-    b.moving = b.tstate === 1;
+    b.moving = b.tstate === 1 || (b.mounted && Math.hypot(b.tx - b.x, b.tz - b.z) > 0.3);
+    if (b.mounted) { b.rsp = lerp(b.rsp || 0, Math.hypot(b.x - ox, b.z - oz) / Math.max(dt, 1e-3), clamp(dt * 6, 0, 1)); b.sp01 = clamp(b.rsp / (AF_F.move * AF_F.horseSpeed), 0, 1); }
     afApplyRemotePose(b, dt);
     afCommit(b, dt);
   }
@@ -17434,7 +17468,7 @@ function afApplyRemotePose(b, dt) {
   if (hurt && !b.tinted) { setTint(b.parts, 0x551111); b.tinted = true; } else if (!hurt && b.tinted) { setTint(b.parts, null); b.tinted = false; }
   b.tiltX = 0;
   switch (s) {
-    case 1: b.gait = GAIT.run; walkLegs(b.parts, b.phase += dt * GAIT.run.tempo, GAIT.run.leg); setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.2); break;
+    case 1: b.gait = GAIT.run; if (b.mounted) { b.parts.mount.userData.rig.speed01 = clamp((b.rsp || 0) / (AF_F.move * AF_F.horseSpeed * 1.3), 0, 1); walkLegs(b.parts, b.phase += dt * (3 + 2.4 * (b.rsp || 0)), 0.6); } else walkLegs(b.parts, b.phase += dt * GAIT.run.tempo, GAIT.run.leg); setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.2); break;
     case 2: setPose(b.anim, MOVES[mv].windup, 0.08); restLegs(b.parts, dt, true); break;
     case 3: setPose(b.anim, MOVES[mv].strike, 0.05); restLegs(b.parts, dt, true); break;
     case 4: setPose(b.anim, 'guard', 0.15); restLegs(b.parts, dt, true); break;
@@ -17442,6 +17476,7 @@ function afApplyRemotePose(b, dt) {
     case 6: setPose(b.anim, 'block', 0.1); restLegs(b.parts, dt, true); break;
     case 7: b.rollT += dt; b.tiltX = -Math.sin(clamp(b.rollT / AF_F.dodge.dur, 0, 1) * Math.PI) * 1.05; walkLegs(b.parts, b.phase += dt * 14, 0.5, 0.6); setPose(b.anim, 'relax', 0.1); break;
     case 12: restLegs(b.parts, dt, true); break;              // blades locked — hold whatever the blade was doing
+    case 13: b.tiltX = -1.35; b.roll = 0.45; setPose(b.anim, 'hurt', 0.08); restLegs(b.parts, dt, true); break;   // ridden down
     case 9: setPose(b.anim, 'aimBow', 0.1); restLegs(b.parts, dt, false); break;
     case 10: setPose(b.anim, 'looseBow', 0.05); restLegs(b.parts, dt, false); break;
     default: setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.2); restLegs(b.parts, dt, true);
@@ -17459,7 +17494,7 @@ function afApplySnap(s) {
     if (b === AF.me) {                                       // my body: the host owns hp/death/stuns; position is softly corrected
       b.hp = hp;
       if (code === 8 && !b.dead) afKill(b, null, true);
-      if (code === 5) b.flinch = Math.max(b.flinch, 0.12); else if (code === 11) b.stagger = Math.max(b.stagger, 0.2);
+      if (code === 5) b.flinch = Math.max(b.flinch, 0.12); else if (code === 11) b.stagger = Math.max(b.stagger, 0.2); else if (code === 13) b.downT = Math.max(b.downT || 0, 0.3);
       const ex = x - b.x, ez = z - b.z, ed = Math.hypot(ex, ez);
       if (ed > 4) { b.x = x; b.z = z; } else { b.x += ex * 0.25; b.z += ez * 0.25; }
       continue;

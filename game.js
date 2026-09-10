@@ -17780,7 +17780,7 @@ function afLobbyRender() {
   else if (!online) { list.innerHTML = 'Reaching the war-net at ' + (window.coop ? window.coop.url.replace(/^ws[s]?:\/\//, '') : '?') + '… (retrying)'; stat.textContent = 'offline'; }
   else if (!host) { list.innerHTML = 'Only the host sends invitations.'; stat.textContent = ''; }
   else {
-    const rows = AF.online.filter(p => p.name !== L.host);
+    const seen = new Set(), rows = AF.online.filter(p => p.name !== L.host && !seen.has(p.name) && seen.add(p.name)); // one row per player, however many tabs they have open
     stat.textContent = rows.length + ' online · you are ' + L.host;
     list.innerHTML = rows.length ? rows.map(p => { const st = seatedNames.has(p.name) ? 'joined' : L.invites.get(p.name) || (p.busy ? 'in a fight' : '');
       return '<div class="al-orow"><span><b>' + p.name + '</b> <span style="opacity:.6;font-size:12px">' + st + '</span></span><button data-inv="' + p.name + '"' + (st === 'joined' || st === 'invited…' ? ' disabled' : '') + '>Invite</button></div>'; }).join('')

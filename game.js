@@ -17067,6 +17067,74 @@ function afStepArrows(dt, sim) {
 }
 
 // ---- the NPC brain: writes the same input record a player would ----
+/* ---- THE CAPTAIN: each team's NPCs are organised, not a mob. At the bell the captain reads his roster and
+   draws a FORMATION (guardsmen centre-front, swordsmen and brutes filling the front rank, duelists on its ends,
+   archers a rank behind, riders on the wing), then issues ORDERS through the fight: form up, advance as a line
+   at a walk, release the charge at contact, send the riders wide to flank, regroup when the line has scattered,
+   and fall back to a wall when losing badly. Humans are never commanded, but see their captain's order. ---- */
+const AF_TACT = { formSecs: 1.6, walk: 0.62, contact: 10, regroupAfter: 8, regroupSpread: 9, rallyRatio: 0.45, rallySecs: 3.5, pursueRatio: 1.7 };
+function afPlanTeams() {
+  AF.teams = [];
+  for (let t = 0; t < AF.cfg.teams; t++) {
+    const sp = afSpawn(t, AF.cfg.teams), T = { t, phase: 'form', order: 'hold', riderOrder: 'hold', anchor: { x: sp.cx, z: sp.cz }, home: { x: sp.cx, z: sp.cz }, face: sp.yaw, thinkT: 0, since: 0, rallied: false, wp: null, doctrine: 'line' };
+    const npcs = AF.bodies.filter(b => b.team === t && b.ctrl === 'ai');
+    const front = [], rear = [], riders = [];
+    for (const b of npcs) { if (b.mounted) riders.push(b); else if (b.weapon === 'bow') rear.push(b); else front.push(b); }
+    const rank = b => b.arch === 'guardsman' ? 0 : b.arch === 'brute' ? 1 : b.arch === 'swordsman' ? 2 : 3;   // centre → ends
+    front.sort((a, b) => rank(a) - rank(b));
+    const ordered = [];                                        // alternate sides from the centre outward: G G S S B D …
+    front.forEach((b, i) => { if (i % 2) ordered.push(b); else ordered.unshift(b); });
+    ordered.forEach((b, i) => { b.slot = { right: (i - (ordered.length - 1) / 2) * 2.2, back: 0 }; });
+    const rw = Math.max(1, Math.ceil(rear.length / Math.max(1, Math.ceil(rear.length / 8))));
+    rear.forEach((b, i) => { b.slot = { right: ((i % rw) - (Math.min(rw, rear.length) - 1) / 2) * 2.4, back: 3 + Math.floor(i / rw) * 2.4 }; });
+    const halfW = (ordered.length - 1) / 2 * 2.2 + 3.5;
+    riders.forEach((b, i) => { b.slot = { right: (i % 2 ? -1 : 1) * (halfW + Math.floor(i / 2) * 2.6), back: 1.5 }; });
+    const archers = rear.length, total = npcs.length;
+    T.doctrine = archers > total * 0.4 ? 'skirmish' : riders.length >= 2 ? 'hammer' : 'line';
+    AF.teams.push(T);
+    if (npcs.length >= 3) afOrderLog(T, 'form');
+  }
+}
+function afFormationSlot(T, b) {
+  const fwx = Math.sin(T.face), fwz = Math.cos(T.face), rgx = -Math.cos(T.face), rgz = Math.sin(T.face), sl = b.slot || { right: 0, back: 0 };
+  return { x: T.anchor.x + rgx * sl.right - fwx * sl.back, z: T.anchor.z + rgz * sl.right - fwz * sl.back };
+}
+const AF_ORDER_TEXT = { form: 'forms a line', advance: 'advances', charge: 'charges!', flank: 'sends the riders wide', regroup: 'regroups', fallback: 'falls back to the wall', pursue: 'presses the rout' };
+function afOrderLog(T, key) { const txt = AF_TEAMS[T.t].name + ' ' + (AF_ORDER_TEXT[key] || key); afLogLine(txt, AF_TEAMS[T.t].col); AF.events.push({ k: 'order', t: T.t, o: key }); }
+function afCaptainThink(T, dt) {
+  T.thinkT -= dt; if (T.thinkT > 0) return; T.thinkT = 0.4; T.since += 0.4;
+  const mine = AF.bodies.filter(b => !b.dead && b.team === T.t), foes = AF.bodies.filter(b => !b.dead && b.team !== T.t);
+  if (!mine.length || !foes.length) return;
+  const cen = arr => { let x = 0, z = 0; for (const b of arr) { x += b.x; z += b.z; } return { x: x / arr.length, z: z / arr.length }; };
+  const mc = cen(mine), fc = cen(foes), gap = Math.hypot(fc.x - mc.x, fc.z - mc.z);
+  const hp = arr => arr.reduce((a, b) => a + b.hp, 0), ratio = hp(mine) / Math.max(1, hp(foes));
+  const spread = mine.reduce((a, b) => a + Math.hypot(b.x - mc.x, b.z - mc.z), 0) / mine.length;
+  const bearing = Math.atan2(fc.x - T.anchor.x, fc.z - T.anchor.z);
+  let contact = false; for (const b of mine) { for (const o of foes) if (Math.hypot(o.x - b.x, o.z - b.z) < 5) { contact = true; break; } if (contact) break; }
+  switch (T.phase) {
+    case 'form':
+      T.face = angleLerp(T.face, bearing, 0.5);
+      if (T.since >= AF_TACT.formSecs || contact) { T.phase = 'advance'; T.order = 'advance'; T.since = 0; afOrderLog(T, 'advance');
+        if (mine.some(b => b.mounted && b.ctrl === 'ai')) { const px = -Math.cos(bearing), pz = Math.sin(bearing), side = Math.random() < 0.5 ? 1 : -1; T.wp = { x: fc.x + px * 22 * side, z: fc.z + pz * 22 * side }; T.riderOrder = 'flank'; afOrderLog(T, 'flank'); } }
+      break;
+    case 'advance': {
+      T.face = angleLerp(T.face, bearing, 0.6);
+      const step = AF_F.move * AF_TACT.walk * 0.4, d = Math.hypot(fc.x - T.anchor.x, fc.z - T.anchor.z);
+      if (d > AF_TACT.contact) { T.anchor.x += (fc.x - T.anchor.x) / d * step; T.anchor.z += (fc.z - T.anchor.z) / d * step; }
+      if (gap < AF_TACT.contact || contact) { T.phase = 'charge'; T.order = 'charge'; T.since = 0; afOrderLog(T, 'charge'); }
+      break; }
+    case 'charge':
+      if (T.riderOrder === 'flank' && T.wp) { const rs = mine.filter(b => b.mounted); if (!rs.length || rs.every(b => Math.hypot(b.x - T.wp.x, b.z - T.wp.z) < 6)) T.riderOrder = 'charge'; }
+      if (ratio < AF_TACT.rallyRatio && mine.length >= 3 && !T.rallied) { T.rallied = true; T.phase = 'fallback'; T.order = 'fallback'; T.riderOrder = 'fallback'; T.since = 0; T.anchor = { x: T.home.x, z: T.home.z }; T.face = Math.atan2(fc.x - T.home.x, fc.z - T.home.z); afOrderLog(T, 'fallback'); }
+      else if (T.since > AF_TACT.regroupAfter && spread > AF_TACT.regroupSpread && ratio < AF_TACT.pursueRatio && mine.length >= 3 && !contact) { T.phase = 'form'; T.order = 'hold'; T.since = 0; T.anchor = { x: mc.x, z: mc.z }; T.face = bearing; afOrderLog(T, 'regroup'); }
+      else if (ratio > AF_TACT.pursueRatio && !T.pursuing) { T.pursuing = true; afOrderLog(T, 'pursue'); }
+      break;
+    case 'fallback': {
+      let near = 0; for (const o of foes) if (Math.hypot(o.x - T.anchor.x, o.z - T.anchor.z) < 8) near++;
+      if (T.since > AF_TACT.rallySecs || near) { T.phase = 'charge'; T.order = 'charge'; T.riderOrder = 'charge'; T.since = 0; afOrderLog(T, 'charge'); }
+      break; }
+  }
+}
 // PACK DIRECTOR (borrowed from the field fights): every 0.3s each NPC claims a foe, closest first; a victim accepts
 // at most two committed attackers, the overflow spreads to another foe with a free slot, and only when every duel is
 // full does a man WAIT — circling to a slot in his mark's rear arc and committing only from behind, where guards can't reach.
@@ -17108,6 +17176,27 @@ function afThink(b, dt) {
   if (!t) { const [sx, sz] = afSepFrom(b, 2.4); I.mx = sx; I.mz = sz; return; }
   const dx = t.x - b.x, dz = t.z - b.z, d = Math.hypot(dx, dz) || 1e-4, ux = dx / d, uz = dz / d;
   const [sx, sz] = afSepFrom(b, 2.6);
+  // ORDERS: until the captain releases the charge, a man keeps his place in the line and only fights what
+  // reaches him (the battle editor's leash rule); riders ride to their flanking mark; a fallback is a guarded walk home
+  const T = AF.teams && AF.teams[b.team];
+  const ord = T ? (b.mounted ? T.riderOrder : T.order) : 'charge';
+  if (ord !== 'charge' && !busy) {
+    if (ord === 'flank' && T.wp) {
+      const wx = T.wp.x - b.x, wz = T.wp.z - b.z, wd = Math.hypot(wx, wz) || 1e-4;
+      if (wd > 4) { I.yaw = Math.atan2(wx, wz); I.mx = wx / wd; I.mz = wz / wd; return; }
+    } else {
+      const slot = afFormationSlot(T, b), slx = slot.x - b.x, slz = slot.z - b.z, sd = Math.hypot(slx, slz);
+      const reach = F.reach + (b.reachBonus || 0) + (b.mounted ? F.horseReach : 0);
+      const inFace = d <= reach * 1.25, pressing = d < 4 && ord === 'advance';
+      if (ord === 'fallback') { if (sd > 1) { I.mx = slx / sd + sx; I.mz = slz / sd + sz; } I.yaw = d < 9 ? Math.atan2(dx, dz) : T.face; I.block = d < 4.5 && b.weapon !== 'bow'; if (b.weapon === 'bow' && d > 6 && d < 22 && b.shotCd <= 0) { b.aiHoldT = 0.45; b.shotCd = 1.9 + Math.random(); } b.shotCd -= dt; return; }
+      if (!inFace && !pressing) {
+        if (sd > 0.5) { const pace = ord === 'advance' ? AF_TACT.walk + 0.15 : 1; I.mx = slx / sd * pace + sx * 0.5; I.mz = slz / sd * pace + sz * 0.5; }
+        I.yaw = d < 12 ? Math.atan2(dx, dz) : T.face;
+        if (b.weapon === 'bow') { b.shotCd -= dt; if (d > 6 && d < 22 && b.shotCd <= 0 && !busy) { b.aiHoldT = 0.35 + b.skill * 0.4; b.shotCd = 1.7 + Math.random() * 1.2; } }
+        return;
+      }
+    }
+  }
   I.yaw = Math.atan2(dx, dz);
   b.strafeT -= dt; if (b.strafeT <= 0) { b.strafeT = 0.8 + Math.random() * 1.4; b.strafe = Math.random() < 0.5 ? -1 : 1; }
   const tx = -uz * b.strafe, tz = ux * b.strafe;             // tangent around the mark
@@ -17208,6 +17297,7 @@ function afReadLocalInput() {
 function afTick(dt) {
   if (AF.over) return;
   if ((AF.assignT = (AF.assignT || 0) - dt) <= 0) { afAssignTargets(); AF.assignT = 0.3; }
+  if (AF.teams) for (const T of AF.teams) afCaptainThink(T, dt);
   for (const b of AF.bodies) {
     if (b.dead) { afStepDead(b, dt); continue; }
     if (b.ctrl === 'ai') afThink(b, dt);
@@ -17329,6 +17419,8 @@ function afApplyEvent(ev) {
     if (b === AF.me && !b.dead) afKill(b, null, true);
   } else if (ev.k === 'arrow') {
     afAddArrow(ev.t, ev.o, ev.p[0], ev.p[1], ev.p[2], new THREE.Vector3(ev.v[0], ev.v[1], ev.v[2]), 9, ev.l);
+  } else if (ev.k === 'order') {
+    afLogLine(AF_TEAMS[ev.t].name + ' ' + (AF_ORDER_TEXT[ev.o] || ev.o), AF_TEAMS[ev.t].col); if (AF.me && AF.me.team === ev.t) AF.myOrder = ev.o;
   }
 }
 
@@ -17549,6 +17641,8 @@ function afUpdateHud() {
   const tally = new Map(); for (const b of AF.bodies) { const t = tally.get(b.team) || { alive: 0, total: 0 }; t.total++; if (!b.dead) t.alive++; tally.set(b.team, t); }
   const rem = Math.max(0, AF_F.timeLimit * (AF.bodies.length > AF_LIM.heroCap ? 2 : 1) - AF.t), mm = Math.floor(rem / 60), ss = Math.floor(rem % 60);
   let html = '<div style="display:flex;justify-content:space-between;gap:14px;margin-bottom:6px"><b style="color:#ffe089">⚔ Arena</b><span style="color:#c9bfda">' + (AF.phase === 'countdown' ? 'ready…' : mm + ':' + (ss < 10 ? '0' : '') + ss) + '</span></div>';
+  const myT = AF.teams && AF.me ? AF.teams[AF.me.team] : null, ordTxt = myT ? (myT.phase === 'form' ? 'form up' : myT.order) : AF.myOrder ? (AF.myOrder === 'form' || AF.myOrder === 'regroup' ? 'form up' : AF.myOrder) : null;
+  if (ordTxt && AF.phase === 'fight') html += '<div style="font-size:11px;color:#ffe089;margin-bottom:4px">⚑ captain: ' + ordTxt + '</div>';
   for (let t = 0; t < AF.cfg.teams; t++) { const c = tally.get(t) || { alive: 0, total: 0 }, me = AF.me && AF.me.team === t;
     html += '<div style="display:flex;justify-content:space-between;gap:10px;margin-top:2px' + (c.alive ? '' : ';opacity:.45') + '"><span style="color:' + AF_TEAMS[t].col + ';font-weight:800">' + AF_TEAMS[t].name + (me ? ' ◉' : '') + '</span><span style="font-weight:800">' + c.alive + '<span style="opacity:.5;font-weight:400">/' + c.total + '</span></span></div>'; }
   p.innerHTML = html;
@@ -17684,6 +17778,7 @@ function afBoot(spec) {
   if (AF.me) { AF.cam.yaw = AF.me.yaw; AF.cam.pitch = 0.3; AF.me.seenAtk = AF.me.seenHeavy = AF.me.seenDodge = 0; }
   AF.phase = 'countdown'; AF.countdown = AF_F.countdown; AF.t = 0; AF.over = false; AF.winner = -1; AF.standings = null; AF.events = []; AF._hc = 0; AF.last = 0; AF.hitstop = 0; AF.assignT = 0; trauma = 0; camKick.set(0, 0, 0); fovPunch = 0;
   AF.orbit.theta = AF.me ? AF.me.yaw + Math.PI : 0.4; AF.roar = 0; AF.waveT = 0; AF.nextWave = 22 + Math.random() * 10;
+  AF.teams = null; if (AF.role !== 'guest') afPlanTeams();   // the captains draw up their lines (the sim runs here)
   afHud();
   afBanner(AF.cfg.teams + ' TEAMS · ' + AF.cfg.per + ' EACH', AF.me ? 'you fight for ' + AF.me.teamDef.name + ' — steel yourself' : '', 2.6);
   try { console.log('[arena]', JSON.stringify({ seed: AF.seed, teams: AF.cfg.teams, per: AF.cfg.per, role: AF.role, bodies: AF.bodies.length })); } catch (e) {}

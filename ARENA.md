@@ -127,6 +127,16 @@ arc, knockback, poise damage, the lunge and the slash arc all scale with `k`; pa
 a heavy (cracks guards, resets the combo). A HUD meter under your fighter shows the load and turns red
 at the heavy line. NPCs load their swings the same way, so a long visible hold is a heavy you can roll from.
 
+**The captain** (`afPlanTeams` / `afCaptainThink`): each team's NPCs are organised, not a mob. At the
+bell the captain reads his roster and draws a formation — guardsmen centre-front, swordsmen and brutes
+filling the front rank, duelists on its ends, archers a rank behind, riders on the wing — and issues orders
+through the fight: *form up* (1.6 s), *advance* as a line at a walk toward the enemy, *send the riders
+wide* to a flanking mark, *charge* at contact, *regroup* when the line has scattered and the fight is
+even, *fall back to the wall* when losing badly (a guarded walk home, archers still loosing) and charge
+again when the enemy comes on or the moment passes, and *press the rout* when winning big. Until the
+charge is released a man keeps his place and only fights what reaches him. Humans are never commanded
+but see their captain's order in the HUD; the log narrates every shift, on guests too.
+
 **Fighters of the vale** (`AF_ARCH`): the NPCs come in six archetypes, each a build (rig, weapon, size),
 a body (health, poise, speed, damage) and a temperament. *Swordsman*: sword and shield, the baseline.
 *Brute*: a big man with a two-hander — more health and poise, slower, hits harder, loads almost every

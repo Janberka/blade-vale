@@ -16752,10 +16752,11 @@ function afDrive(b, dt, sim) {
   }
   if (b.atk) {
     const a = b.atk; a.t += dt;
-    if (human && !a.hit && !a.bow) {                         // aim assist: the blade tracks a foe in front while it winds up
-      const tg = afNearestFoeInCone(b, F.reach * 1.9, 0.45);
-      if (tg) b.yaw = angleLerp(b.yaw, Math.atan2(tg.x - b.x, tg.z - b.z), clamp(dt * 12, 0, 1));
+    if (human && !a.hit && !a.bow && Math.abs(angleDelta(I.yaw, b.prevInYaw == null ? I.yaw : b.prevInYaw)) < dt * 0.9) { // aim assist — but the moment you turn, your aim wins
+      const tg = afNearestFoeInCone(b, F.reach * 1.9, 0.7);
+      if (tg) b.yaw = angleLerp(b.yaw, Math.atan2(tg.x - b.x, tg.z - b.z), clamp(dt * 6, 0, 1));
     }
+    b.prevInYaw = I.yaw;
     if (!a.bow && a.t > a.wind * (a.heavy ? 0.85 : 0.7) && a.t < a.wind + a.strike)   // lunge with the blow
       afMove(b, Math.sin(b.yaw), Math.cos(b.yaw), F.move * (a.heavy ? F.heavyLunge : F.lunge) * 0.85, dt);
     if (!a.hit && a.t >= a.wind) {
@@ -17067,6 +17068,13 @@ function afReadLocalInput() {
   const m = Math.hypot(f, s); if (m > 1) { f /= m; s /= m; }
   I.mx = fx * f + rx * s; I.mz = fz * f + rz * s; I.yaw = cam.yaw;
   I.block = K.has('shift') || !!(typeof keys !== 'undefined' && keys['ShiftLeft'] && TOUCH);
+  // HOLD to keep swinging: a held mouse button or a held ATK/HVY touch button chains the next blow as soon as the arm is free
+  const me = AF.me;
+  if (me && !me.dead && !me.atk && me.cd <= 0 && me.clashT <= 0) {
+    const atkEl = TOUCH ? document.getElementById('tb-attack') : null, hvyEl = TOUCH ? document.getElementById('tb-heavy') : null;
+    if (AF.mouseHeavy || (hvyEl && hvyEl.classList.contains('on'))) I.heavy++;
+    else if (AF.mouseDown || (atkEl && atkEl.classList.contains('on'))) I.atk++;
+  }
   return I;
 }
 
@@ -17343,7 +17351,7 @@ function afInstallControls() {
   canvas.addEventListener('pointerdown', e => {
     if (!AF.on) return;
     if (AF.me && !AF.me.dead && AF.phase !== 'over') {
-      if (locked()) { if (e.button === 2) AF.locIn.heavy++; else if (e.button === 0) AF.locIn.atk++; }
+      if (locked()) { if (e.button === 2) { AF.locIn.heavy++; AF.mouseHeavy = true; } else if (e.button === 0) { AF.locIn.atk++; AF.mouseDown = true; } }
       else if (!TOUCH) { try { const p = canvas.requestPointerLock(); if (p && p.catch) p.catch(() => {}); } catch (err) {} }
       return;
     }
@@ -17355,7 +17363,8 @@ function afInstallControls() {
     if (!o.drag) return;
     o.theta -= (e.clientX - px) * 0.01; o.phi = clamp(o.phi - (e.clientY - py) * 0.01, 0.15, 1.45); px = e.clientX; py = e.clientY;
   });
-  window.addEventListener('pointerup', () => { o.drag = false; });
+  window.addEventListener('pointerup', e => { o.drag = false; if (e.button === 2) AF.mouseHeavy = false; else if (e.button === 0) AF.mouseDown = false; });
+  window.addEventListener('blur', () => { AF.mouseDown = false; AF.mouseHeavy = false; });
   canvas.addEventListener('wheel', e => {
     if (!AF.on) return; e.preventDefault();
     if (AF.me && !AF.me.dead) AF.cam.dist = clamp(AF.cam.dist * (1 + Math.sign(e.deltaY) * 0.1), 3.5, 14);

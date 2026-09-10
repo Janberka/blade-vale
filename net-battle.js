@@ -49,7 +49,7 @@
       ws.onmessage = function (ev) {
         var m; try { m = JSON.parse(ev.data); } catch (e) { return; }
         switch (m.t) {
-          case 'hello-ok': { var was = coop.everConnected; coop.connected = true; coop.everConnected = true; coop.id = m.id; retryMs = 1500; finish(true); if (was) emit('reconnect', m); break; }
+          case 'hello-ok': { var reopened = !!coop.everConnected && !coop.connected; coop.connected = true; coop.everConnected = true; coop.id = m.id; retryMs = 1500; finish(true); if (reopened) emit('reconnect', m); break; } // a re-hello on a live socket is NOT a reconnect
           case 'hosting': coop.room = m.room; coop.isHost = true; emit('hosting', m); break;
           case 'joined': coop.room = m.room; coop.isHost = false; emit('joined', m); break;
           case 'beacons': emit('beacons', m); break;

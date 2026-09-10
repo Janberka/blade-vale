@@ -16405,12 +16405,24 @@ const AF_LIM = { teamsMin: 2, teamsMax: 6, perMin: 1, perMax: 50, heroCap: 24 };
 const AF_F = { hp: 100, move: 5.6, reach: 2.5, cone: 0.3, radius: 34, timeLimit: 120, countdown: 3,
   light: { wind: 0.24, strike: 0.10, rec: 0.28, dmg: [10, 15] },
   heavy: { wind: 0.60, strike: 0.12, rec: 0.50, dmg: [24, 32] },
-  bow:   { wind: 0.50, strike: 0.06, rec: 0.40, dmg: [14, 20], speed: 42, range: 44 },
+  bow:   { wind: 0.50, strike: 0.06, rec: 0.40, dmg: [11, 16], speed: 42, range: 44 },
   blockMul: 0.15, guardBreak: 0.75, flinch: 0.18, deathDur: 1.1,
   knock: 6, heavyKnock: 14, lightPoise: 20, heavyPoise: 40, maxPoise: 45, poiseRegen: 8, staggerDur: 1.2, executeMul: 2.2, // three quick lights, or a heavy on a chipped guard, break poise
   accel: 7.13, friction: 0.0008, lunge: 2, heavyLunge: 3,      // velocity model borrowed from the field fighters (terminal speed ≈ move)
   dodge: { dur: 0.40, speed: 13, iframes: 0.32, cd: 0.55 },
   chargeMax: 0.85, heavyAt: 0.6, horseSpeed: 1.9, horseReach: 0.9 };
+// FIGHTERS OF THE VALE — the NPC archetypes: build (rig, weapon, size), body (hp/poise/speed/damage) and
+// temperament (how often he loads a swing, whether he blocks or rolls, whether he feints or walls up)
+const AF_ARCH = {
+  swordsman: { label: 'swordsman', weapon: 'sword', hp: 100, poise: 45, move: 1.0,  dmg: 1.0,  scale: 1.0,  heavyBias: 0.15, block: 0.35, dodge: 0.25, circ: 0.55, reach: 0,   shield: true,  bow: true  },
+  brute:     { label: 'brute',     weapon: 'longsword', hp: 140, poise: 75, move: 0.85, dmg: 1.3, scale: 1.12, heavyBias: 0.8,  block: 0.0,  dodge: 0.12, circ: 0.1,  reach: 0.4, shield: false, bow: false },
+  duelist:   { label: 'duelist',   weapon: 'sword', hp: 85,  poise: 35, move: 1.15, dmg: 0.9,  scale: 0.96, heavyBias: 0.05, block: 0.1,  dodge: 0.7,  circ: 0.85, reach: 0,   shield: false, bow: true,  feint: 0.35 },
+  guardsman: { label: 'guardsman', weapon: 'sword', hp: 120, poise: 60, move: 0.9,  dmg: 1.0,  scale: 1.04, heavyBias: 0.25, block: 0.8,  dodge: 0.08, circ: 0.3,  reach: 0,   shield: true,  bow: true,  wall: true, bigShield: true },
+  archer:    { label: 'archer',    weapon: 'bow',   hp: 90,  poise: 40, move: 1.05, dmg: 1.0,  scale: 0.98, heavyBias: 0.1,  block: 0.2,  dodge: 0.4,  circ: 0.5,  reach: 0,   shield: true,  bow: true  },
+  rider:     { label: 'rider',     weapon: 'horse', hp: 110, poise: 55, move: 1.0,  dmg: 1.0,  scale: 1.0,  heavyBias: 0.2,  block: 0.2,  dodge: 0.1,  circ: 0.3,  reach: 0,   shield: true,  bow: true  },
+};
+const AF_ARCH_ROLL = [['swordsman', 30], ['brute', 15], ['duelist', 15], ['guardsman', 15], ['archer', 15], ['rider', 10]];
+function afRollArch(r, allowRider) { let tot = 0; for (const [k, w] of AF_ARCH_ROLL) if (k !== 'rider' || allowRider) tot += w; let x = r() * tot; for (const [k, w] of AF_ARCH_ROLL) { if (k === 'rider' && !allowRider) continue; x -= w; if (x <= 0) return k; } return 'swordsman'; }
 const AF_PITS = { cosy: 34, wide: 50, vast: 68, colossal: 100 }; // the ring's radius by lobby choice (radius is set per boot; a big roster grows it)
 function afPitFor(pit, per) { const need = 26 + per * 0.9; let best = pit; for (const k of ['cosy', 'wide', 'vast', 'colossal']) { if (AF_PITS[k] >= Math.max(need, AF_PITS[pit] || 0)) { best = k; break; } best = k; } return AF_PITS[best] >= need ? best : 'colossal'; }                          // hold the attack to load it: a full hold (chargeMax s) is a heavy; past heavyAt it cracks guards
 const AF_TEAM_HEX = AF_TEAMS.map(t => parseInt(t.col.slice(1), 16));
@@ -16632,25 +16644,29 @@ function afSlotOffset(slot, per) {
 // ---- fighters ----
 function afFreshInput() { return { mx: 0, mz: 0, yaw: 0, atk: 0, heavy: 0, dodge: 0, block: false, hold: false, swap: 0 }; } // atk = release count (a tap between samples still lands); hold = the button is down (charging)
 function afMakeBody(entry, idx, r) {
-  const td = AF_TEAMS[entry.t], mounted = entry.weapon === 'horse', weapon = entry.weapon === 'bow' ? 'bow' : 'sword';
+  const td = AF_TEAMS[entry.t];
+  const archKey = entry.arch || (entry.weapon === 'bow' ? 'archer' : entry.weapon === 'horse' ? 'rider' : 'swordsman'), A = AF_ARCH[archKey] || AF_ARCH.swordsman;
+  const mounted = A.weapon === 'horse', weapon = A.weapon === 'bow' ? 'bow' : A.weapon === 'longsword' ? 'longsword' : 'sword';
   const big = AF.cfg.teams * AF.cfg.per > AF_LIM.heroCap;
-  const rigOpts = { hero: entry.kind !== 'npc' || !big, both: true, plume: AF_TEAM_HEX[entry.t] }; // a hundred capes would melt a phone: only the humans dress up in a big fight
-  const h = mounted ? buildCavalry(td.pal, 1, 'sword', rigOpts) : buildHumanoid(td.pal, 1, weapon, rigOpts); const group = h.group || h;
+  const rigOpts = { hero: entry.kind !== 'npc' || !big, both: A.bow, plume: AF_TEAM_HEX[entry.t] }; // a hundred capes would melt a phone: only the humans dress up in a big fight
+  const h = mounted ? buildCavalry(td.pal, A.scale, 'sword', rigOpts) : buildHumanoid(td.pal, A.scale, A.bow ? weapon : weapon, rigOpts); const group = h.group || h;
+  if (h.parts.shield) { h.parts.shield.visible = A.shield && weapon !== 'bow'; if (A.bigShield) h.parts.shield.scale.set(1.3, 1.3, 1.3); }
   group.rotation.order = 'YXZ';                              // yaw first, then a body-local tilt/roll (somersaults, crumples)
   const sp = afSpawn(entry.t, AF.cfg.teams), rgx = -Math.cos(sp.yaw), rgz = Math.sin(sp.yaw), so = afSlotOffset(entry.s, AF.cfg.per), off = so.right, back = so.back * (mounted ? 1.3 : 1);
   const b = { id: idx, idx, team: entry.t, teamDef: td, name: entry.name, kind: entry.kind, peer: entry.peer || null, weapon,
     ctrl: entry.kind === 'npc' ? 'ai' : 'input', inp: afFreshInput(),
     group, parts: h.parts, anim: makeAnimator(h.parts),
     x: sp.cx + rgx * off - Math.sin(sp.yaw) * back, z: sp.cz + rgz * off - Math.cos(sp.yaw) * back, yaw: sp.yaw, phase: r() * TAU, tiltX: 0,
-    hp: AF_F.hp, maxHp: AF_F.hp, state: 'idle', atk: null, combo: 0, comboT: 0, blocking: false,
+    hp: A.hp, maxHp: A.hp, state: 'idle', atk: null, combo: 0, comboT: 0, blocking: false,
     dodgeT: 0, dodgeCd: 0, ddx: 0, ddz: 0, iframes: 0, flinch: 0, stagger: 0, dead: false, deadT: 0, tinted: false, kills: 0,
-    vx: 0, vz: 0, poise: AF_F.maxPoise, maxPoise: AF_F.maxPoise, queued: false, cd: 0, waiting: false, slotAngle: 0, retreatT: 0, bob: 0,
+    vx: 0, vz: 0, poise: A.poise, maxPoise: A.poise, queued: false, cd: 0, waiting: false, slotAngle: 0, retreatT: 0, bob: 0,
     gait: null, hitT: 0, hitSide: 0, lookYaw: 0, headYaw: 0, capeX: 0.12, phase0: r() * TAU, roll: 0, lastStep: 0, flashT: 0, sway: r() * TAU, clashT: 0, clashAtk: false, clashDx: 0, clashDz: 0,
     charge: null, chargeMove: 0, prevHold: false, releaseNow: false, aiHoldT: 0, prefBow: weapon === 'bow', swapT: 0, seenSwap: 0,
     mounted, trampleT: 0, passT: 0, sp01: 0,
+    arch: archKey, A, moveMul: A.move, dmgMul: A.dmg, reachBonus: A.reach, noShield: !A.shield, feint: 0,
     seenAtk: 0, seenHeavy: 0, seenDodge: 0,
     // NPC brain traits (seeded so a replay of the same seed fields the same temperaments)
-    skill: 0.35 + r() * 0.5, heavyBias: 0.12 + r() * 0.2, target: null, aiT: r() * 0.3, strafe: r() < 0.5 ? -1 : 1, strafeT: 0.5 + r(), swingT: 0.4 + r() * 0.5, holdBlock: 0, reactedTo: null, shotCd: 1 + r(),
+    skill: 0.35 + r() * 0.5, heavyBias: A.heavyBias * (0.7 + r() * 0.6), target: null, aiT: r() * 0.3, strafe: r() < 0.5 ? -1 : 1, strafeT: 0.5 + r(), swingT: 0.4 + r() * 0.5, holdBlock: 0, reactedTo: null, shotCd: 1 + r(),
     // guest-side interpolation targets
     tx: 0, tz: 0, tyaw: 0, tstate: 0, tmove: 0, rollT: 0, remoteSeen: false,
   };
@@ -16659,16 +16675,17 @@ function afMakeBody(entry, idx, r) {
   scene.add(group); group.userData.afBody = b;
   // floating name + health bar (a separate un-rotated tag so the bar can face the camera)
   const tag = new THREE.Group();
-  const nm = makeNameSprite(entry.name); nm.scale.set(Math.min(3.2, 1.1 + entry.name.length * 0.16), 0.36, 1); nm.position.y = 0.34; tag.add(nm);
+  const tagText = entry.kind === 'npc' && archKey !== 'swordsman' ? entry.name + ' · ' + A.label : entry.name;
+  const nm = makeNameSprite(tagText); nm.scale.set(Math.min(3.6, 1.1 + tagText.length * 0.16), 0.36, 1); nm.position.y = 0.34; tag.add(nm);
   const bar = makeHealthBar(parseInt(td.col.slice(1), 16)); bar.visible = true; bar.scale.setScalar(0.6); tag.add(bar);
   b.tag = tag; b.bar = bar; scene.add(tag);
   return b;
 }
 // sheathe one, draw the other: bow in the left hand, or sword and shield (the arm settles for a beat)
 function afSetWeapon(b, w) {
-  if (b.weapon === w) return;
+  if (b.weapon === w || (w === 'bow' && !b.parts.bow)) return;
   b.weapon = w; const p = b.parts, ranged = w === 'bow';
-  if (p.bow) p.bow.visible = ranged; if (p.sword) p.sword.visible = !ranged; if (p.shield) p.shield.visible = !ranged;
+  if (p.bow) p.bow.visible = ranged; if (p.sword) p.sword.visible = !ranged; if (p.shield) p.shield.visible = !ranged && !b.noShield;
   b.charge = null; b.atk = null; b.queued = false; b.swapT = 0.35; b.anim.ease = null; setPose(b.anim, ranged ? 'relax' : 'guard', 0.2);
 }
 function afStateCode(b) {
@@ -16826,7 +16843,7 @@ function afDrive(b, dt, sim) {
   const canMove = !b.atk || (!b.atk.heavy && !b.atk.bow && !b.atk.hit);
   if (b.mounted) { afRide(b, dt, I, mm, canMove, sim); afIntegrate(b, dt); afCommit(b, dt); return; }
   if (mm > 1e-3 && canMove) {
-    const spd = F.move * (b.blocking ? 0.4 : (b.atk || b.charge) ? 0.35 : 1) * Math.min(1, mm);
+    const spd = F.move * (b.moveMul || 1) * (b.blocking ? 0.4 : (b.atk || b.charge) ? 0.35 : 1) * Math.min(1, mm);
     afMove(b, ux, uz, spd, dt); b.moving = true;
     const g = b.gait = b.blocking || b.atk || b.charge ? GAIT.walk : GAIT.run;
     const fwdDot = ux * Math.sin(b.yaw) + uz * Math.cos(b.yaw);       // backpedaling plays the cycle in reverse
@@ -16859,7 +16876,7 @@ function afCape(b, p, dt, fwd, sp) {
 // RIDING: the stick's forward component is the throttle along the facing; momentum is dragged onto the facing
 // (hooves grip, no strafing); the gait clock runs on the horse; at speed the horse TRAMPLES foot soldiers it runs into.
 function afRide(b, dt, I, mm, canMove, sim) {
-  const F = AF_F, top = F.move * F.horseSpeed, sp = Math.hypot(b.vx, b.vz), sp01 = clamp(sp / top, 0, 1);
+  const F = AF_F, top = F.move * F.horseSpeed * (b.moveMul || 1), sp = Math.hypot(b.vx, b.vz), sp01 = clamp(sp / top, 0, 1);
   b.sp01 = sp01; b.parts.mount.userData.rig.speed01 = sp01;
   const fx = Math.sin(b.yaw), fz = Math.cos(b.yaw);
   const thr = mm > 1e-3 ? clamp((I.mx * fx + I.mz * fz) / Math.max(mm, 1e-3) * Math.min(1, mm), -0.45, 1) : 0;
@@ -16903,8 +16920,8 @@ function afRelease(b, k) {
   b.blocking = false;
 }
 function afStrike(b, heavy, k) {
-  const F = AF_F, w = k || 0, reach = lerp(F.reach, F.reach * 1.25, w) + (b.mounted ? F.horseReach : 0), fdx = Math.sin(b.yaw), fdz = Math.cos(b.yaw), cone = lerp(F.cone, 0.1, w);
-  const shock = b.mounted ? 1 + MOUNT.chargeDmg * b.sp01 : 1;   // a blow at full tilt lands harder
+  const F = AF_F, w = k || 0, reach = lerp(F.reach, F.reach * 1.25, w) + (b.mounted ? F.horseReach : 0) + (b.reachBonus || 0), fdx = Math.sin(b.yaw), fdz = Math.cos(b.yaw), cone = lerp(F.cone, 0.1, w);
+  const shock = (b.mounted ? 1 + MOUNT.chargeDmg * b.sp01 : 1) * (b.dmgMul || 1);   // a blow at full tilt lands harder; a brute's lands harder still
   for (const o of AF.bodies) {
     if (o.dead || o.team === b.team || o === b) continue;
     const dx = o.x - b.x, dz = o.z - b.z, dd = Math.hypot(dx, dz); if (dd > reach) continue;
@@ -17110,25 +17127,35 @@ function afThink(b, dt) {
     const canShoot = b.shotCd <= 0 && !busy;
     if (d < 7) { I.mx = (-ux + sx) * 0.7; I.mz = (-uz + sz) * 0.7; if (canShoot && d > 3) { b.aiHoldT = 0.3; b.shotCd = 1.1 + Math.random() * 0.8; } } // give ground — but a swordsman who keeps coming gets shot in the face
     else if (d > 22) { I.mx = ux + sx; I.mz = uz + sz; }
-    else { I.mx = tx * 0.45 + sx; I.mz = tz * 0.45 + sz; if (canShoot) { b.aiHoldT = 0.35 + b.skill * 0.4; b.shotCd = 1.3 + Math.random() * 1.2 * (1.3 - b.skill * 0.5); } } // a longer draw for the better archer
+    else { I.mx = tx * 0.45 + sx; I.mz = tz * 0.45 + sz; if (canShoot) { b.aiHoldT = 0.35 + b.skill * 0.4; b.shotCd = 1.7 + Math.random() * 1.2 * (1.3 - b.skill * 0.5); } } // a longer draw for the better archer
     return;
   }
   // hurt and pressed: back off toward the team, guard up, and let the poise come back
   if (b.retreatT > 0) { b.retreatT -= dt; I.mx = -ux * 0.9 + sx; I.mz = -uz * 0.9 + sz; I.block = d < 4; return; }
-  if (b.hp < b.maxHp * 0.3 && b.stagger <= 0) { let near = 0; for (const o of AF.bodies) if (!o.dead && o.team !== b.team && Math.hypot(o.x - b.x, o.z - b.z) < 6) near++; if (near >= 2 && Math.random() < dt * 0.9) { b.retreatT = 1.4; return; } }
+  if (b.hp < b.maxHp * 0.3 && b.stagger <= 0 && b.arch !== 'brute') { let near = 0; for (const o of AF.bodies) if (!o.dead && o.team !== b.team && Math.hypot(o.x - b.x, o.z - b.z) < 6) near++; if (near >= 2 && Math.random() < dt * 0.9) { b.retreatT = 1.4; return; } }
   // a swing is coming at me: a skilled fighter blocks it or rolls out of it (once per swing)
   const facingMe = ((b.x - t.x) * Math.sin(t.yaw) + (b.z - t.z) * Math.cos(t.yaw)) / d;
   if (t.mounted && !b.mounted && t.sp01 > 0.5 && d < 7 && facingMe > 0.6 && b.reactedTo !== t && Math.random() < b.skill * 0.9) { b.reactedTo = t; I.dodge++; I.mx = tx; I.mz = tz; return; } // a charge is coming: roll out of its line
   const incoming = t.charge || (t.atk && !t.atk.hit && !t.atk.bow ? t.atk : null);    // a raised arm, loading — or the swing itself
   if (incoming && d < 3.8 && facingMe > 0.3 && b.reactedTo !== incoming) {
     b.reactedTo = incoming;
-    const r = Math.random();
-    if (t.charge && t.charge.heavyPose || (t.atk && t.atk.heavy)) { if (r < b.skill * 0.8) I.dodge++; }   // never block a loaded blow — roll
-    else if (r < b.skill * 0.35) b.holdBlock = (t.atk ? t.atk.wind : Math.max(0.1, F.chargeMax - t.charge.t)) + 0.25;   // guard up until the blow should land (a quick light often beats the reaction)
-    else if (r < b.skill * 0.5) I.dodge++;
+    const r = Math.random(), A = b.A || AF_ARCH.swordsman, sk = 0.7 + b.skill * 0.6;
+    if (t.charge && t.charge.heavyPose || (t.atk && t.atk.heavy)) { if (r < (A.dodge * 1.3 + A.block * 0.2) * sk) I.dodge++; }   // a loaded blow: roll (a guardsman may still trust the shield)
+    else if (r < A.block * sk) b.holdBlock = (t.atk ? t.atk.wind : Math.max(0.1, F.chargeMax - t.charge.t)) + 0.25;   // guard up until the blow should land (a quick light often beats the reaction)
+    else if (r < (A.block + A.dodge) * sk) I.dodge++;
   }
   if (b.holdBlock > 0) { b.holdBlock -= dt; I.block = true; }
-  const reach = F.reach, open = t.stagger > 0 || (t.atk && t.atk.hit) || t.flinch > 0 || (t.clashT > 0 && t.clashAtk);   // reeling, staggered, locked on my guard, or in his follow-through: punish
+  const A = b.A || AF_ARCH.swordsman;
+  if (A.wall) {                                            // the SHIELD WALL: a guardsman edges toward the nearest fellow guardsman and holds his guard between swings
+    let mate = null, md = 1e9; for (const o of AF.bodies) { if (o === b || o.dead || o.team !== b.team || !(o.A && o.A.wall)) continue; const dd = Math.hypot(o.x - b.x, o.z - b.z); if (dd < md) { md = dd; mate = o; } }
+    if (mate && md > 3.2) { I.mx += (mate.x - b.x) / md * 0.35; I.mz += (mate.z - b.z) / md * 0.35; }
+    if (d < 3.4 && b.cd > 0 && !b.atk && !b.charge) I.block = true;
+  }
+  if (b.feint) {                                           // the DUELIST's feint: load, cancel into a guard to bait the roll, then the real blow
+    if (b.feint === 1 && b.charge && b.charge.t > 0.22) { b.holdBlock = 0.12; b.feint = 2; }
+    else if (b.feint === 2 && b.holdBlock <= 0) { b.feint = 0; afAiSwing(b, false); b.cd = 0.5; }
+  }
+  const reach = F.reach + (b.reachBonus || 0), open = t.stagger > 0 || (t.atk && t.atk.hit) || t.flinch > 0 || (t.clashT > 0 && t.clashAtk);   // reeling, staggered, locked on my guard, or in his follow-through: punish
   if (b.waiting) {                                           // FLANK: orbit to the rear slot; commit only from behind
     const radius = 3.4, fromT = Math.atan2(b.x - t.x, b.z - t.z), err = angleDelta(fromT, b.slotAngle);
     const tang = (Math.sign(err) || 1) * clamp(Math.abs(err) * 1.6, 0, 1), rad = -clamp(d - radius, -1.2, 1.2);
@@ -17138,7 +17165,7 @@ function afThink(b, dt) {
     return;
   }
   if (d > reach * 0.9) {                                     // close in — a charge when far, a wary circling approach near contact
-    const circ = d < 4.5 ? 0.55 : 0.12, pace = d > 7 ? 1 : 0.85;
+    const circ = d < 4.5 ? A.circ : 0.12, pace = d > 7 ? 1 : 0.85;
     I.mx = (ux + tx * circ) * pace + sx * 1.2; I.mz = (uz + tz * circ) * pace + sz * 1.2;
     if (open && d <= reach * 1.3 && b.cd <= 0 && !busy) { afAiSwing(b, false); b.cd = 0.4; }   // he's open and a lunge covers the gap
     return;
@@ -17148,11 +17175,12 @@ function afThink(b, dt) {
   if (b.cd <= 0) {
     const guarded = t.blocking && facingMe > 0.15;
     if (guarded) { if (Math.random() < 0.55 + b.skill * 0.3) afAiSwing(b, true); else { I.mx = tx * 0.9 + sx; I.mz = tz * 0.9 + sz; b.cd = 0.25; return; } } // crack it or go around it
+    else if (A.feint && Math.random() < A.feint && !b.feint) { b.feint = 1; b.aiHoldT = 0.6; }               // the duelist sells a swing he won't throw
     else afAiSwing(b, Math.random() < b.heavyBias);
     b.cd = (0.3 + Math.random() * 0.45) * (1.3 - b.skill * 0.5);
   } else {                                                   // between blows: keep the blade's length, slide sideways
     const back = d < reach * 0.6 ? -0.5 : 0;
-    I.mx = tx * 0.4 + ux * back + sx; I.mz = tz * 0.4 + uz * back + sz;
+    I.mx = tx * 0.4 * (0.5 + A.circ) + ux * back + sx; I.mz = tz * 0.4 * (0.5 + A.circ) + uz * back + sz;
   }
 }
 
@@ -17707,6 +17735,7 @@ function afResize(L) {
   for (const row of L.slots) for (const s of row) if (s) seated.push(s);
   if (!seated.length) seated.push({ kind: 'host', name: L.host, peer: null, weapon: L.weapon });
   L.slots = []; for (let t = 0; t < L.teams; t++) { const row = []; for (let s = 0; s < L.per; s++) row.push(null); L.slots.push(row); }
+  if (L.role === 'host') afRollNpcMix(L);
   for (const p of seated) afPlace(L, p, p.pref);
 }
 function afPlace(L, p, prefTeam) {                          // first free seat: the preferred team, else the team with the fewest humans
@@ -17715,6 +17744,10 @@ function afPlace(L, p, prefTeam) {                          // first free seat: 
   order.sort((a, b) => (a === prefTeam ? -1 : b === prefTeam ? 1 : 0) || (L.slots[a].filter(Boolean).length - L.slots[b].filter(Boolean).length));
   for (const t of order) { const i = L.slots[t].indexOf(null); if (i >= 0) { L.slots[t][i] = p; p.pref = t; return true; } }
   return false;
+}
+function afRollNpcMix(L) {                                 // who the fighters of the vale will be, seat by seat (rolled by the host, shown to all)
+  const r = _mulberry32((L.mixSeed = L.mixSeed || ((Math.random() * 0xffffffff) >>> 0)) ^ (L.teams * 977 + L.per * 31));
+  L.npcArch = []; for (let t = 0; t < L.teams; t++) { const row = []; for (let s = 0; s < L.per; s++) row.push(afRollArch(r, L.per >= 2)); L.npcArch.push(row); }
 }
 function afSeat(peer, name) { const L = AF.lobby; if (afFindSeat(peer)) return; afPlace(L, { kind: 'player', name: String(name || 'Ally').slice(0, 24), peer, weapon: 'sword' }); L.invites.set(name, 'joined'); }
 function afUnseat(peer) { const L = AF.lobby; for (const row of L.slots) for (let i = 0; i < row.length; i++) if (row[i] && row[i].peer === peer) { L.invites.delete(row[i].name); row[i] = null; } }
@@ -17745,11 +17778,11 @@ function afOpenLobby(role, beacon) {
 function afLobbyBroadcast() {
   const L = AF.lobby; if (!L || L.role !== 'host' || !window.coop || !window.coop.connected) return;
   window.coop.updateBeacon({ arena: true, host: L.host, teams: L.teams, per: L.per });
-  window.coop.send({ k: 'lobby', teams: L.teams, per: L.per, time: L.time, weather: L.weather, pit: L.pit, host: L.host, slots: L.slots.map(row => row.map(s => s ? { kind: s.kind, name: s.name, peer: s.peer, weapon: s.weapon } : null)) });
+  window.coop.send({ k: 'lobby', teams: L.teams, per: L.per, time: L.time, weather: L.weather, pit: L.pit, npcArch: L.npcArch, host: L.host, slots: L.slots.map(row => row.map(s => s ? { kind: s.kind, name: s.name, peer: s.peer, weapon: s.weapon } : null)) });
 }
 function afLobbyApply(d) {                                   // guest: mirror the host's lobby
   const L = AF.lobby; if (!L || L.role !== 'guest') return;
-  L.teams = d.teams; L.per = d.per; L.host = d.host || L.host; L.slots = d.slots; L.time = d.time || 'day'; L.weather = d.weather || 'clear'; L.pit = d.pit || 'wide';
+  L.teams = d.teams; L.per = d.per; L.host = d.host || L.host; L.slots = d.slots; L.time = d.time || 'day'; L.weather = d.weather || 'clear'; L.pit = d.pit || 'wide'; if (d.npcArch) L.npcArch = d.npcArch;
   const me = afFindSeat(window.coop.id); if (me) L.weapon = me.weapon || 'sword';
   afLobbyRender();
 }
@@ -17769,8 +17802,8 @@ function afLobbyRender() {
     const td = AF_TEAMS[t], free = row.indexOf(null) >= 0, mine = !!me && row.indexOf(me) >= 0;
     return '<div class="al-team" style="--tc:' + td.col + '"><div class="al-tname"><span>' + td.name + '</span>' + (!host && free && !mine ? '<button data-team="' + t + '">join</button>' : '') + '</div>' +
       (L.per > 8 ? row.filter(Boolean) : row).map(s => s ? '<div class="al-slot ' + (s === me ? 'you' : 'player') + '"><span>' + (s === me ? 'You' : s.name) + '</span><span class="al-tag">' + (s.weapon === 'bow' ? '🏹' : s.weapon === 'horse' ? '🐎' : '🗡') + (s.kind === 'host' && s !== me ? ' host' : '') + '</span></div>'
-                        : '<div class="al-slot npc"><span>fighter of the vale</span><span class="al-tag">npc</span></div>').join('') +
-      (L.per > 8 ? '<div class="al-slot npc"><span>' + row.filter(x => !x).length + ' fighters of the vale</span><span class="al-tag">npc</span></div>' : '') + '</div>';
+                        : null).map((html, i) => html != null ? html : '<div class="al-slot npc"><span>' + ((L.npcArch && L.npcArch[t] && L.npcArch[t][i]) || 'swordsman') + ' of the vale</span><span class="al-tag">npc</span></div>').join('') +
+      (L.per > 8 ? '<div class="al-slot npc"><span>' + afMixSummary(L, t) + '</span><span class="al-tag">npc</span></div>' : '') + '</div>';
   }).join('');
   for (const btn of grid.querySelectorAll('button[data-team]')) btn.onclick = () => { if (window.coop) window.coop.send({ k: 'team', t: parseInt(btn.getAttribute('data-team'), 10) }); };
   // who's online
@@ -17793,6 +17826,12 @@ function afLobbyRender() {
   const pitNote = afPitFor(L.pit, L.per) !== L.pit ? ' · ' + afPitFor(L.pit, L.per) + ' pit' : '';
   startBtn.textContent = (humans > 1 ? 'Start Fight · ' + humans + ' players + ' + (total - humans) + ' NPCs' : 'Start Fight · you + ' + (total - 1) + ' NPCs') + pitNote;
   document.getElementById('al-back').textContent = host ? 'Back' : 'Leave';
+}
+function afMixSummary(L, t) {                              // "12 swordsmen, 4 brutes, …" for the empty seats of a big team
+  const counts = {}; const row = L.slots[t] || [];
+  row.forEach((s, i) => { if (s) return; const k = (L.npcArch && L.npcArch[t] && L.npcArch[t][i]) || 'swordsman'; counts[k] = (counts[k] || 0) + 1; });
+  const plural = { swordsman: 'swordsmen', brute: 'brutes', duelist: 'duelists', guardsman: 'guardsmen', archer: 'archers', rider: 'riders' };
+  return Object.keys(counts).map(k => counts[k] + ' ' + (counts[k] === 1 ? k : plural[k])).join(', ') || 'no NPCs';
 }
 function afInvite(name) {
   name = String(name || '').trim(); const L = AF.lobby; if (!name || !L || L.role !== 'host') return;
@@ -17836,7 +17875,8 @@ function afStartFight() {
     const seat = L.slots[t][s];
     if (seat) { roster.push({ t, s, name: seat.name, kind: seat.kind, peer: seat.peer, weapon: seat.weapon || 'sword' }); used.add(seat.name); continue; }
     let nm; do { nm = pick(GIVEN_NAMES) + (r() < 0.35 ? ' ' + pick(BYNAMES) : ''); } while (used.has(nm)); used.add(nm);
-    const wr = r(); roster.push({ t, s, name: nm, kind: 'npc', peer: null, weapon: wr < 0.2 ? 'bow' : wr < 0.36 && L.per >= 2 ? 'horse' : 'sword' }); // a fifth archers, a sixth riders
+    const arch = (L.npcArch && L.npcArch[t] && L.npcArch[t][s]) || 'swordsman';
+    roster.push({ t, s, name: nm, kind: 'npc', peer: null, arch, weapon: AF_ARCH[arch].weapon === 'bow' ? 'bow' : AF_ARCH[arch].weapon === 'horse' ? 'horse' : 'sword' });
   }
   const humans = roster.filter(x => x.kind === 'player').length;
   AF.role = humans ? 'host' : 'solo';

@@ -127,6 +127,15 @@ arc, knockback, poise damage, the lunge and the slash arc all scale with `k`; pa
 a heavy (cracks guards, resets the combo). A HUD meter under your fighter shows the load and turns red
 at the heavy line. NPCs load their swings the same way, so a long visible hold is a heavy you can roll from.
 
+**Fighters of the vale** (`AF_ARCH`): the NPCs come in six archetypes, each a build (rig, weapon, size),
+a body (health, poise, speed, damage) and a temperament. *Swordsman*: sword and shield, the baseline.
+*Brute*: a big man with a two-hander — more health and poise, slower, hits harder, loads almost every
+swing, never blocks, rarely rolls, never retreats. *Duelist*: lean and quick, no shield — light chains,
+rolls rather than blocks, circles, and **feints** (loads, cancels into a guard to bait your roll, then
+strikes). *Guardsman*: a heavy shield and a thick hide — keeps his guard up between swings, ripostes
+after a lock, and edges toward fellow guardsmen to form a **wall**. *Archer* and *rider* as above. The
+host's lobby pre-rolls the mix seat by seat and shows it to everyone; name tags carry the archetype.
+
 **Big fights**: a team musters as a rank-and-file block (`afSlotOffset`), the pit grows to fit the
 roster (`afPitFor`), the clock doubles, and above 24 bodies only the humans wear the hero dressing
 and name tags show only up close, so a hundred fighters stay cheap (about 1 ms of sim per tick).

@@ -16458,9 +16458,9 @@ function afBuildGround() {
   m.receiveShadow = true; return m;
 }
 function afBuildSky(zenHex, midHex, horHex) {              // a gradient dome: haze at the horizon rising into the zenith colour
-  const geo = new THREE.SphereGeometry(230, 24, 12), p = geo.attributes.position, col = new Float32Array(p.count * 3), c = new THREE.Color();
+  const RS = Math.max(230, AF_F.radius * 4.2), geo = new THREE.SphereGeometry(RS, 24, 12), p = geo.attributes.position, col = new Float32Array(p.count * 3), c = new THREE.Color(); // the dome must clear the ground plane of a colossal pit
   const zen = new THREE.Color(zenHex), mid = new THREE.Color(midHex), hor = new THREE.Color(horHex);
-  for (let i = 0; i < p.count; i++) { const t = clamp(p.getY(i) / 230, -1, 1); if (t < 0.18) c.copy(hor).lerp(mid, clamp(t / 0.18, 0, 1)); else c.copy(mid).lerp(zen, clamp((t - 0.18) / 0.6, 0, 1)); col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b; }
+  for (let i = 0; i < p.count; i++) { const t = clamp(p.getY(i) / RS, -1, 1); if (t < 0.18) c.copy(hor).lerp(mid, clamp(t / 0.18, 0, 1)); else c.copy(mid).lerp(zen, clamp((t - 0.18) / 0.6, 0, 1)); col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b; }
   geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
   const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false, depthWrite: false }));
   m.renderOrder = -10; return m;
@@ -16480,7 +16480,8 @@ function afApplyTime() {
   const skyC = T.sky.map(h => new THREE.Color(h)); if (rain) for (const c of skyC) c.lerp(new THREE.Color(0x6e7681), 0.55);
   AF.sky = afBuildSky(skyC[0].getHex(), skyC[1].getHex(), skyC[2].getHex()); scene.add(AF.sky);
   const fogC = new THREE.Color(T.fog[0]); if (rain) fogC.lerp(new THREE.Color(0x707884), 0.5);
-  scene.fog = new THREE.Fog(fogC.getHex(), rain ? T.fog[1] * 0.7 : T.fog[1], rain ? T.fog[2] * 0.8 : T.fog[2]); scene.background = fogC;
+  const fk = Math.max(1, AF_F.radius / 50);                // a bigger pit pushes the fog out with it
+  scene.fog = new THREE.Fog(fogC.getHex(), (rain ? T.fog[1] * 0.7 : T.fog[1]) * fk, (rain ? T.fog[2] * 0.8 : T.fog[2]) * fk); scene.background = fogC;
   renderer.toneMappingExposure = T.exp;
   if (AF_POST.on) AF_POST.bright.uniforms.thr.value = T.thr;
   if (AF.sunSpr) { AF.sunSpr.visible = T.sunSpr > 0 && !rain; AF.sunSpr.position.copy(sun.position).normalize().multiplyScalar(205); AF.sunSpr.scale.set(T.sunSpr, T.sunSpr, 1); AF.sunSpr.material.color.setHex(AF.cfg.time === 'dusk' ? 0xffb070 : 0xffffff); }
@@ -16718,7 +16719,7 @@ function afCommit(b, dt) {
     if (b.moving && b.dodgeT <= 0) b.roll = Math.sin(b.phase) * 0.035; else if (b.moving || b.atk || b.dodgeT > 0) b.roll = 0;
     if (b.moving && b.dodgeT <= 0) {                         // a footfall: dust at the planted foot (near the camera only)
       const step = Math.floor(b.phase / Math.PI);
-      if (step !== b.lastStep) { b.lastStep = step; if (camera.position.distanceToSquared(b.group.position) < 900 && sp > 3) spawnSparks(tmpV.set(b.x, afY(b.x, b.z) + 0.15, b.z), 0xc9b79a, 2); }
+      if (step !== b.lastStep) { b.lastStep = step; if (sp > 3 && camera.position.distanceToSquared(b.group.position) < (AF.bodies.length > AF_LIM.heroCap ? 120 : 900)) spawnSparks(tmpV.set(b.x, afY(b.x, b.z) + 0.15, b.z), 0xc9b79a, AF.bodies.length > AF_LIM.heroCap ? 1 : 2); }
     }
   }
   const y = afY(b.x, b.z) + (b.moving && !b.dead && !b.mounted ? Math.abs(Math.cos(b.phase)) * g.bob : 0);

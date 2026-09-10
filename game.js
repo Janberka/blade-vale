@@ -564,6 +564,27 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
   eyeSlit.position.set(0, 1.26, 0.235); upperBody.add(eyeSlit);
   const noseSlit = boxMesh(0.05, 0.16, 0.06, slitM);
   noseSlit.position.set(0, 1.17, 0.24); upperBody.add(noseSlit);
+  // HERO dressing (opts.hero — the arena fighters / a featured figure, never the 1000-man hosts):
+  // the whole head rides a pivot so it can LOOK at a foe, a plume in the team colour crowns the helm,
+  // a tabard carries the team cloth on the chest, and a cape hangs off the shoulders to flare on the run.
+  let headPivot = null, cape = null;
+  if (opts.hero) {
+    headPivot = new THREE.Group(); headPivot.position.y = 0.98; upperBody.add(headPivot);
+    for (const m of [head, helm, crest, eyeSlit, noseSlit]) { upperBody.remove(m); m.position.y -= 0.98; headPivot.add(m); }
+    const plume = softCapsule(0.07, 0.42, mat(opts.plume != null ? opts.plume : palette.cloth, { shared: false }), 6);
+    plume.position.set(0, 0.62, -0.14); plume.rotation.x = 0.6; headPivot.add(plume);
+    const tabard = boxMesh(0.42, 0.5, 0.05, cloth); tabard.position.set(0, 0.42, 0.36); upperBody.add(tabard);
+    const trim = boxMesh(0.44, 0.06, 0.06, accent); trim.position.set(0, 0.16, 0.37); upperBody.add(trim);
+    cape = new THREE.Group(); cape.position.set(0, 0.84, -0.3); cape.rotation.x = 0.12; upperBody.add(cape); // +x swings the hem BACK (away from +Z, the facing)
+    // the cape is a CHAIN of hinged panels (cape.userData.segs); the arena runs a spring sim on the hinges so it hangs, flares and ripples
+    const segs = [], NSEG = 5, segH = 1.3 / NSEG; let parent = cape;
+    for (let i = 0; i < NSEG; i++) {
+      const sg = new THREE.Group(); sg.position.y = i === 0 ? 0 : -segH; parent.add(sg);
+      const panel = boxMesh(0.8 - i * 0.03, segH * 1.08, 0.035, cloth); panel.position.y = -segH / 2; sg.add(panel); if (i < 3) casters.push(panel);
+      segs.push(sg); parent = sg;
+    }
+    cape.userData.segs = segs;
+  }
 
   // --- Arms: shoulder pivot → upper arm → elbow pivot → forearm → hand ---
   function makeArm(side) {
@@ -669,7 +690,7 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
   return {
     group: g,
     parts: {
-      torso, head, upperBody, sword, bow,
+      torso, head, upperBody, sword, bow, headPivot, cape,
       shoulderL: armL.shoulder, elbowL: armL.elbow,
       shoulderR: armR.shoulder, elbowR: armR.elbow,
       hipL: legL.hip, kneeL: legL.knee,
@@ -902,7 +923,7 @@ function setPose(anim, name, dur = 0.15) {
 }
 function updateAnimator(anim, dt) {
   anim.t = Math.min(anim.t + dt, anim.dur);
-  const k = easeOut(anim.t / anim.dur);
+  const k = (anim.ease || easeOut)(anim.t / anim.dur);
   const c = anim.cur, p = anim.parts;
   for (const key in anim.target) c[key] = lerp(anim.start[key] ?? 0, anim.target[key], k);
   // z-channels and twist are authored for a +X sword arm; the rig mirrors to -X,
@@ -1898,6 +1919,7 @@ addEventListener('keydown', (e) => {
 });
 addEventListener('keyup', (e) => { keys[e.code] = false; });
 canvas.addEventListener('mousedown', (e) => {
+  if (AF.on) return;                            // the arena listens to pointerdown itself
   if (commandPanelOpen) return;
   // Locked = combat (clicks strike). Free cursor = navigate (clicks march, handled by the map listener) —
   // EXCEPT in a live in-place fight, where clicks always strike even before the pointer re-locks.
@@ -1920,6 +1942,7 @@ if (TOUCH) {
   let tjAnchor = { x: 0, y: 0 }, lookLast = { x: 0, y: 0 };
 
   function controllable() {
+    if (AF.on) return { inMap: false, inBattle: true, field: false, any: !!(AF.me && !AF.me.dead && AF.phase !== 'over') }; // the pit: stick + ATK/HVY/BLOCK/DODGE while you stand
     const field = mode === 'map' && mapFieldMode && !mapCmdMode && !encounter; // on-foot character roam = battle-like
     const inMap = mode === 'map' && !encounter && !field;                       // strategic banner roam
     const inBattle = field; // field mode IS the one combat mode
@@ -2036,6 +2059,7 @@ function toggleWeapon() {
   setPlayerWeaponVisual();
 }
 function requestAttack() {
+  if (AF.on) { AF.locIn.atk++; return; }        // arena: touch ATK button (desktop clicks go through pointerdown)
   if (!gameRunning || !player.alive || player.rolling || player.heavy || musterOpen || encounter) return;
   if (player.weapon === 'bow') { startBowShot(); return; }
   if (player.attacking) { player.queued = true; return; }
@@ -2045,6 +2069,7 @@ function requestAttack() {
   startAttack();
 }
 function requestHeavyAttack() {
+  if (AF.on) { AF.locIn.heavy++; return; }      // arena: touch HVY button
   if (!gameRunning || !player.alive || player.rolling || player.attacking || player.heavy || musterOpen || encounter) return;
   if (player.weapon !== 'sword' || player.cooldown > 0) return;
   if (player.stamina < FEEL.heavyStamina) return; // a heavy is a real commitment
@@ -2157,6 +2182,7 @@ function startAttack() {
   showCombo(player.combo);
 }
 function requestDodge() {
+  if (AF.on) { AF.locIn.dodge++; return; }      // arena: Space / touch DODGE
   if (!gameRunning || !player.alive || player.rolling) return;
   if (player.stamina < 30) return;
   player.stamina -= 30;
@@ -10900,6 +10926,7 @@ function updateDbgHud() {
 let last = performance.now();
 let frameNo = 0;
 function loop(now) {
+  if (AF.on) return afFrame(now);       // arena fights: the pit runs its own sim/net/camera (see ARENA FIGHTS)
   if (BATTLE.on) return battleFrame(now); // battle-editor mode: two armies fighting in a valley, own sim + orbit
   if (MARCH.on) return marchFrame(now);  // march-editor mode: two hosts patrol real towns/roads — tune how they WALK
   if (EDIT.on) return editFrame(now);   // object-editor mode: orbit + render one model, skip the game sim
@@ -12727,6 +12754,7 @@ function refreshAuthGate() {
     document.getElementById('auth-name').textContent = sess.username;
     if (note) note.innerHTML = 'Ready. <b>Enter the Vale</b> to take command — press <b>U</b> in game to switch or raise new characters.';
     if (startBtn) startBtn.classList.remove('hidden');
+    afTitlePresence(); // arena: announce yourself so challenges can find you (and finish a pending join)
   } else {
     form.style.display = '';
     who.classList.add('hidden');
@@ -16339,6 +16367,1384 @@ BV.forgeSelect = (on) => { if (on === false) forgeCancelSelect(); else forgeEnte
 BV.forgeSnapshot = () => FORGE.session ? JSON.parse(JSON.stringify(FORGE.session.snap)) : null;
 BV.forgeFromSnap = (snap) => { if (!FORGE.on && snap && snap.bounds) forgeEnterSession(JSON.parse(JSON.stringify(snap))); return BV.forgeStatus(); }; // enter from a hand-built snapshot — proves the snap is honest plain data
 
+/* ============================================================================
+   ARENA FIGHTS — the pit. From the title screen: pick how many TEAMS and how many FIGHTERS each,
+   invite players who are online (they get a challenge prompt wherever they are — title screen or
+   out in the vale), and every seat nobody takes is filled by an NPC fighter. Then everyone drops
+   into a walled arena and the last team standing wins.
+   Built from the same primitives as the battle editor (buildHumanoid, the shared pose system,
+   setTint, arrows) but it is NOT the army sim: no divisions, no commanders, no morale — a brawl
+   of individuals with the full personal moveset: light combo, heavy, block (heavies break guard),
+   dodge-roll with i-frames, sword or bow.
+   One CONTROL routine drives every fighter (afDrive) from an INPUT record {mx,mz,yaw,atk,heavy,
+   dodge,block}. Your keyboard/mouse writes yours, the NPC brain (afThink) writes its own, and a
+   remote player's arrives over the co-op socket — so humans and NPCs are the same fighter class.
+   NETWORK: host-authoritative over the /coop relay. The host runs the sim and broadcasts 20 Hz
+   snapshots (positions, hp, animation state, hit/arrow events); guests send their input record
+   at 20 Hz, drive their OWN body locally for latency-free movement (softly corrected toward the
+   host's truth), and interpolate everyone else. Every client builds the same arena from the
+   shared seed + roster, so bodies are addressed by roster index. If the host falls off, the fight
+   ends; if a guest drops, an NPC takes over their fighter mid-swing.
+   ?arena opens the lobby straight away. Hooks: BV.arena / BV.arenaStatus / BV.arenaStep.
+   ============================================================================ */
+const AF_TEAMS = [
+  { name: 'AZURE',   col: '#6fa8ff', pal: { skin: 0xe0b088, cloth: 0x2f6fd0, accent: 0x1d3f7a, blade: 0xeaf2ff } },
+  { name: 'CRIMSON', col: '#ff7d6f', pal: { skin: 0xd8a878, cloth: 0xc23a2f, accent: 0x6e1a15, blade: 0xfff0e6 } },
+  { name: 'VERDANT', col: '#7fd67f', pal: { skin: 0xdcae80, cloth: 0x2f8f4a, accent: 0x1a4f2a, blade: 0xeaf2ff } },
+  { name: 'AMBER',   col: '#ffc857', pal: { skin: 0xe0b088, cloth: 0xd9932a, accent: 0x7a4a10, blade: 0xfff0e6 } },
+  { name: 'VIOLET',  col: '#c77dff', pal: { skin: 0xd8a878, cloth: 0x7a3fbf, accent: 0x3f1f66, blade: 0xeaf2ff } },
+  { name: 'IVORY',   col: '#f0ece0', pal: { skin: 0xe0b088, cloth: 0xd8d2c0, accent: 0x6b665a, blade: 0xeaf2ff } },
+];
+const AF_LIM = { teamsMin: 2, teamsMax: 6, perMin: 1, perMax: 8 };
+// the feel of the pit — one table, like BATTLE_MELEE
+const AF_F = { hp: 100, move: 5.6, reach: 2.5, cone: 0.3, radius: 34, timeLimit: 120, countdown: 3,
+  light: { wind: 0.24, strike: 0.10, rec: 0.28, dmg: [10, 15] },
+  heavy: { wind: 0.60, strike: 0.12, rec: 0.50, dmg: [24, 32] },
+  bow:   { wind: 0.50, strike: 0.06, rec: 0.40, dmg: [14, 20], speed: 42, range: 44 },
+  blockMul: 0.15, guardBreak: 0.75, flinch: 0.18, deathDur: 1.1,
+  knock: 6, heavyKnock: 14, lightPoise: 20, heavyPoise: 40, maxPoise: 45, poiseRegen: 8, staggerDur: 1.2, executeMul: 2.2, // three quick lights, or a heavy on a chipped guard, break poise
+  accel: 7.13, friction: 0.0008, lunge: 2, heavyLunge: 3,      // velocity model borrowed from the field fighters (terminal speed ≈ move)
+  dodge: { dur: 0.40, speed: 13, iframes: 0.32, cd: 0.55 } };
+const AF_TEAM_HEX = AF_TEAMS.map(t => parseInt(t.col.slice(1), 16));
+const AF_NET = { snapDt: 1 / 20, inDt: 1 / 20 };
+const AF = {
+  on: false, role: 'solo',                 // 'solo' (no peers) | 'host' | 'guest'
+  phase: 'lobby',                          // 'lobby' | 'countdown' | 'fight' | 'over'
+  bodies: [], arrows: [], ground: null, props: [], seed: 1, cfg: { teams: 2, per: 3 }, roster: [],
+  me: null, keys: new Set(), locIn: { mx: 0, mz: 0, yaw: 0, atk: 0, heavy: 0, dodge: 0, block: false },
+  cam: { yaw: 0, pitch: 0.3, dist: 6.5 }, orbit: { theta: 0.4, phi: 0.9, r: 62, drag: false },
+  last: 0, t: 0, countdown: 0, over: false, winner: -1, standings: null, hudEl: null, events: [],
+  inputs: new Map(), snapAcc: 0, inAcc: 0, lastSnap: 0, installed: false, log: [], torches: [], motes: null, hurt: 0, fov: CAM_BASE_FOV,
+  sky: null, stars: null, rain: null, sunSpr: null, crowd: [], roar: 0, waveT: 0, waveAng: 0, nextWave: 0,
+  lobby: null, online: [], whoTimer: null, invite: null, pendingRoom: null,
+};
+BV.AF = AF;
+
+// ---- the pit: a seeded, gently rolling floor inside a ring wall; the same on every client ----
+function afY(x, z) {
+  const T = AF.terr; if (!T) return 0;
+  const d = Math.hypot(x, z), rim = clamp((d - AF_F.radius) / 30, 0, 1);
+  let h = 0.28 * Math.sin(x * 0.11 + T.p1) * Math.cos(z * 0.09 + T.p2) + 0.16 * Math.sin((x + z) * 0.17 + T.p3);
+  h += rim * rim * (6 + 5 * Math.sin(Math.atan2(z, x) * 3 + T.p1));   // the ground climbs into a bowl beyond the wall
+  return h;
+}
+function afBuildGround() {
+  const size = 200, geo = new THREE.PlaneGeometry(size, size, 120, 120); geo.rotateX(-Math.PI / 2);
+  const p = geo.attributes.position, col = new Float32Array(p.count * 3), c = new THREE.Color();
+  const sand = new THREE.Color(0xb89a6c), sandDk = new THREE.Color(0x8f7650), churn = new THREE.Color(0x745538), grass = new THREE.Color(0x4f7a2e), grassDk = new THREE.Color(0x3c5f23), stone = new THREE.Color(0x77726a);
+  const n = (x, z) => 0.5 + 0.25 * Math.sin(x * 0.37 + AF.terr.p1) * Math.cos(z * 0.41 + AF.terr.p2) + 0.25 * Math.sin((x - z) * 0.23 + AF.terr.p3); // 0..1 patches
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i), z = p.getZ(i), y = afY(x, z); p.setY(i, y);
+    const d = Math.hypot(x, z), k = n(x, z);
+    if (d < AF_F.radius - 1) {
+      c.copy(sand).lerp(sandDk, k * 0.8);
+      const ring = clamp(1 - Math.abs(d - 11) / 13, 0, 1); c.lerp(churn, ring * 0.7 * (0.5 + k * 0.7)); // the trampled middle where the fights happen
+      if (((x * 12.9898 + z * 78.233) * 43758.5453) % 1 < 0.06) c.lerp(sandDk, 0.6);                     // scattered darker grains
+      if (d > AF_F.radius - 4) c.lerp(stone, (d - (AF_F.radius - 4)) / 3 * 0.5);
+    } else if (d < AF_F.radius + 2) c.copy(stone).lerp(sandDk, 0.2 * k);
+    else c.copy(grass).lerp(grassDk, k).lerp(stone, clamp((y - 3) / 8, 0, 0.6));
+    col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3)); geo.computeVertexNormals();
+  const m = new THREE.Mesh(geo, new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: true, shininess: 2, specular: 0x000000 }));
+  m.receiveShadow = true; return m;
+}
+function afBuildSky(zenHex, midHex, horHex) {              // a gradient dome: haze at the horizon rising into the zenith colour
+  const geo = new THREE.SphereGeometry(230, 24, 12), p = geo.attributes.position, col = new Float32Array(p.count * 3), c = new THREE.Color();
+  const zen = new THREE.Color(zenHex), mid = new THREE.Color(midHex), hor = new THREE.Color(horHex);
+  for (let i = 0; i < p.count; i++) { const t = clamp(p.getY(i) / 230, -1, 1); if (t < 0.18) c.copy(hor).lerp(mid, clamp(t / 0.18, 0, 1)); else c.copy(mid).lerp(zen, clamp((t - 0.18) / 0.6, 0, 1)); col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b; }
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false, depthWrite: false }));
+  m.renderOrder = -10; return m;
+}
+// the light of the hour: sun height/colour, sky dome, fog, torches, exposure — and the weather on top
+const AF_TIMES = {
+  day:   { sun: [48, 70, 30], sunCol: 0xfff0d0, sunI: 1.25, hemi: [0xbfd8ff, 0x6a5a44, 0.7], sky: [0x3f78bd, 0x8fb6e0, 0xe9dfd0], fog: [0xe9dfd0, 110, 230], exp: 0.92, torch: 0, flame: 1, thr: 0.66, sunSpr: 46 },
+  dusk:  { sun: [70, 16, -34], sunCol: 0xffa060, sunI: 0.95, hemi: [0x6a5a8a, 0x2a2020, 0.5], sky: [0x2a2f5a, 0x8a4a5a, 0xf0a060], fog: [0xb07a6a, 90, 220], exp: 0.85, torch: 2.0, flame: 1.25, thr: 0.5, sunSpr: 70 },
+  night: { sun: [-30, 60, 40], sunCol: 0x8fa8ff, sunI: 0.22, hemi: [0x1c2440, 0x0c0a10, 0.35], sky: [0x05070f, 0x0d1430, 0x2a2848], fog: [0x141726, 70, 200], exp: 0.9, torch: 2.8, flame: 1.4, thr: 0.42, sunSpr: 0 },
+};
+function afApplyTime() {
+  const T = AF_TIMES[AF.cfg.time] || AF_TIMES.day, rain = AF.cfg.weather === 'rain';
+  sun.position.set(T.sun[0], T.sun[1], T.sun[2]); sun.color.setHex(T.sunCol); sun.intensity = T.sunI * (rain ? 0.5 : 1);
+  hemi.color.setHex(T.hemi[0]); hemi.groundColor.setHex(T.hemi[1]); hemi.intensity = T.hemi[2] * (rain ? 0.8 : 1);
+  if (rain) { hemi.color.lerp(new THREE.Color(0x8a94a4), 0.5); sun.color.lerp(new THREE.Color(0xc0c8d4), 0.5); }
+  if (AF.sky) { scene.remove(AF.sky); try { disposeGroup(AF.sky); } catch (e) {} }
+  const skyC = T.sky.map(h => new THREE.Color(h)); if (rain) for (const c of skyC) c.lerp(new THREE.Color(0x6e7681), 0.55);
+  AF.sky = afBuildSky(skyC[0].getHex(), skyC[1].getHex(), skyC[2].getHex()); scene.add(AF.sky);
+  const fogC = new THREE.Color(T.fog[0]); if (rain) fogC.lerp(new THREE.Color(0x707884), 0.5);
+  scene.fog = new THREE.Fog(fogC.getHex(), rain ? T.fog[1] * 0.7 : T.fog[1], rain ? T.fog[2] * 0.8 : T.fog[2]); scene.background = fogC;
+  renderer.toneMappingExposure = T.exp;
+  if (AF_POST.on) AF_POST.bright.uniforms.thr.value = T.thr;
+  if (AF.sunSpr) { AF.sunSpr.visible = T.sunSpr > 0 && !rain; AF.sunSpr.position.copy(sun.position).normalize().multiplyScalar(205); AF.sunSpr.scale.set(T.sunSpr, T.sunSpr, 1); AF.sunSpr.material.color.setHex(AF.cfg.time === 'dusk' ? 0xffb070 : 0xffffff); }
+  if (AF.ground) { AF.ground.material.shininess = rain ? 42 : 2; AF.ground.material.specular.setHex(rain ? 0x3a3a3a : 0x000000); AF.ground.material.needsUpdate = true; }
+  for (const t of AF.torches) {                              // after dark the torches carry the light
+    if (t.userData.light) { t.userData.light.intensity = T.torch || 1.3; t.userData.light.distance = T.torch ? 30 : 18; }
+    else if (T.torch) { const light = new THREE.PointLight(0xff7b3e, T.torch, 30, 2); light.position.y = 3.7; t.add(light); t.userData.light = light; }
+    t.userData.flame.scale.setScalar(T.flame); t.userData.flameBase = T.flame;
+  }
+  if (AF.stars) { scene.remove(AF.stars); AF.stars = null; }
+  if (AF.cfg.time === 'night' && !rain) {                    // stars
+    const n = 700, pos = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) { const a = Math.random() * TAU, e = Math.asin(Math.random() * 0.95 + 0.05), r = 222; pos[i * 3] = Math.cos(a) * Math.cos(e) * r; pos[i * 3 + 1] = Math.sin(e) * r; pos[i * 3 + 2] = Math.sin(a) * Math.cos(e) * r; }
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    AF.stars = new THREE.Points(g, new THREE.PointsMaterial({ color: 0xe8ecff, size: 1.1, transparent: true, opacity: 0.9, fog: false, depthWrite: false })); scene.add(AF.stars);
+  }
+  if (AF.rain) { scene.remove(AF.rain); AF.rain = null; }
+  if (rain) {                                                // rain: a box of streaks that rides with the camera and falls
+    const n = 1800, pos = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) { pos[i * 3] = (Math.random() - 0.5) * 70; pos[i * 3 + 1] = Math.random() * 30; pos[i * 3 + 2] = (Math.random() - 0.5) * 70; }
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    AF.rain = new THREE.Points(g, new THREE.PointsMaterial({ color: 0xd6dde8, size: 0.09, transparent: true, opacity: 0.55, depthWrite: false })); scene.add(AF.rain);
+  }
+  if (AF.motes) AF.motes.visible = !rain;
+}
+// the crowd lives: a restless shuffle, a leap and a ROAR when someone falls, and now and then the wave goes round
+function afStepCrowd(dt) {
+  if (AF.roar > 0) AF.roar -= dt;
+  if (AF.phase === 'fight' && !AF.over) { AF.nextWave -= dt; if (AF.nextWave <= 0) { AF.waveT = 3.4; AF.waveAng = -0.6; AF.nextWave = 26 + Math.random() * 14; } }
+  if (AF.waveT > 0) { AF.waveT -= dt; AF.waveAng += dt * 2.2; }
+  const rk = clamp(AF.roar / 1.4, 0, 1);
+  for (const c of AF.crowd) {
+    let y = Math.sin(rtNow * 2.2 + c.phase) * 0.025;
+    if (rk > 0) y += Math.abs(Math.sin(rtNow * 11 + c.phase)) * 0.42 * rk * c.amp;
+    if (AF.waveT > 0) { const w = angleDelta(c.ang, AF.waveAng); if (Math.abs(w) < 0.55) y += Math.cos(w * 2.85) * 0.6; }
+    c.body.position.y = c.y0 + y; c.head.position.y = c.y0 + 0.7 + y;
+  }
+}
+// the roar: a swell of band-passed noise (the synth has no samples) — bigger when it's your kill, or your fall
+function afRoar(vol) {
+  const S = SFX; if (!S.ctx || S.muted) return;
+  try {
+    const ctx = S.ctx, t = ctx.currentTime;
+    for (const [f0, f1, q, g, d] of [[260, 420, 0.7, vol, 2.4], [700, 500, 0.6, vol * 0.5, 1.8]]) {
+      const src = ctx.createBufferSource(); src.buffer = S.noise; src.loop = true;
+      const bq = ctx.createBiquadFilter(); bq.type = 'bandpass'; bq.Q.value = q; bq.frequency.setValueAtTime(f0, t); bq.frequency.linearRampToValueAtTime(f1, t + 0.5); bq.frequency.exponentialRampToValueAtTime(f0 * 0.7, t + d);
+      const gn = ctx.createGain(); gn.gain.setValueAtTime(0.0001, t); gn.gain.exponentialRampToValueAtTime(g, t + 0.35); gn.gain.exponentialRampToValueAtTime(0.0001, t + d);
+      src.connect(bq); bq.connect(gn); gn.connect(S.master); src.start(t); src.stop(t + d + 0.05);
+    }
+  } catch (e) {}
+}
+function afCrowdReact(big) { AF.roar = Math.max(AF.roar, big ? 1.9 : 1.3); afRoar(big ? 0.55 : 0.32); }
+function afStepWeather(dt) {
+  if (AF.rain) {
+    const a = AF.rain.geometry.attributes.position, arr = a.array;
+    for (let i = 1; i < arr.length; i += 3) { arr[i] -= 26 * dt; if (arr[i] < 0) arr[i] += 30; }
+    a.needsUpdate = true; AF.rain.position.set(camera.position.x, 0, camera.position.z);
+  }
+}
+function afMakeTorch(x, z, yaw, withLight) {
+  const g = new THREE.Group();
+  const pole = boxMesh(0.22, 3.2, 0.22, mat(0x4a3520)); pole.position.y = 1.6; pole.castShadow = false; g.add(pole);
+  const cup = new THREE.Mesh(cachedGeo('af-cup', () => new THREE.CylinderGeometry(0.22, 0.12, 0.3, 6)), mat(0x2a2422, { metal: 1 })); cup.position.y = 3.2; g.add(cup);
+  const flame = new THREE.Mesh(cachedGeo('flame', () => new THREE.IcosahedronGeometry(0.45, 0)), mat(0xff7b2e, { emissive: 0xff5a1e, emissiveI: 2.2 }));
+  flame.position.y = 3.6; g.add(flame); g.userData.flame = flame;
+  if (withLight) { const light = new THREE.PointLight(0xff7b3e, 1.3, 18, 2); light.position.y = 3.7; g.add(light); g.userData.light = light; }
+  g.position.set(x, afY(x, z), z); g.rotation.y = yaw; return g;
+}
+function afBuildWall() {
+  const g = new THREE.Group(), N = 36, R = AF_F.radius + 0.9, seg = (2 * Math.PI * R) / N;
+  const wm = mat(0x8a8378), cap = mat(0x5e5850), wood = mat(0x6b4a2e), woodDk = mat(0x4e351f), rope = mat(0xb8a27a);
+  for (let i = 0; i < N; i++) {                              // the ring wall: stone blocks with capstones every third
+    const a = (i / N) * TAU, x = Math.cos(a) * R, z = Math.sin(a) * R, h = 2.1 + (i % 3 === 0 ? 0.7 : 0);
+    const b = boxMesh(seg * 1.04, h, 1.2, wm); b.position.set(x, afY(x, z) + h / 2, z); b.rotation.y = -a; g.add(b);
+    if (i % 3 === 0) { const t = boxMesh(1.4, 0.35, 1.5, cap); t.position.set(x, afY(x, z) + h + 0.17, z); t.rotation.y = -a; g.add(t); }
+  }
+  // the STANDS: three timber tiers climbing away from the wall, and a crowd on them in every colour of the vale
+  AF.crowd = [];
+  const NS = 30, crowdCols = [0x9a3b2f, 0x3b5a9a, 0xd9b04a, 0x6b8f3a, 0x7a4a8a, 0xd8d2c0, 0x4a3520, 0xc86a3a];
+  const crowdMats = crowdCols.map(cn => mat(cn));
+  const seed = _mulberry32(AF.seed ^ 0x5bd1e995);
+  for (let tier = 0; tier < 3; tier++) {
+    const r = AF_F.radius + 4.2 + tier * 2.6, hgt = 1.1 + tier * 1.35, segL = (2 * Math.PI * r) / NS;
+    for (let i = 0; i < NS; i++) {
+      const a = ((i + 0.5) / NS) * TAU, x = Math.cos(a) * r, z = Math.sin(a) * r, gy = afY(x, z);
+      const bench = boxMesh(segL * 1.02, 0.5, 2.2, tier % 2 ? woodDk : wood); bench.position.set(x, gy + hgt, z); bench.rotation.y = -a; bench.castShadow = false; g.add(bench);
+      const face = boxMesh(segL * 1.02, hgt + 0.25, 0.25, woodDk); face.position.set(Math.cos(a) * (r - 1.1), gy + (hgt + 0.25) / 2, Math.sin(a) * (r - 1.1)); face.rotation.y = -a; face.castShadow = false; face.receiveShadow = false; g.add(face);
+      if (seed() < 0.85) {                                   // a spectator (or two) on the bench
+        const n = 1 + (seed() < 0.5 ? 1 : 0);
+        for (let k = 0; k < n; k++) {
+          const off = (seed() - 0.5) * segL * 0.7, px = x + Math.cos(a + Math.PI / 2) * off, pz = z + Math.sin(a + Math.PI / 2) * off;
+          const body = new THREE.Mesh(cachedGeo('af-crowd', () => new THREE.CylinderGeometry(0.28, 0.36, 1.2, 6)), crowdMats[(seed() * crowdMats.length) | 0]);
+          body.position.set(px, gy + hgt + 0.85, pz); body.castShadow = false; body.receiveShadow = false; g.add(body);
+          const hd = sphereMesh(0.2, mat(0xe0b088), 6, 5); hd.position.set(px, gy + hgt + 1.55, pz); hd.castShadow = false; hd.receiveShadow = false; g.add(hd);
+          AF.crowd.push({ body, head: hd, y0: gy + hgt + 0.85, phase: seed() * TAU, ang: a, amp: 0.7 + seed() * 0.6 });
+        }
+      }
+    }
+  }
+  // banner poles on the wall in the fighting teams' colours, and torches between them
+  const NB = Math.max(6, AF.cfg.teams * 3);
+  AF.torches = [];
+  let lights = 0;
+  for (let i = 0; i < NB; i++) {
+    const a = (i / NB) * TAU, x = Math.cos(a) * (R + 1.6), z = Math.sin(a) * (R + 1.6);
+    try { const ban = makeBanner(AF_TEAMS[i % AF.cfg.teams].pal.cloth); ban.position.set(x, afY(x, z) + 1.2, z); ban.rotation.y = -a + Math.PI / 2; ban.scale.setScalar(1.25); g.add(ban); } catch (e) {}
+    const ta = a + Math.PI / NB, tx = Math.cos(ta) * (R + 1.5), tz = Math.sin(ta) * (R + 1.5);
+    const torch = afMakeTorch(tx, tz, -ta, lights < 6); if (torch.userData.light) lights++;
+    g.add(torch); AF.torches.push(torch);
+  }
+  // rope + posts around the sand's edge
+  for (let i = 0; i < 24; i++) { const a = (i / 24) * TAU, x = Math.cos(a) * (AF_F.radius - 0.2), z = Math.sin(a) * (AF_F.radius - 0.2); const post = boxMesh(0.16, 0.9, 0.16, rope); post.position.set(x, afY(x, z) + 0.45, z); post.castShadow = false; g.add(post); }
+  // PENNANT strings sag between the banner poles above the wall, little flags in the fighting colours
+  const flagGeo = cachedGeo('af-flag', () => { const sh = new THREE.Shape(); sh.moveTo(0, 0); sh.lineTo(0.5, 0); sh.lineTo(0.06, -0.55); sh.closePath(); return new THREE.ShapeGeometry(sh); });
+  const flagMats = AF_TEAMS.slice(0, AF.cfg.teams).map(t => new THREE.MeshPhongMaterial({ color: t.pal.cloth, side: THREE.DoubleSide, flatShading: true }));
+  const ropeMat = new THREE.LineBasicMaterial({ color: 0x3a2e22 });
+  for (let i = 0; i < NB; i++) {
+    const a0 = (i / NB) * TAU, a1 = ((i + 1) / NB) * TAU, rr = R + 1.6, y0 = afY(Math.cos(a0) * rr, Math.sin(a0) * rr) + 5.6, y1 = afY(Math.cos(a1) * rr, Math.sin(a1) * rr) + 5.6;
+    const pts = [], K = 10;
+    for (let k = 0; k <= K; k++) { const t = k / K, a = a0 + (a1 - a0) * t, sag = Math.sin(t * Math.PI) * 1.3; pts.push(new THREE.Vector3(Math.cos(a) * rr, lerp(y0, y1, t) - sag, Math.sin(a) * rr)); }
+    g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), ropeMat));
+    for (let k = 1; k < K; k += 2) { const f = new THREE.Mesh(flagGeo, flagMats[(i + k) % flagMats.length]); f.position.copy(pts[k]); f.rotation.y = -(a0 + (a1 - a0) * (k / K)) + Math.PI / 2; f.castShadow = false; g.add(f); }
+  }
+  // DEBRIS in the sand: pebbles, a split shield, a snapped blade or two
+  const dbg = _mulberry32(AF.seed ^ 0x2545f491), rockM = mat(0x8d8578);
+  for (let i = 0; i < 46; i++) { const a = dbg() * TAU, rr = 8 + dbg() * (AF_F.radius - 10), x = Math.cos(a) * rr, z = Math.sin(a) * rr, sz = 0.1 + dbg() * 0.22;
+    const rk = new THREE.Mesh(cachedGeo('af-rock', () => new THREE.IcosahedronGeometry(1, 0)), rockM); rk.position.set(x, afY(x, z) + sz * 0.3, z); rk.scale.set(sz * 1.4, sz * 0.7, sz); rk.rotation.y = dbg() * TAU; rk.castShadow = false; g.add(rk); }
+  for (let i = 0; i < 3; i++) { const a = dbg() * TAU, rr = 10 + dbg() * 18, x = Math.cos(a) * rr, z = Math.sin(a) * rr;
+    const bl = boxMesh(0.09, 0.9, 0.2, mat(0xb9c2cc, { metal: 1 })); bl.position.set(x, afY(x, z) + 0.05, z); bl.rotation.set(Math.PI / 2 - 0.15, dbg() * TAU, 0); bl.castShadow = false; g.add(bl); }
+  return g;
+}
+// team spawn points: evenly around the ring, each facing the centre
+function afSpawn(teamIdx, teams) {
+  const a = (teamIdx / teams) * TAU - Math.PI / 2, r = AF_F.radius * 0.7;
+  const cx = Math.cos(a) * r, cz = Math.sin(a) * r;
+  return { cx, cz, yaw: Math.atan2(-cx, -cz) };
+}
+
+// ---- fighters ----
+function afFreshInput() { return { mx: 0, mz: 0, yaw: 0, atk: 0, heavy: 0, dodge: 0, block: false }; }
+function afMakeBody(entry, idx, r) {
+  const td = AF_TEAMS[entry.t], weapon = entry.weapon === 'bow' ? 'bow' : 'sword';
+  const h = buildHumanoid(td.pal, 1, weapon, { hero: true, plume: AF_TEAM_HEX[entry.t] }); const group = h.group || h;
+  group.rotation.order = 'YXZ';                              // yaw first, then a body-local tilt/roll (somersaults, crumples)
+  const sp = afSpawn(entry.t, AF.cfg.teams), rgx = -Math.cos(sp.yaw), rgz = Math.sin(sp.yaw), off = (entry.s - (AF.cfg.per - 1) / 2) * 2.3;
+  const b = { id: idx, idx, team: entry.t, teamDef: td, name: entry.name, kind: entry.kind, peer: entry.peer || null, weapon,
+    ctrl: entry.kind === 'npc' ? 'ai' : 'input', inp: afFreshInput(),
+    group, parts: h.parts, anim: makeAnimator(h.parts),
+    x: sp.cx + rgx * off, z: sp.cz + rgz * off, yaw: sp.yaw, phase: r() * TAU, tiltX: 0,
+    hp: AF_F.hp, maxHp: AF_F.hp, state: 'idle', atk: null, combo: 0, comboT: 0, blocking: false,
+    dodgeT: 0, dodgeCd: 0, ddx: 0, ddz: 0, iframes: 0, flinch: 0, stagger: 0, dead: false, deadT: 0, tinted: false, kills: 0,
+    vx: 0, vz: 0, poise: AF_F.maxPoise, maxPoise: AF_F.maxPoise, queued: false, cd: 0, waiting: false, slotAngle: 0, retreatT: 0, bob: 0,
+    gait: null, hitT: 0, hitSide: 0, lookYaw: 0, headYaw: 0, capeX: 0.12, phase0: r() * TAU, roll: 0, lastStep: 0, flashT: 0, sway: r() * TAU, clashT: 0, clashAtk: false, clashDx: 0, clashDz: 0,
+    seenAtk: 0, seenHeavy: 0, seenDodge: 0,
+    // NPC brain traits (seeded so a replay of the same seed fields the same temperaments)
+    skill: 0.35 + r() * 0.5, heavyBias: 0.12 + r() * 0.2, target: null, aiT: r() * 0.3, strafe: r() < 0.5 ? -1 : 1, strafeT: 0.5 + r(), swingT: 0.4 + r() * 0.5, holdBlock: 0, reactedTo: null, shotCd: 1 + r(),
+    // guest-side interpolation targets
+    tx: 0, tz: 0, tyaw: 0, tstate: 0, tmove: 0, rollT: 0, remoteSeen: false,
+  };
+  b.tx = b.x; b.tz = b.z; b.tyaw = b.yaw; b.inp.yaw = b.yaw;
+  group.position.set(b.x, afY(b.x, b.z), b.z); group.rotation.y = b.yaw;
+  scene.add(group); group.userData.afBody = b;
+  // floating name + health bar (a separate un-rotated tag so the bar can face the camera)
+  const tag = new THREE.Group();
+  const nm = makeNameSprite(entry.name); nm.scale.set(Math.min(3.2, 1.1 + entry.name.length * 0.16), 0.36, 1); nm.position.y = 0.34; tag.add(nm);
+  const bar = makeHealthBar(parseInt(td.col.slice(1), 16)); bar.visible = true; bar.scale.setScalar(0.6); tag.add(bar);
+  b.tag = tag; b.bar = bar; scene.add(tag);
+  return b;
+}
+function afStateCode(b) {
+  if (b.dead) return 8;
+  if (b.clashT > 0) return 12;
+  if (b.stagger > 0) return 11;
+  if (b.flinch > 0) return 5;
+  if (b.dodgeT > 0) return 7;
+  if (b.atk) { if (b.atk.bow) return b.atk.hit ? 10 : 9; return b.atk.hit ? (b.atk.t > b.atk.wind + b.atk.strike ? 4 : 3) : 2; }
+  if (b.blocking) return 6;
+  return b.moving ? 1 : 0;
+}
+const AF_MOVES = ['slashR', 'slashL', 'chop', 'heavy'];
+function afMove(b, ux, uz, spd, dt) {                     // steer: accelerate toward a velocity of spd along (ux,uz)
+  b.vx += ux * spd * AF_F.accel * dt; b.vz += uz * spd * AF_F.accel * dt;
+}
+function afIntegrate(b, dt) {                              // friction + step + the ring wall (the wall kills outward speed)
+  const f = Math.pow(AF_F.friction, dt); b.vx *= f; b.vz *= f;
+  b.x += b.vx * dt; b.z += b.vz * dt;
+  const d = Math.hypot(b.x, b.z), R = AF_F.radius - 0.9;
+  if (d > R) { const nx = b.x / d, nz = b.z / d, out = b.vx * nx + b.vz * nz; if (out > 0) { b.vx -= nx * out; b.vz -= nz * out; } b.x = nx * R; b.z = nz * R; }
+}
+// the SECONDARY-MOTION layer, applied on top of the pose every frame: arm counter-swing and torso lean on
+// the run, breathing, a head that looks at the foe, a directional flinch when hit, a cape that flares with
+// speed, and dust at the feet. Everything here is additive so the authored poses stay readable.
+function afCommit(b, dt) {
+  updateAnimator(b.anim, dt);
+  const p = b.parts, F = AF_F, sp = Math.hypot(b.vx, b.vz), fwd = b.vx * Math.sin(b.yaw) + b.vz * Math.cos(b.yaw);
+  const g = b.gait || GAIT.run;
+  if (b.moving && !b.dead) walkArms(p, b.phase, g.arm * (b.atk || b.blocking ? 0.3 : 1), 0);
+  if (b.flashT > 0) { b.flashT -= dt; if (!b.flashWhite) { setTint(p, 0xfff0e0); b.flashWhite = true; } if (b.flashT <= 0) { b.flashWhite = false; b.tinted = false; setTint(p, null); } }
+  if (!b.dead) {
+    p.upperBody.rotation.x += clamp(fwd / F.move, -1, 1) * 0.14 + Math.sin(rtNow * 2.1 + b.phase0) * 0.012; // lean into the run + breathe
+    if (!b.moving && !b.atk && b.dodgeT <= 0) {              // standing guard: the weight shifts from foot to foot
+      const w = Math.sin(rtNow * 0.9 + b.sway); p.upperBody.rotation.z += w * 0.03; p.hipL.rotation.x += w * 0.05; p.hipR.rotation.x -= w * 0.05; b.roll = w * 0.015;
+    }
+    if (b.hitT > 0) {                                        // the blow throws the shoulders back and the head snaps
+      b.hitT -= dt; const k = clamp(b.hitT / 0.25, 0, 1);
+      p.upperBody.rotation.x -= k * 0.32; p.upperBody.rotation.z += b.hitSide * k * 0.22;
+      if (p.headPivot) p.headPivot.rotation.x = -k * 0.35;
+    } else if (p.headPivot) p.headPivot.rotation.x = lerp(p.headPivot.rotation.x, 0, clamp(dt * 8, 0, 1));
+    if (p.headPivot) {                                       // look at the mark (clamped to a neck's travel), under the torso twist
+      const want = clamp(angleDelta(b.yaw, b.lookYaw), -0.85, 0.85) - p.upperBody.rotation.y;
+      b.headYaw = lerp(b.headYaw, want, clamp(dt * 7, 0, 1)); p.headPivot.rotation.y = b.headYaw;
+    }
+    if (p.cape) afCape(b, p, dt, fwd, sp);
+    if (b.moving && b.dodgeT <= 0) b.roll = Math.sin(b.phase) * 0.035; else if (b.moving || b.atk || b.dodgeT > 0) b.roll = 0;
+    if (b.moving && b.dodgeT <= 0) {                         // a footfall: dust at the planted foot (near the camera only)
+      const step = Math.floor(b.phase / Math.PI);
+      if (step !== b.lastStep) { b.lastStep = step; if (camera.position.distanceToSquared(b.group.position) < 900 && sp > 3) spawnSparks(tmpV.set(b.x, afY(b.x, b.z) + 0.15, b.z), 0xc9b79a, 2); }
+    }
+  }
+  const y = afY(b.x, b.z) + (b.moving && !b.dead ? Math.abs(Math.cos(b.phase)) * g.bob : 0);
+  b.group.position.set(b.x, y, b.z); b.group.rotation.set(b.tiltX || 0, b.yaw, b.roll || 0);
+  if (b.tag) { b.tag.position.set(b.x, y + 2.25, b.z); b.bar.quaternion.copy(camera.quaternion); b.bar.userData.fill.scale.x = clamp(b.hp / b.maxHp, 0, 1); b.tag.visible = !b.dead; }
+}
+// ONE control routine for everyone: reads b.inp (keyboard, NPC brain, or a remote player's record).
+// sim=true means this client is the authority (hits land); a guest driving its own body passes false.
+function afDrive(b, dt, sim) {
+  const I = b.inp, F = AF_F, human = b.ctrl !== 'ai';
+  if (b.dodgeCd > 0) b.dodgeCd -= dt;
+  if (b.cd > 0) b.cd -= dt;
+  if (b.comboT > 0) { b.comboT -= dt; if (b.comboT <= 0) b.combo = 0; }
+  if (b.iframes > 0) b.iframes -= dt;
+  if (b.stagger <= 0 && b.poise < b.maxPoise) b.poise = Math.min(b.maxPoise, b.poise + F.poiseRegen * dt); // poise recovers off the pressure
+  b.moving = false;
+  if (b.stagger > 0 || b.flinch > 0) {                     // reeling (flinch) or guard broken / poise gone (stagger: open to an execution)
+    if (b.stagger > 0) b.stagger -= dt; else b.flinch -= dt;
+    b.atk = null; b.queued = false; b.blocking = false; b.tiltX = 0;
+    setPose(b.anim, 'hurt', 0.06); restLegs(b.parts, dt, true);
+    if (!b.tinted && b.flashT <= 0) { setTint(b.parts, 0x551111); b.tinted = true; }
+    afIntegrate(b, dt); afCommit(b, dt); return;
+  }
+  if (b.tinted) { setTint(b.parts, null); b.tinted = false; }
+  if (b.clashT > 0) {                                        // blades locked: hold the pose, then shove apart (the attacker further, and open)
+    b.clashT -= dt; b.vx *= 0.4; b.vz *= 0.4; b.blocking = !b.clashAtk; restLegs(b.parts, dt, true);
+    if (b.clashT <= 0) { const k = b.clashAtk ? 5.5 : 2.5; b.vx += b.clashDx * k; b.vz += b.clashDz * k; b.cd = b.clashAtk ? 0.35 : 0.05; b.anim.ease = null; setPose(b.anim, b.clashAtk ? 'hurt' : 'block', 0.12); if (b.clashAtk) b.flinch = 0.16; }
+    afIntegrate(b, dt); afCommit(b, dt); return;
+  }
+  if (b.dodgeT > 0) {                                        // mid-roll: i-frames + a burst of speed, tucked and tumbling
+    b.dodgeT -= dt; const k = 1 - clamp(b.dodgeT / F.dodge.dur, 0, 1);
+    const sp = F.dodge.speed * (1 - k * 0.5); b.vx = b.ddx * sp; b.vz = b.ddz * sp;
+    b.tiltX = -Math.sin(k * Math.PI) * 1.1; b.moving = true;
+    walkLegs(b.parts, b.phase += dt * 14, 0.5, 0.6); setPose(b.anim, 'relax', 0.1);
+    if (b.dodgeT <= 0) { b.tiltX = 0; b.vx *= 0.4; b.vz *= 0.4; }
+    afIntegrate(b, dt); afCommit(b, dt); return;
+  }
+  const mm = Math.hypot(I.mx, I.mz), ux = mm > 1e-3 ? I.mx / mm : 0, uz = mm > 1e-3 ? I.mz / mm : 0;
+  if (I.dodge !== b.seenDodge) {                             // a roll cancels a windup, never a landed blow
+    b.seenDodge = I.dodge;
+    if (b.dodgeCd <= 0 && !(b.atk && b.atk.hit)) {
+      b.dodgeT = F.dodge.dur; b.iframes = F.dodge.iframes; b.dodgeCd = F.dodge.dur + F.dodge.cd; b.atk = null; b.queued = false; b.blocking = false;
+      if (mm > 1e-3) { b.ddx = ux; b.ddz = uz; } else { b.ddx = -Math.sin(b.yaw); b.ddz = -Math.cos(b.yaw); }
+      try { SFX.foot(b.group.position); } catch (e) {}
+      afIntegrate(b, dt); afCommit(b, dt); return;
+    }
+  }
+  // facing: everyone turns, nobody snaps — a player's aim leads, an NPC's intent follows
+  b.yaw = angleLerp(b.yaw, I.yaw, clamp(dt * (human ? 14 : 9), 0, 1));
+  if (human) b.lookYaw = I.yaw; else if (b.target && !b.target.dead) b.lookYaw = Math.atan2(b.target.x - b.x, b.target.z - b.z); else b.lookYaw = b.yaw;
+  if (b.atk && !b.atk.hit && !b.atk.heavy && !b.atk.bow && I.block) { b.atk = null; b.queued = false; b.cd = 0.05; } // block-cancel out of a light windup
+  if (!b.atk) {                                              // (the NPC brain paces itself with cd; only a player's clicks are gated by it)
+    if (I.heavy !== b.seenHeavy) { b.seenHeavy = I.heavy; b.seenAtk = I.atk; if (!human || b.cd <= 0) afStartAttack(b, true); }
+    else if (I.atk !== b.seenAtk) { b.seenAtk = I.atk; if (!human || b.cd <= 0) afStartAttack(b, false); }
+  } else {                                                   // a click mid-swing queues the next blow of the combo
+    if (I.atk !== b.seenAtk && !b.atk.heavy && !b.atk.bow) b.queued = true;
+    b.seenAtk = I.atk; b.seenHeavy = I.heavy;
+  }
+  if (b.atk) {
+    const a = b.atk; a.t += dt;
+    if (human && !a.hit && !a.bow) {                         // aim assist: the blade tracks a foe in front while it winds up
+      const tg = afNearestFoeInCone(b, F.reach * 1.9, 0.45);
+      if (tg) b.yaw = angleLerp(b.yaw, Math.atan2(tg.x - b.x, tg.z - b.z), clamp(dt * 12, 0, 1));
+    }
+    if (!a.bow && a.t > a.wind * (a.heavy ? 0.85 : 0.7) && a.t < a.wind + a.strike)   // lunge with the blow
+      afMove(b, Math.sin(b.yaw), Math.cos(b.yaw), F.move * (a.heavy ? F.heavyLunge : F.lunge) * 0.85, dt);
+    if (!a.hit && a.t >= a.wind) {
+      a.hit = true;
+      if (a.bow) { setPose(b.anim, 'looseBow', 0.05); if (sim) afShoot(b); try { SFX.bow(b.group.position); } catch (e) {} }
+      else {
+        const mv = MOVES[AF_MOVES[a.move]], col = AF_TEAM_HEX[b.team];
+        b.anim.ease = AF_EASE_BACK; setPose(b.anim, mv.strike, a.heavy ? 0.09 : 0.1);   // the blade whips PAST the mark and settles
+        try { spawnSlashArc(b.group.position, b.yaw, mv, a.heavy ? 1.6 : 1, col); spawnTrail(b, 1.7, col); } catch (e) {}
+        if (b === AF.me) addShake(a.heavy ? 0.16 : 0.09);
+        try { SFX.swing(b.group.position); } catch (e) {}
+        if (sim) afStrike(b, a.heavy);
+      }
+    }
+    const total = a.wind + a.strike + a.rec;
+    if (a.hit && b.queued && a.t >= a.wind + a.strike + a.rec * 0.45) { b.queued = false; afStartAttack(b, false); } // chain from the follow-through
+    else if (a.t >= total) { b.atk = null; b.queued = false; b.cd = 0.04; b.anim.ease = null; setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.3); }
+    else if (a.hit && a.t > a.wind + a.strike + a.rec * 0.5 && !a.bow) { b.anim.ease = null; setPose(b.anim, 'guard', 0.3); }
+    b.blocking = false;
+  } else b.blocking = !!I.block;
+  if (b.blocking) setPose(b.anim, 'block', 0.1);
+  else if (!b.atk) setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.22);
+  const canMove = !b.atk || (!b.atk.heavy && !b.atk.bow && !b.atk.hit);
+  if (mm > 1e-3 && canMove) {
+    const spd = F.move * (b.blocking ? 0.4 : b.atk ? 0.35 : 1) * Math.min(1, mm);
+    afMove(b, ux, uz, spd, dt); b.moving = true;
+    const g = b.gait = b.blocking || b.atk ? GAIT.walk : GAIT.run;
+    const fwdDot = ux * Math.sin(b.yaw) + uz * Math.cos(b.yaw);       // backpedaling plays the cycle in reverse
+    b.phase += dt * g.tempo * (fwdDot < -0.1 ? -1 : 1) * Math.min(1, spd / F.move + 0.3);
+    walkLegs(b.parts, b.phase, g.leg);
+  } else restLegs(b.parts, dt, true);
+  afIntegrate(b, dt); afCommit(b, dt);
+}
+// CLOTH: each hinge of the cape chain is a damped spring chasing a target that its parent's angle sets,
+// pushed out by the air flowing past a running body, tugged by a gust, and never allowed to fold through
+// the back — so the cape hangs still, flares on a sprint, streams behind a roll and ripples as it settles.
+function afCape(b, p, dt, fwd, sp) {
+  const segs = p.cape.userData.segs, F = AF_F; if (!segs) return;
+  if (!b.capeW) { b.capeW = segs.map(() => 0.15); b.capeV = segs.map(() => 0); }
+  const flow = clamp(fwd / F.move, -0.5, 1.8) + (b.dodgeT > 0 ? 1.1 : 0) + (b.dead ? -0.3 : 0);
+  const lat = clamp((b.vx * Math.cos(b.yaw) - b.vz * Math.sin(b.yaw)) / F.move, -1, 1);
+  const gust = Math.sin(rtNow * 2.7 + b.phase0) * 0.05 + Math.sin(rtNow * 5.3 + b.phase0 * 1.7) * 0.025;
+  let prev = 0;
+  for (let i = 0; i < segs.length; i++) {
+    const target = (i === 0 ? 0.12 : prev) + 0.03 + Math.max(0, flow) * (0.4 - i * 0.045) + gust * (1 + i * 0.5) + Math.min(0, flow) * 0.05;
+    const stiff = 28 - i * 2.5, damp = 5.5 + i * 0.3;
+    b.capeV[i] += ((target - b.capeW[i]) * stiff - b.capeV[i] * damp) * dt;
+    b.capeW[i] += b.capeV[i] * dt;
+    const lo = i === 0 ? 0.03 : prev - 0.3, hi = prev + 0.65;
+    if (b.capeW[i] < lo) { b.capeW[i] = lo; b.capeV[i] *= 0.2; } else if (b.capeW[i] > hi) { b.capeW[i] = hi; b.capeV[i] *= 0.2; }
+    segs[i].rotation.x = b.capeW[i] - prev; segs[i].rotation.z = (i ? 0.35 : 0) * -lat * 0.25; prev = b.capeW[i];
+  }
+  p.cape.rotation.z = lerp(p.cape.rotation.z, -lat * 0.3 + Math.sin(rtNow * 2.3 + b.phase0) * 0.02, clamp(dt * 5, 0, 1));
+}
+function afNearestFoeInCone(b, R, cosMin) {
+  let best = null, bd = R, fdx = Math.sin(b.yaw), fdz = Math.cos(b.yaw);
+  for (const o of AF.bodies) { if (o.dead || o.team === b.team) continue; const dx = o.x - b.x, dz = o.z - b.z, dd = Math.hypot(dx, dz); if (dd < bd && (dx * fdx + dz * fdz) / (dd || 1) > cosMin) { bd = dd; best = o; } }
+  return best;
+}
+const AF_EASE_BACK = t => { const c = 1.9, u = t - 1; return 1 + (c + 1) * u * u * u + c * u * u; }; // ease-out-back: overshoot, then settle
+function afStartAttack(b, heavy) {
+  b.anim.ease = null;
+  if (b.weapon === 'bow') { b.atk = { bow: true, t: 0, wind: AF_F.bow.wind, strike: AF_F.bow.strike, rec: AF_F.bow.rec, hit: false, move: 4 }; setPose(b.anim, 'aimBow', 0.1); return; }
+  const P = heavy ? AF_F.heavy : AF_F.light;
+  let move;
+  if (heavy) move = 3; else { move = b.combo % 3; b.combo++; b.comboT = 1.1; }
+  b.atk = { heavy, t: 0, wind: P.wind, strike: P.strike, rec: P.rec, hit: false, move };
+  setPose(b.anim, MOVES[AF_MOVES[move]].windup, 0.08); b.blocking = false;
+}
+function afStrike(b, heavy) {
+  const reach = heavy ? AF_F.reach * 1.25 : AF_F.reach, fdx = Math.sin(b.yaw), fdz = Math.cos(b.yaw), P = heavy ? AF_F.heavy : AF_F.light;
+  for (const o of AF.bodies) {
+    if (o.dead || o.team === b.team || o === b) continue;
+    const dx = o.x - b.x, dz = o.z - b.z, dd = Math.hypot(dx, dz); if (dd > reach) continue;
+    if ((dx * fdx + dz * fdz) / (dd || 1) < (heavy ? 0.1 : AF_F.cone)) continue; // a heavy cleaves a wide arc
+    let dmg = rand(P.dmg[0], P.dmg[1]) + b.combo * 1.5;
+    const exec = o.stagger > 0;                            // a staggered foe is open: the execution lands for real
+    if (exec) dmg *= AF_F.executeMul;
+    afDamage(o, dmg, b, heavy, exec);
+  }
+}
+function afDamage(t, amt, from, heavy, exec, arrow) {
+  if (t.dead || AF.over) return;
+  const pos = t.group.position;
+  if (t.iframes > 0) { spawnPopup(pos, 'dodge', '#9fd6ff'); return; }
+  const ax = from.x - t.x, az = from.z - t.z, ad = Math.hypot(ax, az) || 1;
+  const facing = (ax * Math.sin(t.yaw) + az * Math.cos(t.yaw)) / ad;
+  let blocked = 0;
+  tmpV.set(t.x, afY(t.x, t.z) + 1.3, t.z);
+  if (t.blocking && facing > 0.15) {
+    if (heavy) { blocked = 2; t.stagger = AF_F.guardBreak; t.poise = t.maxPoise; t.blocking = false; t.atk = null; amt *= 0.5; t.vx -= ax / ad * AF_F.knock; t.vz -= az / ad * AF_F.knock; spawnPopup(pos, 'GUARD BREAK', '#ffb347'); try { SFX.clang(pos, true); } catch (e) {} }
+    else {
+      blocked = 1; amt *= AF_F.blockMul; spawnPopup(pos, 'block', '#ffe089'); try { SFX.clang(pos); } catch (e) {}
+      if (!arrow) {                                          // BLADE LOCK: steel bites steel, both freeze for a beat, then the shove — and the attacker's swing is spent
+        from.clashT = 0.3; from.clashAtk = true; from.clashDx = ax / ad; from.clashDz = az / ad; from.atk = null; from.queued = false; from.vx = from.vz = 0;
+        t.clashT = 0.22; t.clashAtk = false; t.clashDx = -ax / ad; t.clashDz = -az / ad; t.vx = t.vz = 0;
+        tmpV.set((t.x + from.x) / 2, afY(t.x, t.z) + 1.4, (t.z + from.z) / 2); spawnSparks(tmpV, 0xffffff, 12); spawnSparks(tmpV, 0xffdf6b, 8);
+        if (from === AF.me || t === AF.me) { addShake(0.14); AF.hitstop = Math.max(AF.hitstop, 0.05); }
+      }
+    }
+    spawnSparks(tmpV, 0xffdf6b, 6);
+  } else {
+    t.atk = null; t.queued = false; t.blocking = false;
+    const k = heavy ? AF_F.heavyKnock : AF_F.knock; t.vx -= ax / ad * k; t.vz -= az / ad * k; // an impulse, not a teleport
+    if (t.stagger <= 0) {                                    // poise: chip it and he flinches; break it and he reels wide open
+      t.poise -= heavy ? AF_F.heavyPoise : arrow ? AF_F.lightPoise * 0.4 : AF_F.lightPoise;
+      if (t.poise <= 0) { t.poise = t.maxPoise; t.stagger = AF_F.staggerDur; spawnPopup(pos, 'STAGGERED', '#ffb347'); }
+      else t.flinch = Math.max(t.flinch, AF_F.flinch);
+    }
+    spawnSparks(tmpV, exec ? 0xff3b2b : 0xff5a3c, exec ? 14 : 8); try { SFX.hit(pos, heavy); } catch (e) {}
+    t.hitT = 0.25; t.hitSide = Math.sign(ax * Math.cos(t.yaw) - az * Math.sin(t.yaw)) || 1;   // thrown back and away from the blow
+    t.flashT = 0.07;                                         // an impact frame: the body flares white for a beat
+    if (t === AF.me) AF.hurt = Math.min(1, AF.hurt + (heavy ? 0.9 : 0.55));
+    afSplat(t.x, t.z, heavy || exec ? 1.1 : 0.7);
+    spawnPopup(pos, exec ? 'EXECUTE ' + Math.round(amt) : String(Math.round(amt)), exec ? '#ff5a3c' : heavy ? '#ffd27a' : '#ff7d6f');
+  }
+  t.hp -= amt;
+  if ((from === AF.me || t === AF.me) && AF.role !== 'guest') afJuice(from, t, amt, heavy, blocked); // your blows and your wounds rattle the camera
+  AF.events.push({ k: 'hit', i: t.idx, d: Math.round(amt), b: blocked, h: heavy ? 1 : 0, by: from.idx });
+  if (t.hp <= 0) afKill(t, from);
+}
+// the screen juice: shake + hit-stop + a directional kick + FOV punch, scaled by the weight of the blow
+function afJuice(from, t, amt, heavy, blocked) {
+  const w = clamp(amt / 26, 0.5, 1.6);
+  if (blocked) { addShake(0.08); return; }
+  addShake((heavy ? FEEL.killShake : FEEL.hitShake) * w); AF.hitstop = Math.max(AF.hitstop, (heavy ? 0.07 : FEEL.hitStop) * w);
+  _killDir.set(t.x - from.x, 0, t.z - from.z); if (_killDir.lengthSq() > 1e-6) addKick(_killDir.normalize(), FEEL.kickHit * w);
+  addFovPunch(FEEL.fovPunchHit * w);
+}
+function afKill(t, by, quiet) {                          // quiet: a guest mirroring the host's verdict (the kill event carries the log line)
+  t.dead = true; t.hp = 0; t.deadT = 0; t.atk = null; t.blocking = false; t.dodgeT = 0; t.tiltX = 0;
+  if (by && by !== t) by.kills++;
+  if (!quiet) { try { SFX.kill(t.group.position); } catch (e) {} spawnSparks(tmpV.set(t.x, afY(t.x, t.z) + 1.6, t.z), 0xff6b6b, 14); }
+  afSplat(t.x, t.z, 1.6); afSplat(t.x + Math.sin(t.yaw) * 0.8, t.z + Math.cos(t.yaw) * 0.8, 1.0);
+  t.deadSide = Math.random() < 0.5 ? -1 : 1; setPose(t.anim, 'relax', 0.35);
+  if (!quiet && (by === AF.me || t === AF.me) && AF.role !== 'guest') { addShake(FEEL.killShake); AF.hitstop = Math.max(AF.hitstop, FEEL.killStop); addFovPunch(FEEL.fovPunchKill); }
+  AF.events.push({ k: 'kill', i: t.idx, by: by ? by.idx : -1 });
+  if (!quiet) afLogLine((by ? by.name + ' fells ' : '') + t.name, t.teamDef.col);
+  if (!quiet) afCrowdReact(by === AF.me || t === AF.me);
+  if (t === AF.me) { afBanner('YOU FELL', 'watch the rest of the fight', 2.2); try { document.exitPointerLock && document.exitPointerLock(); } catch (e) {} }
+}
+function afStepDead(b, dt) {
+  b.deadT += dt;
+  const k = clamp(b.deadT / AF_F.deathDur, 0, 1), e = easeOut(k), p = b.parts, sd = b.deadSide || 1;
+  b.vx *= Math.pow(0.001, dt); b.vz *= Math.pow(0.001, dt); b.x += b.vx * dt; b.z += b.vz * dt;   // the last blow still carries him
+  // CRUMPLE: the knees buckle, the torso folds, and he goes over sideways — then lies still
+  const q = clamp(dt * 9, 0, 1);
+  p.kneeL.rotation.x = lerp(p.kneeL.rotation.x, 1.9, q); p.kneeR.rotation.x = lerp(p.kneeR.rotation.x, 1.6, q);
+  p.hipL.rotation.x = lerp(p.hipL.rotation.x, -0.9, q); p.hipR.rotation.x = lerp(p.hipR.rotation.x, -0.6, q);
+  updateAnimator(b.anim, dt);
+  p.upperBody.rotation.x += e * 0.45; if (p.headPivot) { p.headPivot.rotation.x = e * 0.5; p.headPivot.rotation.y = 0; }
+  if (p.cape) afCape(b, p, dt, 0, 0);
+  const drop = e * 0.3;                                      // the fall pivots at the feet; the folded legs sink a little into the sand
+  b.group.rotation.set(0.35 * e, b.yaw, sd * 1.35 * e);
+  b.group.position.set(b.x, afY(b.x, b.z) - drop - Math.max(0, b.deadT - 8) * 0.3, b.z); // and after a while the pit takes the body
+  if (k > 0.7 && !b.tinted) { setTint(b.parts, 0x1a1214); b.tinted = true; }
+  if (b.tag) b.tag.visible = false;
+}
+// blood on the sand: pooled flat discs that soak in and slowly fade (the pit remembers the fight)
+const _afSplats = [];
+function afSplat(x, z, size) {
+  if (_afSplats.length > 90) { const o = _afSplats.shift(); scene.remove(o.m); }
+  const m = new THREE.Mesh(cachedGeo('af-splat', () => new THREE.CircleGeometry(1, 9)), new THREE.MeshBasicMaterial({ color: 0x5a0e0e, transparent: true, opacity: 0, depthWrite: false }));
+  m.rotation.x = -Math.PI / 2; m.rotation.z = Math.random() * TAU;
+  m.position.set(x + (Math.random() - 0.5) * 0.6, afY(x, z) + 0.04, z + (Math.random() - 0.5) * 0.6);
+  m.scale.setScalar(size * (0.7 + Math.random() * 0.6) * 0.3);
+  scene.add(m); _afSplats.push({ m, t: 0, size });
+}
+function afStepSplats(dt) {
+  for (const o of _afSplats) { o.t += dt; const k = clamp(o.t / 0.35, 0, 1); o.m.scale.setScalar(o.size * (0.3 + 0.7 * easeOut(k))); o.m.material.opacity = 0.75 * k * clamp(1 - (o.t - 25) / 30, 0, 1); }
+}
+// arrows: ballistic; the authority tests hits, everyone flies them (guests get the spawn as an event)
+function afShoot(b) {
+  const fdx = Math.sin(b.yaw), fdz = Math.cos(b.yaw);
+  let best = null, bd = AF_F.bow.range;                      // aim assist: the nearest foe inside a frontal cone
+  for (const o of AF.bodies) { if (o.dead || o.team === b.team) continue; const dx = o.x - b.x, dz = o.z - b.z, dd = Math.hypot(dx, dz); if (dd < bd && (dx * fdx + dz * fdz) / (dd || 1) > 0.86) { bd = dd; best = o; } }
+  const tx = best ? best.x : b.x + fdx * 30, tz = best ? best.z : b.z + fdz * 30;
+  afSpawnArrow(b.team, b.idx, b.x, afY(b.x, b.z) + 1.6, b.z, tx, afY(tx, tz) + 1.1, tz, true);
+}
+function afSpawnArrow(team, owner, sx, sy, sz, tx, ty, tz, announce) {
+  const dist = Math.hypot(tx - sx, tz - sz), flight = Math.max(0.12, dist / AF_F.bow.speed), grav = 9;
+  const vel = new THREE.Vector3((tx - sx) / flight, (ty - sy) / flight + 0.5 * grav * flight, (tz - sz) / flight);
+  afAddArrow(team, owner, sx, sy, sz, vel, grav, flight + 0.6);
+  if (announce) AF.events.push({ k: 'arrow', t: team, o: owner, p: [+sx.toFixed(2), +sy.toFixed(2), +sz.toFixed(2)], v: [+vel.x.toFixed(2), +vel.y.toFixed(2), +vel.z.toFixed(2)], l: +(flight + 0.6).toFixed(2) });
+}
+function afAddArrow(team, owner, sx, sy, sz, vel, grav, life) {
+  const g = new THREE.Group();
+  const shaft = new THREE.Mesh(cachedGeo('proj-shaft', () => new THREE.CylinderGeometry(0.03, 0.03, 0.85, 5)), mat(0x7a5a36, { smooth: true }));
+  shaft.rotation.x = Math.PI / 2; g.add(shaft);
+  const head = new THREE.Mesh(cachedGeo('proj-head', () => new THREE.ConeGeometry(0.06, 0.16, 4)), mat(0xb9c2cc, { metal: 0.5 }));
+  head.rotation.x = Math.PI / 2; head.position.z = 0.5; g.add(head);
+  g.position.set(sx, sy, sz); scene.add(g);
+  AF.arrows.push({ g, vel, grav, team, owner, life });
+}
+function afStepArrows(dt, sim) {
+  for (let i = AF.arrows.length - 1; i >= 0; i--) {
+    const a = AF.arrows[i];
+    a.vel.y -= a.grav * dt; a.g.position.addScaledVector(a.vel, dt);
+    tmpV.copy(a.g.position).add(a.vel); a.g.lookAt(tmpV);
+    a.life -= dt;
+    const gy = afY(a.g.position.x, a.g.position.z);
+    let done = a.life <= 0 || a.g.position.y <= gy;
+    if (sim && !done) for (const o of AF.bodies) {
+      if (o.dead || o.team === a.team) continue;
+      const dx = o.x - a.g.position.x, dz = o.z - a.g.position.z;
+      if (dx * dx + dz * dz < 1.1 && Math.abs(a.g.position.y - (gy + 1.1)) < 1.6) { afDamage(o, rand(AF_F.bow.dmg[0], AF_F.bow.dmg[1]), AF.bodies[a.owner] || o, false, false, true); done = true; break; }
+    }
+    if (done) { scene.remove(a.g); try { disposeGroup(a.g); } catch (e) {} AF.arrows.splice(i, 1); }
+  }
+}
+
+// ---- the NPC brain: writes the same input record a player would ----
+// PACK DIRECTOR (borrowed from the field fights): every 0.3s each NPC claims a foe, closest first; a victim accepts
+// at most two committed attackers, the overflow spreads to another foe with a free slot, and only when every duel is
+// full does a man WAIT — circling to a slot in his mark's rear arc and committing only from behind, where guards can't reach.
+function afAssignTargets() {
+  const live = AF.bodies.filter(b => !b.dead), ai = live.filter(b => b.ctrl === 'ai'), counts = new Map();
+  const adj = (f, o) => Math.hypot(o.x - f.x, o.z - f.z) - (f.target === o ? 0.8 : 0);
+  for (const f of ai) { let bd = Infinity; for (const o of live) if (o.team !== f.team) bd = Math.min(bd, adj(f, o)); f._claim = bd; }
+  ai.sort((a, b) => a._claim - b._claim);
+  for (const f of ai) {
+    let bestFree = null, bdFree = Infinity, bestAny = null, bdAny = Infinity;
+    for (const o of live) { if (o.team === f.team) continue; const d = adj(f, o);
+      if (d < bdAny) { bdAny = d; bestAny = o; }
+      if ((counts.get(o) || 0) < 2 && d < bdFree) { bdFree = d; bestFree = o; } }
+    if (f.weapon === 'bow') { f.target = bestAny; f.waiting = false; continue; }   // archers never crowd a duel
+    if (bestFree) { f.target = bestFree; f.waiting = false; counts.set(bestFree, (counts.get(bestFree) || 0) + 1); }
+    else { f.target = bestAny; f.waiting = true; }
+  }
+  // fan each victim's waiting flankers across his rear arc
+  const byVictim = new Map();
+  for (const f of ai) if (f.waiting && f.target) { const arr = byVictim.get(f.target) || []; arr.push(f); byVictim.set(f.target, arr); }
+  for (const [v, arr] of byVictim) {
+    const rear = v.yaw + Math.PI;
+    arr.sort((a, b) => angleDelta(rear, Math.atan2(a.x - v.x, a.z - v.z)) - angleDelta(rear, Math.atan2(b.x - v.x, b.z - v.z)));
+    arr.forEach((f, i) => { f.slotAngle = rear + (arr.length === 1 ? 0 : lerp(-1, 1, i / (arr.length - 1)) * 1.1); });
+  }
+}
+function afSepFrom(b, R) {                                  // soft spacing from teammates: nobody fights shoulder-in-shoulder
+  let sx = 0, sz = 0;
+  for (const o of AF.bodies) { if (o === b || o.dead) continue; const dx = b.x - o.x, dz = b.z - o.z, d2 = dx * dx + dz * dz; if (d2 > R * R || d2 < 1e-4) continue; const d = Math.sqrt(d2), w = (1 - d / R) * (o.team === b.team ? 1 : 0.5); sx += dx / d * w; sz += dz / d * w; }
+  return [sx, sz];
+}
+function afThink(b, dt) {
+  const I = b.inp, F = AF_F; I.mx = 0; I.mz = 0; I.block = false;
+  const t = b.target && !b.target.dead ? b.target : null;
+  if (!t) { const [sx, sz] = afSepFrom(b, 2.4); I.mx = sx; I.mz = sz; return; }
+  const dx = t.x - b.x, dz = t.z - b.z, d = Math.hypot(dx, dz) || 1e-4, ux = dx / d, uz = dz / d;
+  const [sx, sz] = afSepFrom(b, 2.6);
+  I.yaw = Math.atan2(dx, dz);
+  b.strafeT -= dt; if (b.strafeT <= 0) { b.strafeT = 0.8 + Math.random() * 1.4; b.strafe = Math.random() < 0.5 ? -1 : 1; }
+  const tx = -uz * b.strafe, tz = ux * b.strafe;             // tangent around the mark
+  if (b.weapon === 'bow') {                                  // archers keep their distance, loose, and drift sideways between shots
+    b.shotCd -= dt;
+    const canShoot = b.shotCd <= 0 && !b.atk;
+    if (d < 7) { I.mx = (-ux + sx) * 0.7; I.mz = (-uz + sz) * 0.7; if (canShoot && d > 3) { I.atk++; b.shotCd = 1.1 + Math.random() * 0.8; } } // give ground — but a swordsman who keeps coming gets shot in the face
+    else if (d > 22) { I.mx = ux + sx; I.mz = uz + sz; }
+    else { I.mx = tx * 0.45 + sx; I.mz = tz * 0.45 + sz; if (canShoot) { I.atk++; b.shotCd = 1.3 + Math.random() * 1.2 * (1.3 - b.skill * 0.5); } }
+    return;
+  }
+  // hurt and pressed: back off toward the team, guard up, and let the poise come back
+  if (b.retreatT > 0) { b.retreatT -= dt; I.mx = -ux * 0.9 + sx; I.mz = -uz * 0.9 + sz; I.block = d < 4; return; }
+  if (b.hp < b.maxHp * 0.3 && b.stagger <= 0) { let near = 0; for (const o of AF.bodies) if (!o.dead && o.team !== b.team && Math.hypot(o.x - b.x, o.z - b.z) < 6) near++; if (near >= 2 && Math.random() < dt * 0.9) { b.retreatT = 1.4; return; } }
+  // a swing is coming at me: a skilled fighter blocks it or rolls out of it (once per swing)
+  const facingMe = ((b.x - t.x) * Math.sin(t.yaw) + (b.z - t.z) * Math.cos(t.yaw)) / d;
+  if (t.atk && !t.atk.hit && !t.atk.bow && d < 3.8 && facingMe > 0.3 && b.reactedTo !== t.atk) {
+    b.reactedTo = t.atk;
+    const r = Math.random();
+    if (t.atk.heavy) { if (r < b.skill * 0.8) I.dodge++; }                   // never block a heavy — roll
+    else if (r < b.skill * 0.35) b.holdBlock = t.atk.wind + 0.25;            // a quick light often beats the reaction
+    else if (r < b.skill * 0.5) I.dodge++;
+  }
+  if (b.holdBlock > 0) { b.holdBlock -= dt; I.block = true; }
+  const reach = F.reach, open = t.stagger > 0 || (t.atk && t.atk.hit) || t.flinch > 0 || (t.clashT > 0 && t.clashAtk);   // reeling, staggered, locked on my guard, or in his follow-through: punish
+  if (b.waiting) {                                           // FLANK: orbit to the rear slot; commit only from behind
+    const radius = 3.4, fromT = Math.atan2(b.x - t.x, b.z - t.z), err = angleDelta(fromT, b.slotAngle);
+    const tang = (Math.sign(err) || 1) * clamp(Math.abs(err) * 1.6, 0, 1), rad = -clamp(d - radius, -1.2, 1.2);
+    I.mx = Math.cos(fromT) * tang + (b.x - t.x) / d * rad + sx; I.mz = -Math.sin(fromT) * tang + (b.z - t.z) / d * rad + sz;
+    const behind = ((b.x - t.x) * Math.sin(t.yaw) + (b.z - t.z) * Math.cos(t.yaw)) / d < -0.25;
+    if ((behind || open) && d <= reach * 1.05 && b.cd <= 0 && !b.atk) { I.atk++; b.cd = 0.5 + Math.random() * 0.4; }
+    return;
+  }
+  if (d > reach * 0.9) {                                     // close in — a charge when far, a wary circling approach near contact
+    const circ = d < 4.5 ? 0.55 : 0.12, pace = d > 7 ? 1 : 0.85;
+    I.mx = (ux + tx * circ) * pace + sx * 1.2; I.mz = (uz + tz * circ) * pace + sz * 1.2;
+    if (open && d <= reach * 1.3 && b.cd <= 0 && !b.atk) { I.atk++; b.cd = 0.4; }   // he's open and a lunge covers the gap
+    return;
+  }
+  if (b.atk) return;
+  if (open && b.cd <= 0) { I.atk++; b.cd = 0.35 + Math.random() * 0.3; return; }   // punish the follow-through
+  if (b.cd <= 0) {
+    const guarded = t.blocking && facingMe > 0.15;
+    if (guarded) { if (Math.random() < 0.55 + b.skill * 0.3) I.heavy++; else { I.mx = tx * 0.9 + sx; I.mz = tz * 0.9 + sz; b.cd = 0.25; return; } } // crack it or go around it
+    else if (Math.random() < b.heavyBias) I.heavy++; else I.atk++;
+    b.cd = (0.3 + Math.random() * 0.45) * (1.3 - b.skill * 0.5);
+  } else {                                                   // between blows: keep the blade's length, slide sideways
+    const back = d < reach * 0.6 ? -0.5 : 0;
+    I.mx = tx * 0.4 + ux * back + sx; I.mz = tz * 0.4 + uz * back + sz;
+  }
+}
+
+// ---- the local player's input record: keyboard/mouse (or the touch stick + buttons) + the follow cam ----
+function afReadLocalInput() {
+  const I = AF.locIn, K = AF.keys, cam = AF.cam;
+  const fx = Math.sin(cam.yaw), fz = Math.cos(cam.yaw), rx = -Math.cos(cam.yaw), rz = Math.sin(cam.yaw);
+  let f = 0, s = 0;
+  if (K.has('w')) f += 1; if (K.has('s')) f -= 1; if (K.has('d')) s += 1; if (K.has('a')) s -= 1;
+  if (typeof touchMove !== 'undefined' && touchMove.active) { f += touchMove.f; s += touchMove.s; }
+  const m = Math.hypot(f, s); if (m > 1) { f /= m; s /= m; }
+  I.mx = fx * f + rx * s; I.mz = fz * f + rz * s; I.yaw = cam.yaw;
+  I.block = K.has('shift') || !!(typeof keys !== 'undefined' && keys['ShiftLeft'] && TOUCH);
+  return I;
+}
+
+// ---- the sim tick (host / solo): brains, drives, arrows, resolution ----
+function afTick(dt) {
+  if (AF.over) return;
+  if ((AF.assignT = (AF.assignT || 0) - dt) <= 0) { afAssignTargets(); AF.assignT = 0.3; }
+  for (const b of AF.bodies) {
+    if (b.dead) { afStepDead(b, dt); continue; }
+    if (b.ctrl === 'ai') afThink(b, dt);
+    afDrive(b, dt, true);
+  }
+  afSeparate();
+  for (const b of AF.bodies) if (!b.dead) b.group.position.set(b.x, b.group.position.y, b.z);
+  afStepArrows(dt, true);
+  AF.t += dt;
+  const alive = new Map();
+  for (const b of AF.bodies) if (!b.dead) alive.set(b.team, (alive.get(b.team) || 0) + 1);
+  if (alive.size <= 1) afFinish(alive.size ? [...alive.keys()][0] : -1);
+  else if (AF.t >= AF_F.timeLimit) { const st = afStandings(); afFinish(st[0].alive === st[1].alive && st[0].hp === st[1].hp ? -1 : st[0].team); }
+}
+// nobody overlaps — they shove (heavier when it's you, so you can wade through a press)
+function afSeparate() {
+  const R = 1.1, R2 = R * R, L = AF.bodies;
+  for (let i = 0; i < L.length; i++) { const b = L[i]; if (b.dead) continue;
+    for (let j = i + 1; j < L.length; j++) { const o = L[j]; if (o.dead) continue;
+      const dx = o.x - b.x, dz = o.z - b.z, d2 = dx * dx + dz * dz; if (d2 >= R2 || d2 < 1e-6) continue;
+      const d = Math.sqrt(d2), ov = R - d, nx = dx / d, nz = dz / d, wb = b.ctrl === 'ai' ? 1 : 2, wo = o.ctrl === 'ai' ? 1 : 2, tot = wb + wo;
+      b.x -= nx * ov * (wo / tot); b.z -= nz * ov * (wo / tot); o.x += nx * ov * (wb / tot); o.z += nz * ov * (wb / tot);
+    } }
+}
+function afStandings() {
+  const st = [];
+  for (let t = 0; t < AF.cfg.teams; t++) {
+    let alive = 0, hp = 0, kills = 0, names = [];
+    for (const b of AF.bodies) if (b.team === t) { kills += b.kills; if (!b.dead) { alive++; hp += b.hp; names.push(b.name); } }
+    st.push({ team: t, alive, hp: Math.round(hp), kills, names });
+  }
+  st.sort((a, b) => b.alive - a.alive || b.hp - a.hp || b.kills - a.kills);
+  return st;
+}
+function afFinish(winner, standings) {
+  AF.over = true; AF.phase = 'over'; AF.winner = winner; AF.standings = standings || afStandings();
+  if (AF.role === 'host') afSend({ k: 'over', winner, standings: AF.standings });
+  const mine = AF.me ? AF.me.team : -1;
+  afBanner(winner < 0 ? 'DRAW' : winner === mine ? 'VICTORY' : AF_TEAMS[winner].name + ' WINS', winner === mine ? 'your team holds the pit' : winner < 0 ? 'the bell rang on a stalemate' : 'the pit belongs to them', 3.5);
+  try { document.exitPointerLock && document.exitPointerLock(); } catch (e) {}
+  setTimeout(afEndPanel, 1600);
+}
+
+// ---- guest side: drive my own body, interpolate everyone else, apply the host's truth ----
+function afGuestTick(dt) {
+  for (const b of AF.bodies) {
+    if (b === AF.me && !b.dead) { afDrive(b, dt, false); continue; }
+    if (b.dead) { afStepDead(b, dt); continue; }
+    if (!b.remoteSeen) { afCommit(b, dt); continue; }
+    const k = clamp(dt * 14, 0, 1);
+    b.x = lerp(b.x, b.tx, k); b.z = lerp(b.z, b.tz, k);
+    b.yaw = angleLerp(b.yaw, b.tyaw, k);
+    b.moving = b.tstate === 1;
+    afApplyRemotePose(b, dt);
+    afCommit(b, dt);
+  }
+  afStepArrows(dt, false);
+}
+function afApplyRemotePose(b, dt) {
+  const s = b.tstate, mv = AF_MOVES[b.tmove] || 'slashR';
+  b.lookYaw = b.tyaw;                                        // a remote fighter looks where he faces (the host's snapshot carries no target)
+  const hurt = s === 5 || s === 11;
+  if (hurt && !b.tinted) { setTint(b.parts, 0x551111); b.tinted = true; } else if (!hurt && b.tinted) { setTint(b.parts, null); b.tinted = false; }
+  b.tiltX = 0;
+  switch (s) {
+    case 1: b.gait = GAIT.run; walkLegs(b.parts, b.phase += dt * GAIT.run.tempo, GAIT.run.leg); setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.2); break;
+    case 2: setPose(b.anim, MOVES[mv].windup, 0.08); restLegs(b.parts, dt, true); break;
+    case 3: setPose(b.anim, MOVES[mv].strike, 0.05); restLegs(b.parts, dt, true); break;
+    case 4: setPose(b.anim, 'guard', 0.15); restLegs(b.parts, dt, true); break;
+    case 5: case 11: setPose(b.anim, 'hurt', 0.06); restLegs(b.parts, dt, true); break;
+    case 6: setPose(b.anim, 'block', 0.1); restLegs(b.parts, dt, true); break;
+    case 7: b.rollT += dt; b.tiltX = -Math.sin(clamp(b.rollT / AF_F.dodge.dur, 0, 1) * Math.PI) * 1.05; walkLegs(b.parts, b.phase += dt * 14, 0.5, 0.6); setPose(b.anim, 'relax', 0.1); break;
+    case 12: restLegs(b.parts, dt, true); break;              // blades locked — hold whatever the blade was doing
+    case 9: setPose(b.anim, 'aimBow', 0.1); restLegs(b.parts, dt, false); break;
+    case 10: setPose(b.anim, 'looseBow', 0.05); restLegs(b.parts, dt, false); break;
+    default: setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.2); restLegs(b.parts, dt, true);
+  }
+  if (s !== 7) b.rollT = 0;
+}
+function afApplySnap(s) {
+  if (s.ph === 'fight' && AF.phase === 'countdown') { AF.phase = 'fight'; AF.countdown = 0; afBanner('FIGHT', '', 1.0); afCrowdReact(false); }
+  AF.t = s.t || AF.t;
+  for (const row of s.b || []) {
+    const b = AF.bodies[row[0]]; if (!b) continue;
+    const x = row[1] / 100, z = row[2] / 100, yaw = row[3] / 100, hp = row[4], code = row[5];
+    b.kills = row[7] || 0;
+    if (b === AF.me) {                                       // my body: the host owns hp/death/stuns; position is softly corrected
+      b.hp = hp;
+      if (code === 8 && !b.dead) afKill(b, null, true);
+      if (code === 5) b.flinch = Math.max(b.flinch, 0.12); else if (code === 11) b.stagger = Math.max(b.stagger, 0.2);
+      const ex = x - b.x, ez = z - b.z, ed = Math.hypot(ex, ez);
+      if (ed > 4) { b.x = x; b.z = z; } else { b.x += ex * 0.25; b.z += ez * 0.25; }
+      continue;
+    }
+    if (!b.remoteSeen) { b.remoteSeen = true; b.x = x; b.z = z; b.yaw = yaw; }
+    b.tx = x; b.tz = z; b.tyaw = yaw; b.tstate = code; b.tmove = row[6] || 0; b.hp = hp;
+    if (code === 8 && !b.dead) { b.dead = true; b.deadT = 0; b.hp = 0; }
+  }
+  for (const ev of s.ev || []) afApplyEvent(ev);
+}
+function afApplyEvent(ev) {
+  const b = AF.bodies[ev.i];
+  if (ev.k === 'hit' && b) {
+    const by = AF.bodies[ev.by];
+    tmpV.set(b.x, afY(b.x, b.z) + 1.3, b.z);
+    if (ev.b) { spawnSparks(tmpV, 0xffdf6b, 6); spawnPopup(b.group.position, ev.b === 2 ? 'GUARD BREAK' : 'block', ev.b === 2 ? '#ffb347' : '#ffe089'); try { SFX.clang(b.group.position, ev.b === 2); } catch (e) {} }
+    else { spawnSparks(tmpV, 0xff5a3c, 8); spawnPopup(b.group.position, String(ev.d), ev.h ? '#ffd27a' : '#ff7d6f'); try { SFX.hit(b.group.position, !!ev.h); } catch (e) {}
+      if (by) { b.hitT = 0.25; b.hitSide = Math.sign((by.x - b.x) * Math.cos(b.yaw) - (by.z - b.z) * Math.sin(b.yaw)) || 1; } b.flashT = 0.07; if (b === AF.me) AF.hurt = Math.min(1, AF.hurt + (ev.h ? 0.9 : 0.55)); afSplat(b.x, b.z, ev.h ? 1.1 : 0.7); }
+    if (by && (by === AF.me || b === AF.me)) afJuice(by, b, ev.d, !!ev.h, ev.b);   // my blow / my wound: the guest feels it too
+  } else if (ev.k === 'kill' && b) {
+    const by = AF.bodies[ev.by];
+    afLogLine((by ? by.name + ' fells ' : '') + b.name, b.teamDef.col);
+    afCrowdReact(by === AF.me || b === AF.me);
+    try { SFX.kill(b.group.position); } catch (e) {}
+    spawnSparks(tmpV.set(b.x, afY(b.x, b.z) + 1.6, b.z), 0xff6b6b, 14); afSplat(b.x, b.z, 1.6); b.deadSide = Math.random() < 0.5 ? -1 : 1; setPose(b.anim, 'relax', 0.35);
+    if (by === AF.me || b === AF.me) { addShake(FEEL.killShake); AF.hitstop = Math.max(AF.hitstop, FEEL.killStop); addFovPunch(FEEL.fovPunchKill); }
+    if (b === AF.me && !b.dead) afKill(b, null, true);
+  } else if (ev.k === 'arrow') {
+    afAddArrow(ev.t, ev.o, ev.p[0], ev.p[1], ev.p[2], new THREE.Vector3(ev.v[0], ev.v[1], ev.v[2]), 9, ev.l);
+  }
+}
+
+// ---- networking during the fight ----
+function afSend(d, to) { if (window.coop && window.coop.connected) window.coop.send(d, to); }
+function afNetTick(dt) {
+  if (AF.role === 'host') {
+    AF.snapAcc += dt; if (AF.snapAcc < AF_NET.snapDt) return; AF.snapAcc = 0;
+    const rows = [];
+    for (const b of AF.bodies) rows.push([b.idx, Math.round(b.x * 100), Math.round(b.z * 100), Math.round(b.yaw * 100), Math.round(b.hp), afStateCode(b), b.atk ? b.atk.move : 0, b.kills]);
+    afSend({ k: 'snap', t: +AF.t.toFixed(2), ph: AF.phase, b: rows, ev: AF.events });
+    AF.events = [];
+  } else if (AF.role === 'guest') {
+    AF.events = [];
+    AF.inAcc += dt; if (AF.inAcc < AF_NET.inDt) return; AF.inAcc = 0;
+    const I = AF.locIn;
+    afSend({ k: 'in', mx: +I.mx.toFixed(2), mz: +I.mz.toFixed(2), yaw: +I.yaw.toFixed(3), atk: I.atk, heavy: I.heavy, dodge: I.dodge, block: I.block ? 1 : 0 });
+  } else AF.events = [];
+}
+function afOnFightMsg(m) {
+  const d = m.data; if (!d) return;
+  if (AF.role === 'host' && d.k === 'in') {
+    let inp = AF.inputs.get(m.from);
+    if (!inp) { inp = afFreshInput(); AF.inputs.set(m.from, inp); const b = AF.bodies.find(x => x.peer === m.from); if (b) b.inp = inp; }
+    inp.mx = +d.mx || 0; inp.mz = +d.mz || 0; inp.yaw = +d.yaw || 0; inp.atk = d.atk | 0; inp.heavy = d.heavy | 0; inp.dodge = d.dodge | 0; inp.block = !!d.block;
+  } else if (AF.role === 'guest') {
+    if (d.k === 'snap') afApplySnap(d);
+    else if (d.k === 'over' && !AF.over) afFinish(d.winner, d.standings);
+    else if (d.k === 'go') afBoot(d);                        // a rematch
+  }
+}
+function afPeerLeftFight(id) {
+  const b = AF.bodies.find(x => x.peer === id);
+  if (b && !b.dead) { b.ctrl = 'ai'; b.inp = afFreshInput(); b.inp.yaw = b.yaw; b.kind = 'npc'; afLogLine(b.name + ' left — a fighter of the vale takes the sword', '#c9bfda'); }
+  for (const r of AF.roster) if (r.peer === id) { r.kind = 'npc'; r.peer = null; }
+  AF.inputs.delete(id);
+}
+
+// ---- frame ----
+function afFrame(now, noRaf) {
+  const dt = clamp((now - (AF.last || now)) / 1000, 0, 0.05); AF.last = now; // never negative: a stale clock must not run the fight backwards
+  rtNow = now / 1000;
+  let gdt = dt;                                              // hit-stop: the fight crawls for a few frames on impact; camera/FX stay real-time
+  if (AF.hitstop > 0) { AF.hitstop -= dt; gdt = dt * 0.08; }
+  if (AF.phase === 'countdown') { AF.countdown -= dt; if (AF.countdown <= 0) { AF.phase = 'fight'; afBanner('FIGHT', '', 1.0); afCrowdReact(false); } } // guests count too (the host's snapshot also flips it)
+  if (AF.me && !AF.me.dead && AF.phase === 'fight') afReadLocalInput(); else { const I = AF.locIn; I.mx = I.mz = 0; I.block = false; }
+  if (AF.phase === 'fight' || AF.phase === 'over') {
+    if (AF.role === 'guest') afGuestTick(gdt);
+    else afTick(gdt);
+    afNetTick(dt);
+  } else if (AF.phase === 'countdown') {
+    for (const b of AF.bodies) { restLegs(b.parts, dt, true); setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.3); afCommit(b, dt); }
+    if (AF.role === 'guest') afNetTick(dt);
+  }
+  updateSparks(gdt); updatePopups(gdt); updateArcs(dt); updateTrails(dt); afStepSplats(dt);
+  const TT = AF_TIMES[AF.cfg.time] || AF_TIMES.day;
+  for (const t of AF.torches) { const f = 0.85 + Math.sin(rtNow * 9 + t.position.x) * 0.15 + Math.random() * 0.1; t.userData.flame.scale.setScalar((t.userData.flameBase || 1) * (0.85 + f * 0.25)); if (t.userData.light) t.userData.light.intensity = (TT.torch || 1.3) * f; }
+  afStepWeather(dt); afStepCrowd(dt);
+  if (AF.me) player.pos.set(AF.me.x, 0, AF.me.z);            // the synth attenuates sounds toward the hero — in the pit that's your fighter
+  if (TOUCH && window.updateTouchHud) window.updateTouchHud(); // the stick + ATK/HVY/BLOCK/DODGE set
+  afCamera(dt);
+  if ((++AF._hc % 4) === 0) afUpdateHud();
+  if (AF.motes) { AF.motes.position.x = Math.sin(rtNow * 0.13) * 3; AF.motes.position.z = Math.cos(rtNow * 0.11) * 3; AF.motes.position.y = Math.sin(rtNow * 0.21) * 0.8; AF.motes.rotation.y = rtNow * 0.01; }
+  if (AF_POST.on) afPostRender(); else renderer.render(scene, camera);
+  if (!noRaf) requestAnimationFrame(loop);
+}
+function afCamera(dt) {
+  const me = AF.me, cam = AF.cam;
+  if (me && !me.dead) {
+    const hy = afY(me.x, me.z) + 1.55, cp = Math.cos(cam.pitch);
+    tmpV.set(me.x - Math.sin(cam.yaw) * cam.dist * cp, hy + cam.dist * Math.sin(cam.pitch) + 0.6, me.z - Math.cos(cam.yaw) * cam.dist * cp);
+    if (AF.phase === 'countdown') {                          // the SWEEP: from high over the pit down onto your shoulder as the bell nears
+      const k = 1 - clamp(AF.countdown / AF_F.countdown, 0, 1), e = k * k * (3 - 2 * k), a = cam.yaw + Math.PI * 0.9 * (1 - e);
+      const r = lerp(52, cam.dist, e), h = lerp(34, tmpV.y - hy, e);
+      tmpV2.set(me.x - Math.sin(a) * r, hy + h, me.z - Math.cos(a) * r);
+      camera.position.copy(tmpV2); camera.lookAt(me.x, hy + 0.2, me.z);
+    } else { camera.position.lerp(tmpV, clamp(dt * 14, 0, 1)); camera.lookAt(me.x, hy, me.z); }
+    const sp = Math.hypot(me.vx, me.vz); AF.fov = lerp(AF.fov, CAM_BASE_FOV + clamp(sp / AF_F.move, 0, 1.2) * 5, clamp(dt * 4, 0, 1)); // a run widens the lens
+  } else {                                                  // spectating: orbit the pit (drag to turn, wheel to zoom)
+    const o = AF.orbit; if (!o.drag) o.theta += dt * 0.06;
+    const st = Math.sin(o.phi);
+    tmpV.set(o.r * st * Math.sin(o.theta), 6 + o.r * Math.cos(o.phi), o.r * st * Math.cos(o.theta));
+    camera.position.lerp(tmpV, clamp(dt * 3, 0, 1)); camera.lookAt(0, 2, 0);
+    AF.fov = lerp(AF.fov, CAM_BASE_FOV, clamp(dt * 4, 0, 1));
+  }
+  if (trauma > 0) {                                         // the same shake, kick and FOV punch the field fights use
+    trauma = Math.max(0, trauma - dt * 2.0);
+    const sh = trauma * trauma, t = rtNow * 30;
+    camera.position.x += Math.sin(t) * sh * 0.5; camera.position.y += Math.cos(t * 1.31) * sh * 0.4; camera.position.z += Math.sin(t * 1.73) * sh * 0.35;
+    camera.rotation.z += Math.sin(t * 1.13) * sh * 0.035;
+  }
+  if (camKick.lengthSq() > 1e-6) { camera.position.add(camKick); camKick.multiplyScalar(clamp(1 - dt * FEEL.camKickDecay, 0, 1)); if (camKick.lengthSq() < 1e-5) camKick.set(0, 0, 0); }
+  if (fovPunch > 0.001) { fovPunch *= clamp(1 - dt * FEEL.fovDecay, 0, 1); if (fovPunch < 0.02) fovPunch = 0; }
+  const wantFov = AF.fov - fovPunch;
+  if (Math.abs(camera.fov - wantFov) > 0.001) { camera.fov = wantFov; camera.updateProjectionMatrix(); }
+  AF.hurt = Math.max(0, AF.hurt - dt * 1.6);
+}
+/* ---- POST: a small pipeline of our own (three core only): scene → bright pass → separable blur → composite.
+   Bloom lifts the torches, sparks, blade trails and the sun; a vignette frames the pit; the edges flush red
+   when you're hit and pulse when you're near death; a touch of contrast/saturation finishes the grade. ---- */
+const AF_POST = { on: false, w: 0, h: 0 };
+function afPostInit() {
+  const P = AF_POST; if (P.on) return; P.on = true;
+  P.cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1); P.scene = new THREE.Scene();
+  P.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), null); P.scene.add(P.quad);
+  const VS = 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }';
+  P.bright = new THREE.ShaderMaterial({ uniforms: { tex: { value: null }, thr: { value: 0.66 } }, vertexShader: VS, depthTest: false, depthWrite: false, fragmentShader:
+    'uniform sampler2D tex; uniform float thr; varying vec2 vUv; void main(){ vec3 c = texture2D(tex, vUv).rgb; float l = dot(c, vec3(0.299, 0.587, 0.114)); float k = smoothstep(thr, thr + 0.35, l); gl_FragColor = vec4(c * k, 1.0); }' });
+  P.blur = new THREE.ShaderMaterial({ uniforms: { tex: { value: null }, dir: { value: new THREE.Vector2(1, 0) } }, vertexShader: VS, depthTest: false, depthWrite: false, fragmentShader:
+    'uniform sampler2D tex; uniform vec2 dir; varying vec2 vUv; void main(){ vec3 s = texture2D(tex, vUv).rgb * 0.227; s += (texture2D(tex, vUv + dir * 1.385).rgb + texture2D(tex, vUv - dir * 1.385).rgb) * 0.316; s += (texture2D(tex, vUv + dir * 3.231).rgb + texture2D(tex, vUv - dir * 3.231).rgb) * 0.070; gl_FragColor = vec4(s, 1.0); }' });
+  P.comp = new THREE.ShaderMaterial({ uniforms: { tex: { value: null }, bloom: { value: null }, strength: { value: 0.7 }, vig: { value: 0.42 }, hurt: { value: 0 }, low: { value: 0 } }, vertexShader: VS, depthTest: false, depthWrite: false, fragmentShader:
+    'uniform sampler2D tex; uniform sampler2D bloom; uniform float strength; uniform float vig; uniform float hurt; uniform float low; varying vec2 vUv;' +
+    'void main(){ vec3 c = texture2D(tex, vUv).rgb + texture2D(bloom, vUv).rgb * strength;' +
+    ' float l = dot(c, vec3(0.299, 0.587, 0.114)); c = mix(vec3(l), c, 1.12); c = (c - 0.5) * 1.06 + 0.5;' +           // a little saturation + contrast
+    ' vec2 d = vUv - 0.5; float r = dot(d, d) * 2.4; c *= 1.0 - smoothstep(0.35, 1.25, r) * vig;' +                        // vignette
+    ' float edge = smoothstep(0.15, 1.0, r); c = mix(c, vec3(0.55, 0.02, 0.02), edge * clamp(hurt * 0.8 + low, 0.0, 0.85));' + // the red flush when hurt / near death
+    ' gl_FragColor = vec4(c, 1.0); }' });
+  P.comp.toneMapped = false; P.bright.toneMapped = false; P.blur.toneMapped = false;
+}
+function afPostSize() {
+  const P = AF_POST, sz = renderer.getDrawingBufferSize(new THREE.Vector2()), w = Math.max(4, sz.x | 0), h = Math.max(4, sz.y | 0); // a hidden tab reports 0×0
+  if (P.rt && w === P.w && h === P.h) return; P.w = w; P.h = h;
+  for (const k of ['rt', 'ra', 'rb']) if (P[k]) P[k].dispose();
+  const opt = { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat };
+  P.rt = new THREE.WebGLRenderTarget(w, h, opt); P.rt.depthBuffer = true;
+  const bw = Math.max(64, w >> 2), bh = Math.max(64, h >> 2);
+  P.ra = new THREE.WebGLRenderTarget(bw, bh, opt); P.rb = new THREE.WebGLRenderTarget(bw, bh, opt);
+  P.blurStep = new THREE.Vector2(1 / bw, 1 / bh);
+}
+function afPostRender() {
+  const P = AF_POST; afPostSize();
+  const pr = renderer.getPixelRatio();
+  renderer.setRenderTarget(P.rt); renderer.render(scene, camera);
+  const pass = (mat, tex, target) => { mat.uniforms.tex.value = tex; P.quad.material = mat; renderer.setRenderTarget(target); renderer.render(P.scene, P.cam); };
+  pass(P.bright, P.rt.texture, P.ra);
+  P.blur.uniforms.dir.value.set(P.blurStep.x, 0); pass(P.blur, P.ra.texture, P.rb);
+  P.blur.uniforms.dir.value.set(0, P.blurStep.y); pass(P.blur, P.rb.texture, P.ra);
+  P.blur.uniforms.dir.value.set(P.blurStep.x * 2, 0); pass(P.blur, P.ra.texture, P.rb);
+  P.blur.uniforms.dir.value.set(0, P.blurStep.y * 2); pass(P.blur, P.rb.texture, P.ra);
+  const me = AF.me, low = me && !me.dead ? clamp((0.35 - me.hp / me.maxHp) / 0.35, 0, 1) * (0.35 + 0.15 * Math.sin(rtNow * 5)) : 0;
+  P.comp.uniforms.bloom.value = P.ra.texture; P.comp.uniforms.hurt.value = AF.hurt; P.comp.uniforms.low.value = low;
+  pass(P.comp, P.rt.texture, null);
+}
+function afInstallControls() {
+  if (AF.installed) return; AF.installed = true;
+  const locked = () => document.pointerLockElement === canvas;
+  const o = AF.orbit; let px = 0, py = 0;
+  canvas.addEventListener('pointerdown', e => {
+    if (!AF.on) return;
+    if (AF.me && !AF.me.dead && AF.phase !== 'over') {
+      if (locked()) { if (e.button === 2) AF.locIn.heavy++; else if (e.button === 0) AF.locIn.atk++; }
+      else if (!TOUCH) { try { const p = canvas.requestPointerLock(); if (p && p.catch) p.catch(() => {}); } catch (err) {} }
+      return;
+    }
+    o.drag = true; px = e.clientX; py = e.clientY;
+  });
+  window.addEventListener('pointermove', e => {
+    if (!AF.on) return;
+    if (AF.me && !AF.me.dead) { if (!locked()) return; AF.cam.yaw -= (e.movementX || 0) * 0.0026; AF.cam.pitch = clamp(AF.cam.pitch + (e.movementY || 0) * 0.0022, -0.1, 1.1); return; }
+    if (!o.drag) return;
+    o.theta -= (e.clientX - px) * 0.01; o.phi = clamp(o.phi - (e.clientY - py) * 0.01, 0.15, 1.45); px = e.clientX; py = e.clientY;
+  });
+  window.addEventListener('pointerup', () => { o.drag = false; });
+  canvas.addEventListener('wheel', e => {
+    if (!AF.on) return; e.preventDefault();
+    if (AF.me && !AF.me.dead) AF.cam.dist = clamp(AF.cam.dist * (1 + Math.sign(e.deltaY) * 0.1), 3.5, 14);
+    else o.r = clamp(o.r * (1 + Math.sign(e.deltaY) * 0.08), 20, 160);
+  }, { passive: false });
+  window.addEventListener('keydown', e => {
+    if (!AF.on) return;
+    const k = e.key.toLowerCase();
+    if ('wasd'.includes(k) && k.length === 1) AF.keys.add(k);
+    if (e.key === 'Shift') AF.keys.add('shift');
+  });
+  window.addEventListener('keyup', e => { const k = e.key.toLowerCase(); if ('wasd'.includes(k) && k.length === 1) AF.keys.delete(k); if (e.key === 'Shift') AF.keys.delete('shift'); });
+  window.addEventListener('blur', () => AF.keys.clear());
+  if (TOUCH) {                                              // the right half of the screen steers the cam (touch has no pointer lock)
+    let lookId = null, lx = 0;
+    canvas.addEventListener('touchstart', e => { if (!AF.on) return; for (const t of e.changedTouches) if (t.clientX > innerWidth * 0.5 && lookId === null) { lookId = t.identifier; lx = t.clientX; } }, { passive: true });
+    addEventListener('touchmove', e => { if (!AF.on || lookId === null) return; for (const t of e.changedTouches) if (t.identifier === lookId) { AF.cam.yaw -= (t.clientX - lx) * 0.005; lx = t.clientX; } }, { passive: true });
+    const end = e => { for (const t of e.changedTouches) if (t.identifier === lookId) lookId = null; };
+    addEventListener('touchend', end); addEventListener('touchcancel', end);
+  }
+}
+
+// ---- HUD: team tallies, your bar, the clock, the banner, the kill log, the end panel ----
+function afHud() {
+  let p = document.getElementById('af-hud');
+  if (!p) {
+    p = document.createElement('div'); p.id = 'af-hud';
+    p.style.cssText = 'position:fixed;left:12px;top:12px;z-index:40;background:rgba(16,14,24,.82);border:1px solid #3a3247;border-radius:10px;padding:10px 14px;min-width:170px;font:13px system-ui;color:#e8def8;pointer-events:none';
+    document.body.appendChild(p);
+    const me = document.createElement('div'); me.id = 'af-me';
+    me.style.cssText = 'position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:40;background:rgba(16,14,24,.82);border:1px solid #3a3247;border-radius:10px;padding:8px 16px;min-width:260px;font:13px system-ui;color:#e8def8;text-align:center;pointer-events:none';
+    document.body.appendChild(me);
+    const ban = document.createElement('div'); ban.id = 'af-banner';
+    ban.style.cssText = 'position:fixed;left:50%;top:22%;transform:translateX(-50%);z-index:41;text-align:center;pointer-events:none;opacity:0;transition:opacity .25s';
+    document.body.appendChild(ban);
+    const lg = document.createElement('div'); lg.id = 'af-log';
+    lg.style.cssText = 'position:fixed;right:12px;top:12px;z-index:40;font:12px system-ui;color:#e8def8;text-align:right;pointer-events:none;text-shadow:0 1px 3px #000';
+    document.body.appendChild(lg);
+  }
+  AF.hudEl = p; p.style.display = ''; document.getElementById('af-me').style.display = ''; document.getElementById('af-log').style.display = '';
+  afUpdateHud();
+}
+function afUpdateHud() {
+  const p = AF.hudEl; if (!p || !AF.on) return;
+  const tally = new Map(); for (const b of AF.bodies) { const t = tally.get(b.team) || { alive: 0, total: 0 }; t.total++; if (!b.dead) t.alive++; tally.set(b.team, t); }
+  const rem = Math.max(0, AF_F.timeLimit - AF.t), mm = Math.floor(rem / 60), ss = Math.floor(rem % 60);
+  let html = '<div style="display:flex;justify-content:space-between;gap:14px;margin-bottom:6px"><b style="color:#ffe089">⚔ Arena</b><span style="color:#c9bfda">' + (AF.phase === 'countdown' ? 'ready…' : mm + ':' + (ss < 10 ? '0' : '') + ss) + '</span></div>';
+  for (let t = 0; t < AF.cfg.teams; t++) { const c = tally.get(t) || { alive: 0, total: 0 }, me = AF.me && AF.me.team === t;
+    html += '<div style="display:flex;justify-content:space-between;gap:10px;margin-top:2px' + (c.alive ? '' : ';opacity:.45') + '"><span style="color:' + AF_TEAMS[t].col + ';font-weight:800">' + AF_TEAMS[t].name + (me ? ' ◉' : '') + '</span><span style="font-weight:800">' + c.alive + '<span style="opacity:.5;font-weight:400">/' + c.total + '</span></span></div>'; }
+  p.innerHTML = html;
+  const me = document.getElementById('af-me'), b = AF.me;
+  if (me) {
+    if (b) {
+      const hp = clamp(b.hp / b.maxHp, 0, 1);
+      me.innerHTML = '<div style="display:flex;justify-content:space-between;gap:12px"><b style="color:' + b.teamDef.col + '">' + b.name + '</b><span style="color:#c9bfda">' + b.kills + ' kill' + (b.kills === 1 ? '' : 's') + '</span></div>' +
+        '<div style="height:8px;margin:5px 0 4px;border-radius:4px;background:#2a2438;overflow:hidden"><div style="height:100%;width:' + Math.round(hp * 100) + '%;background:' + (hp > 0.35 ? '#8fd08f' : '#ff6a5a') + '"></div></div>' +
+        '<div style="font-size:11px;color:#9a90ab">' + (b.dead ? 'you fell — drag to look around' : TOUCH ? 'stick move · drag right side aim · ATK / HVY / BLOCK / DODGE' : 'WASD move · mouse aim · click ' + (b.weapon === 'bow' ? 'shoot' : 'strike') + ' · right-click heavy · Shift block · Space dodge' + (document.pointerLockElement === canvas ? '' : ' · <b style="color:#ffe089">click to aim</b>')) + '</div>';
+    } else me.innerHTML = '<span style="color:#9a90ab">spectating</span>';
+  }
+}
+let _afBanT = null;
+function afBanner(big, sub, secs) {
+  const el = document.getElementById('af-banner'); if (!el) return;
+  el.innerHTML = '<div style="font:900 54px system-ui;letter-spacing:6px;color:#ffe089;text-shadow:0 4px 24px rgba(0,0,0,.8)">' + big + '</div>' + (sub ? '<div style="font:600 16px system-ui;color:#e8def8;text-shadow:0 2px 8px #000;margin-top:4px">' + sub + '</div>' : '');
+  el.style.opacity = '1';
+  if (_afBanT) clearTimeout(_afBanT);
+  _afBanT = setTimeout(() => { el.style.opacity = '0'; }, (secs || 1.5) * 1000);
+}
+function afLogLine(text, col) {
+  AF.log.push({ text, col, t: performance.now() }); if (AF.log.length > 6) AF.log.shift();
+  const el = document.getElementById('af-log'); if (el) el.innerHTML = AF.log.map(l => '<div style="color:' + (l.col || '#e8def8') + ';margin-top:3px">' + l.text + '</div>').join('');
+}
+function afEndPanel() {
+  let p = document.getElementById('af-end');
+  if (!p) { p = document.createElement('div'); p.id = 'af-end'; p.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);min-width:340px;max-width:86vw;background:rgba(16,12,24,.95);border:1px solid #ffd34d;border-radius:14px;padding:20px 24px;z-index:60;color:#f3ead8;box-shadow:0 10px 40px rgba(0,0,0,.6);font-family:inherit;text-align:center'; document.body.appendChild(p); }
+  const st = AF.standings || afStandings(), w = AF.winner;
+  p.innerHTML = '<h2 style="margin:0 0 4px;font-size:26px;color:#ffd34d">' + (w < 0 ? 'Draw' : AF_TEAMS[w].name + ' holds the pit') + '</h2>' +
+    '<div style="font-size:13px;opacity:.7;margin-bottom:12px">' + (AF.me && AF.me.team === w ? 'Your team won.' : AF.me ? 'Your team fell.' : '') + '</div>' +
+    st.map((s, i) => '<div style="display:flex;justify-content:space-between;gap:16px;padding:6px 0;border-top:1px solid #3a3247;font-size:14px"><span><b style="color:' + AF_TEAMS[s.team].col + '">' + (i + 1) + '. ' + AF_TEAMS[s.team].name + '</b> <span style="opacity:.6;font-size:12px">' + (s.names.length ? s.names.join(', ') : 'all fallen') + '</span></span><span>' + s.alive + ' standing · ' + s.kills + ' kills</span></div>').join('') +
+    '<div style="display:flex;gap:10px;justify-content:center;margin-top:16px">' +
+    (AF.role !== 'guest' ? '<button id="af-rematch" style="background:#3a6fd0;color:#fff;border:none;border-radius:8px;padding:9px 18px;cursor:pointer;font-weight:700">↻ Rematch</button>' : '<span style="font-size:12px;opacity:.7;align-self:center">waiting for the host…</span>') +
+    '<button id="af-leave" style="background:#2a2233;color:#f3ead8;border:1px solid #6b5e7a;border-radius:8px;padding:9px 18px;cursor:pointer">Leave the pit</button></div>';
+  p.style.display = 'block';
+  const rb = document.getElementById('af-rematch'); if (rb) rb.onclick = () => { p.style.display = 'none'; afRematch(); };
+  document.getElementById('af-leave').onclick = () => { afLeaveToMenu(); };
+}
+function afRematch() {
+  const spec = { k: 'go', seed: (Math.random() * 0xffffffff) >>> 0, teams: AF.cfg.teams, per: AF.cfg.per, time: AF.cfg.time, weather: AF.cfg.weather, roster: AF.roster.map(r => ({ ...r })) };
+  if (AF.role === 'host') afSend(spec);
+  afBoot(spec);
+}
+function afLeaveToMenu() {
+  try { if (window.coop && window.coop.connected) window.coop.leave(); } catch (e) {}
+  location.href = location.pathname + (location.search.replace(/[?&]arena(=[^&]*)?/, '').replace(/^&/, '?') || '');
+}
+
+// ---- lifecycle ----
+function afClear() {
+  for (const b of AF.bodies) { scene.remove(b.group); try { disposeGroup(b.group); } catch (e) {} if (b.tag) { scene.remove(b.tag); try { disposeGroup(b.tag); } catch (e) {} } }
+  for (const a of AF.arrows) { scene.remove(a.g); try { disposeGroup(a.g); } catch (e) {} }
+  for (const p of AF.props) { scene.remove(p); try { disposeGroup(p); } catch (e) {} }
+  AF.bodies.length = 0; AF.arrows.length = 0; AF.props.length = 0; AF.torches = []; AF.crowd = [];
+  for (const o of _afSplats) scene.remove(o.m); _afSplats.length = 0;
+  if (AF.ground) { scene.remove(AF.ground); try { disposeGroup(AF.ground); } catch (e) {} AF.ground = null; }
+  const ep = document.getElementById('af-end'); if (ep) ep.style.display = 'none';
+  AF.log.length = 0; const lg = document.getElementById('af-log'); if (lg) lg.innerHTML = '';
+}
+// spec = { seed, teams, per, roster:[{t,s,name,kind:'host'|'player'|'npc',peer,weapon}] } — identical on every client
+function afBoot(spec) {
+  const first = !AF.on;
+  AF.on = true; AF.seed = spec.seed >>> 0 || 1; AF.cfg = { teams: spec.teams, per: spec.per, time: spec.time || 'day', weather: spec.weather || 'clear' }; AF.roster = spec.roster;
+  if (first) {
+    try { setBattleDressing(false); } catch (e) {}
+    for (const c of scene.children.slice()) { if (!c.isLight) c.visible = false; } // strip the boot-time world clutter
+    scene.background = new THREE.Color(0xe9dfd0);
+    const hudEl = document.getElementById('hud'); if (hudEl) hudEl.classList.add('hidden');
+    document.querySelectorAll('.overlay').forEach(o => o.classList.add('hidden'));
+    const inv = document.getElementById('arena-invite'); if (inv) inv.classList.add('hidden');
+    // the pit is small enough to afford the full look everywhere: crisp shadows over the whole ring, native pixel
+    // density (the phone tier's 1× looked soft), filmic tone mapping, warm key light + cool fill
+    try {
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      renderer.shadowMap.enabled = true; sun.castShadow = true;
+      sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -0.0006; sun.shadow.normalBias = 0.02;
+      const sc = sun.shadow.camera; sc.left = -52; sc.right = 52; sc.top = 52; sc.bottom = -52; sc.near = 5; sc.far = 220; sc.updateProjectionMatrix();
+      sun.position.set(48, 70, 30); sun.intensity = 1.25; sun.color.setHex(0xfff0d0);
+      hemi.intensity = 0.7; hemi.color.setHex(0xbfd8ff); hemi.groundColor.setHex(0x6a5a44);
+      renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 0.92;
+      scene.traverse(o => { if (o.material) { const ms = Array.isArray(o.material) ? o.material : [o.material]; for (const m of ms) m.needsUpdate = true; } });
+    } catch (e) {}
+    const fill = new THREE.DirectionalLight(0xa8c4ff, 0.3); fill.position.set(-40, 30, -20); scene.add(fill);
+    try { renderer.shadowMap.type = THREE.PCFSoftShadowMap; } catch (e) {}
+    try {                                                    // the sun itself (a soft additive disc the bloom catches)
+      const c = document.createElement('canvas'); c.width = c.height = 128; const ctx = c.getContext('2d');
+      const gr = ctx.createRadialGradient(64, 64, 4, 64, 64, 64); gr.addColorStop(0, 'rgba(255,250,230,1)'); gr.addColorStop(0.25, 'rgba(255,236,190,0.9)'); gr.addColorStop(0.6, 'rgba(255,220,160,0.25)'); gr.addColorStop(1, 'rgba(255,210,150,0)');
+      ctx.fillStyle = gr; ctx.fillRect(0, 0, 128, 128);
+      const sunSpr = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+      sunSpr.position.copy(sun.position).normalize().multiplyScalar(205); sunSpr.scale.set(46, 46, 1); scene.add(sunSpr); AF.sunSpr = sunSpr;
+    } catch (e) {}
+    try {                                                    // dust motes hanging in the air over the sand
+      const n = 500, pos = new Float32Array(n * 3);
+      for (let i = 0; i < n; i++) { pos[i * 3] = (Math.random() - 0.5) * 80; pos[i * 3 + 1] = Math.random() * 10 + 0.3; pos[i * 3 + 2] = (Math.random() - 0.5) * 80; }
+      const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      AF.motes = new THREE.Points(g, new THREE.PointsMaterial({ color: 0xfff0d0, size: 0.11, transparent: true, opacity: 0.55, depthWrite: false })); scene.add(AF.motes);
+    } catch (e) {}
+    try { afPostInit(); } catch (e) { AF_POST.on = false; }
+    afInstallControls();
+    if (AF.whoTimer) { clearInterval(AF.whoTimer); AF.whoTimer = null; }
+  }
+  afClear();
+  const r = _mulberry32(AF.seed);
+  AF.terr = { p1: r() * TAU, p2: r() * TAU, p3: r() * TAU };
+  editTerrainFn = afY;
+  AF.ground = afBuildGround(); scene.add(AF.ground);
+  const wall = afBuildWall(); scene.add(wall); AF.props.push(wall);
+  afApplyTime();                                             // day / dusk / night, clear / rain — the same on every client
+  for (let t = 0; t < AF.cfg.teams; t++) {                  // a banner behind each team's spawn
+    try { const sp = afSpawn(t, AF.cfg.teams), ban = makeBanner(AF_TEAMS[t].pal.cloth); const bx = sp.cx * 1.32, bz = sp.cz * 1.32; ban.position.set(bx, afY(bx, bz), bz); ban.rotation.y = sp.yaw; scene.add(ban); AF.props.push(ban); } catch (e) {}
+  }
+  AF.me = null; AF.inputs.clear();
+  spec.roster.forEach((entry, i) => {
+    const b = afMakeBody(entry, i, r);
+    AF.bodies.push(b);
+    const mine = AF.role === 'guest' ? (entry.kind === 'player' && entry.peer === window.coop.id) : entry.kind === 'host';
+    if (mine) { AF.me = b; b.inp = AF.locIn; }
+    else if (entry.kind === 'player' && AF.role === 'host') { const inp = AF.inputs.get(entry.peer) || afFreshInput(); inp.yaw = b.yaw; AF.inputs.set(entry.peer, inp); b.inp = inp; b.peer = entry.peer; }
+    else if (entry.kind !== 'npc' && AF.role === 'guest') { b.ctrl = 'remote'; }
+    else if (entry.kind !== 'npc') { b.ctrl = 'ai'; }        // a solo fight lists no players; a stale peer becomes an NPC
+  });
+  const I = AF.locIn; I.atk = I.heavy = I.dodge = 0; I.block = false; AF.keys.clear();
+  if (AF.me) { AF.cam.yaw = AF.me.yaw; AF.cam.pitch = 0.3; AF.me.seenAtk = AF.me.seenHeavy = AF.me.seenDodge = 0; }
+  AF.phase = 'countdown'; AF.countdown = AF_F.countdown; AF.t = 0; AF.over = false; AF.winner = -1; AF.standings = null; AF.events = []; AF._hc = 0; AF.last = 0; AF.hitstop = 0; AF.assignT = 0; trauma = 0; camKick.set(0, 0, 0); fovPunch = 0;
+  AF.orbit.theta = AF.me ? AF.me.yaw + Math.PI : 0.4; AF.roar = 0; AF.waveT = 0; AF.nextWave = 22 + Math.random() * 10;
+  afHud();
+  afBanner(AF.cfg.teams + ' TEAMS · ' + AF.cfg.per + ' EACH', AF.me ? 'you fight for ' + AF.me.teamDef.name + ' — steel yourself' : '', 2.6);
+  try { console.log('[arena]', JSON.stringify({ seed: AF.seed, teams: AF.cfg.teams, per: AF.cfg.per, role: AF.role, bodies: AF.bodies.length })); } catch (e) {}
+}
+
+/* ---- the LOBBY: teams × fighters, seats, invites (title screen) ---- */
+function afSession() { return (window.net && window.net.session) ? window.net.session.username : null; }
+function afNetConnect() {                                    // one socket, announced under the signed-in name (the invite address)
+  const u = afSession(); if (!u || !window.coop) return Promise.resolve(false);
+  afNetWire();
+  return window.coop.connect(u, 'arena', u).then(ok => ok);
+}
+let _afWired = false;
+function afNetWire() {
+  if (_afWired || !window.coop) return; _afWired = true;
+  const C = window.coop;
+  C.on('invite', afShowInvite);
+  C.on('invite-fail', m => { if (AF.lobby) { AF.lobby.invites.set(m.to, 'not online'); afLobbyRender(); } });
+  C.on('who', m => { AF.online = m.list || []; if (AF.lobby) afLobbyRender(); });
+  C.on('peer-join', m => { if (AF.lobby && AF.lobby.role === 'host') { afSeat(m.id, m.name); afLobbyRender(); afLobbyBroadcast(); } });
+  C.on('peer-leave', m => { if (AF.on && AF.role === 'host') afPeerLeftFight(m.id); if (AF.lobby && AF.lobby.role === 'host') { afUnseat(m.id); afLobbyRender(); afLobbyBroadcast(); } });
+  C.on('joined', m => { if (AF.pendingRoom) { AF.pendingRoom = null; afOpenLobby('guest', m.beacon || {}); } });
+  C.on('join-fail', () => { if (AF.pendingRoom) { AF.pendingRoom = null; afLobbyMsg('That fight is gone — the host left the lobby.'); afOpenLobby('host'); } });
+  C.on('host-gone', () => { if (AF.on && AF.role === 'guest') { afBanner('HOST LEFT', 'the fight is over', 3); setTimeout(afLeaveToMenu, 2500); } else if (AF.lobby && AF.lobby.role === 'guest') { afLobbyMsg('The host closed the lobby.'); afOpenLobby('host'); } });
+  C.on('disconnect', () => { if (AF.on && AF.role !== 'solo') { afBanner('DISCONNECTED', 'lost the war-net', 3); setTimeout(afLeaveToMenu, 2500); } });
+  C.on('msg', m => {
+    const d = m.data; if (!d) return;
+    if (AF.on) { afOnFightMsg(m); return; }
+    if (!AF.lobby) return;
+    if (AF.lobby.role === 'guest') { if (d.k === 'lobby') afLobbyApply(d); else if (d.k === 'go') { AF.role = 'guest'; afCloseLobbyUi(); afBoot(d); } }
+    else if (AF.lobby.role === 'host') {
+      if (d.k === 'team') { afMoveSeat(m.from, d.t | 0); afLobbyRender(); afLobbyBroadcast(); }
+      else if (d.k === 'weapon') { const s = afFindSeat(m.from); if (s) { s.weapon = d.w === 'bow' ? 'bow' : 'sword'; afLobbyRender(); afLobbyBroadcast(); } }
+      else if (d.k === 'invite-declined') { AF.lobby.invites.set(d.name, 'declined'); afLobbyRender(); }
+    }
+  });
+}
+function afNewLobby(role) {
+  const L = { role, teams: 2, per: 3, weapon: 'sword', time: 'day', weather: 'clear', slots: [], invites: new Map(), host: afSession() || 'You', room: null };
+  afResize(L); return L;
+}
+function afResize(L) {
+  const seated = [];                                        // keep every human, in seat order, re-seated into the new grid
+  for (const row of L.slots) for (const s of row) if (s) seated.push(s);
+  if (!seated.length) seated.push({ kind: 'host', name: L.host, peer: null, weapon: L.weapon });
+  L.slots = []; for (let t = 0; t < L.teams; t++) { const row = []; for (let s = 0; s < L.per; s++) row.push(null); L.slots.push(row); }
+  for (const p of seated) afPlace(L, p, p.pref);
+}
+function afPlace(L, p, prefTeam) {                          // first free seat: the preferred team, else the team with the fewest humans
+  const order = [];
+  for (let t = 0; t < L.teams; t++) order.push(t);
+  order.sort((a, b) => (a === prefTeam ? -1 : b === prefTeam ? 1 : 0) || (L.slots[a].filter(Boolean).length - L.slots[b].filter(Boolean).length));
+  for (const t of order) { const i = L.slots[t].indexOf(null); if (i >= 0) { L.slots[t][i] = p; p.pref = t; return true; } }
+  return false;
+}
+function afSeat(peer, name) { const L = AF.lobby; if (afFindSeat(peer)) return; afPlace(L, { kind: 'player', name: String(name || 'Ally').slice(0, 24), peer, weapon: 'sword' }); L.invites.set(name, 'joined'); }
+function afUnseat(peer) { const L = AF.lobby; for (const row of L.slots) for (let i = 0; i < row.length; i++) if (row[i] && row[i].peer === peer) { L.invites.delete(row[i].name); row[i] = null; } }
+function afFindSeat(peer) { for (const row of AF.lobby.slots) for (const s of row) if (s && s.peer === peer) return s; return null; }
+function afMoveSeat(peer, t) { const L = AF.lobby, s = afFindSeat(peer); if (!s || t < 0 || t >= L.teams || L.slots[t].indexOf(null) < 0) return; afUnseat(peer); afPlace(L, s, t); }
+function afHostSeat() { for (const row of AF.lobby.slots) for (const s of row) if (s && s.kind === 'host') return s; return null; }
+function afCloseLobbyUi() { const el = document.getElementById('arena-lobby'); if (el) el.classList.add('hidden'); if (AF.whoTimer) { clearInterval(AF.whoTimer); AF.whoTimer = null; } }
+function afLobbyMsg(t) { const el = document.getElementById('al-msg'); if (el) el.textContent = t || ''; }
+// open the lobby from the title screen. role 'host' = my lobby (solo until someone accepts an invite);
+// 'guest' = I accepted somebody's challenge and mirror THEIR lobby
+function afOpenLobby(role, beacon) {
+  const start = document.getElementById('start'), el = document.getElementById('arena-lobby'); if (!el) return;
+  if (start) start.classList.add('hidden'); el.classList.remove('hidden');
+  AF.lobby = afNewLobby(role);
+  if (role === 'guest') { AF.lobby.host = (beacon && beacon.host) || 'the host'; if (beacon) { AF.lobby.teams = beacon.teams || 2; AF.lobby.per = beacon.per || 3; afResize(AF.lobby); } }
+  afLobbyMsg('');
+  afLobbyRender();
+  if (afSession() && window.coop) {
+    afNetConnect().then(ok => {
+      if (!ok) { afLobbyMsg('The war-net is unreachable — you can still fight NPCs.'); afLobbyRender(); return; }
+      if (AF.lobby && AF.lobby.role === 'host') { window.coop.host({ arena: true, host: afSession(), teams: AF.lobby.teams, per: AF.lobby.per }); }
+      window.coop.who();
+      if (!AF.whoTimer) AF.whoTimer = setInterval(() => { if (AF.lobby && window.coop.connected) window.coop.who(); }, 3000);
+      afLobbyRender();
+    });
+  }
+}
+function afLobbyBroadcast() {
+  const L = AF.lobby; if (!L || L.role !== 'host' || !window.coop || !window.coop.connected) return;
+  window.coop.updateBeacon({ arena: true, host: L.host, teams: L.teams, per: L.per });
+  window.coop.send({ k: 'lobby', teams: L.teams, per: L.per, time: L.time, weather: L.weather, host: L.host, slots: L.slots.map(row => row.map(s => s ? { kind: s.kind, name: s.name, peer: s.peer, weapon: s.weapon } : null)) });
+}
+function afLobbyApply(d) {                                   // guest: mirror the host's lobby
+  const L = AF.lobby; if (!L || L.role !== 'guest') return;
+  L.teams = d.teams; L.per = d.per; L.host = d.host || L.host; L.slots = d.slots; L.time = d.time || 'day'; L.weather = d.weather || 'clear';
+  const me = afFindSeat(window.coop.id); if (me) L.weapon = me.weapon || 'sword';
+  afLobbyRender();
+}
+function afLobbyRender() {
+  const L = AF.lobby; if (!L) return;
+  const host = L.role === 'host', online = !!(window.coop && window.coop.connected), signed = !!afSession();
+  document.getElementById('al-teams-n').textContent = L.teams; document.getElementById('al-per-n').textContent = L.per;
+  for (const id of ['al-teams-minus', 'al-teams-plus', 'al-per-minus', 'al-per-plus']) document.getElementById(id).disabled = !host;
+  document.getElementById('al-wpn-sword').classList.toggle('on', L.weapon !== 'bow'); document.getElementById('al-wpn-bow').classList.toggle('on', L.weapon === 'bow');
+  for (const tm of ['day', 'dusk', 'night']) { const el = document.getElementById('al-time-' + tm); if (el) { el.classList.toggle('on', L.time === tm); el.disabled = !host; } }
+  for (const wx of ['clear', 'rain']) { const el = document.getElementById('al-wx-' + wx); if (el) { el.classList.toggle('on', L.weather === wx); el.disabled = !host; } }
+  const sub = document.getElementById('al-sub'); if (sub) sub.textContent = host ? 'Choose the teams, invite players who are online, and every empty place is taken by a fighter of the vale.' : L.host + ' set the teams — pick a side, pick a weapon, and wait for the bell.';
+  const me = host ? afHostSeat() : afFindSeat(window.coop && window.coop.id);
+  const grid = document.getElementById('al-teams');
+  grid.innerHTML = L.slots.map((row, t) => {
+    const td = AF_TEAMS[t], free = row.indexOf(null) >= 0, mine = !!me && row.indexOf(me) >= 0;
+    return '<div class="al-team" style="--tc:' + td.col + '"><div class="al-tname"><span>' + td.name + '</span>' + (!host && free && !mine ? '<button data-team="' + t + '">join</button>' : '') + '</div>' +
+      row.map(s => s ? '<div class="al-slot ' + (s === me ? 'you' : 'player') + '"><span>' + (s === me ? 'You' : s.name) + '</span><span class="al-tag">' + (s.weapon === 'bow' ? '🏹' : '🗡') + (s.kind === 'host' && s !== me ? ' host' : '') + '</span></div>'
+                        : '<div class="al-slot npc"><span>fighter of the vale</span><span class="al-tag">npc</span></div>').join('') + '</div>';
+  }).join('');
+  for (const btn of grid.querySelectorAll('button[data-team]')) btn.onclick = () => { if (window.coop) window.coop.send({ k: 'team', t: parseInt(btn.getAttribute('data-team'), 10) }); };
+  // who's online
+  const list = document.getElementById('al-olist'), stat = document.getElementById('al-ostat');
+  const seatedNames = new Set(); for (const row of L.slots) for (const s of row) if (s && s.kind === 'player') seatedNames.add(s.name);
+  if (!signed) { list.innerHTML = 'Sign in on the title screen to invite other players. Without them, every seat is an NPC.'; stat.textContent = ''; }
+  else if (!online) { list.innerHTML = 'Reaching the war-net…'; stat.textContent = ''; }
+  else if (!host) { list.innerHTML = 'Only the host sends invitations.'; stat.textContent = ''; }
+  else {
+    const rows = AF.online.filter(p => p.name !== L.host);
+    stat.textContent = rows.length + ' online';
+    list.innerHTML = rows.length ? rows.map(p => { const st = seatedNames.has(p.name) ? 'joined' : L.invites.get(p.name) || (p.busy ? 'in a fight' : '');
+      return '<div class="al-orow"><span><b>' + p.name + '</b> <span style="opacity:.6;font-size:12px">' + st + '</span></span><button data-inv="' + p.name + '"' + (st === 'joined' || st === 'invited…' ? ' disabled' : '') + '>Invite</button></div>'; }).join('')
+      : '<span style="opacity:.7">Nobody else is online right now. Invite by name below, or fight the NPCs.</span>';
+    for (const btn of list.querySelectorAll('button[data-inv]')) btn.onclick = () => afInvite(btn.getAttribute('data-inv'));
+  }
+  document.getElementById('al-inv-name').disabled = !(host && online); document.getElementById('al-inv-btn').disabled = !(host && online);
+  const startBtn = document.getElementById('al-start'); startBtn.classList.toggle('hidden', !host);
+  const humans = L.slots.flat().filter(Boolean).length, total = L.teams * L.per;
+  startBtn.textContent = humans > 1 ? 'Start Fight · ' + humans + ' players + ' + (total - humans) + ' NPCs' : 'Start Fight · you + ' + (total - 1) + ' NPCs';
+  document.getElementById('al-back').textContent = host ? 'Back' : 'Leave';
+}
+function afInvite(name) {
+  name = String(name || '').trim(); const L = AF.lobby; if (!name || !L || L.role !== 'host') return;
+  if (!window.coop || !window.coop.connected) { afLobbyMsg('Not connected to the war-net.'); return; }
+  if (name === L.host) { afLobbyMsg('That is you.'); return; }
+  window.coop.invite(name, { host: L.host, teams: L.teams, per: L.per });
+  L.invites.set(name, 'invited…'); afLobbyMsg('Challenge sent to ' + name + '.'); afLobbyRender();
+}
+function afShowInvite(m) {                                   // a challenge arrives — wherever you are
+  const el = document.getElementById('arena-invite'), tx = document.getElementById('ai-text'); if (!el) return;
+  if (AF.on) return;                                         // mid-fight: ignore
+  AF.invite = m;
+  tx.innerHTML = '⚔ <b>' + (m.name || 'Someone') + '</b> challenges you to an arena fight — ' + ((m.cfg && m.cfg.teams) || '?') + ' teams × ' + ((m.cfg && m.cfg.per) || '?');
+  el.classList.remove('hidden');
+  try { SFX.clang && SFX.clang(camera.position); } catch (e) {}
+  if (AF._invT) clearTimeout(AF._invT); AF._invT = setTimeout(() => { if (AF.invite === m) afDeclineInvite(true); }, 45000);
+}
+function afDeclineInvite(silent) {
+  const m = AF.invite; AF.invite = null; document.getElementById('arena-invite').classList.add('hidden');
+  if (m && !silent && window.coop && window.coop.connected) window.coop.dm(m.from, { k: 'invite-declined', name: afSession() });
+}
+function afAcceptInvite() {
+  const m = AF.invite; AF.invite = null; document.getElementById('arena-invite').classList.add('hidden'); if (!m) return;
+  const onTitle = mode === 'menu' && !document.getElementById('start').classList.contains('hidden');
+  const inMyLobby = AF.lobby && AF.lobby.role === 'host' && !AF.on;
+  if (onTitle || inMyLobby) afJoin(m.room, m.name);
+  else { try { sessionStorage.setItem('bv-arena-join', JSON.stringify({ room: m.room, host: m.name })); } catch (e) {} location.reload(); } // out in the vale: come back to the title and join
+}
+function afJoin(room, hostName) {
+  afCloseLobbyUi(); const start = document.getElementById('start'); if (start) start.classList.add('hidden');
+  const el = document.getElementById('arena-lobby'); if (el) el.classList.remove('hidden');
+  AF.lobby = afNewLobby('guest'); AF.lobby.host = hostName || 'the host'; afLobbyRender(); afLobbyMsg('Joining ' + AF.lobby.host + '…');
+  AF.pendingRoom = room;
+  afNetConnect().then(ok => { if (!ok) { afLobbyMsg('The war-net is unreachable.'); return; } window.coop.join(room); });
+}
+function afStartFight() {
+  const L = AF.lobby; if (!L || L.role !== 'host') return;
+  const r = _mulberry32((Math.random() * 0xffffffff) >>> 0), used = new Set(), roster = [];
+  const pick = arr => arr[Math.floor(r() * arr.length)];
+  for (let t = 0; t < L.teams; t++) for (let s = 0; s < L.per; s++) {
+    const seat = L.slots[t][s];
+    if (seat) { roster.push({ t, s, name: seat.name, kind: seat.kind, peer: seat.peer, weapon: seat.weapon || 'sword' }); used.add(seat.name); continue; }
+    let nm; do { nm = pick(GIVEN_NAMES) + (r() < 0.35 ? ' ' + pick(BYNAMES) : ''); } while (used.has(nm)); used.add(nm);
+    roster.push({ t, s, name: nm, kind: 'npc', peer: null, weapon: r() < 0.22 ? 'bow' : 'sword' });
+  }
+  const humans = roster.filter(x => x.kind === 'player').length;
+  AF.role = humans ? 'host' : 'solo';
+  const spec = { k: 'go', seed: (Math.random() * 0xffffffff) >>> 0, teams: L.teams, per: L.per, time: L.time, weather: L.weather, roster };
+  if (humans) afSend(spec);
+  afCloseLobbyUi();
+  afBoot(spec);
+}
+(function afWireLobbyUi() {
+  const g = id => document.getElementById(id);
+  if (!g('arena-lobby')) return;
+  const bump = (key, d) => { const L = AF.lobby; if (!L || L.role !== 'host') return; const lim = key === 'teams' ? [AF_LIM.teamsMin, AF_LIM.teamsMax] : [AF_LIM.perMin, AF_LIM.perMax];
+    L[key] = clamp(L[key] + d, lim[0], lim[1]); afResize(L); afLobbyRender(); afLobbyBroadcast(); };
+  g('al-teams-minus').onclick = () => bump('teams', -1); g('al-teams-plus').onclick = () => bump('teams', 1);
+  g('al-per-minus').onclick = () => bump('per', -1); g('al-per-plus').onclick = () => bump('per', 1);
+  const wpn = w => { const L = AF.lobby; if (!L) return; L.weapon = w;
+    if (L.role === 'host') { const s = afHostSeat(); if (s) s.weapon = w; afLobbyRender(); afLobbyBroadcast(); } else { if (window.coop) window.coop.send({ k: 'weapon', w }); afLobbyRender(); } };
+  g('al-wpn-sword').onclick = () => wpn('sword'); g('al-wpn-bow').onclick = () => wpn('bow');
+  const setOpt = (key, v) => { const L = AF.lobby; if (!L || L.role !== 'host') return; L[key] = v; afLobbyRender(); afLobbyBroadcast(); };
+  for (const tm of ['day', 'dusk', 'night']) { const el = g('al-time-' + tm); if (el) el.onclick = () => setOpt('time', tm); }
+  for (const wx of ['clear', 'rain']) { const el = g('al-wx-' + wx); if (el) el.onclick = () => setOpt('weather', wx); }
+  g('al-inv-btn').onclick = () => { const i = g('al-inv-name'); afInvite(i.value); i.value = ''; };
+  g('al-inv-name').addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') { afInvite(g('al-inv-name').value); g('al-inv-name').value = ''; } });
+  g('al-start').onclick = () => { if (typeof requestFullscreenSafe === 'function' && TOUCH) requestFullscreenSafe(); SFX.init && SFX.init(); afStartFight(); };
+  g('al-back').onclick = () => { try { if (window.coop && window.coop.connected) window.coop.leave(); } catch (e) {} afCloseLobbyUi(); AF.lobby = null; AF.pendingRoom = null; g('start').classList.remove('hidden'); };
+  g('arena-btn').onclick = () => { SFX.init && SFX.init(); afOpenLobby('host'); };
+  g('ai-accept').onclick = afAcceptInvite; g('ai-decline').onclick = () => afDeclineInvite(false);
+})();
+// title-screen presence: once signed in, sit on the war-net so challenges can find you (here or in the vale)
+function afTitlePresence() {
+  if (!afSession() || !window.coop) return;
+  afNetConnect().then(() => {
+    let pend = null; try { pend = JSON.parse(sessionStorage.getItem('bv-arena-join') || 'null'); sessionStorage.removeItem('bv-arena-join'); } catch (e) {}
+    if (pend && pend.room) afJoin(pend.room, pend.host);
+  });
+}
+BV.arena = (cfg) => { afOpenLobby('host'); if (cfg && AF.lobby) { if (cfg.teams) AF.lobby.teams = clamp(cfg.teams, AF_LIM.teamsMin, AF_LIM.teamsMax); if (cfg.per) AF.lobby.per = clamp(cfg.per, AF_LIM.perMin, AF_LIM.perMax); afResize(AF.lobby); afLobbyRender(); if (cfg.start) afStartFight(); } return BV.arenaStatus(); };
+BV.arenaStart = () => { afStartFight(); return BV.arenaStatus(); };
+BV.arenaStatus = () => ({ on: AF.on, role: AF.role, phase: AF.phase, t: +AF.t.toFixed(1), teams: AF.cfg.teams, per: AF.cfg.per, seed: AF.seed, over: AF.over, winner: AF.winner,
+  bodies: AF.bodies.map(b => ({ i: b.idx, name: b.name, team: b.team, kind: b.kind, ctrl: b.ctrl, weapon: b.weapon, hp: Math.round(b.hp), dead: b.dead, kills: b.kills, x: +b.x.toFixed(1), z: +b.z.toFixed(1), state: afStateCode(b) })),
+  me: AF.me ? AF.me.idx : null, lobby: AF.lobby ? { role: AF.lobby.role, teams: AF.lobby.teams, per: AF.lobby.per, seats: AF.lobby.slots.map(r => r.map(s => s ? s.name : null)) } : null, online: AF.online.map(p => p.name) });
+BV.arenaStep = (steps = 60, dt = 1 / 60) => { if (AF.phase === 'countdown') { AF.phase = 'fight'; AF.countdown = 0; } for (let i = 0; i < steps; i++) afTick(dt); return BV.arenaStatus(); };
+BV.arenaInput = (patch) => { Object.assign(AF.locIn, patch || {}); return { ...AF.locIn }; };
+BV.arenaPump = (frames = 60, dt = 1 / 60) => { for (let i = 0; i < frames; i++) afFrame((AF.last || performance.now()) + dt * 1000, true); return BV.arenaStatus(); }; // headless: run whole frames (sim + net + camera) without rAF
+
 // Boot. ?edit=<kind> (or window.BV_EDIT) opens the object editor; otherwise show the sign-in gate
 // and DEFER the universe boot until the player clicks "Enter the Vale". The game no longer auto-
 // enters: you sign in (or create an account) first, and entering loads your active character.
@@ -16383,6 +17789,7 @@ if (window.BV_BATTLE || (_editQ && _editQ.has('battle'))) {
 } else {
   if (_editQ && _editQ.has('forge')) FORGE.autoArm = true; // ?forge: boot the live game normally, then arm the master-editor picker on the first map frame
   refreshAuthGate(); // show login vs. signed-in Enter button (the sim idles behind the overlay)
+  if (_editQ && _editQ.has('arena')) afOpenLobby('host'); // ?arena: straight into the arena lobby
 }
 
 })();

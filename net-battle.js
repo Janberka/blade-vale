@@ -13,24 +13,30 @@
 
   var coop = {
     connected: false, id: null, room: null, isHost: false, peers: [],
-    url: defaultUrl(), handlers: {},
+    url: defaultUrl(), handlers: {}, name: null, acct: null,
   };
   var ws = null, helloResolve = null;
 
-  coop.on = function (type, fn) { coop.handlers[type] = fn; return coop; };
-  function emit(type, m) { var h = coop.handlers[type]; if (h) try { h(m); } catch (e) { /* a handler bug must not kill the socket */ } }
+  // several subsystems (the world co-op and the arena lobby) listen on the same socket, so every
+  // type keeps a LIST of handlers; each one guards on its own state and ignores what isn't its business
+  coop.on = function (type, fn) { (coop.handlers[type] = coop.handlers[type] || []).push(fn); return coop; };
+  function emit(type, m) { var hs = coop.handlers[type] || []; for (var i = 0; i < hs.length; i++) { try { hs[i](m); } catch (e) { /* a handler bug must not kill the socket */ } } }
   function raw(o) { if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify(o)); return true; } catch (e) {} } return false; }
 
   // shared-world play is the prerequisite for co-op (you need to share a world to meet other players)
   coop.available = function () { return !!(window.net && window.net.sharedWorld); };
 
-  coop.connect = function (name, world) {
-    if (coop.connected) return Promise.resolve(true);
+  // acct = the signed-in username (the stable address arena invites are sent to); name = how the player is
+  // shown. Re-connecting while already connected just re-announces the (possibly new) name/world.
+  coop.connect = function (name, world, acct) {
+    coop.name = name || 'Ally'; coop.acct = acct || coop.acct || null;
+    var hello = { t: 'hello', name: coop.name, world: world || 'default', acct: coop.acct || '' };
+    if (coop.connected) { raw(hello); return Promise.resolve(true); }
     coop.url = defaultUrl();
     return new Promise(function (resolve) {
       var done = false, finish = function (ok) { if (!done) { done = true; resolve(ok); } };
       try { ws = new WebSocket(coop.url); } catch (e) { finish(false); return; }
-      ws.onopen = function () { raw({ t: 'hello', name: name || 'Ally', world: world || 'default' }); };
+      ws.onopen = function () { raw(hello); };
       ws.onmessage = function (ev) {
         var m; try { m = JSON.parse(ev.data); } catch (e) { return; }
         switch (m.t) {
@@ -44,6 +50,9 @@
           case 'join-fail': emit('join-fail', m); break;
           case 'left': coop.room = null; coop.isHost = false; emit('left', m); break;
           case 'msg': emit('msg', m); break; // { from, data } — battle sync payload
+          case 'who': emit('who', m); break;               // { list:[{id,name,busy}] }
+          case 'invite': emit('invite', m); break;         // { from, name, room, cfg } — an arena challenge
+          case 'invite-fail': emit('invite-fail', m); break;
         }
       };
       ws.onclose = function () { coop.connected = false; coop.room = null; coop.isHost = false; coop.peers = []; emit('disconnect', {}); };
@@ -58,6 +67,9 @@
   coop.join = function (room) { raw({ t: 'join', room: room }); };
   coop.leave = function () { raw({ t: 'leave' }); coop.room = null; coop.isHost = false; coop.peers = []; };
   coop.send = function (data, to) { return raw({ t: 'msg', data: data, to: to }); }; // battle sync to room peers
+  coop.who = function () { raw({ t: 'who' }); };                                   // who is online (arena invites)
+  coop.invite = function (to, cfg) { return raw({ t: 'invite', to: to, cfg: cfg || {} }); };
+  coop.dm = function (to, data) { return raw({ t: 'dm', to: to, data: data }); };  // one player, no room needed
   coop.close = function () { try { if (ws) ws.close(); } catch (e) {} ws = null; coop.connected = false; };
 
   window.coop = coop;

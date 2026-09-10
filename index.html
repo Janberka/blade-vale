@@ -227,6 +227,55 @@
   .btn:hover { background: rgba(255,180,80,.28); transform: translateY(-2px); box-shadow: 0 8px 24px rgba(255,150,60,.3); }
   .hidden { display: none !important; }
 
+  /* ===== Arena Fights: the lobby (teams × fighters, invites) and the challenge prompt ===== */
+  #start .start-btns { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; }
+  #arena-btn { border-color: #ff8a5b; color: #ffd0b8; background: rgba(255,120,80,.12); }
+  #arena-btn:hover { background: rgba(255,120,80,.3); box-shadow: 0 8px 24px rgba(255,110,60,.3); }
+  #arena-lobby { gap: 12px; overflow-y: auto; justify-content: flex-start; padding-top: max(18px, 3vh); }
+  #arena-lobby h1 { font-size: 42px; letter-spacing: 4px; margin: 0; }
+  #arena-lobby .al-sub { font-size: 14px; opacity: .7; margin: -6px 0 2px; }
+  .al-cfg { display: flex; gap: 22px; flex-wrap: wrap; justify-content: center; align-items: center;
+    padding: 10px 18px; border: 1px solid rgba(255,207,91,.3); border-radius: 10px; background: rgba(0,0,0,.28); pointer-events: auto; }
+  .al-cfg .wp-row { margin: 0; gap: 8px; }
+  .al-cfg .wp-row span { width: auto; font-size: 13px; letter-spacing: 1px; text-transform: uppercase; color: #ffe2a8; }
+  .al-cfg .al-wpn { display: flex; gap: 6px; }
+  .al-cfg .al-wpn button { cursor: pointer; width: auto; height: auto; padding: 5px 12px; border-radius: 6px; border: 1px solid rgba(255,207,91,.4);
+    background: rgba(0,0,0,.3); color: #e9eef5; font-size: 13px; }
+  .al-cfg .al-wpn button.on { background: rgba(255,180,80,.32); border-color: #ffcf5b; color: #ffe2a8; }
+  #al-teams { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; max-width: 1100px; pointer-events: auto; }
+  .al-team { min-width: 170px; max-width: 220px; flex: 1 1 170px; border-radius: 10px; padding: 10px 12px;
+    background: rgba(0,0,0,.32); border: 1px solid var(--tc, #ffcf5b); box-shadow: inset 0 0 0 1px rgba(0,0,0,.4); text-align: left; }
+  .al-team .al-tname { font-weight: 800; letter-spacing: 2px; font-size: 13px; color: var(--tc, #ffcf5b); display: flex; justify-content: space-between; align-items: center; }
+  .al-team .al-tname button { cursor: pointer; font-size: 11px; padding: 2px 8px; border-radius: 5px; border: 1px solid var(--tc); background: transparent; color: var(--tc); }
+  .al-slot { margin-top: 6px; font-size: 13px; padding: 5px 8px; border-radius: 6px; background: rgba(255,255,255,.05); display: flex; justify-content: space-between; gap: 6px; }
+  .al-slot.npc { opacity: .55; font-style: italic; }
+  .al-slot.you { background: rgba(255,207,91,.16); color: #ffe2a8; font-weight: 700; }
+  .al-slot.player { background: rgba(120,200,255,.14); color: #d6ecff; }
+  .al-slot .al-tag { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; opacity: .7; }
+  #al-online { width: min(560px, 92vw); pointer-events: auto; text-align: left; font-size: 13px;
+    border: 1px solid rgba(120,200,255,.3); border-radius: 10px; background: rgba(0,0,0,.28); padding: 10px 14px; }
+  #al-online .al-ohead { font-size: 12px; letter-spacing: 2px; text-transform: uppercase; color: #9fd6ff; display: flex; justify-content: space-between; }
+  #al-online .al-orow { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; border-top: 1px solid rgba(255,255,255,.06); }
+  #al-online button { cursor: pointer; padding: 4px 12px; border-radius: 6px; border: 1px solid #6fa8ff; background: rgba(80,140,255,.16); color: #d6ecff; font-size: 12px; }
+  #al-online button:disabled { opacity: .5; cursor: default; }
+  #al-online .al-inv { display: flex; gap: 8px; margin-top: 8px; }
+  #al-online .al-inv input { flex: 1; background: rgba(0,0,0,.5); border: 1px solid rgba(120,200,255,.35); border-radius: 6px; color: #e9eef5; padding: 6px 10px; font-size: 13px; outline: none; }
+  #al-msg { min-height: 18px; font-size: 13px; color: #ffe089; }
+  .al-btns { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; }
+  .al-btns .btn { font-size: 16px; padding: 10px 28px; }
+  #al-back { border-color: #9fb2cc; color: #c8d4e6; background: rgba(120,140,170,.12); }
+  #arena-invite { position: fixed; top: 18px; left: 50%; transform: translateX(-50%); z-index: 70; pointer-events: auto;
+    background: rgba(16,12,24,.96); border: 1px solid #ff8a5b; border-radius: 12px; padding: 12px 18px; color: #f3ead8;
+    box-shadow: 0 10px 40px rgba(0,0,0,.6); display: flex; gap: 14px; align-items: center; font-size: 14px; max-width: 92vw; }
+  #arena-invite b { color: #ffd0b8; }
+  #arena-invite button { cursor: pointer; padding: 6px 14px; border-radius: 7px; border: 1px solid #ffcf5b; background: rgba(255,180,80,.16); color: #ffe2a8; font-weight: 700; }
+  #arena-invite button.no { border-color: #6b5e7a; background: #2a2233; color: #c9bfda; font-weight: 400; }
+  @media (max-height: 560px) {
+    #arena-lobby h1 { font-size: 26px; letter-spacing: 2px; }
+    #arena-lobby .al-sub { display: none; }
+    .al-team { min-width: 140px; padding: 7px 9px; }
+  }
+
   /* ===== Sign in (super-simple username/password) ===== */
   #auth-box { pointer-events: auto; margin-top: 4px; font-size: 13px; width: min(360px, 90vw);
     background: rgba(0,0,0,.32); border: 1px solid rgba(255,207,91,.35); border-radius: 12px; padding: 18px 20px; }
@@ -571,7 +620,41 @@
     <div id="auth-note">Sign in (or create an account) to enter. Your characters live on the map —
       <span class="desktop-keys">switch between them with <b>U</b> in game.</span><span class="touch-keys">tap <b>Chars</b> in game to switch between them.</span></div>
   </div>
-  <button class="btn hidden" id="start-btn">Enter the Vale</button>
+  <div class="start-btns">
+    <button class="btn hidden" id="start-btn">Enter the Vale</button>
+    <button class="btn" id="arena-btn" title="Pick teams, invite players, fill the rest with NPCs, and fight in the pit">⚔ Arena Fights</button>
+  </div>
+</div>
+
+<!-- ===== Arena Fights lobby: how many teams, how many fighters each, who is in them ===== -->
+<div id="arena-lobby" class="overlay hidden">
+  <h1>Arena Fights</h1>
+  <div class="al-sub" id="al-sub">Choose the teams, invite players who are online, and every empty place is taken by a fighter of the vale.</div>
+  <div class="al-cfg" id="al-cfg">
+    <div class="wp-row"><span>Teams</span><button id="al-teams-minus">−</button><b id="al-teams-n">2</b><button id="al-teams-plus">+</button></div>
+    <div class="wp-row"><span>Fighters per team</span><button id="al-per-minus">−</button><b id="al-per-n">3</b><button id="al-per-plus">+</button></div>
+    <div class="wp-row"><span>Your weapon</span><div class="al-wpn"><button id="al-wpn-sword" class="on">🗡 Sword</button><button id="al-wpn-bow">🏹 Bow</button></div></div>
+    <div class="wp-row"><span>Hour</span><div class="al-wpn"><button id="al-time-day" class="on">☀ Day</button><button id="al-time-dusk">🌇 Dusk</button><button id="al-time-night">🌙 Night</button></div></div>
+    <div class="wp-row"><span>Sky</span><div class="al-wpn"><button id="al-wx-clear" class="on">Clear</button><button id="al-wx-rain">🌧 Rain</button></div></div>
+  </div>
+  <div id="al-teams"></div>
+  <div id="al-online">
+    <div class="al-ohead"><span>Players online</span><span id="al-ostat"></span></div>
+    <div id="al-olist" style="opacity:.8;padding:6px 0">…</div>
+    <div class="al-inv"><input id="al-inv-name" placeholder="invite by username" maxlength="24"><button id="al-inv-btn">Invite</button></div>
+  </div>
+  <div id="al-msg"></div>
+  <div class="al-btns">
+    <button class="btn" id="al-start">Start Fight</button>
+    <button class="btn" id="al-back">Back</button>
+  </div>
+</div>
+
+<!-- a challenge from another player: shown wherever you are (title screen or in the vale) -->
+<div id="arena-invite" class="hidden">
+  <span id="ai-text">⚔ <b>Someone</b> challenges you to an arena fight</span>
+  <button id="ai-accept">Accept</button>
+  <button id="ai-decline" class="no">Decline</button>
 </div>
 
 <!-- reinforce-between-waves picker: lives here hidden, muster pulls it in when a wave clears -->
@@ -667,7 +750,7 @@
 <script src="sim/settle.js?v=1"></script>
 <script src="sim/battle.js?v=1"></script>
 <script src="client-net.js?v=7"></script>
-<script src="net-battle.js?v=1"></script>
-<script src="game.js?v=88"></script>
+<script src="net-battle.js?v=2"></script>
+<script src="game.js?v=89"></script>
 </body>
 </html>

@@ -11,6 +11,9 @@
 //   join  {room}                   -> joined {room,beacon} | join-fail ; host gets peer-join {id,name}
 //   leave                          ; peers get peer-leave {id}  (host leaving -> guests get host-gone)
 //   msg   {data,to?}               -> relayed to room peers as msg {from,data}  (host<->guest sync)
+//   who                            -> who {list:[{id,name,busy}]}   (everyone online, for arena invites)
+//   invite{to,cfg}                 -> the named player gets invite {from,name,room,cfg} | invite-fail {to}
+//   dm    {to,data}                -> msg {from,data,dm:true} to ONE connection, room or not (invite replies)
 const crypto = require('crypto');
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const acceptKey = (key) => crypto.createHash('sha1').update(key + WS_GUID).digest('base64');
@@ -80,7 +83,27 @@ function attach(server, opts) {
     switch (m.t) {
       case 'hello':
         conn.world = String(m.world || 'default'); conn.name = String(m.name || 'Ally').slice(0, 40);
+        conn.acct = String(m.acct || '').slice(0, 40); conn.hello = true; // acct = signed-in username: the stable invite address
         conn.send({ t: 'hello-ok', id: conn.id }); break;
+      case 'who': {                              // everyone online right now (arena invite roster)
+        const list = [];
+        for (const [id, c] of conns) if (id !== conn.id && c.hello) list.push({ id, name: c.acct || c.name, busy: !!c.room });
+        conn.send({ t: 'who', list }); break;
+      }
+      case 'invite': {                           // a host invites a named player into its room
+        const to = String(m.to || '').slice(0, 40); if (!to || !conn.room) break;
+        let sent = 0;
+        for (const [id, c] of conns) {
+          if (id === conn.id || !c.hello) continue;
+          if (c.acct === to || (!c.acct && c.name === to)) { c.send({ t: 'invite', from: conn.id, name: conn.acct || conn.name, room: conn.room, cfg: m.cfg || {} }); sent++; }
+        }
+        if (!sent) conn.send({ t: 'invite-fail', to });
+        break;
+      }
+      case 'dm': {                               // one-to-one, independent of rooms (invite accept/decline)
+        const c = conns.get(m.to | 0); if (c) c.send({ t: 'msg', from: conn.id, data: m.data, dm: true });
+        break;
+      }
       case 'host': {
         leaveRoom(conn);
         const room = String(m.room || ('r' + conn.id + '_' + (nextId++)));

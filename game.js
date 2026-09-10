@@ -2019,6 +2019,8 @@ if (TOUCH) {
   bindBtn('tb-attack', requestAttack, () => { if (AF.on) AF.locIn.atk++; }); // arena: the release swings
   bindBtn('tb-heavy', requestHeavyAttack);
   bindBtn('tb-dodge', requestDodge);
+  bindBtn('tb-roll-l', () => { if (AF.on) { AF.locIn.rollDir = -1; AF.locIn.dodge++; } });
+  bindBtn('tb-roll-r', () => { if (AF.on) { AF.locIn.rollDir = 1; AF.locIn.dodge++; } });
   bindBtn('tb-block', () => { keys['ShiftLeft'] = true; }, () => { keys['ShiftLeft'] = false; });
   bindBtn('tb-weapon', toggleWeapon);
   // The ONE zoom control a phone has (no wheel, no pinch), so it has to land on a rung, not nudge
@@ -2187,7 +2189,7 @@ function startAttack() {
   showCombo(player.combo);
 }
 function requestDodge() {
-  if (AF.on) { AF.locIn.dodge++; return; }      // arena: Space / touch DODGE
+  if (AF.on) { AF.locIn.rollDir = 0; AF.locIn.dodge++; return; }   // arena: Space rolls toward the side you're moving
   if (!gameRunning || !player.alive || player.rolling) return;
   if (player.stamina < 30) return;
   player.stamina -= 30;
@@ -16679,7 +16681,7 @@ function afMakeBody(entry, idx, r) {
     // guest-side interpolation targets
     tx: 0, tz: 0, tyaw: 0, tstate: 0, tmove: 0, rollT: 0, remoteSeen: false,
   };
-  b.tx = b.x; b.tz = b.z; b.tyaw = b.yaw; b.inp.yaw = b.yaw; b.tagH = mounted ? 3.5 : 2.25;
+  b.tx = b.x; b.tz = b.z; b.tyaw = b.yaw; b.inp.yaw = b.yaw; b.tagH = mounted ? 3.5 : 2.25; b.baseScale = group.scale.x;
   group.position.set(b.x, afY(b.x, b.z), b.z); group.rotation.y = b.yaw;
   scene.add(group); group.userData.afBody = b;
   // floating name + health bar (a separate un-rotated tag so the bar can face the camera)
@@ -16703,7 +16705,7 @@ function afStateCode(b) {
   if (b.clashT > 0) return 12;
   if (b.stagger > 0) return 11;
   if (b.flinch > 0) return 5;
-  if (b.dodgeT > 0) return 7;
+  if (b.dodgeT > 0) return b.rollSide < 0 ? 14 : 7;
   if (b.charge) return b.weapon === 'bow' ? 9 : 2;
   if (b.atk) { if (b.atk.bow) return b.atk.hit ? 10 : 9; return b.atk.hit ? (b.atk.t > b.atk.wind + b.atk.strike ? 4 : 3) : 2; }
   if (b.blocking) return 6;
@@ -16750,7 +16752,15 @@ function afCommit(b, dt) {
     }
   }
   const y = afY(b.x, b.z) + (b.moving && !b.dead && !b.mounted ? Math.abs(Math.cos(b.phase)) * g.bob : 0);
-  b.group.position.set(b.x, y, b.z); b.group.rotation.set(b.tiltX || 0, b.yaw, b.roll || 0);
+  if (b.rollAng) {                                           // pivot the roll about the tucked body's middle: the feet swing over, the hips stay low
+    const bs = b.baseScale || 1, sq = 1 - 0.45 * (b.rollSq || 0), h = 0.95 * bs * sq, th = b.rollAng;
+    const ox = h * Math.sin(th), oy = h * (1 - Math.cos(th));
+    b.group.scale.set(bs, bs * sq, bs);
+    b.group.position.set(b.x + Math.cos(b.yaw) * ox, y + oy, b.z - Math.sin(b.yaw) * ox); b.group.rotation.set(0, b.yaw, th);
+  } else {
+    if (b.baseScale && b.group.scale.y !== b.baseScale) b.group.scale.setScalar(b.baseScale);
+    b.group.position.set(b.x, y, b.z); b.group.rotation.set(b.tiltX || 0, b.yaw, b.roll || 0);
+  }
   if (b.tag) { b.tag.visible = !b.dead && camera.position.distanceToSquared(b.group.position) < (AF.bodies.length > AF_LIM.heroCap ? 900 : 4e4); b.tag.position.set(b.x, y + (b.tagH || 2.25), b.z); b.bar.quaternion.copy(camera.quaternion); b.bar.userData.fill.scale.x = clamp(b.hp / b.maxHp, 0, 1); }
 }
 // ONE control routine for everyone: reads b.inp (keyboard, NPC brain, or a remote player's record).
@@ -16784,12 +16794,11 @@ function afDrive(b, dt, sim) {
     if (b.clashT <= 0) { const k = b.clashAtk ? 5.5 : 2.5; b.vx += b.clashDx * k; b.vz += b.clashDz * k; b.cd = b.clashAtk ? 0.35 : 0.05; b.anim.ease = null; setPose(b.anim, b.clashAtk ? 'hurt' : 'block', 0.12); if (b.clashAtk) b.flinch = 0.16; }
     afIntegrate(b, dt); afCommit(b, dt); return;
   }
-  if (b.dodgeT > 0) {                                        // mid-roll: i-frames + a burst of speed, tucked and tumbling
+  if (b.dodgeT > 0) {                                        // mid-roll: i-frames, a burst of sideways speed, tucked into a ball and rolling over the shoulder
     b.dodgeT -= dt; const k = 1 - clamp(b.dodgeT / F.dodge.dur, 0, 1);
     const sp = F.dodge.speed * (1 - k * 0.5); b.vx = b.ddx * sp; b.vz = b.ddz * sp;
-    b.tiltX = -Math.sin(k * Math.PI) * 1.1; b.moving = true;
-    walkLegs(b.parts, b.phase += dt * 14, 0.5, 0.6); setPose(b.anim, 'relax', 0.1);
-    if (b.dodgeT <= 0) { b.tiltX = 0; b.vx *= 0.4; b.vz *= 0.4; if (b === AF.me) afAutoTurn(b); }
+    afRollPose(b, k, dt);
+    if (b.dodgeT <= 0) { b.rollAng = 0; b.rollSq = 0; b.vx *= 0.4; b.vz *= 0.4; if (b === AF.me) afAutoTurn(b); }
     afIntegrate(b, dt); afCommit(b, dt); return;
   }
   const mm = Math.hypot(I.mx, I.mz), ux = mm > 1e-3 ? I.mx / mm : 0, uz = mm > 1e-3 ? I.mz / mm : 0;
@@ -16798,7 +16807,10 @@ function afDrive(b, dt, sim) {
     if (b.mounted) { if (b.dodgeCd <= 0) { b.dodgeCd = 1.2; b.vx += Math.sin(b.yaw) * 6; b.vz += Math.cos(b.yaw) * 6; b.iframes = 0.15; try { SFX.foot(b.group.position); } catch (e) {} } }
     else if (b.dodgeCd <= 0 && !(b.atk && b.atk.hit)) {
       b.dodgeT = F.dodge.dur; b.iframes = F.dodge.iframes; b.dodgeCd = F.dodge.dur + F.dodge.cd; b.atk = null; b.charge = null; b.queued = false; b.blocking = false;
-      if (mm > 1e-3) { b.ddx = ux; b.ddz = uz; } else { b.ddx = -Math.sin(b.yaw); b.ddz = -Math.cos(b.yaw); }
+      // a SIDEWAYS roll: the side asked for (Q / E, the two touch buttons), else the side the stick leans, else a coin
+      const rgx = -Math.cos(b.yaw), rgz = Math.sin(b.yaw), lean = mm > 1e-3 ? ux * rgx + uz * rgz : 0;
+      b.rollSide = I.rollDir ? Math.sign(I.rollDir) : Math.abs(lean) > 0.2 ? Math.sign(lean) : (Math.random() < 0.5 ? -1 : 1);
+      b.ddx = rgx * b.rollSide; b.ddz = rgz * b.rollSide;   // (rollDir stays as sent: the guest's own copy and the host's must agree)
       try { SFX.foot(b.group.position); } catch (e) {}
       afIntegrate(b, dt); afCommit(b, dt); return;
     }
@@ -16941,6 +16953,14 @@ function afAutoTurn(b) {
   if (!best) return;
   const want = Math.atan2(best.x - b.x, best.z - b.z);
   if (Math.abs(angleDelta(AF.cam.yaw, want)) > 0.45) AF.autoTurn = { yaw: want, t: 0.35, last: AF.cam.yaw };
+}
+// the ROLL: a full turn about the body's forward axis, tucked (legs folded, body squashed into a ball), feet leaving
+// the ground and landing again on the far side — the facing never changes, so you come up still looking at your man
+function afRollPose(b, k, dt) {
+  const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;      // ease in-out: a push, the turn, a landing
+  b.rollAng = (b.rollSide || 1) * TAU * e; b.rollSq = Math.sin(k * Math.PI);
+  b.tiltX = 0; b.moving = false;
+  restLegs(b.parts, dt * 3, true, b.rollSq); setPose(b.anim, 'guard', 0.08);
 }
 function afNearestFoeInCone(b, R, cosMin) {
   let best = null, bd = R, fdx = Math.sin(b.yaw), fdz = Math.cos(b.yaw);
@@ -17157,7 +17177,7 @@ function afFormationSlot(T, b) {
   const fwx = Math.sin(T.face), fwz = Math.cos(T.face), rgx = -Math.cos(T.face), rgz = Math.sin(T.face), sl = b.slot || { right: 0, back: 0 };
   return { x: T.anchor.x + rgx * sl.right - fwx * sl.back, z: T.anchor.z + rgz * sl.right - fwz * sl.back };
 }
-const AF_ORDER_TEXT = { form: 'forms a line', advance: 'advances', charge: 'charges!', flank: 'sends the riders wide', regroup: 'regroups', fallback: 'falls back to the wall', pursue: 'presses the rout' };
+const AF_ORDER_TEXT = { form: 'forms a line', advance: 'advances', charge: 'charges!', flank: 'sends the riders wide', regroup: 'regroups', fallback: 'falls back to re-form', pursue: 'presses the rout' };
 function afOrderLog(T, key) { const txt = AF_TEAMS[T.t].name + ' ' + (AF_ORDER_TEXT[key] || key); afLogLine(txt, AF_TEAMS[T.t].col); AF.events.push({ k: 'order', t: T.t, o: key }); }
 function afCaptainThink(T, dt) {
   T.thinkT -= dt; if (T.thinkT > 0) return; T.thinkT = 0.4; T.since += 0.4;
@@ -17191,7 +17211,7 @@ function afCaptainThink(T, dt) {
       break; }
     case 'charge':
       if (T.riderOrder === 'flank' && T.wp) { const rs = mine.filter(b => b.mounted); if (!rs.length || rs.every(b => Math.hypot(b.x - T.wp.x, b.z - T.wp.z) < 6) || T.since > AF_TACT.wpTimeout) T.riderOrder = 'charge'; }
-      if (ratio < AF_TACT.rallyRatio && mine.length >= 3 && !T.rallied) { T.rallied = true; T.phase = 'fallback'; T.order = 'fallback'; T.riderOrder = 'fallback'; T.since = 0; T.anchor = { x: T.home.x, z: T.home.z }; T.face = Math.atan2(fc.x - T.home.x, fc.z - T.home.z); afOrderLog(T, 'fallback'); }
+      if (ratio < AF_TACT.rallyRatio && mine.length >= 3 && !T.rallied) { T.rallied = true; T.phase = 'fallback'; T.order = 'fallback'; T.riderOrder = 'fallback'; T.since = 0; const ux = (fc.x - mc.x) / (gap || 1), uz = (fc.z - mc.z) / (gap || 1); T.anchor = afClampPit(mc.x - ux * 12, mc.z - uz * 12, 8); T.face = Math.atan2(ux, uz); afOrderLog(T, 'fallback'); } // a FIGHTING withdrawal — a dozen paces back to re-form, not an 80-pace walk to the wall with backs turned (that was a massacre at legion scale)
       else if (T.since > AF_TACT.regroupAfter && spread > T.regroupSpread && ratio < AF_TACT.pursueRatio && mine.length >= 3 && !contact) { T.phase = 'form'; T.order = 'hold'; T.since = 0; T.anchor = { x: mc.x, z: mc.z }; T.face = bearing; afOrderLog(T, 'regroup'); }
       else if (ratio > AF_TACT.pursueRatio && !T.pursuing) { T.pursuing = true; afOrderLog(T, 'pursue'); }
       else if (T.noContact > 2.5 && gap > AF_TACT.contact * 1.5 && mine.length >= 3) { T.phase = 'advance'; T.order = 'advance'; T.since = 0; T.anchor = { x: mc.x, z: mc.z }; T.face = bearing; afOrderLog(T, 'advance'); } // the lines came apart: dress ranks where we stand and march again
@@ -17387,7 +17407,7 @@ function afReadLocalInput() {
 
 // ---- the sim tick (host / solo): brains, drives, arrows, resolution ----
 function afTick(dt) {
-  if (AF.over) return;
+  if (AF.over) { for (const b of AF.bodies) if (b.dead) afStepDead(b, dt); return; }   // the fight is decided, but the last man cut down still falls
   afRebuildGrid();
   if ((AF.assignT = (AF.assignT || 0) - dt) <= 0) { afAssignTargets(); AF.assignT = 0.3; }
   if (AF.teams) for (const T of AF.teams) afCaptainThink(T, dt);
@@ -17474,14 +17494,14 @@ function afApplyRemotePose(b, dt) {
     case 4: setPose(b.anim, 'guard', 0.15); restLegs(b.parts, dt, true); break;
     case 5: case 11: setPose(b.anim, 'hurt', 0.06); restLegs(b.parts, dt, true); break;
     case 6: setPose(b.anim, 'block', 0.1); restLegs(b.parts, dt, true); break;
-    case 7: b.rollT += dt; b.tiltX = -Math.sin(clamp(b.rollT / AF_F.dodge.dur, 0, 1) * Math.PI) * 1.05; walkLegs(b.parts, b.phase += dt * 14, 0.5, 0.6); setPose(b.anim, 'relax', 0.1); break;
+    case 7: case 14: b.rollT += dt; b.rollSide = s === 14 ? -1 : 1; afRollPose(b, clamp(b.rollT / AF_F.dodge.dur, 0, 1), dt); break;
     case 12: restLegs(b.parts, dt, true); break;              // blades locked — hold whatever the blade was doing
     case 13: b.tiltX = -1.35; b.roll = 0.45; setPose(b.anim, 'hurt', 0.08); restLegs(b.parts, dt, true); break;   // ridden down
     case 9: setPose(b.anim, 'aimBow', 0.1); restLegs(b.parts, dt, false); break;
     case 10: setPose(b.anim, 'looseBow', 0.05); restLegs(b.parts, dt, false); break;
     default: setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.2); restLegs(b.parts, dt, true);
   }
-  if (s !== 7) b.rollT = 0;
+  if (s !== 7 && s !== 14) { b.rollT = 0; b.rollAng = 0; b.rollSq = 0; }
 }
 function afApplySnap(s) {
   if (s.ph === 'fight' && AF.phase === 'countdown') { AF.phase = 'fight'; AF.countdown = 0; afBanner('FIGHT', '', 1.0); afCrowdReact(false); }
@@ -17542,7 +17562,7 @@ function afNetTick(dt) {
     AF.events = [];
     AF.inAcc += dt; if (AF.inAcc < AF_NET.inDt) return; AF.inAcc = 0;
     const I = AF.locIn;
-    afSend({ k: 'in', mx: +I.mx.toFixed(2), mz: +I.mz.toFixed(2), yaw: +I.yaw.toFixed(3), atk: I.atk, heavy: I.heavy, dodge: I.dodge, block: I.block ? 1 : 0, hold: I.hold ? 1 : 0, swap: I.swap });
+    afSend({ k: 'in', mx: +I.mx.toFixed(2), mz: +I.mz.toFixed(2), yaw: +I.yaw.toFixed(3), atk: I.atk, heavy: I.heavy, dodge: I.dodge, roll: I.rollDir || 0, block: I.block ? 1 : 0, hold: I.hold ? 1 : 0, swap: I.swap });
   } else AF.events = [];
 }
 function afOnFightMsg(m) {
@@ -17550,7 +17570,7 @@ function afOnFightMsg(m) {
   if (AF.role === 'host' && d.k === 'in') {
     let inp = AF.inputs.get(m.from);
     if (!inp) { inp = afFreshInput(); AF.inputs.set(m.from, inp); const b = AF.bodies.find(x => x.peer === m.from); if (b) b.inp = inp; }
-    inp.mx = +d.mx || 0; inp.mz = +d.mz || 0; inp.yaw = +d.yaw || 0; inp.atk = d.atk | 0; inp.heavy = d.heavy | 0; inp.dodge = d.dodge | 0; inp.block = !!d.block; inp.hold = !!d.hold; inp.swap = d.swap | 0;
+    inp.mx = +d.mx || 0; inp.mz = +d.mz || 0; inp.yaw = +d.yaw || 0; inp.atk = d.atk | 0; inp.heavy = d.heavy | 0; if ((d.dodge | 0) !== inp.dodge) inp.rollDir = d.roll || 0; inp.dodge = d.dodge | 0; inp.block = !!d.block; inp.hold = !!d.hold; inp.swap = d.swap | 0;
   } else if (AF.role === 'guest') {
     if (d.k === 'snap') afApplySnap(d);
     else if (d.k === 'over' && !AF.over) afFinish(d.winner, d.standings);
@@ -17702,6 +17722,7 @@ function afInstallControls() {
     if ('wasd'.includes(k) && k.length === 1) AF.keys.add(k);
     if (e.key === 'Shift') AF.keys.add('shift');
     if (k === 'f' && !e.repeat) AF.locIn.swap++;             // sword <-> bow
+    if ((k === 'q' || k === 'e') && !e.repeat) { AF.locIn.rollDir = k === 'q' ? -1 : 1; AF.locIn.dodge++; }   // roll left / right
   });
   window.addEventListener('keyup', e => { const k = e.key.toLowerCase(); if ('wasd'.includes(k) && k.length === 1) AF.keys.delete(k); if (e.key === 'Shift') AF.keys.delete('shift'); });
   window.addEventListener('blur', () => AF.keys.clear());
@@ -17757,7 +17778,7 @@ function afUpdateHud() {
       const hp = clamp(b.hp / b.maxHp, 0, 1);
       me.innerHTML = '<div style="display:flex;justify-content:space-between;gap:12px"><b style="color:' + b.teamDef.col + '">' + b.name + '</b><span style="color:#c9bfda">' + b.kills + ' kill' + (b.kills === 1 ? '' : 's') + '</span></div>' +
         '<div style="height:8px;margin:5px 0 4px;border-radius:4px;background:#2a2438;overflow:hidden"><div style="height:100%;width:' + Math.round(hp * 100) + '%;background:' + (hp > 0.35 ? '#8fd08f' : '#ff6a5a') + '"></div></div>' +
-        '<div style="font-size:11px;color:#9a90ab">' + (b.dead ? 'you fell — drag to look around' : TOUCH ? 'stick move · drag right side aim · hold ATK to load, release to swing · SWAP sword/bow · BLOCK · DODGE' : 'WASD move · mouse aim · hold click to load, release to ' + (b.weapon === 'bow' ? 'loose' : 'strike') + ' · F ' + (b.weapon === 'bow' ? 'sword' : 'bow') + ' · Shift / right-click block · Space dodge' + (document.pointerLockElement === canvas ? '' : ' · <b style="color:#ffe089">click to aim</b>')) + '</div>';
+        '<div style="font-size:11px;color:#9a90ab">' + (b.dead ? 'you fell — drag to look around' : TOUCH ? 'stick move · drag right side aim · hold ATK to load, release to swing · SWAP sword/bow · BLOCK · ◀ ROLL ▶' : 'WASD move · mouse aim · hold click to load, release to ' + (b.weapon === 'bow' ? 'loose' : 'strike') + ' · F ' + (b.weapon === 'bow' ? 'sword' : 'bow') + ' · Shift / right-click block · Q / E roll' + (document.pointerLockElement === canvas ? '' : ' · <b style="color:#ffe089">click to aim</b>')) + '</div>';
     } else me.innerHTML = '<span style="color:#9a90ab">spectating</span>';
   }
 }

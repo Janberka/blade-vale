@@ -41,7 +41,7 @@ and pick their own weapon; only the host changes the team layout and sends invit
 
 On touch, the thumb that holds ATK or BLOCK also aims: press, drag to turn, release to swing where you
 face (the other thumb is on the stick, so there is no third finger).
-| Dodge roll (invulnerable for most of the roll) | Space | DODGE |
+| Roll left / right (invulnerable for most of the roll; you come up still facing your man) | Q / E, or Space toward the side you're moving | ◀ ROLL / ROLL ▶ |
 
 When you fall you spectate: drag to orbit the pit, wheel to zoom. The fight ends when one
 team is left standing, or after 3 minutes (most fighters standing, then most health, wins).
@@ -132,7 +132,7 @@ bell the captain reads his roster and draws a formation — guardsmen centre-fro
 filling the front rank, duelists on its ends, archers a rank behind, riders on the wing — and issues orders
 through the fight: *form up* (1.6 s), *advance* as a line at a walk toward the enemy, *send the riders
 wide* to a flanking mark, *charge* at contact, *regroup* when the line has scattered and the fight is
-even, *fall back to the wall* when losing badly (a guarded walk home, archers still loosing) and charge
+even, *fall back* a dozen paces to re-form when losing badly (it used to be a long walk to the wall with backs turned — a massacre at legion scale) and charge
 again when the enemy comes on or the moment passes, and *press the rout* when winning big. Until the
 charge is released a man keeps his place and only fights what reaches him. Humans are never commanded
 but see their captain's order in the HUD; the log narrates every shift, on guests too.
@@ -199,6 +199,11 @@ the ground (stride rate follows speed, ~2.4 strides a second at a run), and a ho
 so (`downT`), and costs the horse only a little way — a deep block still stops it eventually. A friend
 is shouldered aside, not ridden down. A guardsman bracing his shield toward the horse is the one thing
 that stops it dead (BRACED). A horse at speed is never shoved back by the man it hits.
+
+**The roll** (`afRollPose`): a dodge is a sideways shoulder roll — a full turn about the body's forward axis,
+tucked into a ball and pivoted about its middle, the feet swinging over and landing on the far side. It goes
+left or right (Q / E, the two touch buttons, or Space toward the side the stick leans) and never changes your
+facing. NPCs roll away from the side the danger comes from. The side rides the state code so guests see it.
 
 **Horsemen** (`afRide`): a rider steers, he does not strafe — the stick's forward component is the
 throttle along the facing, momentum is dragged onto the facing (hooves grip), and the yaw rate collapses

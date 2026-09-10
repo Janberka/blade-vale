@@ -14,7 +14,7 @@ Companion docs: `BATTLES.md` (the army-scale battle system this reuses primitive
 
 1. Sign in (or not — without an account you can still fight NPCs, you just can't invite anyone).
 2. Title screen → **⚔ Arena Fights**.
-3. In the lobby: **Teams** (2–6), **Fighters per team** (1–50; « » step by ten), what **you ride in with** (sword, bow, or a horse — everyone carries sword and bow), the **Pit** (cosy / wide / vast / colossal — it grows by itself to fit a big roster), **Hour** (day / dusk / night) and **Sky** (clear / rain).
+3. In the lobby: **Teams** (2–6), **Fighters per team** (1–200; « » step by ten), what **you ride in with** (sword, bow, or a horse — everyone carries sword and bow), the **Pit** (cosy / wide / vast / colossal — it keeps growing past colossal to fit a legion-sized roster), **Hour** (day / dusk / night) and **Sky** (clear / rain).
    The team cards show every seat: you, invited players who accepted, and *fighter of the vale*
    (an NPC) for each empty seat.
 4. **Players online** lists everyone connected to the war-net right now. **Invite** sends them
@@ -137,6 +137,12 @@ again when the enemy comes on or the moment passes, and *press the rout* when wi
 charge is released a man keeps his place and only fights what reaches him. Humans are never commanded
 but see their captain's order in the HUD; the log narrates every shift, on guests too.
 
+**Army-scale mixes**: bigger rosters field proportionally more archers and cavalry, the way a
+real army's specialist ranks grow with its size — `afArchWeights(per)` slides the archetype odds
+from a skirmish mix (mostly swordsmen) toward a legion mix (a third archers, a quarter riders) as
+`per` climbs toward ~40. A tiny duel still rolls mostly swordsmen; a 200-a-side legion fields ranks
+of bowmen and real wings of horse.
+
 **Fighters of the vale** (`AF_ARCH`): the NPCs come in six archetypes, each a build (rig, weapon, size),
 a body (health, poise, speed, damage) and a temperament. *Swordsman*: sword and shield, the baseline.
 *Brute*: a big man with a two-hander — more health and poise, slower, hits harder, loads almost every
@@ -145,6 +151,31 @@ rolls rather than blocks, circles, and **feints** (loads, cancels into a guard t
 strikes). *Guardsman*: a heavy shield and a thick hide — keeps his guard up between swings, ripostes
 after a lock, and edges toward fellow guardsmen to form a **wall**. *Archer* and *rider* as above. The
 host's lobby pre-rolls the mix seat by seat and shows it to everyone; name tags carry the archetype.
+
+**Organised armies, not a mob** — the fixes below turn a 50-a-side clash from three accidental
+skirmishes into one continuous front:
+- **A real block, not one giant thread** (`afPlanTeams`): the front line used to be a SINGLE rank —
+  at 50 a side that's a ~70-unit-wide single file of men, and a line that thin shears into separate
+  pockets the instant contact along it goes uneven. It's now files ∝ √N, a few ranks deep — the same
+  idiom the world-map armies already muster with — so the line holds together as it closes.
+- **A living melee centre and an engagement radius** (`T.center`, `T.engageR`, recomputed by the
+  captain every tick): once the charge is on, a man whose nearest foe is well beyond his own side's
+  current engagement radius falls back toward his team's centre instead of soloing across the pit
+  after one distant straggler — the mechanism that keeps a big battle as ONE fight. Riders get a
+  longer leash (cavalry should range) but the same rule.
+- **A live, clamped flanking mark** for riders (`T.wp`, tracked every captain tick via `afClampPit`):
+  it used to be a single point frozen the moment the advance began, using that instant's enemy
+  position — by the time cavalry arrived, the enemy (and often the mark itself) had moved on, or the
+  point sat outside the ring entirely, so a horse could end up standing alone at the wall. The mark
+  now tracks the live enemy centre and is clamped inside the ring; if cavalry still can't reach it
+  within `wpTimeout` (6s) the charge is ordered anyway rather than waiting on an unreachable spot.
+- **Regroup scales with roster size** (`T.regroupSpread`): a fixed 9-unit trigger either never fired
+  for a 50-man block or fired constantly; it's now proportional to √(team size).
+
+**Perf at scale**: `afSepFrom` (called once per NPC, every tick) and `afSeparate` were both true
+O(n²) full scans — fine at a dozen fighters, a real cost at hundreds. Both now use a shared spatial
+grid rebuilt once per tick (`afRebuildGrid`, the same idiom the world-map battle sim already uses),
+turning the per-tick cost roughly linear. A 200-a-side legion (400 bodies) ticks in ~7ms.
 
 **Big fights**: a team musters as a rank-and-file block (`afSlotOffset`), the pit grows to fit the
 roster (`afPitFor`), the clock doubles, and above 24 bodies only the humans wear the hero dressing

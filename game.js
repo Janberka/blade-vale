@@ -17127,8 +17127,9 @@ function afCaptainThink(T, dt) {
   const hp = arr => arr.reduce((a, b) => a + b.hp, 0), ratio = hp(mine) / Math.max(1, hp(foes));
   const spread = mine.reduce((a, b) => a + Math.hypot(b.x - mc.x, b.z - mc.z), 0) / mine.length;
   const bearing = Math.atan2(fc.x - T.anchor.x, fc.z - T.anchor.z);
-  let contact = false; for (const b of mine) { for (const o of foes) if (Math.hypot(o.x - b.x, o.z - b.z) < 5) { contact = true; break; } if (contact) break; }
-  T.center = mc;                                             // the living melee centroid — where an isolated man falls back on his own side
+  let contact = false; for (const b of mine) { if (b.mounted) continue; for (const o of foes) { if (o.mounted) continue; if (Math.hypot(o.x - b.x, o.z - b.z) < 5) { contact = true; break; } } if (contact) break; } // the LINES meeting — foot on foot; a rider's blow (ours or theirs) doesn't release the whole army
+  T.noContact = contact ? 0 : (T.noContact || 0) + 0.4;
+  T.center = mc; T.enemyCenter = fc;                        // the living centroids: an isolated man heads for the ENEMY's, never his own (that made a pile)
   T.engageR = clamp(spread * 1.8 + 14, AF_TACT.engageMin, AF_TACT.engageMax);
   T.regroupSpread = clamp(Math.sqrt(Math.max(1, mine.length)) * 3.4, 12, 34);
   if (T.riderOrder === 'flank') {                             // track the flanking mark live: the enemy line has moved since the order was given
@@ -17152,6 +17153,7 @@ function afCaptainThink(T, dt) {
       if (ratio < AF_TACT.rallyRatio && mine.length >= 3 && !T.rallied) { T.rallied = true; T.phase = 'fallback'; T.order = 'fallback'; T.riderOrder = 'fallback'; T.since = 0; T.anchor = { x: T.home.x, z: T.home.z }; T.face = Math.atan2(fc.x - T.home.x, fc.z - T.home.z); afOrderLog(T, 'fallback'); }
       else if (T.since > AF_TACT.regroupAfter && spread > T.regroupSpread && ratio < AF_TACT.pursueRatio && mine.length >= 3 && !contact) { T.phase = 'form'; T.order = 'hold'; T.since = 0; T.anchor = { x: mc.x, z: mc.z }; T.face = bearing; afOrderLog(T, 'regroup'); }
       else if (ratio > AF_TACT.pursueRatio && !T.pursuing) { T.pursuing = true; afOrderLog(T, 'pursue'); }
+      else if (T.noContact > 2.5 && gap > AF_TACT.contact * 1.5 && mine.length >= 3) { T.phase = 'advance'; T.order = 'advance'; T.since = 0; T.anchor = { x: mc.x, z: mc.z }; T.face = bearing; afOrderLog(T, 'advance'); } // the lines came apart: dress ranks where we stand and march again
       break;
     case 'fallback': {
       let near = 0; for (const o of foes) if (Math.hypot(o.x - T.anchor.x, o.z - T.anchor.z) < 8) near++;
@@ -17236,11 +17238,11 @@ function afThink(b, dt) {
       }
     }
   }
-  if (T && ord === 'charge' && !busy) {                     // isolated: my own side's fight is somewhere else — go find it, not this straggler
+  if (T && T.enemyCenter && ord === 'charge' && !busy) {   // no foe near me: the fight is at the enemy's mass — go THERE (walking to our own centre made a pile)
     const cap = T.engageR * (b.mounted ? AF_TACT.riderEngageMul : 1);
     if (d > cap) {
-      const cx = T.center.x - b.x, cz = T.center.z - b.z, cd = Math.hypot(cx, cz);
-      if (cd > 4) { I.yaw = Math.atan2(cx, cz); I.mx = cx / cd; I.mz = cz / cd; return; }
+      const cx = T.enemyCenter.x - b.x, cz = T.enemyCenter.z - b.z, cd = Math.hypot(cx, cz);
+      if (cd > 4) { I.yaw = Math.atan2(cx, cz); I.mx = cx / cd + sx * 0.5; I.mz = cz / cd + sz * 0.5; return; }
     }
   }
   I.yaw = Math.atan2(dx, dz);
@@ -17252,7 +17254,10 @@ function afThink(b, dt) {
   }
   if (b.mounted) {                                          // a rider charges, strikes in passing, rides through and wheels for another pass
     const reach = F.reach + F.horseReach;
-    if (b.passT > 0) { b.passT -= dt; I.yaw = b.yaw; I.mx = Math.sin(b.yaw); I.mz = Math.cos(b.yaw); if (d <= reach && !busy && b.cd <= 0) { afAiSwing(b, false); b.cd = 0.45; } return; }
+    if (b.passT > 0) { b.passT -= dt; I.yaw = b.wheelYaw != null ? b.wheelYaw : b.yaw; I.mx = Math.sin(I.yaw); I.mz = Math.cos(I.yaw); if (d <= reach && !busy && b.cd <= 0) { afAiSwing(b, false); b.cd = 0.45; } if (b.passT <= 0) b.wheelYaw = null; return; }
+    if (b.sp01 < 0.3 && d < 5 && !busy && T && T.enemyCenter && Math.random() < dt * 1.2) { // bogged down in the press: wheel OUT, get the horse moving, come again
+      b.wheelYaw = Math.atan2(b.x - T.enemyCenter.x, b.z - T.enemyCenter.z) + (Math.random() - 0.5) * 0.8; b.passT = 1.6; return;
+    }
     I.yaw = Math.atan2(dx, dz); const thr = d > 5 ? 1 : 0.7; I.mx = Math.sin(I.yaw) * thr + sx * 0.3; I.mz = Math.cos(I.yaw) * thr + sz * 0.3;
     if (d <= reach * 1.1 && !busy && b.cd <= 0) { afAiSwing(b, b.sp01 < 0.4 && Math.random() < b.heavyBias); b.cd = 0.5 + Math.random() * 0.4; if (b.sp01 > 0.45) b.passT = 0.9 + Math.random() * 0.5; }
     return;
@@ -17261,8 +17266,8 @@ function afThink(b, dt) {
     b.shotCd -= dt;
     const canShoot = b.shotCd <= 0 && !busy;
     if (d < 7) { I.mx = (-ux + sx) * 0.7; I.mz = (-uz + sz) * 0.7; if (canShoot && d > 3) { b.aiHoldT = 0.3; b.shotCd = 1.1 + Math.random() * 0.8; } } // give ground — but a swordsman who keeps coming gets shot in the face
-    else if (d > 22) { I.mx = ux + sx; I.mz = uz + sz; }
-    else { I.mx = tx * 0.45 + sx; I.mz = tz * 0.45 + sz; if (canShoot) { b.aiHoldT = 0.35 + b.skill * 0.4; b.shotCd = 1.7 + Math.random() * 1.2 * (1.3 - b.skill * 0.5); } } // a longer draw for the better archer
+    else if (d > 14) { I.mx = ux + sx; I.mz = uz + sz; if (canShoot && d < 22) { b.aiHoldT = 0.35 + b.skill * 0.4; b.shotCd = 1.7 + Math.random() * 1.2 * (1.3 - b.skill * 0.5); } } // close to a decisive range, loosing on the way
+    else { I.mx = tx * 0.25 + sx; I.mz = tz * 0.25 + sz; if (canShoot) { b.aiHoldT = 0.35 + b.skill * 0.4; b.shotCd = 1.7 + Math.random() * 1.2 * (1.3 - b.skill * 0.5); } } // a longer draw for the better archer
     return;
   }
   // hurt and pressed: back off toward the team, guard up, and let the poise come back

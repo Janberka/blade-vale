@@ -169,6 +169,17 @@ skirmishes into one continuous front:
   point sat outside the ring entirely, so a horse could end up standing alone at the wall. The mark
   now tracks the live enemy centre and is clamped inside the ring; if cavalry still can't reach it
   within `wpTimeout` (6s) the charge is ordered anyway rather than waiting on an unreachable spot.
+- **The lines meet on foot**: only infantry touching infantry releases the charge — a rider's first
+  blow (ours or theirs) used to release the whole army from 150 units out, so the cavalry charged
+  alone and was spent before the foot arrived. Cavalry now waits on its flanking mark and goes in
+  as the lines meet. A rider bogged down inside a block wheels OUT to regain speed before the next
+  pass instead of dying as a slow target in the press.
+- **No fight is no fight**: when the lines come apart (no foot-on-foot contact for a few seconds
+  with a gap between the masses), the captain dresses ranks where the men stand and marches them
+  again as a line. And an isolated man heads for the *enemy's* mass, never his own side's centre —
+  walking to our own centre is what turned a lull into two piles spinning at each other.
+- **Archers close**: late in a big fight the survivors are mostly bowmen; they used to hold at 22
+  and strafe in circles at each other forever. They now close to 14 and strafe less.
 - **Regroup scales with roster size** (`T.regroupSpread`): a fixed 9-unit trigger either never fired
   for a 50-man block or fired constantly; it's now proportional to √(team size).
 

@@ -17044,7 +17044,8 @@ function afJuice(from, t, amt, heavy, blocked) {
   addFovPunch(FEEL.fovPunchHit * w);
 }
 function afKill(t, by, quiet) {                          // quiet: a guest mirroring the host's verdict (the kill event carries the log line)
-  t.dead = true; t.hp = 0; t.deadT = 0; t.atk = null; t.blocking = false; t.dodgeT = 0; t.tiltX = 0;
+  t.dead = true; t.hp = 0; t.deadT = 0; t.atk = null; t.blocking = false; t.dodgeT = 0; t.tiltX = 0; t.rollAng = 0; t.downT = 0;
+  t.flashT = 0; t.flashWhite = false; t.tinted = false; setTint(t.parts, null);   // clear any hit-flash so the corpse darkens instead of glowing white
   if (by && by !== t) by.kills++;
   if (!quiet) { try { SFX.kill(t.group.position); } catch (e) {} afSparks(tmpV.set(t.x, afY(t.x, t.z) + 1.6, t.z), 0xff6b6b, 14); }
   afSplat(t.x, t.z, 1.6); afSplat(t.x + Math.sin(t.yaw) * 0.8, t.z + Math.cos(t.yaw) * 0.8, 1.0);
@@ -17521,7 +17522,7 @@ function afApplySnap(s) {
     }
     if (!b.remoteSeen) { b.remoteSeen = true; b.x = x; b.z = z; b.yaw = yaw; }
     b.tx = x; b.tz = z; b.tyaw = yaw; b.tstate = code; b.tmove = row[6] || 0; b.hp = hp;
-    if (code === 8 && !b.dead) { b.dead = true; b.deadT = 0; b.hp = 0; }
+    if (code === 8 && !b.dead) { b.dead = true; b.deadT = 0; b.hp = 0; b.rollAng = 0; b.flashT = 0; b.flashWhite = false; b.tinted = false; setTint(b.parts, null); }
   }
   for (const ev of s.ev || []) afApplyEvent(ev);
 }
@@ -17617,13 +17618,19 @@ function afCamera(dt) {
   const me = AF.me, cam = AF.cam;
   if (me && !me.dead) {
     const hy = afY(me.x, me.z) + 1.55, cp = Math.cos(cam.pitch);
-    tmpV.set(me.x - Math.sin(cam.yaw) * cam.dist * cp, hy + cam.dist * Math.sin(cam.pitch) + 0.6, me.z - Math.cos(cam.yaw) * cam.dist * cp);
+    // OVER THE CROWD: if a body stands between you and the lens (the press behind you in a big fight), the camera
+    // rises and comes in a little so it looks down over their helmets instead of through their chests
+    const bx = -Math.sin(cam.yaw), bz = -Math.cos(cam.yaw), L = cam.dist * cp; let blocked = false;
+    for (const o of AF.bodies) { if (o === me || o.dead) continue; const ox = o.x - me.x, oz = o.z - me.z, along = ox * bx + oz * bz; if (along < 0.6 || along > L + 1) continue; if (Math.abs(ox * bz - oz * bx) < 1.1) { blocked = true; break; } }
+    AF.camLift = lerp(AF.camLift || 0, blocked ? 1 : 0, clamp(dt * (blocked ? 6 : 2), 0, 1));
+    const dist = cam.dist * (1 - 0.2 * AF.camLift), lift = 2.1 * AF.camLift;
+    tmpV.set(me.x - Math.sin(cam.yaw) * dist * cp, hy + dist * Math.sin(cam.pitch) + 0.6 + lift, me.z - Math.cos(cam.yaw) * dist * cp);
     if (AF.phase === 'countdown') {                          // the SWEEP: from high over the pit down onto your shoulder as the bell nears
       const k = 1 - clamp(AF.countdown / AF_F.countdown, 0, 1), e = k * k * (3 - 2 * k), a = cam.yaw + Math.PI * 0.9 * (1 - e);
       const r = lerp(AF_F.radius * 1.5, cam.dist, e), h = lerp(AF_F.radius, tmpV.y - hy, e);
       tmpV2.set(me.x - Math.sin(a) * r, hy + h, me.z - Math.cos(a) * r);
       camera.position.copy(tmpV2); camera.lookAt(me.x, hy + 0.2, me.z);
-    } else { camera.position.lerp(tmpV, clamp(dt * 14, 0, 1)); camera.lookAt(me.x, hy, me.z); }
+    } else { const la = 3 * AF.camLift; camera.position.lerp(tmpV, clamp(dt * 14, 0, 1)); camera.lookAt(me.x + Math.sin(cam.yaw) * la, hy + 0.9 * AF.camLift, me.z + Math.cos(cam.yaw) * la); } // lifted: look ahead over the fight, not down at your own helmet
     const sp = Math.hypot(me.vx, me.vz); AF.fov = lerp(AF.fov, CAM_BASE_FOV + clamp(sp / AF_F.move, 0, 1.2) * 5, clamp(dt * 4, 0, 1)); // a run widens the lens
   } else {                                                  // spectating: orbit the pit (drag to turn, wheel to zoom)
     const o = AF.orbit; if (!o.drag) o.theta += dt * 0.06;

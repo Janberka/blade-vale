@@ -720,7 +720,7 @@ const MOUNT = {
 };
 // horse coats: picked per-build for herd variety; the caparison/saddle cloth carries the faction color
 const HORSE_COATS = [0x5a4632, 0x6e5138, 0x3e3630, 0x7a6a55];
-function buildCavalry(palette, scale = 1, weapon = 'longsword') {
+function buildCavalry(palette, scale = 1, weapon = 'longsword', opts = {}) {
   const g = new THREE.Group();
   const horse = new THREE.Group();
   g.add(horse);
@@ -790,7 +790,7 @@ function buildCavalry(palette, scale = 1, weapon = 'longsword') {
   for (const c of [barrel, chest, rump, neckMesh, skull, saddle]) c.castShadow = true;
 
   // --- the rider: the real humanoid rig, legs posed astride (saddleRider re-asserts each frame) ---
-  const rider = buildHumanoid(palette, 0.88, weapon);
+  const rider = buildHumanoid(palette, 0.88, weapon, opts);
   rider.group.position.set(0, 1.06, -0.06);        // crotch (hipY 1.7×0.88) lands on the saddle seat
   g.add(rider.group);
 
@@ -16410,7 +16410,8 @@ const AF_F = { hp: 100, move: 5.6, reach: 2.5, cone: 0.3, radius: 34, timeLimit:
   knock: 6, heavyKnock: 14, lightPoise: 20, heavyPoise: 40, maxPoise: 45, poiseRegen: 8, staggerDur: 1.2, executeMul: 2.2, // three quick lights, or a heavy on a chipped guard, break poise
   accel: 7.13, friction: 0.0008, lunge: 2, heavyLunge: 3,      // velocity model borrowed from the field fighters (terminal speed ≈ move)
   dodge: { dur: 0.40, speed: 13, iframes: 0.32, cd: 0.55 },
-  chargeMax: 0.85, heavyAt: 0.6 };                          // hold the attack to load it: a full hold (chargeMax s) is a heavy; past heavyAt it cracks guards
+  chargeMax: 0.85, heavyAt: 0.6, horseSpeed: 1.9, horseReach: 0.9 };
+const AF_PITS = { cosy: 34, wide: 50, vast: 68 };            // the ring's radius by lobby choice (radius is set per boot)                          // hold the attack to load it: a full hold (chargeMax s) is a heavy; past heavyAt it cracks guards
 const AF_TEAM_HEX = AF_TEAMS.map(t => parseInt(t.col.slice(1), 16));
 const AF_NET = { snapDt: 1 / 20, inDt: 1 / 20 };
 const AF = {
@@ -16435,7 +16436,7 @@ function afY(x, z) {
   return h;
 }
 function afBuildGround() {
-  const size = 200, geo = new THREE.PlaneGeometry(size, size, 120, 120); geo.rotateX(-Math.PI / 2);
+  const size = Math.round(AF_F.radius * 5.2), geo = new THREE.PlaneGeometry(size, size, 120, 120); geo.rotateX(-Math.PI / 2);
   const p = geo.attributes.position, col = new Float32Array(p.count * 3), c = new THREE.Color();
   const sand = new THREE.Color(0xb89a6c), sandDk = new THREE.Color(0x8f7650), churn = new THREE.Color(0x745538), grass = new THREE.Color(0x4f7a2e), grassDk = new THREE.Color(0x3c5f23), stone = new THREE.Color(0x77726a);
   const n = (x, z) => 0.5 + 0.25 * Math.sin(x * 0.37 + AF.terr.p1) * Math.cos(z * 0.41 + AF.terr.p2) + 0.25 * Math.sin((x - z) * 0.23 + AF.terr.p3); // 0..1 patches
@@ -16548,7 +16549,7 @@ function afMakeTorch(x, z, yaw, withLight) {
   g.position.set(x, afY(x, z), z); g.rotation.y = yaw; return g;
 }
 function afBuildWall() {
-  const g = new THREE.Group(), N = 36, R = AF_F.radius + 0.9, seg = (2 * Math.PI * R) / N;
+  const g = new THREE.Group(), kR = AF_F.radius / 34, N = Math.round(36 * kR), R = AF_F.radius + 0.9, seg = (2 * Math.PI * R) / N;
   const wm = mat(0x8a8378), cap = mat(0x5e5850), wood = mat(0x6b4a2e), woodDk = mat(0x4e351f), rope = mat(0xb8a27a);
   for (let i = 0; i < N; i++) {                              // the ring wall: stone blocks with capstones every third
     const a = (i / N) * TAU, x = Math.cos(a) * R, z = Math.sin(a) * R, h = 2.1 + (i % 3 === 0 ? 0.7 : 0);
@@ -16558,7 +16559,7 @@ function afBuildWall() {
   }
   // the STANDS: three timber tiers climbing away from the wall, and a crowd on them in every colour of the vale
   AF.crowd = [];
-  const NS = 30, crowdCols = [0x9a3b2f, 0x3b5a9a, 0xd9b04a, 0x6b8f3a, 0x7a4a8a, 0xd8d2c0, 0x4a3520, 0xc86a3a];
+  const NS = Math.round(30 * kR), crowdCols = [0x9a3b2f, 0x3b5a9a, 0xd9b04a, 0x6b8f3a, 0x7a4a8a, 0xd8d2c0, 0x4a3520, 0xc86a3a];
   const crowdMats = crowdCols.map(cn => mat(cn));
   const seed = _mulberry32(AF.seed ^ 0x5bd1e995);
   for (let tier = 0; tier < 3; tier++) {
@@ -16581,7 +16582,7 @@ function afBuildWall() {
     }
   }
   // banner poles on the wall in the fighting teams' colours, and torches between them
-  const NB = Math.max(6, AF.cfg.teams * 3);
+  const NB = Math.max(6, Math.round(AF.cfg.teams * 3 * kR));
   AF.torches = [];
   let lights = 0;
   for (let i = 0; i < NB; i++) {
@@ -16592,7 +16593,8 @@ function afBuildWall() {
     g.add(torch); AF.torches.push(torch);
   }
   // rope + posts around the sand's edge
-  for (let i = 0; i < 24; i++) { const a = (i / 24) * TAU, x = Math.cos(a) * (AF_F.radius - 0.2), z = Math.sin(a) * (AF_F.radius - 0.2); const post = boxMesh(0.16, 0.9, 0.16, rope); post.position.set(x, afY(x, z) + 0.45, z); post.castShadow = false; g.add(post); }
+  const NP = Math.round(24 * kR);
+  for (let i = 0; i < NP; i++) { const a = (i / NP) * TAU, x = Math.cos(a) * (AF_F.radius - 0.2), z = Math.sin(a) * (AF_F.radius - 0.2); const post = boxMesh(0.16, 0.9, 0.16, rope); post.position.set(x, afY(x, z) + 0.45, z); post.castShadow = false; g.add(post); }
   // PENNANT strings sag between the banner poles above the wall, little flags in the fighting colours
   const flagGeo = cachedGeo('af-flag', () => { const sh = new THREE.Shape(); sh.moveTo(0, 0); sh.lineTo(0.5, 0); sh.lineTo(0.06, -0.55); sh.closePath(); return new THREE.ShapeGeometry(sh); });
   const flagMats = AF_TEAMS.slice(0, AF.cfg.teams).map(t => new THREE.MeshPhongMaterial({ color: t.pal.cloth, side: THREE.DoubleSide, flatShading: true }));
@@ -16606,7 +16608,7 @@ function afBuildWall() {
   }
   // DEBRIS in the sand: pebbles, a split shield, a snapped blade or two
   const dbg = _mulberry32(AF.seed ^ 0x2545f491), rockM = mat(0x8d8578);
-  for (let i = 0; i < 46; i++) { const a = dbg() * TAU, rr = 8 + dbg() * (AF_F.radius - 10), x = Math.cos(a) * rr, z = Math.sin(a) * rr, sz = 0.1 + dbg() * 0.22;
+  for (let i = 0; i < Math.round(46 * kR * kR); i++) { const a = dbg() * TAU, rr = 8 + dbg() * (AF_F.radius - 10), x = Math.cos(a) * rr, z = Math.sin(a) * rr, sz = 0.1 + dbg() * 0.22;
     const rk = new THREE.Mesh(cachedGeo('af-rock', () => new THREE.IcosahedronGeometry(1, 0)), rockM); rk.position.set(x, afY(x, z) + sz * 0.3, z); rk.scale.set(sz * 1.4, sz * 0.7, sz); rk.rotation.y = dbg() * TAU; rk.castShadow = false; g.add(rk); }
   for (let i = 0; i < 3; i++) { const a = dbg() * TAU, rr = 10 + dbg() * 18, x = Math.cos(a) * rr, z = Math.sin(a) * rr;
     const bl = boxMesh(0.09, 0.9, 0.2, mat(0xb9c2cc, { metal: 1 })); bl.position.set(x, afY(x, z) + 0.05, z); bl.rotation.set(Math.PI / 2 - 0.15, dbg() * TAU, 0); bl.castShadow = false; g.add(bl); }
@@ -16622,8 +16624,9 @@ function afSpawn(teamIdx, teams) {
 // ---- fighters ----
 function afFreshInput() { return { mx: 0, mz: 0, yaw: 0, atk: 0, heavy: 0, dodge: 0, block: false, hold: false, swap: 0 }; } // atk = release count (a tap between samples still lands); hold = the button is down (charging)
 function afMakeBody(entry, idx, r) {
-  const td = AF_TEAMS[entry.t], weapon = entry.weapon === 'bow' ? 'bow' : 'sword';
-  const h = buildHumanoid(td.pal, 1, weapon, { hero: true, both: true, plume: AF_TEAM_HEX[entry.t] }); const group = h.group || h;
+  const td = AF_TEAMS[entry.t], mounted = entry.weapon === 'horse', weapon = entry.weapon === 'bow' ? 'bow' : 'sword';
+  const rigOpts = { hero: true, both: true, plume: AF_TEAM_HEX[entry.t] };
+  const h = mounted ? buildCavalry(td.pal, 1, 'sword', rigOpts) : buildHumanoid(td.pal, 1, weapon, rigOpts); const group = h.group || h;
   group.rotation.order = 'YXZ';                              // yaw first, then a body-local tilt/roll (somersaults, crumples)
   const sp = afSpawn(entry.t, AF.cfg.teams), rgx = -Math.cos(sp.yaw), rgz = Math.sin(sp.yaw), off = (entry.s - (AF.cfg.per - 1) / 2) * 2.3;
   const b = { id: idx, idx, team: entry.t, teamDef: td, name: entry.name, kind: entry.kind, peer: entry.peer || null, weapon,
@@ -16635,13 +16638,14 @@ function afMakeBody(entry, idx, r) {
     vx: 0, vz: 0, poise: AF_F.maxPoise, maxPoise: AF_F.maxPoise, queued: false, cd: 0, waiting: false, slotAngle: 0, retreatT: 0, bob: 0,
     gait: null, hitT: 0, hitSide: 0, lookYaw: 0, headYaw: 0, capeX: 0.12, phase0: r() * TAU, roll: 0, lastStep: 0, flashT: 0, sway: r() * TAU, clashT: 0, clashAtk: false, clashDx: 0, clashDz: 0,
     charge: null, chargeMove: 0, prevHold: false, releaseNow: false, aiHoldT: 0, prefBow: weapon === 'bow', swapT: 0, seenSwap: 0,
+    mounted, trampleT: 0, passT: 0, sp01: 0,
     seenAtk: 0, seenHeavy: 0, seenDodge: 0,
     // NPC brain traits (seeded so a replay of the same seed fields the same temperaments)
     skill: 0.35 + r() * 0.5, heavyBias: 0.12 + r() * 0.2, target: null, aiT: r() * 0.3, strafe: r() < 0.5 ? -1 : 1, strafeT: 0.5 + r(), swingT: 0.4 + r() * 0.5, holdBlock: 0, reactedTo: null, shotCd: 1 + r(),
     // guest-side interpolation targets
     tx: 0, tz: 0, tyaw: 0, tstate: 0, tmove: 0, rollT: 0, remoteSeen: false,
   };
-  b.tx = b.x; b.tz = b.z; b.tyaw = b.yaw; b.inp.yaw = b.yaw;
+  b.tx = b.x; b.tz = b.z; b.tyaw = b.yaw; b.inp.yaw = b.yaw; b.tagH = mounted ? 3.5 : 2.25;
   group.position.set(b.x, afY(b.x, b.z), b.z); group.rotation.y = b.yaw;
   scene.add(group); group.userData.afBody = b;
   // floating name + health bar (a separate un-rotated tag so the bar can face the camera)
@@ -16709,9 +16713,9 @@ function afCommit(b, dt) {
       if (step !== b.lastStep) { b.lastStep = step; if (camera.position.distanceToSquared(b.group.position) < 900 && sp > 3) spawnSparks(tmpV.set(b.x, afY(b.x, b.z) + 0.15, b.z), 0xc9b79a, 2); }
     }
   }
-  const y = afY(b.x, b.z) + (b.moving && !b.dead ? Math.abs(Math.cos(b.phase)) * g.bob : 0);
+  const y = afY(b.x, b.z) + (b.moving && !b.dead && !b.mounted ? Math.abs(Math.cos(b.phase)) * g.bob : 0);
   b.group.position.set(b.x, y, b.z); b.group.rotation.set(b.tiltX || 0, b.yaw, b.roll || 0);
-  if (b.tag) { b.tag.position.set(b.x, y + 2.25, b.z); b.bar.quaternion.copy(camera.quaternion); b.bar.userData.fill.scale.x = clamp(b.hp / b.maxHp, 0, 1); b.tag.visible = !b.dead; }
+  if (b.tag) { b.tag.position.set(b.x, y + (b.tagH || 2.25), b.z); b.bar.quaternion.copy(camera.quaternion); b.bar.userData.fill.scale.x = clamp(b.hp / b.maxHp, 0, 1); b.tag.visible = !b.dead; }
 }
 // ONE control routine for everyone: reads b.inp (keyboard, NPC brain, or a remote player's record).
 // sim=true means this client is the authority (hits land); a guest driving its own body passes false.
@@ -16741,21 +16745,24 @@ function afDrive(b, dt, sim) {
     const sp = F.dodge.speed * (1 - k * 0.5); b.vx = b.ddx * sp; b.vz = b.ddz * sp;
     b.tiltX = -Math.sin(k * Math.PI) * 1.1; b.moving = true;
     walkLegs(b.parts, b.phase += dt * 14, 0.5, 0.6); setPose(b.anim, 'relax', 0.1);
-    if (b.dodgeT <= 0) { b.tiltX = 0; b.vx *= 0.4; b.vz *= 0.4; }
+    if (b.dodgeT <= 0) { b.tiltX = 0; b.vx *= 0.4; b.vz *= 0.4; if (b === AF.me) afAutoTurn(b); }
     afIntegrate(b, dt); afCommit(b, dt); return;
   }
   const mm = Math.hypot(I.mx, I.mz), ux = mm > 1e-3 ? I.mx / mm : 0, uz = mm > 1e-3 ? I.mz / mm : 0;
   if (I.dodge !== b.seenDodge) {                             // a roll cancels a windup, never a landed blow
     b.seenDodge = I.dodge;
-    if (b.dodgeCd <= 0 && !(b.atk && b.atk.hit)) {
+    if (b.mounted) { if (b.dodgeCd <= 0) { b.dodgeCd = 1.2; b.vx += Math.sin(b.yaw) * 6; b.vz += Math.cos(b.yaw) * 6; b.iframes = 0.15; try { SFX.foot(b.group.position); } catch (e) {} } }
+    else if (b.dodgeCd <= 0 && !(b.atk && b.atk.hit)) {
       b.dodgeT = F.dodge.dur; b.iframes = F.dodge.iframes; b.dodgeCd = F.dodge.dur + F.dodge.cd; b.atk = null; b.charge = null; b.queued = false; b.blocking = false;
       if (mm > 1e-3) { b.ddx = ux; b.ddz = uz; } else { b.ddx = -Math.sin(b.yaw); b.ddz = -Math.cos(b.yaw); }
       try { SFX.foot(b.group.position); } catch (e) {}
       afIntegrate(b, dt); afCommit(b, dt); return;
     }
   }
-  // facing: everyone turns, nobody snaps — a player's aim leads, an NPC's intent follows
-  b.yaw = angleLerp(b.yaw, I.yaw, clamp(dt * (human ? 14 : 9), 0, 1));
+  // facing: everyone turns, nobody snaps — a player's aim leads, an NPC's intent follows (a horse wheels slower the faster it goes)
+  if (b.trampleT > 0) b.trampleT -= dt;
+  if (!b.mounted) b.yaw = angleLerp(b.yaw, I.yaw, clamp(dt * (human ? 14 : 9), 0, 1));
+  else { const maxYaw = lerp(MOUNT.turnStand, MOUNT.turnFull, b.sp01) * dt; b.yaw += clamp(angleDelta(b.yaw, I.yaw), -maxYaw, maxYaw); }
   if (human) b.lookYaw = I.yaw; else if (b.target && !b.target.dead) b.lookYaw = Math.atan2(b.target.x - b.x, b.target.z - b.z); else b.lookYaw = b.yaw;
   if (I.swap !== b.seenSwap) { b.seenSwap = I.swap; if (!b.atk && b.clashT <= 0) afSetWeapon(b, b.weapon === 'bow' ? 'sword' : 'bow'); }
   if (b.swapT > 0) { b.swapT -= dt; b.charge = null; }         // hands busy changing weapons
@@ -16801,13 +16808,14 @@ function afDrive(b, dt, sim) {
     }
     const total = a.wind + a.strike + a.rec;
     if (a.hit && b.queued && a.t >= a.wind + a.strike + a.rec * 0.45) { b.queued = false; afStartAttack(b, false); } // chain from the follow-through
-    else if (a.t >= total) { b.atk = null; b.queued = false; b.cd = 0.04; b.anim.ease = null; setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.3); }
+    else if (a.t >= total) { b.atk = null; b.queued = false; b.cd = 0.04; b.anim.ease = null; setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.3); if (b === AF.me) afAutoTurn(b); }
     else if (a.hit && a.t > a.wind + a.strike + a.rec * 0.5 && !a.bow) { b.anim.ease = null; setPose(b.anim, 'guard', 0.3); }
     b.blocking = false;
   } else b.blocking = !!I.block;
   if (b.blocking) setPose(b.anim, 'block', 0.1);
   else if (!b.atk && !b.charge) setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.22);
   const canMove = !b.atk || (!b.atk.heavy && !b.atk.bow && !b.atk.hit);
+  if (b.mounted) { afRide(b, dt, I, mm, canMove, sim); afIntegrate(b, dt); afCommit(b, dt); return; }
   if (mm > 1e-3 && canMove) {
     const spd = F.move * (b.blocking ? 0.4 : (b.atk || b.charge) ? 0.35 : 1) * Math.min(1, mm);
     afMove(b, ux, uz, spd, dt); b.moving = true;
@@ -16839,6 +16847,33 @@ function afCape(b, p, dt, fwd, sp) {
   }
   p.cape.rotation.z = lerp(p.cape.rotation.z, -lat * 0.3 + Math.sin(rtNow * 2.3 + b.phase0) * 0.02, clamp(dt * 5, 0, 1));
 }
+// RIDING: the stick's forward component is the throttle along the facing; momentum is dragged onto the facing
+// (hooves grip, no strafing); the gait clock runs on the horse; at speed the horse TRAMPLES foot soldiers it runs into.
+function afRide(b, dt, I, mm, canMove, sim) {
+  const F = AF_F, top = F.move * F.horseSpeed, sp = Math.hypot(b.vx, b.vz), sp01 = clamp(sp / top, 0, 1);
+  b.sp01 = sp01; b.parts.mount.userData.rig.speed01 = sp01;
+  const fx = Math.sin(b.yaw), fz = Math.cos(b.yaw);
+  const thr = mm > 1e-3 ? clamp((I.mx * fx + I.mz * fz) / Math.max(mm, 1e-3) * Math.min(1, mm), -0.45, 1) : 0;
+  if (Math.abs(thr) > 0.05 && canMove) afMove(b, fx, fz, top * thr * (b.blocking || b.charge ? 0.55 : 1), dt);
+  if (sp > 0.05) { const fwd = b.vx * fx + b.vz * fz, keep = Math.max(fwd, sp * 0.25), gk = clamp(dt * MOUNT.grip, 0, 1); b.vx = lerp(b.vx, fx * keep, gk); b.vz = lerp(b.vz, fz * keep, gk); }
+  b.moving = sp > 0.4;
+  if (b.moving) { b.gait = GAIT.run; b.phase += dt * 10 * (0.35 + sp01); walkLegs(b.parts, b.phase, 0.6); } else restLegs(b.parts, dt, true);
+  if (sim && sp01 > 0.5) for (const o of AF.bodies) {   // the charge: a foot soldier in the horse's path is bowled over
+    if (o.dead || o === b || o.team === b.team || o.mounted || o.trampleT > 0) continue;
+    const dx = o.x - b.x, dz = o.z - b.z, dd = Math.hypot(dx, dz); if (dd > 1.8 || (dx * fx + dz * fz) / (dd || 1) < 0.2) continue;
+    o.trampleT = 1.4; afDamage(o, 4 + 7 * sp01, b, false, false, false, 0.85); spawnPopup(o.group.position, 'TRAMPLED', '#ffb347');
+    spawnSparks(tmpV.set(o.x, afY(o.x, o.z) + 0.3, o.z), 0xc9b79a, 8);
+  }
+}
+// after a swing or a roll, if a foe is at your elbow but not in front of you, the camera swings onto him —
+// on a phone the thumb can't chase a man who has slipped behind you (it yields the moment you turn yourself)
+function afAutoTurn(b) {
+  let best = null, bd = 4.8;
+  for (const o of AF.bodies) { if (o.dead || o.team === b.team) continue; const d = Math.hypot(o.x - b.x, o.z - b.z); if (d < bd) { bd = d; best = o; } }
+  if (!best) return;
+  const want = Math.atan2(best.x - b.x, best.z - b.z);
+  if (Math.abs(angleDelta(AF.cam.yaw, want)) > 0.45) AF.autoTurn = { yaw: want, t: 0.35, last: AF.cam.yaw };
+}
 function afNearestFoeInCone(b, R, cosMin) {
   let best = null, bd = R, fdx = Math.sin(b.yaw), fdz = Math.cos(b.yaw);
   for (const o of AF.bodies) { if (o.dead || o.team === b.team) continue; const dx = o.x - b.x, dz = o.z - b.z, dd = Math.hypot(dx, dz); if (dd < bd && (dx * fdx + dz * fdz) / (dd || 1) > cosMin) { bd = dd; best = o; } }
@@ -16859,12 +16894,13 @@ function afRelease(b, k) {
   b.blocking = false;
 }
 function afStrike(b, heavy, k) {
-  const F = AF_F, w = k || 0, reach = lerp(F.reach, F.reach * 1.25, w), fdx = Math.sin(b.yaw), fdz = Math.cos(b.yaw), cone = lerp(F.cone, 0.1, w);
+  const F = AF_F, w = k || 0, reach = lerp(F.reach, F.reach * 1.25, w) + (b.mounted ? F.horseReach : 0), fdx = Math.sin(b.yaw), fdz = Math.cos(b.yaw), cone = lerp(F.cone, 0.1, w);
+  const shock = b.mounted ? 1 + MOUNT.chargeDmg * b.sp01 : 1;   // a blow at full tilt lands harder
   for (const o of AF.bodies) {
     if (o.dead || o.team === b.team || o === b) continue;
     const dx = o.x - b.x, dz = o.z - b.z, dd = Math.hypot(dx, dz); if (dd > reach) continue;
     if ((dx * fdx + dz * fdz) / (dd || 1) < cone) continue;  // a loaded blow cleaves a wider arc
-    let dmg = lerp(rand(F.light.dmg[0], F.light.dmg[1]), rand(F.heavy.dmg[0], F.heavy.dmg[1]), w) + b.combo * 1.5;
+    let dmg = (lerp(rand(F.light.dmg[0], F.light.dmg[1]), rand(F.heavy.dmg[0], F.heavy.dmg[1]), w) + b.combo * 1.5) * shock;
     const exec = o.stagger > 0;                            // a staggered foe is open: the execution lands for real
     if (exec) dmg *= F.executeMul;
     afDamage(o, dmg, b, heavy, exec, false, w);
@@ -17053,6 +17089,13 @@ function afThink(b, dt) {
     if (b.weapon === 'bow' && d < 4.2) I.swap++;
     else if (b.weapon === 'sword' && d > 11 && b.hp > b.maxHp * 0.3) I.swap++;
   }
+  if (b.mounted) {                                          // a rider charges, strikes in passing, rides through and wheels for another pass
+    const reach = F.reach + F.horseReach;
+    if (b.passT > 0) { b.passT -= dt; I.yaw = b.yaw; I.mx = Math.sin(b.yaw); I.mz = Math.cos(b.yaw); if (d <= reach && !busy && b.cd <= 0) { afAiSwing(b, false); b.cd = 0.45; } return; }
+    I.yaw = Math.atan2(dx, dz); const thr = d > 5 ? 1 : 0.7; I.mx = Math.sin(I.yaw) * thr + sx * 0.3; I.mz = Math.cos(I.yaw) * thr + sz * 0.3;
+    if (d <= reach * 1.1 && !busy && b.cd <= 0) { afAiSwing(b, b.sp01 < 0.4 && Math.random() < b.heavyBias); b.cd = 0.5 + Math.random() * 0.4; if (b.sp01 > 0.45) b.passT = 0.9 + Math.random() * 0.5; }
+    return;
+  }
   if (b.weapon === 'bow') {                                  // archers keep their distance, loose, and drift sideways between shots
     b.shotCd -= dt;
     const canShoot = b.shotCd <= 0 && !busy;
@@ -17066,6 +17109,7 @@ function afThink(b, dt) {
   if (b.hp < b.maxHp * 0.3 && b.stagger <= 0) { let near = 0; for (const o of AF.bodies) if (!o.dead && o.team !== b.team && Math.hypot(o.x - b.x, o.z - b.z) < 6) near++; if (near >= 2 && Math.random() < dt * 0.9) { b.retreatT = 1.4; return; } }
   // a swing is coming at me: a skilled fighter blocks it or rolls out of it (once per swing)
   const facingMe = ((b.x - t.x) * Math.sin(t.yaw) + (b.z - t.z) * Math.cos(t.yaw)) / d;
+  if (t.mounted && !b.mounted && t.sp01 > 0.5 && d < 7 && facingMe > 0.6 && b.reactedTo !== t && Math.random() < b.skill * 0.9) { b.reactedTo = t; I.dodge++; I.mx = tx; I.mz = tz; return; } // a charge is coming: roll out of its line
   const incoming = t.charge || (t.atk && !t.atk.hit && !t.atk.bow ? t.atk : null);    // a raised arm, loading — or the swing itself
   if (incoming && d < 3.8 && facingMe > 0.3 && b.reactedTo !== incoming) {
     b.reactedTo = incoming;
@@ -17111,6 +17155,10 @@ function afReadLocalInput() {
   if (K.has('w')) f += 1; if (K.has('s')) f -= 1; if (K.has('d')) s += 1; if (K.has('a')) s -= 1;
   if (typeof touchMove !== 'undefined' && touchMove.active) { f += touchMove.f; s += touchMove.s; }
   const m = Math.hypot(f, s); if (m > 1) { f /= m; s /= m; }
+  if (AF.autoTurn) {                                        // ease the aim onto the man at your elbow — unless you moved it yourself
+    const A = AF.autoTurn; if (Math.abs(angleDelta(cam.yaw, A.last)) > 0.02) AF.autoTurn = null;
+    else { cam.yaw += angleDelta(cam.yaw, A.yaw) * 0.22; A.last = cam.yaw; A.t -= 1 / 60; if (A.t <= 0 || Math.abs(angleDelta(cam.yaw, A.yaw)) < 0.03) AF.autoTurn = null; }
+  }
   I.mx = fx * f + rx * s; I.mz = fz * f + rz * s; I.yaw = cam.yaw;
   I.block = K.has('shift') || AF.mouseRight || !!(typeof keys !== 'undefined' && keys['ShiftLeft'] && TOUCH);
   // HOLD the attack to load it, RELEASE to swing: the held mouse button or the held ATK touch button
@@ -17139,9 +17187,10 @@ function afTick(dt) {
 }
 // nobody overlaps — they shove (heavier when it's you, so you can wade through a press)
 function afSeparate() {
-  const R = 1.1, R2 = R * R, L = AF.bodies;
+  const L = AF.bodies;
   for (let i = 0; i < L.length; i++) { const b = L[i]; if (b.dead) continue;
     for (let j = i + 1; j < L.length; j++) { const o = L[j]; if (o.dead) continue;
+      const R = 1.1 + (b.mounted ? 0.7 : 0) + (o.mounted ? 0.7 : 0), R2 = R * R;
       const dx = o.x - b.x, dz = o.z - b.z, d2 = dx * dx + dz * dz; if (d2 >= R2 || d2 < 1e-6) continue;
       const d = Math.sqrt(d2), ov = R - d, nx = dx / d, nz = dz / d, wb = b.ctrl === 'ai' ? 1 : 2, wo = o.ctrl === 'ai' ? 1 : 2, tot = wb + wo;
       b.x -= nx * ov * (wo / tot); b.z -= nz * ov * (wo / tot); o.x += nx * ov * (wb / tot); o.z += nz * ov * (wb / tot);
@@ -17317,15 +17366,15 @@ function afCamera(dt) {
     tmpV.set(me.x - Math.sin(cam.yaw) * cam.dist * cp, hy + cam.dist * Math.sin(cam.pitch) + 0.6, me.z - Math.cos(cam.yaw) * cam.dist * cp);
     if (AF.phase === 'countdown') {                          // the SWEEP: from high over the pit down onto your shoulder as the bell nears
       const k = 1 - clamp(AF.countdown / AF_F.countdown, 0, 1), e = k * k * (3 - 2 * k), a = cam.yaw + Math.PI * 0.9 * (1 - e);
-      const r = lerp(52, cam.dist, e), h = lerp(34, tmpV.y - hy, e);
+      const r = lerp(AF_F.radius * 1.5, cam.dist, e), h = lerp(AF_F.radius, tmpV.y - hy, e);
       tmpV2.set(me.x - Math.sin(a) * r, hy + h, me.z - Math.cos(a) * r);
       camera.position.copy(tmpV2); camera.lookAt(me.x, hy + 0.2, me.z);
     } else { camera.position.lerp(tmpV, clamp(dt * 14, 0, 1)); camera.lookAt(me.x, hy, me.z); }
     const sp = Math.hypot(me.vx, me.vz); AF.fov = lerp(AF.fov, CAM_BASE_FOV + clamp(sp / AF_F.move, 0, 1.2) * 5, clamp(dt * 4, 0, 1)); // a run widens the lens
   } else {                                                  // spectating: orbit the pit (drag to turn, wheel to zoom)
     const o = AF.orbit; if (!o.drag) o.theta += dt * 0.06;
-    const st = Math.sin(o.phi);
-    tmpV.set(o.r * st * Math.sin(o.theta), 6 + o.r * Math.cos(o.phi), o.r * st * Math.cos(o.theta));
+    const st = Math.sin(o.phi), orr = o.r * AF_F.radius / 34;
+    tmpV.set(orr * st * Math.sin(o.theta), 6 + orr * Math.cos(o.phi), orr * st * Math.cos(o.theta));
     camera.position.lerp(tmpV, clamp(dt * 3, 0, 1)); camera.lookAt(0, 2, 0);
     AF.fov = lerp(AF.fov, CAM_BASE_FOV, clamp(dt * 4, 0, 1));
   }
@@ -17510,7 +17559,7 @@ function afEndPanel() {
   document.getElementById('af-leave').onclick = () => { afLeaveToMenu(); };
 }
 function afRematch() {
-  const spec = { k: 'go', seed: (Math.random() * 0xffffffff) >>> 0, teams: AF.cfg.teams, per: AF.cfg.per, time: AF.cfg.time, weather: AF.cfg.weather, roster: AF.roster.map(r => ({ ...r })) };
+  const spec = { k: 'go', seed: (Math.random() * 0xffffffff) >>> 0, teams: AF.cfg.teams, per: AF.cfg.per, time: AF.cfg.time, weather: AF.cfg.weather, pit: AF.cfg.pit, roster: AF.roster.map(r => ({ ...r })) };
   if (AF.role === 'host') afSend(spec);
   afBoot(spec);
 }
@@ -17533,7 +17582,8 @@ function afClear() {
 // spec = { seed, teams, per, roster:[{t,s,name,kind:'host'|'player'|'npc',peer,weapon}] } — identical on every client
 function afBoot(spec) {
   const first = !AF.on;
-  AF.on = true; AF.seed = spec.seed >>> 0 || 1; AF.cfg = { teams: spec.teams, per: spec.per, time: spec.time || 'day', weather: spec.weather || 'clear' }; AF.roster = spec.roster;
+  AF.on = true; AF.seed = spec.seed >>> 0 || 1; AF.cfg = { teams: spec.teams, per: spec.per, time: spec.time || 'day', weather: spec.weather || 'clear', pit: spec.pit || 'wide' }; AF.roster = spec.roster;
+  AF_F.radius = AF_PITS[AF.cfg.pit] || AF_PITS.wide;
   if (first) {
     try { setBattleDressing(false); } catch (e) {}
     for (const c of scene.children.slice()) { if (!c.isLight) c.visible = false; } // strip the boot-time world clutter
@@ -17573,6 +17623,7 @@ function afBoot(spec) {
     if (AF.whoTimer) { clearInterval(AF.whoTimer); AF.whoTimer = null; }
   }
   afClear();
+  try { const sc = sun.shadow.camera, e = AF_F.radius + 20; sc.left = -e; sc.right = e; sc.top = e; sc.bottom = -e; sc.updateProjectionMatrix(); } catch (e) {}
   const r = _mulberry32(AF.seed);
   AF.terr = { p1: r() * TAU, p2: r() * TAU, p3: r() * TAU };
   editTerrainFn = afY;
@@ -17628,13 +17679,13 @@ function afNetWire() {
     if (AF.lobby.role === 'guest') { if (d.k === 'lobby') afLobbyApply(d); else if (d.k === 'go') { AF.role = 'guest'; afCloseLobbyUi(); afBoot(d); } }
     else if (AF.lobby.role === 'host') {
       if (d.k === 'team') { afMoveSeat(m.from, d.t | 0); afLobbyRender(); afLobbyBroadcast(); }
-      else if (d.k === 'weapon') { const s = afFindSeat(m.from); if (s) { s.weapon = d.w === 'bow' ? 'bow' : 'sword'; afLobbyRender(); afLobbyBroadcast(); } }
+      else if (d.k === 'weapon') { const s = afFindSeat(m.from); if (s) { s.weapon = ['bow', 'horse'].includes(d.w) ? d.w : 'sword'; afLobbyRender(); afLobbyBroadcast(); } }
       else if (d.k === 'invite-declined') { AF.lobby.invites.set(d.name, 'declined'); afLobbyRender(); }
     }
   });
 }
 function afNewLobby(role) {
-  const L = { role, teams: 2, per: 3, weapon: 'sword', time: 'day', weather: 'clear', slots: [], invites: new Map(), host: afSession() || 'You', room: null };
+  const L = { role, teams: 2, per: 3, weapon: 'sword', time: 'day', weather: 'clear', pit: 'wide', slots: [], invites: new Map(), host: afSession() || 'You', room: null };
   afResize(L); return L;
 }
 function afResize(L) {
@@ -17680,11 +17731,11 @@ function afOpenLobby(role, beacon) {
 function afLobbyBroadcast() {
   const L = AF.lobby; if (!L || L.role !== 'host' || !window.coop || !window.coop.connected) return;
   window.coop.updateBeacon({ arena: true, host: L.host, teams: L.teams, per: L.per });
-  window.coop.send({ k: 'lobby', teams: L.teams, per: L.per, time: L.time, weather: L.weather, host: L.host, slots: L.slots.map(row => row.map(s => s ? { kind: s.kind, name: s.name, peer: s.peer, weapon: s.weapon } : null)) });
+  window.coop.send({ k: 'lobby', teams: L.teams, per: L.per, time: L.time, weather: L.weather, pit: L.pit, host: L.host, slots: L.slots.map(row => row.map(s => s ? { kind: s.kind, name: s.name, peer: s.peer, weapon: s.weapon } : null)) });
 }
 function afLobbyApply(d) {                                   // guest: mirror the host's lobby
   const L = AF.lobby; if (!L || L.role !== 'guest') return;
-  L.teams = d.teams; L.per = d.per; L.host = d.host || L.host; L.slots = d.slots; L.time = d.time || 'day'; L.weather = d.weather || 'clear';
+  L.teams = d.teams; L.per = d.per; L.host = d.host || L.host; L.slots = d.slots; L.time = d.time || 'day'; L.weather = d.weather || 'clear'; L.pit = d.pit || 'wide';
   const me = afFindSeat(window.coop.id); if (me) L.weapon = me.weapon || 'sword';
   afLobbyRender();
 }
@@ -17693,7 +17744,8 @@ function afLobbyRender() {
   const host = L.role === 'host', online = !!(window.coop && window.coop.connected), signed = !!afSession();
   document.getElementById('al-teams-n').textContent = L.teams; document.getElementById('al-per-n').textContent = L.per;
   for (const id of ['al-teams-minus', 'al-teams-plus', 'al-per-minus', 'al-per-plus']) document.getElementById(id).disabled = !host;
-  document.getElementById('al-wpn-sword').classList.toggle('on', L.weapon !== 'bow'); document.getElementById('al-wpn-bow').classList.toggle('on', L.weapon === 'bow');
+  for (const w of ['sword', 'bow', 'horse']) { const el = document.getElementById('al-wpn-' + w); if (el) el.classList.toggle('on', L.weapon === w); }
+  for (const pt of ['cosy', 'wide', 'vast']) { const el = document.getElementById('al-pit-' + pt); if (el) { el.classList.toggle('on', L.pit === pt); el.disabled = !host; } }
   for (const tm of ['day', 'dusk', 'night']) { const el = document.getElementById('al-time-' + tm); if (el) { el.classList.toggle('on', L.time === tm); el.disabled = !host; } }
   for (const wx of ['clear', 'rain']) { const el = document.getElementById('al-wx-' + wx); if (el) { el.classList.toggle('on', L.weather === wx); el.disabled = !host; } }
   const sub = document.getElementById('al-sub'); if (sub) sub.textContent = host ? 'Choose the teams, invite players who are online, and every empty place is taken by a fighter of the vale.' : L.host + ' set the teams — pick a side, pick a weapon, and wait for the bell.';
@@ -17702,7 +17754,7 @@ function afLobbyRender() {
   grid.innerHTML = L.slots.map((row, t) => {
     const td = AF_TEAMS[t], free = row.indexOf(null) >= 0, mine = !!me && row.indexOf(me) >= 0;
     return '<div class="al-team" style="--tc:' + td.col + '"><div class="al-tname"><span>' + td.name + '</span>' + (!host && free && !mine ? '<button data-team="' + t + '">join</button>' : '') + '</div>' +
-      row.map(s => s ? '<div class="al-slot ' + (s === me ? 'you' : 'player') + '"><span>' + (s === me ? 'You' : s.name) + '</span><span class="al-tag">' + (s.weapon === 'bow' ? '🏹' : '🗡') + (s.kind === 'host' && s !== me ? ' host' : '') + '</span></div>'
+      row.map(s => s ? '<div class="al-slot ' + (s === me ? 'you' : 'player') + '"><span>' + (s === me ? 'You' : s.name) + '</span><span class="al-tag">' + (s.weapon === 'bow' ? '🏹' : s.weapon === 'horse' ? '🐎' : '🗡') + (s.kind === 'host' && s !== me ? ' host' : '') + '</span></div>'
                         : '<div class="al-slot npc"><span>fighter of the vale</span><span class="al-tag">npc</span></div>').join('') + '</div>';
   }).join('');
   for (const btn of grid.querySelectorAll('button[data-team]')) btn.onclick = () => { if (window.coop) window.coop.send({ k: 'team', t: parseInt(btn.getAttribute('data-team'), 10) }); };
@@ -17768,11 +17820,11 @@ function afStartFight() {
     const seat = L.slots[t][s];
     if (seat) { roster.push({ t, s, name: seat.name, kind: seat.kind, peer: seat.peer, weapon: seat.weapon || 'sword' }); used.add(seat.name); continue; }
     let nm; do { nm = pick(GIVEN_NAMES) + (r() < 0.35 ? ' ' + pick(BYNAMES) : ''); } while (used.has(nm)); used.add(nm);
-    roster.push({ t, s, name: nm, kind: 'npc', peer: null, weapon: r() < 0.22 ? 'bow' : 'sword' });
+    const wr = r(); roster.push({ t, s, name: nm, kind: 'npc', peer: null, weapon: wr < 0.2 ? 'bow' : wr < 0.36 && L.per >= 2 ? 'horse' : 'sword' }); // a fifth archers, a sixth riders
   }
   const humans = roster.filter(x => x.kind === 'player').length;
   AF.role = humans ? 'host' : 'solo';
-  const spec = { k: 'go', seed: (Math.random() * 0xffffffff) >>> 0, teams: L.teams, per: L.per, time: L.time, weather: L.weather, roster };
+  const spec = { k: 'go', seed: (Math.random() * 0xffffffff) >>> 0, teams: L.teams, per: L.per, time: L.time, weather: L.weather, pit: L.pit, roster };
   if (humans) afSend(spec);
   afCloseLobbyUi();
   afBoot(spec);
@@ -17784,10 +17836,11 @@ function afStartFight() {
     L[key] = clamp(L[key] + d, lim[0], lim[1]); afResize(L); afLobbyRender(); afLobbyBroadcast(); };
   g('al-teams-minus').onclick = () => bump('teams', -1); g('al-teams-plus').onclick = () => bump('teams', 1);
   g('al-per-minus').onclick = () => bump('per', -1); g('al-per-plus').onclick = () => bump('per', 1);
+  const setOpt = (key, v) => { const L = AF.lobby; if (!L || L.role !== 'host') return; L[key] = v; afLobbyRender(); afLobbyBroadcast(); };
   const wpn = w => { const L = AF.lobby; if (!L) return; L.weapon = w;
     if (L.role === 'host') { const s = afHostSeat(); if (s) s.weapon = w; afLobbyRender(); afLobbyBroadcast(); } else { if (window.coop) window.coop.send({ k: 'weapon', w }); afLobbyRender(); } };
-  g('al-wpn-sword').onclick = () => wpn('sword'); g('al-wpn-bow').onclick = () => wpn('bow');
-  const setOpt = (key, v) => { const L = AF.lobby; if (!L || L.role !== 'host') return; L[key] = v; afLobbyRender(); afLobbyBroadcast(); };
+  g('al-wpn-sword').onclick = () => wpn('sword'); g('al-wpn-bow').onclick = () => wpn('bow'); if (g('al-wpn-horse')) g('al-wpn-horse').onclick = () => wpn('horse');
+  for (const pt of ['cosy', 'wide', 'vast']) { const el = g('al-pit-' + pt); if (el) el.onclick = () => setOpt('pit', pt); }
   for (const tm of ['day', 'dusk', 'night']) { const el = g('al-time-' + tm); if (el) el.onclick = () => setOpt('time', tm); }
   for (const wx of ['clear', 'rain']) { const el = g('al-wx-' + wx); if (el) el.onclick = () => setOpt('weather', wx); }
   g('al-inv-btn').onclick = () => { const i = g('al-inv-name'); afInvite(i.value); i.value = ''; };

@@ -14,7 +14,7 @@ Companion docs: `BATTLES.md` (the army-scale battle system this reuses primitive
 
 1. Sign in (or not — without an account you can still fight NPCs, you just can't invite anyone).
 2. Title screen → **⚔ Arena Fights**.
-3. In the lobby: **Teams** (2–6), **Fighters per team** (1–8), **Your weapon** (which one you start with — everyone carries both), **Hour** (day / dusk / night) and **Sky** (clear / rain).
+3. In the lobby: **Teams** (2–6), **Fighters per team** (1–8), what **you ride in with** (sword, bow, or a horse — everyone carries sword and bow), the **Pit** (cosy / wide / vast), **Hour** (day / dusk / night) and **Sky** (clear / rain).
    The team cards show every seat: you, invited players who accepted, and *fighter of the vale*
    (an NPC) for each empty seat.
 4. **Players online** lists everyone connected to the war-net right now. **Invite** sends them
@@ -126,6 +126,17 @@ coils into the heavy windup; releasing swings with a weight `k` = hold time / `c
 arc, knockback, poise damage, the lunge and the slash arc all scale with `k`; past `heavyAt` the blow is
 a heavy (cracks guards, resets the combo). A HUD meter under your fighter shows the load and turns red
 at the heavy line. NPCs load their swings the same way, so a long visible hold is a heavy you can roll from.
+
+**Horsemen** (`afRide`): a rider steers, he does not strafe — the stick's forward component is the
+throttle along the facing, momentum is dragged onto the facing (hooves grip), and the yaw rate collapses
+as speed grows (a galloping horse carves a wide arc, `MOUNT`). Top speed is 1.9× a man's, the reach is
+longer from the saddle, a blow at full tilt lands harder, and a horse at speed **tramples** foot
+soldiers in its path. NPC riders charge, strike in passing, ride through and wheel for another pass;
+foot soldiers roll clear of a charge. A rider's dodge is a spur.
+
+**Auto-turn** (`afAutoTurn`): after a swing or a roll, if a foe is at your elbow but not in front of
+you, the camera eases onto him — on a phone the thumb can't chase a man who slipped behind you. It
+yields the moment you move the aim yourself.
 
 **Blade locks**: a light blow into a raised guard is a *clash* — steel bites steel with a white flare,
 both fighters freeze for a beat, then shove apart, the attacker further and reeling (his swing is

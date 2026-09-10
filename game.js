@@ -16546,8 +16546,9 @@ function afBuildWall() {
   const wm = mat(0x8a8378), cap = mat(0x5e5850), wood = mat(0x6b4a2e), woodDk = mat(0x4e351f), rope = mat(0xb8a27a);
   for (let i = 0; i < N; i++) {                              // the ring wall: stone blocks with capstones every third
     const a = (i / N) * TAU, x = Math.cos(a) * R, z = Math.sin(a) * R, h = 2.1 + (i % 3 === 0 ? 0.7 : 0);
-    const b = boxMesh(seg * 1.04, h, 1.2, wm); b.position.set(x, afY(x, z) + h / 2, z); b.rotation.y = -a; g.add(b);
-    if (i % 3 === 0) { const t = boxMesh(1.4, 0.35, 1.5, cap); t.position.set(x, afY(x, z) + h + 0.17, z); t.rotation.y = -a; g.add(t); }
+    const tang = -a - Math.PI / 2;                          // a box's +X must run ALONG the ring (tangent), not point at the centre
+    const b = boxMesh(seg * 1.04, h, 1.2, wm); b.position.set(x, afY(x, z) + h / 2, z); b.rotation.y = tang; g.add(b);
+    if (i % 3 === 0) { const t = boxMesh(1.4, 0.35, 1.5, cap); t.position.set(x, afY(x, z) + h + 0.17, z); t.rotation.y = tang; g.add(t); }
   }
   // the STANDS: three timber tiers climbing away from the wall, and a crowd on them in every colour of the vale
   AF.crowd = [];
@@ -16558,8 +16559,9 @@ function afBuildWall() {
     const r = AF_F.radius + 4.2 + tier * 2.6, hgt = 1.1 + tier * 1.35, segL = (2 * Math.PI * r) / NS;
     for (let i = 0; i < NS; i++) {
       const a = ((i + 0.5) / NS) * TAU, x = Math.cos(a) * r, z = Math.sin(a) * r, gy = afY(x, z);
-      const bench = boxMesh(segL * 1.02, 0.5, 2.2, tier % 2 ? woodDk : wood); bench.position.set(x, gy + hgt, z); bench.rotation.y = -a; bench.castShadow = false; g.add(bench);
-      const face = boxMesh(segL * 1.02, hgt + 0.25, 0.25, woodDk); face.position.set(Math.cos(a) * (r - 1.1), gy + (hgt + 0.25) / 2, Math.sin(a) * (r - 1.1)); face.rotation.y = -a; face.castShadow = false; face.receiveShadow = false; g.add(face);
+      const tang = -a - Math.PI / 2;
+      const bench = boxMesh(segL * 1.02, 0.5, 2.2, tier % 2 ? woodDk : wood); bench.position.set(x, gy + hgt, z); bench.rotation.y = tang; bench.castShadow = false; g.add(bench);
+      const face = boxMesh(segL * 1.02, hgt + 0.25, 0.25, woodDk); face.position.set(Math.cos(a) * (r - 1.1), gy + (hgt + 0.25) / 2, Math.sin(a) * (r - 1.1)); face.rotation.y = tang; face.castShadow = false; face.receiveShadow = false; g.add(face);
       if (seed() < 0.85) {                                   // a spectator (or two) on the bench
         const n = 1 + (seed() < 0.5 ? 1 : 0);
         for (let k = 0; k < n; k++) {

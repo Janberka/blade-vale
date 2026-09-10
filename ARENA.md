@@ -35,9 +35,8 @@ and pick their own weapon; only the host changes the team layout and sends invit
 |---|---|---|
 | Move | WASD | left thumb stick |
 | Aim | mouse (click the pit to lock the cursor) | drag the right half of the screen |
-| Light attack (3-hit combo) / shoot | left click | ATK |
-| Heavy (slow, cracks a raised guard) | right click | HVY |
-| Block (hold; 85% less damage from the front) | Shift | BLOCK |
+| Attack: **hold to load, release to swing** — a tap is a quick light (three chain into a combo), a full hold is a heavy that cracks a raised guard; the bow draws the same way | hold / release left click | hold / release ATK |
+| Block (hold; 85% less damage from the front) | Shift or right click | BLOCK |
 | Dodge roll (invulnerable for most of the roll) | Space | DODGE |
 
 When you fall you spectate: drag to orbit the pit, wheel to zoom. The fight ends when one
@@ -117,6 +116,12 @@ saturation, and a red flush at the edges when you are hit (pulsing when you are 
 the lens widens slightly on a run, and the field-fight shake / kick / FOV punch land on your hits.
 Strikes use an ease-out-back so the blade whips past the mark and settles; every hit puts a white
 impact frame on the victim.
+
+**Loading a blow**: there is one attack input. Pressing raises the blade (the load); past ~0.35 s the arm
+coils into the heavy windup; releasing swings with a weight `k` = hold time / `chargeMax`. Damage, reach,
+arc, knockback, poise damage, the lunge and the slash arc all scale with `k`; past `heavyAt` the blow is
+a heavy (cracks guards, resets the combo). A HUD meter under your fighter shows the load and turns red
+at the heavy line. NPCs load their swings the same way, so a long visible hold is a heavy you can roll from.
 
 **Blade locks**: a light blow into a raised guard is a *clash* — steel bites steel with a white flare,
 both fighters freeze for a beat, then shove apart, the attacker further and reeling (his swing is

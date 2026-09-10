@@ -1942,7 +1942,8 @@ if (TOUCH) {
   let tjAnchor = { x: 0, y: 0 }, lookLast = { x: 0, y: 0 };
 
   function controllable() {
-    if (AF.on) return { inMap: false, inBattle: true, field: false, any: !!(AF.me && !AF.me.dead && AF.phase !== 'over') }; // the pit: stick + ATK/HVY/BLOCK/DODGE while you stand
+    if (AF.on) { touchRoot.classList.add('arenamode'); return { inMap: false, inBattle: true, field: false, any: !!(AF.me && !AF.me.dead && AF.phase !== 'over') }; } // the pit: stick + ATK(hold)/BLOCK/DODGE while you stand
+    touchRoot.classList.remove('arenamode');
     const field = mode === 'map' && mapFieldMode && !mapCmdMode && !encounter; // on-foot character roam = battle-like
     const inMap = mode === 'map' && !encounter && !field;                       // strategic banner roam
     const inBattle = field; // field mode IS the one combat mode
@@ -2012,7 +2013,7 @@ if (TOUCH) {
     const up = (e) => { if (e) { e.preventDefault(); e.stopPropagation(); } el.classList.remove('on'); onUp && onUp(); };
     el.addEventListener('touchend', up); el.addEventListener('touchcancel', up);
   }
-  bindBtn('tb-attack', requestAttack);
+  bindBtn('tb-attack', requestAttack, () => { if (AF.on) AF.locIn.atk++; }); // arena: the release swings
   bindBtn('tb-heavy', requestHeavyAttack);
   bindBtn('tb-dodge', requestDodge);
   bindBtn('tb-block', () => { keys['ShiftLeft'] = true; }, () => { keys['ShiftLeft'] = false; });
@@ -2059,7 +2060,7 @@ function toggleWeapon() {
   setPlayerWeaponVisual();
 }
 function requestAttack() {
-  if (AF.on) { AF.locIn.atk++; return; }        // arena: touch ATK button (desktop clicks go through pointerdown)
+  if (AF.on) return;                            // arena: the ATK button is read as a HOLD (charge) each frame; its release is counted by afTouchRelease
   if (!gameRunning || !player.alive || player.rolling || player.heavy || musterOpen || encounter) return;
   if (player.weapon === 'bow') { startBowShot(); return; }
   if (player.attacking) { player.queued = true; return; }
@@ -2069,7 +2070,7 @@ function requestAttack() {
   startAttack();
 }
 function requestHeavyAttack() {
-  if (AF.on) { AF.locIn.heavy++; return; }      // arena: touch HVY button
+  if (AF.on) return;                            // arena: no separate heavy — hold the attack longer
   if (!gameRunning || !player.alive || player.rolling || player.attacking || player.heavy || musterOpen || encounter) return;
   if (player.weapon !== 'sword' || player.cooldown > 0) return;
   if (player.stamina < FEEL.heavyStamina) return; // a heavy is a real commitment
@@ -16404,14 +16405,15 @@ const AF_F = { hp: 100, move: 5.6, reach: 2.5, cone: 0.3, radius: 34, timeLimit:
   blockMul: 0.15, guardBreak: 0.75, flinch: 0.18, deathDur: 1.1,
   knock: 6, heavyKnock: 14, lightPoise: 20, heavyPoise: 40, maxPoise: 45, poiseRegen: 8, staggerDur: 1.2, executeMul: 2.2, // three quick lights, or a heavy on a chipped guard, break poise
   accel: 7.13, friction: 0.0008, lunge: 2, heavyLunge: 3,      // velocity model borrowed from the field fighters (terminal speed ≈ move)
-  dodge: { dur: 0.40, speed: 13, iframes: 0.32, cd: 0.55 } };
+  dodge: { dur: 0.40, speed: 13, iframes: 0.32, cd: 0.55 },
+  chargeMax: 0.85, heavyAt: 0.6 };                          // hold the attack to load it: a full hold (chargeMax s) is a heavy; past heavyAt it cracks guards
 const AF_TEAM_HEX = AF_TEAMS.map(t => parseInt(t.col.slice(1), 16));
 const AF_NET = { snapDt: 1 / 20, inDt: 1 / 20 };
 const AF = {
   on: false, role: 'solo',                 // 'solo' (no peers) | 'host' | 'guest'
   phase: 'lobby',                          // 'lobby' | 'countdown' | 'fight' | 'over'
   bodies: [], arrows: [], ground: null, props: [], seed: 1, cfg: { teams: 2, per: 3 }, roster: [],
-  me: null, keys: new Set(), locIn: { mx: 0, mz: 0, yaw: 0, atk: 0, heavy: 0, dodge: 0, block: false },
+  me: null, keys: new Set(), locIn: { mx: 0, mz: 0, yaw: 0, atk: 0, heavy: 0, dodge: 0, block: false, hold: false },
   cam: { yaw: 0, pitch: 0.3, dist: 6.5 }, orbit: { theta: 0.4, phi: 0.9, r: 62, drag: false },
   last: 0, t: 0, countdown: 0, over: false, winner: -1, standings: null, hudEl: null, events: [],
   inputs: new Map(), snapAcc: 0, inAcc: 0, lastSnap: 0, installed: false, log: [], torches: [], motes: null, hurt: 0, fov: CAM_BASE_FOV,
@@ -16614,7 +16616,7 @@ function afSpawn(teamIdx, teams) {
 }
 
 // ---- fighters ----
-function afFreshInput() { return { mx: 0, mz: 0, yaw: 0, atk: 0, heavy: 0, dodge: 0, block: false }; }
+function afFreshInput() { return { mx: 0, mz: 0, yaw: 0, atk: 0, heavy: 0, dodge: 0, block: false, hold: false }; } // atk = release count (a tap between samples still lands); hold = the button is down (charging)
 function afMakeBody(entry, idx, r) {
   const td = AF_TEAMS[entry.t], weapon = entry.weapon === 'bow' ? 'bow' : 'sword';
   const h = buildHumanoid(td.pal, 1, weapon, { hero: true, plume: AF_TEAM_HEX[entry.t] }); const group = h.group || h;
@@ -16628,6 +16630,7 @@ function afMakeBody(entry, idx, r) {
     dodgeT: 0, dodgeCd: 0, ddx: 0, ddz: 0, iframes: 0, flinch: 0, stagger: 0, dead: false, deadT: 0, tinted: false, kills: 0,
     vx: 0, vz: 0, poise: AF_F.maxPoise, maxPoise: AF_F.maxPoise, queued: false, cd: 0, waiting: false, slotAngle: 0, retreatT: 0, bob: 0,
     gait: null, hitT: 0, hitSide: 0, lookYaw: 0, headYaw: 0, capeX: 0.12, phase0: r() * TAU, roll: 0, lastStep: 0, flashT: 0, sway: r() * TAU, clashT: 0, clashAtk: false, clashDx: 0, clashDz: 0,
+    charge: null, chargeMove: 0, prevHold: false, releaseNow: false, aiHoldT: 0,
     seenAtk: 0, seenHeavy: 0, seenDodge: 0,
     // NPC brain traits (seeded so a replay of the same seed fields the same temperaments)
     skill: 0.35 + r() * 0.5, heavyBias: 0.12 + r() * 0.2, target: null, aiT: r() * 0.3, strafe: r() < 0.5 ? -1 : 1, strafeT: 0.5 + r(), swingT: 0.4 + r() * 0.5, holdBlock: 0, reactedTo: null, shotCd: 1 + r(),
@@ -16650,6 +16653,7 @@ function afStateCode(b) {
   if (b.stagger > 0) return 11;
   if (b.flinch > 0) return 5;
   if (b.dodgeT > 0) return 7;
+  if (b.charge) return b.weapon === 'bow' ? 9 : 2;
   if (b.atk) { if (b.atk.bow) return b.atk.hit ? 10 : 9; return b.atk.hit ? (b.atk.t > b.atk.wind + b.atk.strike ? 4 : 3) : 2; }
   if (b.blocking) return 6;
   return b.moving ? 1 : 0;
@@ -16710,7 +16714,7 @@ function afDrive(b, dt, sim) {
   b.moving = false;
   if (b.stagger > 0 || b.flinch > 0) {                     // reeling (flinch) or guard broken / poise gone (stagger: open to an execution)
     if (b.stagger > 0) b.stagger -= dt; else b.flinch -= dt;
-    b.atk = null; b.queued = false; b.blocking = false; b.tiltX = 0;
+    b.atk = null; b.charge = null; b.queued = false; b.blocking = false; b.tiltX = 0;
     setPose(b.anim, 'hurt', 0.06); restLegs(b.parts, dt, true);
     if (!b.tinted && b.flashT <= 0) { setTint(b.parts, 0x551111); b.tinted = true; }
     afIntegrate(b, dt); afCommit(b, dt); return;
@@ -16733,7 +16737,7 @@ function afDrive(b, dt, sim) {
   if (I.dodge !== b.seenDodge) {                             // a roll cancels a windup, never a landed blow
     b.seenDodge = I.dodge;
     if (b.dodgeCd <= 0 && !(b.atk && b.atk.hit)) {
-      b.dodgeT = F.dodge.dur; b.iframes = F.dodge.iframes; b.dodgeCd = F.dodge.dur + F.dodge.cd; b.atk = null; b.queued = false; b.blocking = false;
+      b.dodgeT = F.dodge.dur; b.iframes = F.dodge.iframes; b.dodgeCd = F.dodge.dur + F.dodge.cd; b.atk = null; b.charge = null; b.queued = false; b.blocking = false;
       if (mm > 1e-3) { b.ddx = ux; b.ddz = uz; } else { b.ddx = -Math.sin(b.yaw); b.ddz = -Math.cos(b.yaw); }
       try { SFX.foot(b.group.position); } catch (e) {}
       afIntegrate(b, dt); afCommit(b, dt); return;
@@ -16742,14 +16746,25 @@ function afDrive(b, dt, sim) {
   // facing: everyone turns, nobody snaps — a player's aim leads, an NPC's intent follows
   b.yaw = angleLerp(b.yaw, I.yaw, clamp(dt * (human ? 14 : 9), 0, 1));
   if (human) b.lookYaw = I.yaw; else if (b.target && !b.target.dead) b.lookYaw = Math.atan2(b.target.x - b.x, b.target.z - b.z); else b.lookYaw = b.yaw;
-  if (b.atk && !b.atk.hit && !b.atk.heavy && !b.atk.bow && I.block) { b.atk = null; b.queued = false; b.cd = 0.05; } // block-cancel out of a light windup
-  if (!b.atk) {                                              // (the NPC brain paces itself with cd; only a player's clicks are gated by it)
-    if (I.heavy !== b.seenHeavy) { b.seenHeavy = I.heavy; b.seenAtk = I.atk; if (!human || b.cd <= 0) afStartAttack(b, true); }
-    else if (I.atk !== b.seenAtk) { b.seenAtk = I.atk; if (!human || b.cd <= 0) afStartAttack(b, false); }
-  } else {                                                   // a click mid-swing queues the next blow of the combo
-    if (I.atk !== b.seenAtk && !b.atk.heavy && !b.atk.bow) b.queued = true;
-    b.seenAtk = I.atk; b.seenHeavy = I.heavy;
-  }
+  if (b.charge && I.block) { b.charge = null; b.cd = 0.05; b.anim.ease = null; }   // block-cancel out of a load
+  // HOLD to load, RELEASE to swing. A press starts the load (the arm goes up, and past ~0.35 s coils into the heavy
+  // windup); the release swings with a weight k = hold time / chargeMax — a tap is a quick light, a full hold a heavy.
+  const holdNow = !!I.hold, pressed = holdNow && !b.prevHold, tapped = I.atk !== b.seenAtk;
+  if (!b.atk) {
+    if (!b.charge && (pressed || tapped)) {
+      if (!human || b.cd <= 0) { b.charge = { t: 0, heavyPose: false }; b.chargeMove = b.combo % 3; b.anim.ease = null;
+        setPose(b.anim, b.weapon === 'bow' ? 'aimBow' : MOVES[AF_MOVES[b.chargeMove]].windup, 0.1); b.blocking = false;
+        b.releaseNow = tapped && !holdNow;                   // a tap that came and went between samples: swing at once
+      }
+      b.seenAtk = I.atk;
+    } else if (b.charge) {
+      b.charge.t += dt;
+      if (b.charge.t > 0.35 && !b.charge.heavyPose && b.weapon !== 'bow') { setPose(b.anim, 'windupHeavy', 0.2); b.charge.heavyPose = true; }
+      const released = b.releaseNow || (!holdNow && b.prevHold) || tapped;
+      if (released) { b.seenAtk = I.atk; b.releaseNow = false; afRelease(b, clamp(b.charge.t / F.chargeMax, 0, 1)); b.charge = null; }
+    } else b.seenAtk = I.atk;
+  } else { if (pressed || tapped) b.queued = true; b.seenAtk = I.atk; } // a press mid-swing queues the next light of the combo
+  b.prevHold = holdNow; b.seenHeavy = I.heavy;
   if (b.atk) {
     const a = b.atk; a.t += dt;
     if (human && !a.hit && !a.bow && Math.abs(angleDelta(I.yaw, b.prevInYaw == null ? I.yaw : b.prevInYaw)) < dt * 0.9) { // aim assist — but the moment you turn, your aim wins
@@ -16757,18 +16772,18 @@ function afDrive(b, dt, sim) {
       if (tg) b.yaw = angleLerp(b.yaw, Math.atan2(tg.x - b.x, tg.z - b.z), clamp(dt * 6, 0, 1));
     }
     b.prevInYaw = I.yaw;
-    if (!a.bow && a.t > a.wind * (a.heavy ? 0.85 : 0.7) && a.t < a.wind + a.strike)   // lunge with the blow
-      afMove(b, Math.sin(b.yaw), Math.cos(b.yaw), F.move * (a.heavy ? F.heavyLunge : F.lunge) * 0.85, dt);
+    if (!a.bow && a.t < a.wind + a.strike)                   // lunge with the blow, harder the more it was loaded
+      afMove(b, Math.sin(b.yaw), Math.cos(b.yaw), F.move * lerp(F.lunge, F.heavyLunge, a.k || 0) * 0.85, dt);
     if (!a.hit && a.t >= a.wind) {
       a.hit = true;
-      if (a.bow) { setPose(b.anim, 'looseBow', 0.05); if (sim) afShoot(b); try { SFX.bow(b.group.position); } catch (e) {} }
+      if (a.bow) { setPose(b.anim, 'looseBow', 0.05); if (sim) afShoot(b, a.k || 0); try { SFX.bow(b.group.position); } catch (e) {} }
       else {
         const mv = MOVES[AF_MOVES[a.move]], col = AF_TEAM_HEX[b.team];
         b.anim.ease = AF_EASE_BACK; setPose(b.anim, mv.strike, a.heavy ? 0.09 : 0.1);   // the blade whips PAST the mark and settles
-        try { spawnSlashArc(b.group.position, b.yaw, mv, a.heavy ? 1.6 : 1, col); spawnTrail(b, 1.7, col); } catch (e) {}
-        if (b === AF.me) addShake(a.heavy ? 0.16 : 0.09);
+        try { spawnSlashArc(b.group.position, b.yaw, mv, 1 + 0.6 * (a.k || 0), col); spawnTrail(b, 1.7, col); } catch (e) {}
+        if (b === AF.me) addShake(0.09 + 0.07 * (a.k || 0));
         try { SFX.swing(b.group.position); } catch (e) {}
-        if (sim) afStrike(b, a.heavy);
+        if (sim) afStrike(b, a.heavy, a.k || 0);
       }
     }
     const total = a.wind + a.strike + a.rec;
@@ -16778,12 +16793,12 @@ function afDrive(b, dt, sim) {
     b.blocking = false;
   } else b.blocking = !!I.block;
   if (b.blocking) setPose(b.anim, 'block', 0.1);
-  else if (!b.atk) setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.22);
+  else if (!b.atk && !b.charge) setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.22);
   const canMove = !b.atk || (!b.atk.heavy && !b.atk.bow && !b.atk.hit);
   if (mm > 1e-3 && canMove) {
-    const spd = F.move * (b.blocking ? 0.4 : b.atk ? 0.35 : 1) * Math.min(1, mm);
+    const spd = F.move * (b.blocking ? 0.4 : (b.atk || b.charge) ? 0.35 : 1) * Math.min(1, mm);
     afMove(b, ux, uz, spd, dt); b.moving = true;
-    const g = b.gait = b.blocking || b.atk ? GAIT.walk : GAIT.run;
+    const g = b.gait = b.blocking || b.atk || b.charge ? GAIT.walk : GAIT.run;
     const fwdDot = ux * Math.sin(b.yaw) + uz * Math.cos(b.yaw);       // backpedaling plays the cycle in reverse
     b.phase += dt * g.tempo * (fwdDot < -0.1 ? -1 : 1) * Math.min(1, spd / F.move + 0.3);
     walkLegs(b.parts, b.phase, g.leg);
@@ -16817,29 +16832,34 @@ function afNearestFoeInCone(b, R, cosMin) {
   return best;
 }
 const AF_EASE_BACK = t => { const c = 1.9, u = t - 1; return 1 + (c + 1) * u * u * u + c * u * u; }; // ease-out-back: overshoot, then settle
-function afStartAttack(b, heavy) {
-  b.anim.ease = null;
-  if (b.weapon === 'bow') { b.atk = { bow: true, t: 0, wind: AF_F.bow.wind, strike: AF_F.bow.strike, rec: AF_F.bow.rec, hit: false, move: 4 }; setPose(b.anim, 'aimBow', 0.1); return; }
-  const P = heavy ? AF_F.heavy : AF_F.light;
-  let move;
-  if (heavy) move = 3; else { move = b.combo % 3; b.combo++; b.comboT = 1.1; }
-  b.atk = { heavy, t: 0, wind: P.wind, strike: P.strike, rec: P.rec, hit: false, move };
-  setPose(b.anim, MOVES[AF_MOVES[move]].windup, 0.08); b.blocking = false;
+function afStartAttack(b, heavy) {                          // (kept for the hooks: an instant swing at a fixed weight)
+  b.anim.ease = null; b.charge = { t: heavy ? AF_F.chargeMax : 0, heavyPose: heavy }; b.chargeMove = b.combo % 3;
+  afRelease(b, heavy ? 1 : 0); b.charge = null;
 }
-function afStrike(b, heavy) {
-  const reach = heavy ? AF_F.reach * 1.25 : AF_F.reach, fdx = Math.sin(b.yaw), fdz = Math.cos(b.yaw), P = heavy ? AF_F.heavy : AF_F.light;
+// the swing itself: the load already happened in the hand; k is how much of it there was
+function afRelease(b, k) {
+  const F = AF_F, heavy = k >= F.heavyAt;
+  if (b.weapon === 'bow') { b.atk = { bow: true, k, t: 0, wind: 0.05, strike: F.bow.strike, rec: F.bow.rec, hit: false, move: 4 }; return; }
+  let move;
+  if (heavy) { move = 3; b.combo = 0; } else { move = b.chargeMove; b.combo++; b.comboT = 1.1; }
+  b.atk = { heavy, k, t: 0, wind: 0.06 + 0.08 * k, strike: lerp(F.light.strike, F.heavy.strike, k), rec: lerp(F.light.rec, F.heavy.rec, k), hit: false, move };
+  b.blocking = false;
+}
+function afStrike(b, heavy, k) {
+  const F = AF_F, w = k || 0, reach = lerp(F.reach, F.reach * 1.25, w), fdx = Math.sin(b.yaw), fdz = Math.cos(b.yaw), cone = lerp(F.cone, 0.1, w);
   for (const o of AF.bodies) {
     if (o.dead || o.team === b.team || o === b) continue;
     const dx = o.x - b.x, dz = o.z - b.z, dd = Math.hypot(dx, dz); if (dd > reach) continue;
-    if ((dx * fdx + dz * fdz) / (dd || 1) < (heavy ? 0.1 : AF_F.cone)) continue; // a heavy cleaves a wide arc
-    let dmg = rand(P.dmg[0], P.dmg[1]) + b.combo * 1.5;
+    if ((dx * fdx + dz * fdz) / (dd || 1) < cone) continue;  // a loaded blow cleaves a wider arc
+    let dmg = lerp(rand(F.light.dmg[0], F.light.dmg[1]), rand(F.heavy.dmg[0], F.heavy.dmg[1]), w) + b.combo * 1.5;
     const exec = o.stagger > 0;                            // a staggered foe is open: the execution lands for real
-    if (exec) dmg *= AF_F.executeMul;
-    afDamage(o, dmg, b, heavy, exec);
+    if (exec) dmg *= F.executeMul;
+    afDamage(o, dmg, b, heavy, exec, false, w);
   }
 }
-function afDamage(t, amt, from, heavy, exec, arrow) {
+function afDamage(t, amt, from, heavy, exec, arrow, k) {   // heavy: cracks guards; k (0..1): how loaded the blow was (knock, poise)
   if (t.dead || AF.over) return;
+  const weight = k != null ? k : heavy ? 1 : 0;
   const pos = t.group.position;
   if (t.iframes > 0) { spawnPopup(pos, 'dodge', '#9fd6ff'); return; }
   const ax = from.x - t.x, az = from.z - t.z, ad = Math.hypot(ax, az) || 1;
@@ -16851,7 +16871,7 @@ function afDamage(t, amt, from, heavy, exec, arrow) {
     else {
       blocked = 1; amt *= AF_F.blockMul; spawnPopup(pos, 'block', '#ffe089'); try { SFX.clang(pos); } catch (e) {}
       if (!arrow) {                                          // BLADE LOCK: steel bites steel, both freeze for a beat, then the shove — and the attacker's swing is spent
-        from.clashT = 0.3; from.clashAtk = true; from.clashDx = ax / ad; from.clashDz = az / ad; from.atk = null; from.queued = false; from.vx = from.vz = 0;
+        from.clashT = 0.3; from.clashAtk = true; from.clashDx = ax / ad; from.clashDz = az / ad; from.atk = null; from.charge = null; from.queued = false; from.vx = from.vz = 0;
         t.clashT = 0.22; t.clashAtk = false; t.clashDx = -ax / ad; t.clashDz = -az / ad; t.vx = t.vz = 0;
         tmpV.set((t.x + from.x) / 2, afY(t.x, t.z) + 1.4, (t.z + from.z) / 2); spawnSparks(tmpV, 0xffffff, 12); spawnSparks(tmpV, 0xffdf6b, 8);
         if (from === AF.me || t === AF.me) { addShake(0.14); AF.hitstop = Math.max(AF.hitstop, 0.05); }
@@ -16859,10 +16879,10 @@ function afDamage(t, amt, from, heavy, exec, arrow) {
     }
     spawnSparks(tmpV, 0xffdf6b, 6);
   } else {
-    t.atk = null; t.queued = false; t.blocking = false;
-    const k = heavy ? AF_F.heavyKnock : AF_F.knock; t.vx -= ax / ad * k; t.vz -= az / ad * k; // an impulse, not a teleport
+    t.atk = null; t.charge = null; t.queued = false; t.blocking = false;
+    const k = lerp(AF_F.knock, AF_F.heavyKnock, weight); t.vx -= ax / ad * k; t.vz -= az / ad * k; // an impulse, not a teleport
     if (t.stagger <= 0) {                                    // poise: chip it and he flinches; break it and he reels wide open
-      t.poise -= heavy ? AF_F.heavyPoise : arrow ? AF_F.lightPoise * 0.4 : AF_F.lightPoise;
+      t.poise -= arrow ? AF_F.lightPoise * 0.4 : lerp(AF_F.lightPoise, AF_F.heavyPoise, weight);
       if (t.poise <= 0) { t.poise = t.maxPoise; t.stagger = AF_F.staggerDur; spawnPopup(pos, 'STAGGERED', '#ffb347'); }
       else t.flinch = Math.max(t.flinch, AF_F.flinch);
     }
@@ -16929,27 +16949,27 @@ function afStepSplats(dt) {
   for (const o of _afSplats) { o.t += dt; const k = clamp(o.t / 0.35, 0, 1); o.m.scale.setScalar(o.size * (0.3 + 0.7 * easeOut(k))); o.m.material.opacity = 0.75 * k * clamp(1 - (o.t - 25) / 30, 0, 1); }
 }
 // arrows: ballistic; the authority tests hits, everyone flies them (guests get the spawn as an event)
-function afShoot(b) {
-  const fdx = Math.sin(b.yaw), fdz = Math.cos(b.yaw);
+function afShoot(b, k) {                                    // a longer draw flies faster and hits harder
+  const fdx = Math.sin(b.yaw), fdz = Math.cos(b.yaw), w = k || 0;
   let best = null, bd = AF_F.bow.range;                      // aim assist: the nearest foe inside a frontal cone
   for (const o of AF.bodies) { if (o.dead || o.team === b.team) continue; const dx = o.x - b.x, dz = o.z - b.z, dd = Math.hypot(dx, dz); if (dd < bd && (dx * fdx + dz * fdz) / (dd || 1) > 0.86) { bd = dd; best = o; } }
   const tx = best ? best.x : b.x + fdx * 30, tz = best ? best.z : b.z + fdz * 30;
-  afSpawnArrow(b.team, b.idx, b.x, afY(b.x, b.z) + 1.6, b.z, tx, afY(tx, tz) + 1.1, tz, true);
+  afSpawnArrow(b.team, b.idx, b.x, afY(b.x, b.z) + 1.6, b.z, tx, afY(tx, tz) + 1.1, tz, true, w);
 }
-function afSpawnArrow(team, owner, sx, sy, sz, tx, ty, tz, announce) {
-  const dist = Math.hypot(tx - sx, tz - sz), flight = Math.max(0.12, dist / AF_F.bow.speed), grav = 9;
+function afSpawnArrow(team, owner, sx, sy, sz, tx, ty, tz, announce, k) {
+  const dist = Math.hypot(tx - sx, tz - sz), flight = Math.max(0.12, dist / (AF_F.bow.speed * (0.75 + 0.45 * (k || 0)))), grav = 9;
   const vel = new THREE.Vector3((tx - sx) / flight, (ty - sy) / flight + 0.5 * grav * flight, (tz - sz) / flight);
-  afAddArrow(team, owner, sx, sy, sz, vel, grav, flight + 0.6);
+  afAddArrow(team, owner, sx, sy, sz, vel, grav, flight + 0.6, k || 0);
   if (announce) AF.events.push({ k: 'arrow', t: team, o: owner, p: [+sx.toFixed(2), +sy.toFixed(2), +sz.toFixed(2)], v: [+vel.x.toFixed(2), +vel.y.toFixed(2), +vel.z.toFixed(2)], l: +(flight + 0.6).toFixed(2) });
 }
-function afAddArrow(team, owner, sx, sy, sz, vel, grav, life) {
+function afAddArrow(team, owner, sx, sy, sz, vel, grav, life, k) {
   const g = new THREE.Group();
   const shaft = new THREE.Mesh(cachedGeo('proj-shaft', () => new THREE.CylinderGeometry(0.03, 0.03, 0.85, 5)), mat(0x7a5a36, { smooth: true }));
   shaft.rotation.x = Math.PI / 2; g.add(shaft);
   const head = new THREE.Mesh(cachedGeo('proj-head', () => new THREE.ConeGeometry(0.06, 0.16, 4)), mat(0xb9c2cc, { metal: 0.5 }));
   head.rotation.x = Math.PI / 2; head.position.z = 0.5; g.add(head);
   g.position.set(sx, sy, sz); scene.add(g);
-  AF.arrows.push({ g, vel, grav, team, owner, life });
+  AF.arrows.push({ g, vel, grav, team, owner, life, k: k || 0 });
 }
 function afStepArrows(dt, sim) {
   for (let i = AF.arrows.length - 1; i >= 0; i--) {
@@ -16962,7 +16982,7 @@ function afStepArrows(dt, sim) {
     if (sim && !done) for (const o of AF.bodies) {
       if (o.dead || o.team === a.team) continue;
       const dx = o.x - a.g.position.x, dz = o.z - a.g.position.z;
-      if (dx * dx + dz * dz < 1.1 && Math.abs(a.g.position.y - (gy + 1.1)) < 1.6) { afDamage(o, rand(AF_F.bow.dmg[0], AF_F.bow.dmg[1]), AF.bodies[a.owner] || o, false, false, true); done = true; break; }
+      if (dx * dx + dz * dz < 1.1 && Math.abs(a.g.position.y - (gy + 1.1)) < 1.6) { afDamage(o, rand(AF_F.bow.dmg[0], AF_F.bow.dmg[1]) * (0.7 + 0.6 * a.k), AF.bodies[a.owner] || o, false, false, true); done = true; break; }
     }
     if (done) { scene.remove(a.g); try { disposeGroup(a.g); } catch (e) {} AF.arrows.splice(i, 1); }
   }
@@ -17000,8 +17020,12 @@ function afSepFrom(b, R) {                                  // soft spacing from
   for (const o of AF.bodies) { if (o === b || o.dead) continue; const dx = b.x - o.x, dz = b.z - o.z, d2 = dx * dx + dz * dz; if (d2 > R * R || d2 < 1e-4) continue; const d = Math.sqrt(d2), w = (1 - d / R) * (o.team === b.team ? 1 : 0.5); sx += dx / d * w; sz += dz / d * w; }
   return [sx, sz];
 }
+// an NPC's swing is a HOLD like anyone's: a tap for a light, a long visible load for a heavy (so you can read it and roll)
+function afAiSwing(b, heavy) { b.aiHoldT = heavy ? AF_F.chargeMax + 0.05 : 0.06; }
 function afThink(b, dt) {
   const I = b.inp, F = AF_F; I.mx = 0; I.mz = 0; I.block = false;
+  if (b.aiHoldT > 0) { b.aiHoldT -= dt; I.hold = true; } else I.hold = false;
+  const busy = b.atk || b.charge || b.aiHoldT > 0;
   const t = b.target && !b.target.dead ? b.target : null;
   if (!t) { const [sx, sz] = afSepFrom(b, 2.4); I.mx = sx; I.mz = sz; return; }
   const dx = t.x - b.x, dz = t.z - b.z, d = Math.hypot(dx, dz) || 1e-4, ux = dx / d, uz = dz / d;
@@ -17011,10 +17035,10 @@ function afThink(b, dt) {
   const tx = -uz * b.strafe, tz = ux * b.strafe;             // tangent around the mark
   if (b.weapon === 'bow') {                                  // archers keep their distance, loose, and drift sideways between shots
     b.shotCd -= dt;
-    const canShoot = b.shotCd <= 0 && !b.atk;
-    if (d < 7) { I.mx = (-ux + sx) * 0.7; I.mz = (-uz + sz) * 0.7; if (canShoot && d > 3) { I.atk++; b.shotCd = 1.1 + Math.random() * 0.8; } } // give ground — but a swordsman who keeps coming gets shot in the face
+    const canShoot = b.shotCd <= 0 && !busy;
+    if (d < 7) { I.mx = (-ux + sx) * 0.7; I.mz = (-uz + sz) * 0.7; if (canShoot && d > 3) { b.aiHoldT = 0.3; b.shotCd = 1.1 + Math.random() * 0.8; } } // give ground — but a swordsman who keeps coming gets shot in the face
     else if (d > 22) { I.mx = ux + sx; I.mz = uz + sz; }
-    else { I.mx = tx * 0.45 + sx; I.mz = tz * 0.45 + sz; if (canShoot) { I.atk++; b.shotCd = 1.3 + Math.random() * 1.2 * (1.3 - b.skill * 0.5); } }
+    else { I.mx = tx * 0.45 + sx; I.mz = tz * 0.45 + sz; if (canShoot) { b.aiHoldT = 0.35 + b.skill * 0.4; b.shotCd = 1.3 + Math.random() * 1.2 * (1.3 - b.skill * 0.5); } } // a longer draw for the better archer
     return;
   }
   // hurt and pressed: back off toward the team, guard up, and let the poise come back
@@ -17022,11 +17046,12 @@ function afThink(b, dt) {
   if (b.hp < b.maxHp * 0.3 && b.stagger <= 0) { let near = 0; for (const o of AF.bodies) if (!o.dead && o.team !== b.team && Math.hypot(o.x - b.x, o.z - b.z) < 6) near++; if (near >= 2 && Math.random() < dt * 0.9) { b.retreatT = 1.4; return; } }
   // a swing is coming at me: a skilled fighter blocks it or rolls out of it (once per swing)
   const facingMe = ((b.x - t.x) * Math.sin(t.yaw) + (b.z - t.z) * Math.cos(t.yaw)) / d;
-  if (t.atk && !t.atk.hit && !t.atk.bow && d < 3.8 && facingMe > 0.3 && b.reactedTo !== t.atk) {
-    b.reactedTo = t.atk;
+  const incoming = t.charge || (t.atk && !t.atk.hit && !t.atk.bow ? t.atk : null);    // a raised arm, loading — or the swing itself
+  if (incoming && d < 3.8 && facingMe > 0.3 && b.reactedTo !== incoming) {
+    b.reactedTo = incoming;
     const r = Math.random();
-    if (t.atk.heavy) { if (r < b.skill * 0.8) I.dodge++; }                   // never block a heavy — roll
-    else if (r < b.skill * 0.35) b.holdBlock = t.atk.wind + 0.25;            // a quick light often beats the reaction
+    if (t.charge && t.charge.heavyPose || (t.atk && t.atk.heavy)) { if (r < b.skill * 0.8) I.dodge++; }   // never block a loaded blow — roll
+    else if (r < b.skill * 0.35) b.holdBlock = (t.atk ? t.atk.wind : Math.max(0.1, F.chargeMax - t.charge.t)) + 0.25;   // guard up until the blow should land (a quick light often beats the reaction)
     else if (r < b.skill * 0.5) I.dodge++;
   }
   if (b.holdBlock > 0) { b.holdBlock -= dt; I.block = true; }
@@ -17036,21 +17061,21 @@ function afThink(b, dt) {
     const tang = (Math.sign(err) || 1) * clamp(Math.abs(err) * 1.6, 0, 1), rad = -clamp(d - radius, -1.2, 1.2);
     I.mx = Math.cos(fromT) * tang + (b.x - t.x) / d * rad + sx; I.mz = -Math.sin(fromT) * tang + (b.z - t.z) / d * rad + sz;
     const behind = ((b.x - t.x) * Math.sin(t.yaw) + (b.z - t.z) * Math.cos(t.yaw)) / d < -0.25;
-    if ((behind || open) && d <= reach * 1.05 && b.cd <= 0 && !b.atk) { I.atk++; b.cd = 0.5 + Math.random() * 0.4; }
+    if ((behind || open) && d <= reach * 1.05 && b.cd <= 0 && !busy) { afAiSwing(b, false); b.cd = 0.5 + Math.random() * 0.4; }
     return;
   }
   if (d > reach * 0.9) {                                     // close in — a charge when far, a wary circling approach near contact
     const circ = d < 4.5 ? 0.55 : 0.12, pace = d > 7 ? 1 : 0.85;
     I.mx = (ux + tx * circ) * pace + sx * 1.2; I.mz = (uz + tz * circ) * pace + sz * 1.2;
-    if (open && d <= reach * 1.3 && b.cd <= 0 && !b.atk) { I.atk++; b.cd = 0.4; }   // he's open and a lunge covers the gap
+    if (open && d <= reach * 1.3 && b.cd <= 0 && !busy) { afAiSwing(b, false); b.cd = 0.4; }   // he's open and a lunge covers the gap
     return;
   }
-  if (b.atk) return;
-  if (open && b.cd <= 0) { I.atk++; b.cd = 0.35 + Math.random() * 0.3; return; }   // punish the follow-through
+  if (busy) return;
+  if (open && b.cd <= 0) { afAiSwing(b, false); b.cd = 0.35 + Math.random() * 0.3; return; }   // punish the follow-through
   if (b.cd <= 0) {
     const guarded = t.blocking && facingMe > 0.15;
-    if (guarded) { if (Math.random() < 0.55 + b.skill * 0.3) I.heavy++; else { I.mx = tx * 0.9 + sx; I.mz = tz * 0.9 + sz; b.cd = 0.25; return; } } // crack it or go around it
-    else if (Math.random() < b.heavyBias) I.heavy++; else I.atk++;
+    if (guarded) { if (Math.random() < 0.55 + b.skill * 0.3) afAiSwing(b, true); else { I.mx = tx * 0.9 + sx; I.mz = tz * 0.9 + sz; b.cd = 0.25; return; } } // crack it or go around it
+    else afAiSwing(b, Math.random() < b.heavyBias);
     b.cd = (0.3 + Math.random() * 0.45) * (1.3 - b.skill * 0.5);
   } else {                                                   // between blows: keep the blade's length, slide sideways
     const back = d < reach * 0.6 ? -0.5 : 0;
@@ -17067,14 +17092,10 @@ function afReadLocalInput() {
   if (typeof touchMove !== 'undefined' && touchMove.active) { f += touchMove.f; s += touchMove.s; }
   const m = Math.hypot(f, s); if (m > 1) { f /= m; s /= m; }
   I.mx = fx * f + rx * s; I.mz = fz * f + rz * s; I.yaw = cam.yaw;
-  I.block = K.has('shift') || !!(typeof keys !== 'undefined' && keys['ShiftLeft'] && TOUCH);
-  // HOLD to keep swinging: a held mouse button or a held ATK/HVY touch button chains the next blow as soon as the arm is free
-  const me = AF.me;
-  if (me && !me.dead && !me.atk && me.cd <= 0 && me.clashT <= 0) {
-    const atkEl = TOUCH ? document.getElementById('tb-attack') : null, hvyEl = TOUCH ? document.getElementById('tb-heavy') : null;
-    if (AF.mouseHeavy || (hvyEl && hvyEl.classList.contains('on'))) I.heavy++;
-    else if (AF.mouseDown || (atkEl && atkEl.classList.contains('on'))) I.atk++;
-  }
+  I.block = K.has('shift') || AF.mouseRight || !!(typeof keys !== 'undefined' && keys['ShiftLeft'] && TOUCH);
+  // HOLD the attack to load it, RELEASE to swing: the held mouse button or the held ATK touch button
+  const atkEl = TOUCH ? document.getElementById('tb-attack') : null;
+  I.hold = !!(AF.mouseDown || (atkEl && atkEl.classList.contains('on')));
   return I;
 }
 
@@ -17210,14 +17231,14 @@ function afNetTick(dt) {
   if (AF.role === 'host') {
     AF.snapAcc += dt; if (AF.snapAcc < AF_NET.snapDt) return; AF.snapAcc = 0;
     const rows = [];
-    for (const b of AF.bodies) rows.push([b.idx, Math.round(b.x * 100), Math.round(b.z * 100), Math.round(b.yaw * 100), Math.round(b.hp), afStateCode(b), b.atk ? b.atk.move : 0, b.kills]);
+    for (const b of AF.bodies) rows.push([b.idx, Math.round(b.x * 100), Math.round(b.z * 100), Math.round(b.yaw * 100), Math.round(b.hp), afStateCode(b), b.atk ? b.atk.move : b.charge ? (b.charge.heavyPose ? 3 : b.chargeMove) : 0, b.kills]);
     afSend({ k: 'snap', t: +AF.t.toFixed(2), ph: AF.phase, b: rows, ev: AF.events });
     AF.events = [];
   } else if (AF.role === 'guest') {
     AF.events = [];
     AF.inAcc += dt; if (AF.inAcc < AF_NET.inDt) return; AF.inAcc = 0;
     const I = AF.locIn;
-    afSend({ k: 'in', mx: +I.mx.toFixed(2), mz: +I.mz.toFixed(2), yaw: +I.yaw.toFixed(3), atk: I.atk, heavy: I.heavy, dodge: I.dodge, block: I.block ? 1 : 0 });
+    afSend({ k: 'in', mx: +I.mx.toFixed(2), mz: +I.mz.toFixed(2), yaw: +I.yaw.toFixed(3), atk: I.atk, heavy: I.heavy, dodge: I.dodge, block: I.block ? 1 : 0, hold: I.hold ? 1 : 0 });
   } else AF.events = [];
 }
 function afOnFightMsg(m) {
@@ -17225,7 +17246,7 @@ function afOnFightMsg(m) {
   if (AF.role === 'host' && d.k === 'in') {
     let inp = AF.inputs.get(m.from);
     if (!inp) { inp = afFreshInput(); AF.inputs.set(m.from, inp); const b = AF.bodies.find(x => x.peer === m.from); if (b) b.inp = inp; }
-    inp.mx = +d.mx || 0; inp.mz = +d.mz || 0; inp.yaw = +d.yaw || 0; inp.atk = d.atk | 0; inp.heavy = d.heavy | 0; inp.dodge = d.dodge | 0; inp.block = !!d.block;
+    inp.mx = +d.mx || 0; inp.mz = +d.mz || 0; inp.yaw = +d.yaw || 0; inp.atk = d.atk | 0; inp.heavy = d.heavy | 0; inp.dodge = d.dodge | 0; inp.block = !!d.block; inp.hold = !!d.hold;
   } else if (AF.role === 'guest') {
     if (d.k === 'snap') afApplySnap(d);
     else if (d.k === 'over' && !AF.over) afFinish(d.winner, d.standings);
@@ -17263,6 +17284,7 @@ function afFrame(now, noRaf) {
   if (TOUCH && window.updateTouchHud) window.updateTouchHud(); // the stick + ATK/HVY/BLOCK/DODGE set
   afCamera(dt);
   if ((++AF._hc % 4) === 0) afUpdateHud();
+  afChargeMeter();
   if (AF.motes) { AF.motes.position.x = Math.sin(rtNow * 0.13) * 3; AF.motes.position.z = Math.cos(rtNow * 0.11) * 3; AF.motes.position.y = Math.sin(rtNow * 0.21) * 0.8; AF.motes.rotation.y = rtNow * 0.01; }
   if (AF_POST.on) afPostRender(); else renderer.render(scene, camera);
   if (!noRaf) requestAnimationFrame(loop);
@@ -17351,7 +17373,7 @@ function afInstallControls() {
   canvas.addEventListener('pointerdown', e => {
     if (!AF.on) return;
     if (AF.me && !AF.me.dead && AF.phase !== 'over') {
-      if (locked()) { if (e.button === 2) { AF.locIn.heavy++; AF.mouseHeavy = true; } else if (e.button === 0) { AF.locIn.atk++; AF.mouseDown = true; } }
+      if (locked()) { if (e.button === 2) AF.mouseRight = true; else if (e.button === 0) AF.mouseDown = true; } // left: hold to load, release to swing · right: block
       else if (!TOUCH) { try { const p = canvas.requestPointerLock(); if (p && p.catch) p.catch(() => {}); } catch (err) {} }
       return;
     }
@@ -17363,8 +17385,8 @@ function afInstallControls() {
     if (!o.drag) return;
     o.theta -= (e.clientX - px) * 0.01; o.phi = clamp(o.phi - (e.clientY - py) * 0.01, 0.15, 1.45); px = e.clientX; py = e.clientY;
   });
-  window.addEventListener('pointerup', e => { o.drag = false; if (e.button === 2) AF.mouseHeavy = false; else if (e.button === 0) AF.mouseDown = false; });
-  window.addEventListener('blur', () => { AF.mouseDown = false; AF.mouseHeavy = false; });
+  window.addEventListener('pointerup', e => { o.drag = false; if (e.button === 2) AF.mouseRight = false; else if (e.button === 0) { if (AF.mouseDown) AF.locIn.atk++; AF.mouseDown = false; } });
+  window.addEventListener('blur', () => { AF.mouseDown = false; AF.mouseRight = false; });
   canvas.addEventListener('wheel', e => {
     if (!AF.on) return; e.preventDefault();
     if (AF.me && !AF.me.dead) AF.cam.dist = clamp(AF.cam.dist * (1 + Math.sign(e.deltaY) * 0.1), 3.5, 14);
@@ -17421,9 +17443,16 @@ function afUpdateHud() {
       const hp = clamp(b.hp / b.maxHp, 0, 1);
       me.innerHTML = '<div style="display:flex;justify-content:space-between;gap:12px"><b style="color:' + b.teamDef.col + '">' + b.name + '</b><span style="color:#c9bfda">' + b.kills + ' kill' + (b.kills === 1 ? '' : 's') + '</span></div>' +
         '<div style="height:8px;margin:5px 0 4px;border-radius:4px;background:#2a2438;overflow:hidden"><div style="height:100%;width:' + Math.round(hp * 100) + '%;background:' + (hp > 0.35 ? '#8fd08f' : '#ff6a5a') + '"></div></div>' +
-        '<div style="font-size:11px;color:#9a90ab">' + (b.dead ? 'you fell — drag to look around' : TOUCH ? 'stick move · drag right side aim · ATK / HVY / BLOCK / DODGE' : 'WASD move · mouse aim · click ' + (b.weapon === 'bow' ? 'shoot' : 'strike') + ' · right-click heavy · Shift block · Space dodge' + (document.pointerLockElement === canvas ? '' : ' · <b style="color:#ffe089">click to aim</b>')) + '</div>';
+        '<div style="font-size:11px;color:#9a90ab">' + (b.dead ? 'you fell — drag to look around' : TOUCH ? 'stick move · drag right side aim · hold ATK to load, release to swing · BLOCK · DODGE' : 'WASD move · mouse aim · hold click to load, release to ' + (b.weapon === 'bow' ? 'loose' : 'strike') + ' · Shift / right-click block · Space dodge' + (document.pointerLockElement === canvas ? '' : ' · <b style="color:#ffe089">click to aim</b>')) + '</div>';
     } else me.innerHTML = '<span style="color:#9a90ab">spectating</span>';
   }
+}
+function afChargeMeter() {                                  // the load in your hand: fills gold while you hold, turns red past the heavy line
+  let el = document.getElementById('af-charge');
+  if (!el) { el = document.createElement('div'); el.id = 'af-charge'; el.style.cssText = 'position:fixed;left:50%;bottom:92px;transform:translateX(-50%);width:150px;height:7px;border-radius:4px;background:rgba(16,14,24,.7);border:1px solid #3a3247;z-index:40;pointer-events:none;opacity:0;transition:opacity .15s'; el.innerHTML = '<div style="height:100%;width:0%;border-radius:3px;background:#ffd34d"></div><div style="position:absolute;top:-2px;bottom:-2px;left:60%;width:2px;background:#ff8a5b"></div>'; document.body.appendChild(el); }
+  const me = AF.me, ch = me && !me.dead && me.charge; const fill = el.firstChild;
+  if (ch) { const k = clamp(ch.t / AF_F.chargeMax, 0, 1); el.style.opacity = '1'; fill.style.width = Math.round(k * 100) + '%'; fill.style.background = k >= AF_F.heavyAt ? '#ff6a4d' : '#ffd34d'; }
+  else el.style.opacity = '0';
 }
 let _afBanT = null;
 function afBanner(big, sub, secs) {

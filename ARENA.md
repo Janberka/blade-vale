@@ -419,6 +419,16 @@ lends plain gear (iron sword, hunting bow, courser) and pays nothing.
   the saddle" when a horse is owned. **Tap any card to try it on** (`AF.tryItem`): the figure
   wears it, nothing is bought, and the strip shows the price with a Buy (or the lock reason) and
   "What I own" to take it off. Trying a bow draws it; trying a horse seats him.
+* **Swords are built, not recoloured** (`AF_LOOK.sword`, `afBuildSword`): each item is a
+  silhouette — straight, a curve of stacked slabs (falchion, scimitar, Black Night), a zigzag
+  flamberge (Serpent flamberge, Ember blade), a thin cup-hilted rapier (Needle), a broad
+  cleaver with an upswept nose, a greatsword with a fuller (Doomsword, Sun-forged blade), a
+  serrated edge (Frost fang) — with gold hilts and glowing (emissive) steel for the rare ones.
+  The marketplace's sword row runs Wooden 0 g → Iron 120 → Falchion 250 → Steel 400 →
+  Needle 550 (reach +0.28) → Cleaver 600 → Blade of the Vale 1200 → Dune scimitar 1400 →
+  Serpent flamberge 1600 → Doomsword 2400 (Champion, reach +0.3, −3% speed) → Master's 3000 →
+  Sun-forged 6000 (Legend, sword skill 5, ×1.4). Ember blade, Frost fang and Black Night are
+  loot-only unique swords (×1.12).
 * **The record**: fights, wins, kills, deaths, damage, stars, trophies and achievements (first
   blood, 10/50/200/500 kills, 1/10/50/100 fights, 5/25/100 wins, stars, trophies) on the career
   sheet.

@@ -13,6 +13,13 @@
     steel_sword:    { slot: 'sword', name: 'Steel sword',       price: 400,  rank: 1, dmg: 1.1,  desc: 'keeps an edge through a whole fight' },
     vale_blade:     { slot: 'sword', name: 'Blade of the Vale', price: 1200, rank: 2, dmg: 1.2,  reach: 0.15, desc: 'long, light and quick' },
     master_sword:   { slot: 'sword', name: "Master's sword",    price: 3000, rank: 4, skill: ['sword', 4], dmg: 1.32, reach: 0.2, desc: 'forged for a hand that has earned it' },
+    falchion:       { slot: 'sword', name: 'Falchion',          price: 250,  rank: 0, dmg: 1.05, desc: 'a broad curved chopper' },
+    rapier:         { slot: 'sword', name: 'Needle',            price: 550,  rank: 1, dmg: 1.0,  reach: 0.28, desc: 'a thin rapier with a cup hilt — reach over weight' },
+    cleaver:        { slot: 'sword', name: "Butcher's cleaver", price: 600,  rank: 1, dmg: 1.15, reach: -0.1, desc: 'short, wide, ugly, effective' },
+    scimitar:       { slot: 'sword', name: 'Dune scimitar',     price: 1400, rank: 2, dmg: 1.18, desc: 'a golden-hilted curve from the south' },
+    flamberge:      { slot: 'sword', name: 'Serpent flamberge', price: 1600, rank: 2, dmg: 1.22, desc: 'a wavy blade that bites on the draw' },
+    doomsword:      { slot: 'sword', name: 'Doomsword',         price: 2400, rank: 3, dmg: 1.3,  reach: 0.3, move: -0.03, desc: 'a great blade as tall as a boy' },
+    sun_blade:      { slot: 'sword', name: 'Sun-forged blade',  price: 6000, rank: 5, skill: ['sword', 5], dmg: 1.4, reach: 0.2, desc: 'it glows — the pit falls quiet when it is drawn' },
     leather:        { slot: 'armor', name: 'Leather jerkin',    price: 150,  rank: 0, hp: 15, desc: 'turns a glancing cut' },
     mail:           { slot: 'armor', name: 'Mail hauberk',      price: 500,  rank: 1, hp: 35, poise: 5, desc: 'rings over padding' },
     plate:          { slot: 'armor', name: 'Plate harness',     price: 1500, rank: 2, hp: 60, poise: 15, move: -0.05, desc: 'heavy, and worth it' },
@@ -30,6 +37,9 @@
     raven_plume:    { slot: 'plume', name: 'Raven plume',       unique: true, plume: 0x1b1b22, desc: 'black as a bad omen' },
     gilded_blade:   { slot: 'trim',  name: 'Gilded blade',      unique: true, blade: 0xe6b84a, dmg: 1.02, desc: 'a gold-washed edge' },
     moon_blade:     { slot: 'trim',  name: 'Moon-steel blade',  unique: true, blade: 0xbfd8ff, dmg: 1.02, desc: 'pale steel that never rusts' },
+    ember_blade:    { slot: 'sword', name: 'Ember blade',       unique: true, dmg: 1.12, desc: 'a wavy blade that smoulders orange' },
+    frost_fang:     { slot: 'sword', name: 'Frost fang',        unique: true, dmg: 1.12, reach: 0.1, desc: 'serrated ice-steel with a cold light' },
+    black_night:    { slot: 'sword', name: 'Black Night',       unique: true, dmg: 1.12, desc: 'a black curve with a violet gleam' },
   };
   var ARENA_SLOTS = ['sword', 'armor', 'bow', 'horse', 'plume', 'trim'];
   var ARENA_ACHIEVEMENTS = [                                 // [id, label, stat, threshold] — the milestones a profile lists

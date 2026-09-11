@@ -16862,7 +16862,24 @@ function afSendGear() { const L = AF.lobby; if (!L || L.role !== 'guest' || !win
 // blade colour and length (a unique's tint wins); bows grow and darken; horses come in sizes.
 const AF_LOOK = {
   armor: { none: null, leather: { torso: 0x6b4a2a, pad: 0x5a3d22, metal: 0 }, mail: { torso: 0x7a808a, pad: 0x6e747e, metal: 1 }, plate: { torso: 0xc8ccd4, pad: 0xc8ccd4, metal: 1, gorget: true }, champion_plate: { torso: 0xd6ccb0, pad: 0xd9b24a, metal: 1, gorget: true, gold: true } },
-  sword: { wood_sword: { blade: 0x8a6a3a, metal: 0, len: 0.9 }, iron_sword: { blade: 0xb9c0c8, len: 1 }, steel_sword: { blade: 0xe3e9f0, len: 1.05 }, vale_blade: { blade: 0xc9d8f0, len: 1.18 }, master_sword: { blade: 0xeef1f5, len: 1.28, gold: true } },
+  // swords are BUILT per item (afBuildSword): style = the silhouette, len × the standard 1.35 blade, w = the flat's width
+  sword: {
+    wood_sword:   { style: 'straight', blade: 0x8a6a3a, metal: 0, len: 0.9, w: 0.18, grip: 0x5a3d22, guard: 0x6b4a2a, pommel: 0x6b4a2a },
+    iron_sword:   { style: 'straight', blade: 0xb9c0c8, len: 1 },
+    steel_sword:  { style: 'straight', blade: 0xe3e9f0, len: 1.05, guard: 0x5a5a66, fuller: true },
+    falchion:     { style: 'curved',   blade: 0xc4c9cf, len: 0.95, w: 0.26 },
+    rapier:       { style: 'thin',     blade: 0xe8ecf2, len: 1.28, guard: 0xd9b24a, pommel: 0xd9b24a },
+    cleaver:      { style: 'cleaver',  blade: 0xa9aeb5, len: 0.8,  w: 0.34, grip: 0x3a2a1a },
+    vale_blade:   { style: 'straight', blade: 0xc9d8f0, len: 1.18, w: 0.17, guard: 0x8fb0d8, fuller: true },
+    scimitar:     { style: 'curved',   blade: 0xe8e3c8, len: 1.15, w: 0.22, guard: 0xd9b24a, pommel: 0xd9b24a, grip: 0x7a1f1f },
+    flamberge:    { style: 'wavy',     blade: 0xd8dde3, len: 1.2,  w: 0.2, guard: 0x4a4a55 },
+    doomsword:    { style: 'great',    blade: 0x9aa0a8, len: 1.5,  w: 0.3, guard: 0x2a2226, grip: 0x1a1216, fuller: true },
+    master_sword: { style: 'straight', blade: 0xeef1f5, len: 1.28, w: 0.2, gold: true, fuller: true },
+    sun_blade:    { style: 'great',    blade: 0xffd680, len: 1.35, w: 0.26, gold: true, glow: 0xff8a1a },
+    ember_blade:  { style: 'wavy',     blade: 0xff7a2a, len: 1.1,  w: 0.2, glow: 0xff3a00, guard: 0x2a1a12 },
+    frost_fang:   { style: 'serrated', blade: 0xd8f2ff, len: 1.1,  w: 0.2, glow: 0x4ab8ff, guard: 0x9ad0ff },
+    black_night:  { style: 'curved',   blade: 0x16141c, len: 1.15, w: 0.22, glow: 0x5a2aa0, guard: 0x5a1a1a, pommel: 0x5a1a1a },
+  },
   bow: { hunting_bow: { scale: 1, wood: 0x6b4a2e }, longbow: { scale: 1.15, wood: 0x4e3620 }, warbow: { scale: 1.3, wood: 0x2e2116 } },
   horse: { nag: { scale: 0.9 }, courser: { scale: 1 }, destrier: { scale: 1.08 }, warhorse: { scale: 1.14 } },
 };
@@ -16877,15 +16894,46 @@ function afDressGear(parts, gear, pal) {
     if (parts.gorget) { parts.gorget.visible = !!(ar && ar.gorget); if (ar && ar.gorget) parts.gorget.material = mat(ar.gold ? 0xd9b24a : ar.torso, { metal: 1, shared: false }); }
   }
   const sw = AF_LOOK.sword[gear.sword] || AF_LOOK.sword.iron_sword, trim = gear.trim && I[gear.trim];
-  if (parts.sword) {
-    const meshes = []; parts.sword.traverse(c => { if (c.isMesh) meshes.push(c); });
-    const blade = meshes.find(m => m.geometry.type === 'BoxGeometry' && m.geometry.parameters.height > 1), tip = meshes.find(m => m.geometry.type === 'ConeGeometry');
-    const bm = mat(trim ? trim.blade : sw.blade, { metal: sw.metal === 0 && !trim ? 0 : 1, shared: false }); if (blade) blade.material = bm; if (tip) tip.material = bm;
-    if (sw.gold) for (const m of meshes) if (m !== blade && m !== tip && m.geometry.type !== 'CylinderGeometry') m.material = mat(0xd9b24a, { metal: 1, shared: false });
-    parts.sword.scale.set(1, sw.len, 1);
-  }
+  if (parts.sword) afBuildSword(parts.sword, sw, trim ? trim.blade : null);
   const bw = gear.bow && AF_LOOK.bow[gear.bow];
   if (parts.bow && bw) { parts.bow.scale.setScalar(bw.scale); parts.bow.traverse(c => { if (c.isMesh && c.geometry.type === 'TorusGeometry') c.material = mat(bw.wood, { smooth: true, shared: false }); }); }
+}
+// BUILD A SWORD in the hand: the group (its grip at the hand, blade up +y, the flat across z) is emptied and refilled
+// from the spec — a plain straight blade, a curve of stacked slabs, a wavy flamberge, a thin rapier with a cup, a
+// broad cleaver, a greatsword with a fuller, a serrated edge; gold hilts and glowing steel for the rare ones.
+function afBuildSword(g, sw, tint) {
+  for (const c of g.children.slice()) { g.remove(c); try { disposeGroup(c); } catch (e) {} }
+  const len = 1.35 * (sw.len || 1), w = sw.w || 0.2, t = sw.style === 'thin' ? 0.05 : 0.085, great = sw.style === 'great';
+  const bladeM = mat(tint || sw.blade, { metal: sw.metal === 0 && !tint ? 0 : 1, shared: false, emissive: sw.glow || 0x000000, emissiveI: sw.glow ? 0.55 : 1 });
+  const hiltM = mat(sw.gold ? 0xd9b24a : (sw.guard || 0x3a2a18), { metal: 1, shared: false }), gripM = mat(sw.grip || 0x241812, { smooth: true, shared: false }), pomM = mat(sw.gold ? 0xd9b24a : (sw.pommel || 0x6a5630), { metal: 1, shared: false });
+  const gripL = great ? 0.5 : sw.style === 'thin' ? 0.3 : 0.34, y0 = 0.2;
+  const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.055, gripL, 8), gripM); grip.position.y = great ? -0.08 : 0; g.add(grip);
+  const pommel = sphereMesh(great ? 0.09 : 0.07, pomM, 8, 6); pommel.position.y = -(gripL / 2 + 0.04) + (great ? -0.08 : 0); g.add(pommel);
+  if (sw.style === 'thin') { const cup = sphereMesh(0.16, hiltM, 10, 6, ); cup.scale.set(1, 0.55, 1); cup.position.y = y0; g.add(cup); const bar = boxMesh(0.36, 0.035, 0.05, hiltM); bar.position.y = y0; g.add(bar); }
+  else if (sw.style === 'cleaver') { const bar = boxMesh(0.2, 0.06, 0.1, hiltM); bar.position.y = y0; g.add(bar); }
+  else { const guard = boxMesh(great ? 0.66 : sw.style === 'curved' ? 0.36 : 0.42, 0.07, great ? 0.16 : 0.14, hiltM); guard.position.y = y0; g.add(guard);
+    if (sw.style === 'curved') { for (const sd of [-1, 1]) { const q = sphereMesh(0.05, hiltM, 6, 4); q.position.set(0.19 * sd, y0 + 0.02, 0.03); g.add(q); } } }
+  const addTip = (y, rot) => { const tip = new THREE.Mesh(new THREE.ConeGeometry(w * 0.55, 0.2 + w * 0.5, 4), bladeM); tip.position.y = y; tip.rotation.y = Math.PI / 4; if (rot) tip.rotation.x = rot; tip.castShadow = true; g.add(tip); return tip; };
+  if (sw.style === 'straight' || sw.style === 'great' || sw.style === 'serrated') {
+    const blade = boxMesh(t, len, w, bladeM); blade.position.y = y0 + len / 2 + 0.02; blade.castShadow = true; g.add(blade); addTip(y0 + len + 0.13 + w * 0.2);
+    if (sw.fuller) { const f = boxMesh(t * 1.2, len * 0.8, w * 0.22, mat(0x2a2a30, { shared: false })); f.position.y = y0 + len * 0.45; g.add(f); }
+    if (sw.style === 'serrated') for (let i = 0; i < 7; i++) { const th = new THREE.Mesh(new THREE.ConeGeometry(0.075, 0.2, 3), bladeM); th.position.set(0, y0 + 0.18 + i * (len - 0.3) / 6, w / 2 + 0.08); th.rotation.x = Math.PI / 2; g.add(th); }
+  } else if (sw.style === 'curved' || sw.style === 'wavy') {           // slabs stacked along a bend (or a zigzag), the flat growing toward the tip
+    const wavy = sw.style === 'wavy', N = wavy ? 9 : 7, seg = len / N; let y = y0 + 0.02, ang = 0, z = 0;
+    for (let i = 0; i < N; i++) { const ww = wavy ? w * (1 - 0.3 * i / N) : w * (0.6 + 0.6 * i / N);
+      ang = wavy ? (i % 2 ? -0.38 : 0.38) : ang + 0.12;      // a flamberge zigzags slab by slab; a scimitar keeps bending one way
+      const slab = boxMesh(t, seg * 1.15, ww, bladeM); slab.position.set(0, y + seg / 2 * Math.cos(ang), z + seg / 2 * Math.sin(ang) + (wavy ? 0 : ww * 0.2)); slab.rotation.x = ang; slab.castShadow = i < 3; g.add(slab);   // (+x rotation tips +y toward +z: slab and step agree)
+      y += seg * Math.cos(ang); z += wavy ? 0 : seg * Math.sin(ang); }
+    const tip = addTip(0, ang); tip.position.set(0, y + 0.12 * Math.cos(ang), z + 0.12 * Math.sin(ang) + (sw.style === 'curved' ? w * 0.2 : 0));
+  } else if (sw.style === 'thin') {
+    const blade = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.045, len, 6), bladeM); blade.position.y = y0 + len / 2 + 0.02; blade.castShadow = true; g.add(blade);
+    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.03, 0.14, 6), bladeM); tip.position.y = y0 + len + 0.09; g.add(tip);
+  } else if (sw.style === 'cleaver') {                                   // a broad slab with a squared, upswept end
+    const blade = boxMesh(t, len, w, bladeM); blade.position.set(0, y0 + len / 2 + 0.02, w * 0.15); blade.castShadow = true; g.add(blade);
+    const nose = boxMesh(t, 0.34, w * 1.1, bladeM); nose.position.set(0, y0 + len + 0.12, w * 0.42); nose.rotation.x = -0.5; g.add(nose);
+    const hole = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, t * 1.3, 8), mat(0x1a1214, { shared: false })); hole.rotation.z = Math.PI / 2; hole.position.set(0, y0 + len - 0.1, w * 0.45); g.add(hole);
+  }
+  g.scale.set(1, 1, 1);
 }
 function afBladeLook(b) { afDressGear(b.parts, b.gear, b.pal); }   // (the rig swaps on mount / dismount re-dress the man)
 function afItemName(id) { const I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}; return I[id] ? I[id].name : id; }
@@ -18807,7 +18855,7 @@ function afMarketRender() {
     const eq = c ? c.equipped[slot] : (AF_GEAR_FREE[slot] || null);
     html += '<h3 style="margin:12px 0 6px;color:#ffe2a8;letter-spacing:1px;font-size:14px">' + slotNames[slot] + ' <span style="font-size:11px;opacity:.7;font-weight:400">— ' + (eq ? 'wearing ' + I[eq].name : slot === 'armor' ? 'none' : 'none (you can\'t ride in with ' + (slot === 'bow' ? 'a bow' : 'a horse') + ' until you own one)') + (eq && slot !== 'sword' && c ? ' · ' + btn('unequip:' + slot, 'take off') : '') + '</span></h3>';
     html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(' + (TOUCH ? 150 : 190) + 'px,1fr));gap:7px">';
-    for (const id in I) { const it = I[id]; if (it.slot !== slot) continue; const owned = !!(c && c.items.includes(id)), why = c ? ARENA_CAT.lockReason(id, c) : 'sign in', trying = AF.tryItem === id;
+    for (const id in I) { const it = I[id]; if (it.slot !== slot || it.unique) continue; const owned = !!(c && c.items.includes(id)), why = c ? ARENA_CAT.lockReason(id, c) : 'sign in', trying = AF.tryItem === id;
       const stat = [it.dmg ? 'dmg ×' + it.dmg : '', it.reach ? 'reach +' + it.reach : '', it.hp ? (slot === 'horse' ? it.hp + ' hp' : '+' + it.hp + ' hp') : '', it.poise ? '+' + it.poise + ' poise' : '', it.move ? 'speed ' + Math.round(it.move * 100) + '%' : '', it.speed && it.speed !== 1 ? 'pace ×' + it.speed : ''].filter(Boolean).join(' · ');
       const need = [it.rank ? ARENA_CAT.ARENA_RANKS[it.rank][0] : '', it.skill ? it.skill[0] + ' ' + it.skill[1] : ''].filter(Boolean).join(', ');
       html += '<div data-act="try:' + id + '" style="cursor:pointer;border:1px solid ' + (trying ? '#ffe089' : eq === id ? '#ffd34d' : owned ? 'rgba(255,207,91,.5)' : '#3a3247') + ';border-radius:9px;padding:8px 10px;background:' + (trying ? 'rgba(255,211,77,.12)' : 'rgba(0,0,0,.3)') + '"><div style="display:flex;justify-content:space-between;gap:6px"><b style="font-size:13px">' + it.name + '</b><span style="color:#ffe089;font-size:12px;white-space:nowrap">' + (owned ? (eq === id ? 'worn' : 'owned') : it.price + ' g') + '</span></div>' +

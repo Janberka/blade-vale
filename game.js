@@ -18710,102 +18710,122 @@ function afStartFight() {
 }
 /* ---- the MARKETPLACE & career sheet: buy with gold, held back by rank (XP) and use-skill; equip what you own;
    the record — stats, trophies, achievements, skills. Server-authoritative: every button is a round trip. ---- */
-// YOUR FIGHTER, TURNING: a little scene of its own on a second renderer, showing the loadout as the pit will build it
+// YOUR FIGHTER, TURNING: a little scene of its own on a second renderer, pinned to the LEFT of the market for the
+// whole visit while the wares scroll on the right. Tap any card to TRY IT ON — the figure wears it (nothing bought),
+// the price and a Buy sit under him; tap again, or "what you own", to take it off.
 function afPreviewEl() {
   if (AF.previewEl) return AF.previewEl;
-  const wrap = document.createElement('div'); wrap.id = 'af-preview'; wrap.style.cssText = 'display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap';
-  const W = TOUCH ? 220 : 300, H = TOUCH ? 260 : 380;
-  const cv = document.createElement('canvas'); cv.width = W * 2; cv.height = H * 2; cv.style.cssText = 'width:' + W + 'px;height:' + H + 'px;border-radius:12px;background:radial-gradient(ellipse at 50% 70%,rgba(255,211,77,.10),rgba(0,0,0,.35));border:1px solid rgba(255,207,91,.35);cursor:grab;touch-action:none';
+  // the figure fills the whole left pane; the head and the try-on strip float over it top and bottom
+  const wrap = document.createElement('div'); wrap.id = 'af-preview'; wrap.style.cssText = 'position:absolute;inset:0';
+  const cv = document.createElement('canvas'); cv.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;background:radial-gradient(ellipse at 50% 60%,rgba(255,211,77,.12),rgba(0,0,0,.2));cursor:grab;touch-action:none;display:block';
   wrap.appendChild(cv);
-  const side = document.createElement('div'); side.id = 'af-preview-side'; side.style.cssText = 'flex:1;min-width:180px;font-size:13px;line-height:1.7'; wrap.appendChild(side);
-  const P = AF.preview = { wrap, cv, W, H, renderer: null, scene: new THREE.Scene(), camera: new THREE.PerspectiveCamera(30, W / H, 0.1, 60), rig: null, yaw: 0.5, mounted: false, drag: null };
-  try { P.renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: true }); P.renderer.setPixelRatio(2); P.renderer.setSize(W, H, false); P.renderer.toneMapping = THREE.ACESFilmicToneMapping; P.renderer.toneMappingExposure = 1.0; } catch (e) { P.renderer = null; }
+  const side = document.createElement('div'); side.id = 'af-preview-side'; side.style.cssText = 'position:absolute;left:0;right:0;bottom:0;padding:8px 10px;font-size:12px;line-height:1.45;background:linear-gradient(to top,rgba(8,6,14,.96),rgba(8,6,14,.8) 70%,rgba(8,6,14,0));pointer-events:none'; wrap.appendChild(side);
+  const P = AF.preview = { wrap, cv, W: 0, H: 0, renderer: null, scene: new THREE.Scene(), camera: new THREE.PerspectiveCamera(30, 1, 0.1, 60), rig: null, yaw: 0.5, mounted: false, drag: null };
+  try { P.renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: true }); P.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2)); P.renderer.toneMapping = THREE.ACESFilmicToneMapping; } catch (e) { P.renderer = null; }
   P.scene.add(new THREE.HemisphereLight(0xbfd8ff, 0x6a5a44, 0.9)); const sun = new THREE.DirectionalLight(0xfff0d0, 1.1); sun.position.set(3, 6, 4); P.scene.add(sun);
   const disc = new THREE.Mesh(new THREE.CircleGeometry(1.6, 24), mat(0xc9b79a, { shared: false })); disc.rotation.x = -Math.PI / 2; P.scene.add(disc);
-  // drag to turn him round (mouse or thumb)
-  const down = e => { P.drag = { x: e.clientX, yaw: P.yaw }; P.holdT = performance.now(); }; const move = e => { if (P.drag) { P.yaw = P.drag.yaw + (e.clientX - P.drag.x) * 0.012; P.holdT = performance.now(); } }; const up = () => { P.drag = null; };
-  cv.addEventListener('pointerdown', down); cv.addEventListener('pointermove', move); cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up); cv.addEventListener('pointerleave', up);
+  const down = e => { P.drag = { x: e.clientX, yaw: P.yaw }; P.holdT = performance.now(); try { cv.setPointerCapture(e.pointerId); } catch (err) {} }; const move = e => { if (P.drag) { P.yaw = P.drag.yaw + (e.clientX - P.drag.x) * 0.012; P.holdT = performance.now(); } }; const up = () => { P.drag = null; };
+  cv.addEventListener('pointerdown', down); cv.addEventListener('pointermove', move); cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
   AF.previewEl = wrap; return wrap;
 }
+function afPreviewGear() {                                  // what the figure wears: your loadout, with the piece you're trying on over it
+  const g = afGear(), I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}, t = AF.tryItem && I[AF.tryItem];
+  if (t) g[t.slot] = AF.tryItem; return g;
+}
 function afPreviewSet(gear, pal, mounted) {
-  const P = AF.preview; if (!P) return;
+  const P = AF.preview; if (!P || !window.ARENA_CAT) return;
   if (P.rig) { P.scene.remove(P.rig.group); try { disposeGroup(P.rig.group); } catch (e) {} P.rig = null; }
-  gear = afGearClean(gear || afGear()); pal = pal || AF_TEAMS[0].pal; const G = afGearStats(gear);
+  gear = afGearClean(gear || afPreviewGear()); pal = pal || AF_TEAMS[0].pal; const G = afGearStats(gear), I = ARENA_CAT.ARENA_ITEMS, t = AF.tryItem && I[AF.tryItem];
+  if (t && t.slot === 'horse') mounted = true;
   P.mounted = !!(mounted && G.horse);
   const opts = { hero: true, both: true, plume: G.plume != null ? G.plume : AF_TEAM_HEX[0] };
   const hsz = P.mounted && AF_LOOK.horse[gear.horse] ? AF_LOOK.horse[gear.horse].scale : 1;
   const r = P.mounted ? buildCavalry(pal, hsz, 'sword', opts) : buildHumanoid(pal, 1, 'sword', opts);
   P.rig = { group: r.group || r, parts: P.mounted ? Object.assign({}, r.parts, { mount: r.horse }) : r.parts };
-  if (P.rig.parts.shield) P.rig.parts.shield.visible = true; if (P.rig.parts.bow) { P.rig.parts.bow.visible = !!G.bow; if (G.bow) { P.rig.parts.bow.visible = false; } }   // (the bow rides on the back — shown on the side panel instead)
+  const showBow = !!(t && t.slot === 'bow');                 // trying a bow: he draws it so you can see it
+  if (P.rig.parts.shield) P.rig.parts.shield.visible = !showBow; if (P.rig.parts.bow) P.rig.parts.bow.visible = showBow; if (P.rig.parts.sword) P.rig.parts.sword.visible = !showBow;
   afDressGear(P.rig.parts, gear, pal); P.scene.add(P.rig.group);
-  if (P.mounted) saddleRider(P.rig.parts); else { restLegs(P.rig.parts, 1, true); }
-  const anim = makeAnimator(P.rig.parts); setPose(anim, 'guard', 0.01); updateAnimator(anim, 1); P.anim = anim;
-  P.camera.position.set(0, P.mounted ? 2.9 : 2.0, P.mounted ? 9.4 : 6.4); P.camera.lookAt(0, P.mounted ? 2.2 : 1.75, 0);
-  const I = ARENA_CAT.ARENA_ITEMS, row = (label, id, none) => '<div><span style="opacity:.6;font-size:11px;letter-spacing:1px;text-transform:uppercase">' + label + '</span><br><b>' + (id && I[id] ? I[id].name : none) + '</b>' + (id && I[id] && I[id].desc ? ' <span style="opacity:.55;font-size:11px">' + I[id].desc + '</span>' : '') + '</div>';
-  const side = P.wrap.querySelector('#af-preview-side');
-  side.innerHTML = '<div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;opacity:.7;margin-bottom:4px">Your fighter · ' + (gear.rank || (AF.career ? AF.career.rank.name : '')) + '</div>' + row('Sword', gear.sword, 'bare hands') + row('Armor', gear.armor, 'a padded jack') + row('Bow', gear.bow, 'none') + row('Horse', gear.horse, 'on foot') + (gear.plume || gear.trim ? row('Unique', gear.plume || gear.trim, '') : '') +
-    '<div style="margin-top:8px;font-size:12px;opacity:.8">health ' + (100 + G.hp) + ' · damage ×' + G.swordDmg.toFixed(2) + (G.reach ? ' · reach +' + G.reach : '') + (G.bow ? ' · arrows ×' + G.bowDmg.toFixed(2) : '') + (G.horse ? ' · horse ' + G.horseHp + ' hp, pace ×' + G.horseSpeed : '') + '</div>' +
-    (G.horse ? '<button id="af-preview-mount" style="margin-top:8px;cursor:pointer;padding:6px 12px;border-radius:7px;border:1px solid #ffcf5b;background:rgba(255,180,80,.16);color:#ffe2a8;font-weight:700;touch-action:manipulation">' + (P.mounted ? '🚶 On foot' : '🐎 In the saddle') + '</button>' : '') + '<div style="font-size:11px;opacity:.5;margin-top:6px">drag to turn him</div>';
-  const mb = side.querySelector('#af-preview-mount'); if (mb) mb.onclick = () => afPreviewSet(gear, pal, !P.mounted);
-  P.gear = gear; P.pal = pal;
+  if (P.mounted) saddleRider(P.rig.parts); else restLegs(P.rig.parts, 1, true);
+  const anim = makeAnimator(P.rig.parts); setPose(anim, showBow ? 'aimBow' : 'guard', 0.01); updateAnimator(anim, 1); P.anim = anim;
+  P.gear = gear; P.pal = pal; P.W = 0;                        // (W=0: the frame re-fits the camera to the canvas)
+  const own = AF.career, side = P.wrap.querySelector('#af-preview-side'), btn = (act, label, dis) => '<button data-act="' + act + '" ' + (dis ? 'disabled' : '') + ' style="cursor:pointer;padding:7px 12px;border-radius:7px;border:1px solid #ffcf5b;background:rgba(255,180,80,.18);color:#ffe2a8;font-weight:700;opacity:' + (dis ? .45 : 1) + ';touch-action:manipulation;margin:4px 4px 0 0">' + label + '</button>';
+  let html = '';
+  if (t) { const why = own ? ARENA_CAT.lockReason(AF.tryItem, own) : 'sign in', owned = own && own.items.includes(AF.tryItem), worn = own && own.equipped[t.slot] === AF.tryItem;
+    html += '<div style="padding:8px 10px;border-radius:8px;background:rgba(255,211,77,.10);border:1px solid rgba(255,207,91,.5)"><div style="font-size:11px;letter-spacing:1px;text-transform:uppercase;opacity:.7">Trying on</div><b style="font-size:14px;color:#ffe089">' + t.name + '</b>' + (t.unique ? ' <span style="opacity:.7">· unique, loot only</span>' : owned ? ' <span style="opacity:.7">· owned</span>' : ' <span style="opacity:.7">· ' + t.price + ' gold</span>') +
+      '<div>' + (owned ? (worn ? '<span style="opacity:.7;font-size:12px">you are wearing it</span>' : btn('equip:' + t.slot + ':' + AF.tryItem, 'Wear it')) : t.unique ? '' : btn('buy:' + AF.tryItem, why ? why : 'Buy for ' + t.price + ' g', !!why)) + btn('untry', 'What I own') + '</div></div>'; }
+  html += '<div style="opacity:.7;font-size:11px;margin-top:4px">health ' + (100 + G.hp) + ' · damage ×' + G.swordDmg.toFixed(2) + (G.reach ? ' · reach +' + G.reach : '') + (G.bow ? ' · arrows ×' + G.bowDmg.toFixed(2) : '') + (G.horse ? ' · horse ' + G.horseHp + ' hp, pace ×' + G.horseSpeed : '') + '</div>' +
+    (G.horse ? btn('mount', P.mounted ? '🚶 On foot' : '🐎 In the saddle') : '') + '<span style="font-size:11px;opacity:.5"> drag him to turn</span>';
+  side.innerHTML = html;
+  for (const el of side.querySelectorAll('button, div, span')) el.style.pointerEvents = 'auto';
+  for (const b of side.querySelectorAll('button[data-act]')) b.onclick = () => afMarketAct(b.getAttribute('data-act'), b);
 }
 function afPreviewFrame() {
   const P = AF.preview; if (!P || !AF.marketOpen || !P.renderer || !P.rig) return;
+  const w = P.cv.clientWidth, h = P.cv.clientHeight;
+  if (w && h && (w !== P.W || h !== P.H)) { P.W = w; P.H = h; P.renderer.setSize(w, h, false); P.camera.aspect = w / h; P.camera.updateProjectionMatrix();
+    const k = Math.max(1, 1 / P.camera.aspect) * 1.08; P.camera.position.set(0, P.mounted ? 2.9 : 2.1, (P.mounted ? 9.4 : 6.4) * k); P.camera.lookAt(0, P.mounted ? 1.9 : 1.45, 0); }   // a narrow canvas backs off so he fits; he sits a little high, clear of the strip along the bottom
   if (!P.drag && performance.now() - (P.holdT || 0) > 1500) P.yaw += 0.006;
-  P.rig.group.rotation.y = P.yaw; P.rig.group.position.y = 0;
+  P.rig.group.rotation.y = P.yaw;
   if (P.rig.parts.mount) saddleRider(P.rig.parts);
   if (P.rig.parts.cape) { const segs = P.rig.parts.cape.userData.segs || []; segs.forEach((sg, i) => { sg.rotation.x = 0.06 + Math.sin(performance.now() / 700 + i) * 0.03; }); }
   P.renderer.render(P.scene, P.camera);
   requestAnimationFrame(afPreviewFrame);
 }
-function afMarketOpen() { AF.marketOpen = true; let p = document.getElementById('af-market'); if (!p) { p = document.createElement('div'); p.id = 'af-market'; p.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(8,6,14,.93);overflow:auto;pointer-events:auto;font:14px system-ui;color:#e8def8'; document.body.appendChild(p); } p.style.display = ''; p.scrollTop = 0; afMarketRender(); afCareerLoad(); requestAnimationFrame(afPreviewFrame); }   // (always re-read the purse: a fight may just have paid out)
-function afMarketClose() { AF.marketOpen = false; const p = document.getElementById('af-market'); if (p) p.style.display = 'none'; }
+function afMarketOpen() { AF.marketOpen = true; AF.tryItem = null; let p = document.getElementById('af-market'); if (!p) { p = document.createElement('div'); p.id = 'af-market'; p.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(8,6,14,.95);pointer-events:auto;font:14px system-ui;color:#e8def8;display:flex;overflow:hidden'; document.body.appendChild(p); } p.style.display = 'flex'; afMarketRender(); afCareerLoad(); requestAnimationFrame(afPreviewFrame); }   // (always re-read the purse: a fight may just have paid out)
+function afMarketClose() { AF.marketOpen = false; AF.tryItem = null; const p = document.getElementById('af-market'); if (p) p.style.display = 'none'; }
 function afMarketMsg(t, bad) { AF.marketMsg = t ? { t, bad } : null; const el = document.getElementById('af-market-msg'); if (el) { el.textContent = t || ''; el.style.color = bad ? '#ff9a9a' : '#ffe089'; el.style.display = t ? '' : 'none'; } }
+function afMarketAct(act, b) {                              // every button in the market: buy / wear / take off / try / mount
+  const a = act.split(':'), I = ARENA_CAT.ARENA_ITEMS, it = I[a[a.length - 1]];
+  if (a[0] === 'try') { AF.tryItem = AF.tryItem === a[1] ? null : a[1]; afMarketRender(); afPreviewSet(null, AF.preview.pal, AF.preview.mounted); return; }
+  if (a[0] === 'untry') { AF.tryItem = null; afMarketRender(); afPreviewSet(null, AF.preview.pal, AF.preview.mounted); return; }
+  if (a[0] === 'mount') { afPreviewSet(null, AF.preview.pal, !AF.preview.mounted); return; }
+  afMarketMsg('Asking the war-net…'); if (b) b.disabled = true;
+  const done = r => { if (r && r.career) AF.career = r.career;
+    if (r && r.ok) { afMarketMsg(a[0] === 'buy' ? '✓ Bought ' + (it ? it.name : '') + ' for ' + (it ? it.price : '?') + ' gold — you are wearing it. ' + AF.career.gold + ' gold left.' : a[0] === 'equip' ? '✓ Wearing ' + (it ? it.name : '') + '.' : '✓ Taken off.'); if (a[0] !== 'unequip') AF.tryItem = null; }
+    else afMarketMsg('✗ ' + ((r && r.error) || 'the war-net did not answer — check the connection and try again'), true);
+    afMarketRender(); afPreviewSet(null, AF.preview.pal, AF.preview.mounted); if (AF.lobby) { afLobbyRender(); afSendGear(); } };
+  if (a[0] === 'buy') window.net.arenaBuy(a[1]).then(done); else if (a[0] === 'equip') window.net.arenaEquip(a[1], a[2]).then(done); else if (a[0] === 'unequip') window.net.arenaEquip(a[1], null).then(done);
+}
 function afMarketRender() {
-  const p = document.getElementById('af-market'); if (!p || !window.ARENA_CAT) return; const c = AF.career, I = ARENA_CAT.ARENA_ITEMS, keepScroll = p.scrollTop;
-  const btn = (id, label, dis) => '<button data-act="' + id + '" ' + (dis ? 'disabled' : '') + ' style="cursor:' + (dis ? 'default' : 'pointer') + ';padding:' + (TOUCH ? '10px 14px' : '6px 12px') + ';border-radius:7px;border:1px solid #ffcf5b;background:rgba(255,180,80,.16);color:#ffe2a8;font-weight:700;opacity:' + (dis ? .45 : 1) + ';touch-action:manipulation">' + label + '</button>';
-  let html = '<div style="max-width:980px;margin:0 auto;padding:0 16px 60px">';
-  // the head stays put while you scroll the wares — the purse and the word on your last buy are always in view
-  html += '<div style="position:sticky;top:0;z-index:2;background:rgba(8,6,14,.97);padding:14px 0 8px;border-bottom:1px solid #3a3247"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><h2 style="margin:0;color:#ffd34d;letter-spacing:2px;font-size:20px">🏪 Marketplace &amp; Career' + (c ? ' <span style="font-size:14px;color:#ffe089;font-weight:400;margin-left:8px">' + c.gold + ' gold · ' + c.rank.name + '</span>' : '') + '</h2><button id="af-market-close" style="cursor:pointer;padding:8px 16px;border-radius:8px;border:1px solid #6b5e7a;background:#2a2233;color:#f3ead8;font-weight:700;touch-action:manipulation">Back to the lobby</button></div>' +
-    '<div id="af-market-msg" style="display:' + (AF.marketMsg ? '' : 'none') + ';margin-top:8px;padding:8px 12px;border-radius:8px;background:rgba(255,211,77,.12);border:1px solid rgba(255,207,91,.5);font-size:14px;font-weight:700;color:' + (AF.marketMsg && AF.marketMsg.bad ? '#ff9a9a' : '#ffe089') + '">' + (AF.marketMsg ? AF.marketMsg.t : '') + '</div></div>';
-  if (!c) { html += '<p style="opacity:.7;margin-top:14px">' + (afSession() ? 'Reaching the war-net for your career…' : 'Sign in on the title screen to keep an arena career.') + '</p></div>'; p.innerHTML = html; document.getElementById('af-market-close').onclick = afMarketClose; return; }
-  const r = c.rank, lo = ARENA_CAT.ARENA_RANKS[r.idx][1], prog = r.nextAt ? Math.round((c.xp - lo) / (r.nextAt - lo) * 100) : 100;
-  html += '<div style="margin:12px 0;padding:12px 14px;border:1px solid rgba(255,207,91,.35);border-radius:10px;background:rgba(0,0,0,.3);display:flex;gap:18px;flex-wrap:wrap;align-items:center">' +
-    '<div><div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;opacity:.7">Rank</div><b style="font-size:20px;color:#ffd34d">' + r.name + '</b><div style="font-size:12px;opacity:.75">' + c.xp + ' XP' + (r.next ? ' · ' + r.next + ' at ' + r.nextAt : ' · the top') + '</div><div style="height:6px;width:160px;background:#2a2438;border-radius:3px;margin-top:4px;overflow:hidden"><div style="height:100%;width:' + prog + '%;background:#ffd34d"></div></div></div>' +
-    '<div><div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;opacity:.7">Gold</div><b style="font-size:20px;color:#ffe089">' + c.gold + '</b></div>' +
-    '<div><div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;opacity:.7">Trophies</div><b style="font-size:20px">🏆 ' + c.trophies + '</b></div>' +
-    '<div style="font-size:12px;opacity:.85;line-height:1.6">' + c.matches + ' fights · ' + c.wins + ' won · ' + c.kills + ' kills · ' + c.deaths + ' deaths · ' + c.stars + '× star · ' + Math.round(c.damage) + ' damage dealt<br>skills: sword ' + c.skills.sword.level + ' (' + c.skills.sword.count + ' hits) · bow ' + c.skills.bow.level + ' (' + c.skills.bow.count + ' hits) · riding ' + c.skills.riding.level + '</div></div>';
-  html += '<div id="af-preview-slot" style="margin:12px 0"></div>';
+  const p = document.getElementById('af-market'); if (!p || !window.ARENA_CAT) return; const c = AF.career, I = ARENA_CAT.ARENA_ITEMS;
+  const right0 = p.querySelector('#af-market-right'), keepScroll = right0 ? right0.scrollTop : 0;
+  const btn = (act, label, dis) => '<button data-act="' + act + '" ' + (dis ? 'disabled' : '') + ' style="cursor:' + (dis ? 'default' : 'pointer') + ';padding:' + (TOUCH ? '9px 12px' : '6px 12px') + ';border-radius:7px;border:1px solid #ffcf5b;background:rgba(255,180,80,.16);color:#ffe2a8;font-weight:700;opacity:' + (dis ? .45 : 1) + ';touch-action:manipulation">' + label + '</button>';
+  // LEFT: the head (title, purse, the word on your last buy) and the fighter, pinned
+  let left = '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><b style="color:#ffd34d;letter-spacing:1px;font-size:15px">🏪 Market</b><button id="af-market-close" style="cursor:pointer;padding:6px 12px;border-radius:8px;border:1px solid #6b5e7a;background:#2a2233;color:#f3ead8;font-weight:700;touch-action:manipulation;font-size:12px">← Lobby</button></div>' +
+    (c ? '<div style="font-size:12px;margin:4px 0 6px;color:#ffe2a8"><b style="color:#ffd34d">' + c.rank.name + '</b> · <b>' + c.gold + '</b> gold · 🏆 ' + c.trophies + '</div>' : '<div style="font-size:12px;margin:4px 0 6px;opacity:.7">' + (afSession() ? 'reaching the war-net…' : 'sign in to keep a career') + '</div>') +
+    '<div id="af-market-msg" style="display:' + (AF.marketMsg ? '' : 'none') + ';margin-bottom:6px;padding:6px 9px;border-radius:8px;background:rgba(255,211,77,.12);border:1px solid rgba(255,207,91,.5);font-size:12px;font-weight:700;color:' + (AF.marketMsg && AF.marketMsg.bad ? '#ff9a9a' : '#ffe089') + '">' + (AF.marketMsg ? AF.marketMsg.t : '') + '</div>' +
+    '';
+  // RIGHT: the wares, scrolling; a card is a TRY-ON, its button the buy
+  let html = '';
+  if (c) {
+    const r = c.rank, lo = ARENA_CAT.ARENA_RANKS[r.idx][1], prog = r.nextAt ? Math.round((c.xp - lo) / (r.nextAt - lo) * 100) : 100;
+    html += '<div style="padding:8px 12px;border:1px solid rgba(255,207,91,.3);border-radius:10px;background:rgba(0,0,0,.3);font-size:12px;line-height:1.6"><b style="color:#ffd34d">' + r.name + '</b> · ' + c.xp + ' XP' + (r.next ? ' · ' + r.next + ' at ' + r.nextAt : '') + ' <span style="display:inline-block;vertical-align:middle;height:5px;width:90px;background:#2a2438;border-radius:3px;overflow:hidden"><span style="display:block;height:100%;width:' + prog + '%;background:#ffd34d"></span></span><br>' +
+      c.matches + ' fights · ' + c.wins + ' won · ' + c.kills + ' kills · ' + c.deaths + ' deaths · ' + c.stars + '× star · ' + Math.round(c.damage) + ' damage · skills: sword ' + c.skills.sword.level + ' · bow ' + c.skills.bow.level + ' · riding ' + c.skills.riding.level + '</div>';
+  }
   const slotNames = { sword: 'Swords', armor: 'Armor', bow: 'Bows', horse: 'Horses' };
   for (const slot of ['sword', 'armor', 'bow', 'horse']) {
-    const eq = c.equipped[slot];
-    html += '<h3 style="margin:16px 0 6px;color:#ffe2a8;letter-spacing:1px">' + slotNames[slot] + ' <span style="font-size:12px;opacity:.7;font-weight:400">— ' + (eq ? 'wearing ' + I[eq].name : slot === 'armor' ? 'none' : 'none (you can\'t ride in with ' + (slot === 'bow' ? 'a bow' : 'a horse') + ' until you own one)') + '</span></h3>';
-    html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px">';
-    for (const id in I) { const it = I[id]; if (it.slot !== slot) continue; const owned = c.items.includes(id), why = ARENA_CAT.lockReason(id, c);
-      const stat = [it.dmg ? 'damage ×' + it.dmg : '', it.reach ? 'reach +' + it.reach : '', it.hp ? (slot === 'horse' ? it.hp + ' health' : '+' + it.hp + ' health') : '', it.poise ? '+' + it.poise + ' poise' : '', it.move ? 'speed ' + Math.round(it.move * 100) + '%' : '', it.speed && it.speed !== 1 ? 'pace ×' + it.speed : ''].filter(Boolean).join(' · ');
-      const need = [it.rank ? ARENA_CAT.ARENA_RANKS[it.rank][0] : '', it.skill ? it.skill[0] + ' skill ' + it.skill[1] : ''].filter(Boolean).join(', ');
-      html += '<div style="border:1px solid ' + (eq === id ? '#ffd34d' : owned ? 'rgba(255,207,91,.5)' : '#3a3247') + ';border-radius:9px;padding:9px 11px;background:rgba(0,0,0,.3)"><div style="display:flex;justify-content:space-between"><b>' + it.name + '</b><span style="color:#ffe089">' + (owned ? (eq === id ? 'worn' : 'owned') : it.price + ' g') + '</span></div>' +
-        '<div style="font-size:12px;opacity:.8;margin:3px 0">' + (stat || 'no bonus') + '</div><div style="font-size:11px;opacity:.6;font-style:italic">' + (it.desc || '') + (need && !owned ? ' · needs ' + need : '') + '</div><div style="margin-top:6px">' +
-        (owned ? (eq === id ? (slot !== 'sword' ? btn('unequip:' + slot, 'Take off') : '') : btn('equip:' + slot + ':' + id, 'Wear')) : btn('buy:' + id, why ? why : 'Buy for ' + it.price + ' g', !!why)) + '</div></div>';
+    const eq = c ? c.equipped[slot] : (AF_GEAR_FREE[slot] || null);
+    html += '<h3 style="margin:12px 0 6px;color:#ffe2a8;letter-spacing:1px;font-size:14px">' + slotNames[slot] + ' <span style="font-size:11px;opacity:.7;font-weight:400">— ' + (eq ? 'wearing ' + I[eq].name : slot === 'armor' ? 'none' : 'none (you can\'t ride in with ' + (slot === 'bow' ? 'a bow' : 'a horse') + ' until you own one)') + (eq && slot !== 'sword' && c ? ' · ' + btn('unequip:' + slot, 'take off') : '') + '</span></h3>';
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(' + (TOUCH ? 150 : 190) + 'px,1fr));gap:7px">';
+    for (const id in I) { const it = I[id]; if (it.slot !== slot) continue; const owned = !!(c && c.items.includes(id)), why = c ? ARENA_CAT.lockReason(id, c) : 'sign in', trying = AF.tryItem === id;
+      const stat = [it.dmg ? 'dmg ×' + it.dmg : '', it.reach ? 'reach +' + it.reach : '', it.hp ? (slot === 'horse' ? it.hp + ' hp' : '+' + it.hp + ' hp') : '', it.poise ? '+' + it.poise + ' poise' : '', it.move ? 'speed ' + Math.round(it.move * 100) + '%' : '', it.speed && it.speed !== 1 ? 'pace ×' + it.speed : ''].filter(Boolean).join(' · ');
+      const need = [it.rank ? ARENA_CAT.ARENA_RANKS[it.rank][0] : '', it.skill ? it.skill[0] + ' ' + it.skill[1] : ''].filter(Boolean).join(', ');
+      html += '<div data-act="try:' + id + '" style="cursor:pointer;border:1px solid ' + (trying ? '#ffe089' : eq === id ? '#ffd34d' : owned ? 'rgba(255,207,91,.5)' : '#3a3247') + ';border-radius:9px;padding:8px 10px;background:' + (trying ? 'rgba(255,211,77,.12)' : 'rgba(0,0,0,.3)') + '"><div style="display:flex;justify-content:space-between;gap:6px"><b style="font-size:13px">' + it.name + '</b><span style="color:#ffe089;font-size:12px;white-space:nowrap">' + (owned ? (eq === id ? 'worn' : 'owned') : it.price + ' g') + '</span></div>' +
+        '<div style="font-size:11px;opacity:.8;margin:2px 0">' + (stat || 'no bonus') + (need && !owned ? ' · needs ' + need : '') + '</div><div style="margin-top:5px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">' +
+        (owned ? (eq === id ? '' : btn('equip:' + slot + ':' + id, 'Wear')) : btn('buy:' + id, why ? why : 'Buy ' + it.price + ' g', !!why)) + '<span style="font-size:11px;opacity:.55">' + (trying ? 'on him now' : 'tap to try on') + '</span></div></div>';
     }
     html += '</div>';
   }
-  const uniques = c.items.filter(id => I[id] && I[id].unique);
-  html += '<h3 style="margin:16px 0 6px;color:#ffe2a8;letter-spacing:1px">Uniques <span style="font-size:12px;opacity:.7;font-weight:400">— loot only; a look, a hair of power</span></h3>';
-  html += uniques.length ? '<div style="display:flex;gap:8px;flex-wrap:wrap">' + uniques.map(id => { const it = I[id], eq = c.equipped[it.slot] === id; return '<div style="border:1px solid ' + (eq ? '#ffd34d' : '#3a3247') + ';border-radius:9px;padding:8px 11px;background:rgba(0,0,0,.3)"><b>' + it.name + '</b> <span style="font-size:11px;opacity:.6">' + it.desc + '</span> ' + (eq ? btn('unequip:' + it.slot, 'Take off') : btn('equip:' + it.slot + ':' + id, 'Wear')) + '</div>'; }).join('') + '</div>' : '<div style="font-size:12px;opacity:.6">Nothing yet — one win in twenty drops a unique.</div>';
-  html += '<h3 style="margin:16px 0 6px;color:#ffe2a8;letter-spacing:1px">Achievements</h3><div style="display:flex;gap:6px;flex-wrap:wrap">' + ARENA_CAT.ARENA_ACHIEVEMENTS.map(([id, label]) => '<span style="font-size:12px;padding:4px 9px;border-radius:12px;border:1px solid ' + (c.achievements.includes(id) ? '#ffd34d;color:#ffe089' : '#3a3247;opacity:.45') + '">' + (c.achievements.includes(id) ? '🏅 ' : '') + label + '</span>').join('') + '</div>';
-  html += '<p style="font-size:12px;opacity:.6;margin-top:18px">XP and gold come from every fight: the bigger and better the army you faced, the more; a win pays half again, and the ★ star of the match (the best fighter in the pit — kills, damage, still standing) 60% more. Beat real players and you take 8% of their purse (at most 60 gold each). One win in four drops a purse, one in twenty a unique.</p></div>';
-  p.innerHTML = html; p.scrollTop = keepScroll;
-  const slot = document.getElementById('af-preview-slot'); if (slot) { slot.appendChild(afPreviewEl()); const pal = (AF.lobby && afHostSeat() ? AF_TEAMS[AF.lobby.slots.findIndex(r => r.includes(afHostSeat()))] : AF_TEAMS[0]) || AF_TEAMS[0]; const g = afGear(); if (!AF.preview.rig || JSON.stringify(AF.preview.gear) !== JSON.stringify(afGearClean(g))) afPreviewSet(g, pal.pal, AF.preview.mounted); }
+  const uniques = c ? c.items.filter(id => I[id] && I[id].unique) : [];
+  html += '<h3 style="margin:12px 0 6px;color:#ffe2a8;letter-spacing:1px;font-size:14px">Uniques <span style="font-size:11px;opacity:.7;font-weight:400">— loot only; a look, a hair of power. Tap one to see it.</span></h3><div style="display:flex;gap:6px;flex-wrap:wrap">' +
+    Object.keys(I).filter(id => I[id].unique).map(id => { const it = I[id], owned = uniques.includes(id), eq = c && c.equipped[it.slot] === id, trying = AF.tryItem === id; return '<div data-act="try:' + id + '" style="cursor:pointer;border:1px solid ' + (trying ? '#ffe089' : eq ? '#ffd34d' : owned ? 'rgba(255,207,91,.5)' : '#3a3247') + ';border-radius:9px;padding:6px 10px;background:rgba(0,0,0,.3);font-size:12px;opacity:' + (owned ? 1 : .7) + '"><b>' + it.name + '</b> <span style="opacity:.6">' + (owned ? (eq ? '· worn' : '') : '· not yet yours') + '</span> ' + (owned && !eq ? btn('equip:' + it.slot + ':' + id, 'Wear') : owned && eq ? btn('unequip:' + it.slot, 'Take off') : '') + '</div>'; }).join('') + '</div>';
+  if (c) html += '<h3 style="margin:12px 0 6px;color:#ffe2a8;letter-spacing:1px;font-size:14px">Achievements</h3><div style="display:flex;gap:5px;flex-wrap:wrap">' + ARENA_CAT.ARENA_ACHIEVEMENTS.map(([id, label]) => '<span style="font-size:11px;padding:3px 8px;border-radius:12px;border:1px solid ' + (c.achievements.includes(id) ? '#ffd34d;color:#ffe089' : '#3a3247;opacity:.45') + '">' + (c.achievements.includes(id) ? '🏅 ' : '') + label + '</span>').join('') + '</div>';
+  html += '<p style="font-size:11px;opacity:.55;margin:14px 0 30px">XP and gold come from every fight — more for a bigger, better army; a win pays half again, the ★ star of the match 60% more. Beat real players and you take 8% of their purse (at most 60 gold each). One win in four drops a purse, one in twenty a unique.</p>';
+  p.innerHTML = '<div id="af-market-left" style="position:relative;flex:0 0 ' + (TOUCH ? 'clamp(220px, 40vw, 360px)' : 'clamp(260px, 34vw, 400px)') + ';min-height:0;border-right:1px solid #3a3247;background:rgba(0,0,0,.25)"><div id="af-preview-slot" style="position:absolute;inset:0"></div><div id="af-market-head" style="position:absolute;left:0;right:0;top:0;padding:8px 10px;background:linear-gradient(to bottom,rgba(8,6,14,.96),rgba(8,6,14,.8) 70%,rgba(8,6,14,0));z-index:2">' + left + '</div></div><div id="af-market-right" style="flex:1;min-width:0;overflow-y:auto;padding:10px 14px">' + html + '</div>';
+  const slot = document.getElementById('af-preview-slot'); if (slot) { slot.appendChild(afPreviewEl()); const pal = (AF.lobby && afHostSeat() ? AF_TEAMS[AF.lobby.slots.findIndex(r => r.includes(afHostSeat()))] : AF_TEAMS[0]) || AF_TEAMS[0]; const g = afPreviewGear(); if (!AF.preview.rig || JSON.stringify(AF.preview.gear) !== JSON.stringify(afGearClean(g))) afPreviewSet(g, pal.pal, AF.preview.mounted); }
+  p.querySelector('#af-market-right').scrollTop = keepScroll;
   document.getElementById('af-market-close').onclick = afMarketClose;
-  for (const b of p.querySelectorAll('button[data-act]')) b.onclick = () => {
-    const a = b.getAttribute('data-act').split(':'), it = I[a[a.length - 1]]; afMarketMsg('Asking the war-net…'); b.disabled = true;
-    const done = r => { if (r && r.career) AF.career = r.career;
-      if (r && r.ok) afMarketMsg(a[0] === 'buy' ? '✓ Bought ' + (it ? it.name : '') + ' for ' + (it ? it.price : '?') + ' gold — you are wearing it. ' + AF.career.gold + ' gold left.' : a[0] === 'equip' ? '✓ Wearing ' + (it ? it.name : '') + '.' : '✓ Taken off.');
-      else afMarketMsg('✗ ' + ((r && r.error) || 'the war-net did not answer — check the connection and try again'), true);
-      afMarketRender(); if (AF.lobby) { afLobbyRender(); afSendGear(); } };
-    if (a[0] === 'buy') window.net.arenaBuy(a[1]).then(done); else if (a[0] === 'equip') window.net.arenaEquip(a[1], a[2]).then(done); else if (a[0] === 'unequip') window.net.arenaEquip(a[1], null).then(done);
-  };
+  for (const b of p.querySelectorAll('#af-market-right [data-act]')) b.onclick = e => { e.stopPropagation(); afMarketAct(b.getAttribute('data-act'), b.tagName === 'BUTTON' ? b : null); };
 }
 (function afWireLobbyUi() {
   const g = id => document.getElementById(id);

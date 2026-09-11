@@ -413,9 +413,12 @@ lends plain gear (iron sword, hunting bow, courser) and pays nothing.
   breastplate and pauldrons (plate and above add a gorget); swords change blade colour and length
   (wood is brown and short, the master's has a gold hilt; a unique tint wins); bows grow and darken;
   a nag is small, a warhorse big. The same dressing runs in the pit and in the **fighter preview**
-  at the top of the marketplace — a turning 3D figure on its own renderer (`afPreviewEl` /
-  `afPreviewSet`), drag to turn, with an "In the saddle" toggle when a horse is owned and a
-  summary of the loadout's numbers.
+  pinned to the left of the marketplace for the whole visit — a turning 3D figure on its own
+  renderer (`afPreviewEl` / `afPreviewSet`) filling the pane, the purse floating over the top and
+  the try-on strip over the bottom, while the wares scroll on the right. Drag to turn him; "In
+  the saddle" when a horse is owned. **Tap any card to try it on** (`AF.tryItem`): the figure
+  wears it, nothing is bought, and the strip shows the price with a Buy (or the lock reason) and
+  "What I own" to take it off. Trying a bow draws it; trying a horse seats him.
 * **The record**: fights, wins, kills, deaths, damage, stars, trophies and achievements (first
   blood, 10/50/200/500 kills, 1/10/50/100 fights, 5/25/100 wins, stars, trophies) on the career
   sheet.

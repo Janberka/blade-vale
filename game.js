@@ -803,7 +803,7 @@ function buildCavalry(palette, scale = 1, weapon = 'longsword', opts = {}) {
   const parts = Object.assign({}, rider.parts, { mount: horse });
   saddleRider(parts);
   g.scale.setScalar(scale);
-  return { group: g, parts };
+  return { group: g, parts, riderGroup: rider.group, horse };
 }
 // seat the rider's legs astride the barrel (thighs forward, shins down the flanks, knees splayed).
 // Re-asserted every gait tick so nothing (restLegs targets, the editor's stride reset) can unseat him.
@@ -818,9 +818,8 @@ function saddleRider(parts) {
 // the stride clock runs slower (MOUNT.phaseMul) because a horse's stride is long.
 const MOUNT_OFF_WALK = { HL: 0, FL: Math.PI * 0.5, HR: Math.PI, FR: Math.PI * 1.5 };
 const MOUNT_OFF_GALLOP = { HL: 0, HR: 0.45, FL: Math.PI, FR: Math.PI + 0.45 };
-function mountGait(parts, phase, sp01) {
-  const M = parts.mount.userData.rig;
-  saddleRider(parts);
+function mountGait(parts, phase, sp01) { saddleRider(parts); horseGait(parts.mount.userData.rig, phase, sp01); }
+function horseGait(M, phase, sp01) {                       // (the horse alone — a loose horse has no rider to seat)
   const t = phase * MOUNT.phaseMul;
   const g2 = clamp(sp01 != null ? sp01 : M.speed01, 0, 1);
   const amp = lerp(0.34, 0.8, g2);                  // stride sweep
@@ -838,9 +837,8 @@ function mountGait(parts, phase, sp01) {
   M.tail.rotation.x = M.tailBase + 0.45 * g2 + Math.sin(t) * 0.08;          // tail streams at speed
 }
 // standing horse: legs settle square, neck/tail ease back to rest, rider stays in the saddle
-function mountRest(parts, dt) {
-  const M = parts.mount.userData.rig;
-  saddleRider(parts);
+function mountRest(parts, dt) { saddleRider(parts); horseRest(parts.mount.userData.rig, dt); }
+function horseRest(M, dt) {
   const s = clamp(dt * 6, 0, 1);
   for (const k of ['FL', 'FR', 'HL', 'HR']) {
     const leg = M['leg' + k], knee = M['knee' + k];
@@ -16688,6 +16686,7 @@ function afMakeBody(entry, idx, r) {
     gait: null, hitT: 0, hitSide: 0, lookYaw: 0, headYaw: 0, capeX: 0.12, phase0: r() * TAU, roll: 0, lastStep: 0, flashT: 0, sway: r() * TAU, clashT: 0, clashAtk: false, clashDx: 0, clashDz: 0,
     charge: null, chargeMove: 0, prevHold: false, releaseNow: false, aiHoldT: 0, prefBow: weapon === 'bow', swapT: 0, seenSwap: 0,
     mounted, trampleT: 0, passT: 0, sp01: 0,
+    pal: td.pal, rigOpts, footScale: mounted ? 1 : A.scale, riderGroup: h.riderGroup || null, horse: null, mountCd: 0,   // (so he can be re-dressed on foot or in a saddle)
     arch: archKey, A, moveMul: A.move, dmgMul: A.dmg * (entry.kind === 'npc' ? lerp(0.85, 1.05, xp / 100) : 1), reachBonus: A.reach, noShield: !A.shield, feint: 0,
     seenAtk: 0, seenHeavy: 0, seenDodge: 0,
     // NPC brain traits (seeded so a replay of the same seed fields the same temperaments)
@@ -16696,6 +16695,7 @@ function afMakeBody(entry, idx, r) {
     tx: 0, tz: 0, tyaw: 0, tstate: 0, tmove: 0, rollT: 0, remoteSeen: false,
   };
   b.tx = b.x; b.tz = b.z; b.tyaw = b.yaw; b.inp.yaw = b.yaw; b.tagH = mounted ? 3.5 : 2.25; b.baseScale = group.scale.x;
+  if (mounted) { const hh = afNewHorse(group, h.horse); hh.rider = b; b.horse = hh; hh.x = b.x; hh.z = b.z; hh.yaw = b.yaw; }
   group.position.set(b.x, afY(b.x, b.z), b.z); group.rotation.y = b.yaw;
   scene.add(group); group.userData.afBody = b;
   // floating name + health bar (a separate un-rotated tag so the bar can face the camera)
@@ -16705,6 +16705,129 @@ function afMakeBody(entry, idx, r) {
   const bar = makeHealthBar(parseInt(td.col.slice(1), 16)); bar.visible = true; bar.scale.setScalar(0.6); tag.add(bar);
   b.tag = tag; b.bar = bar; scene.add(tag);
   return b;
+}
+/* ---- HORSES are their own creatures: a horse has its own health under its rider; when it is cut down the man is
+   thrown, gets up and fights on foot; when the man dies the horse is left loose — it keeps clear of the fighting and
+   ambles about the pit — and any man on foot who reaches a loose horse swings into the saddle. ---- */
+const AF_HORSE = { hp: 100, walk: 0.3, trot: 0.72, mountR: 1.9 };
+function afNewHorse(group, horseG) {
+  const tag = new THREE.Group(), bar = makeHealthBar(0xc09a5a); bar.visible = true; bar.scale.setScalar(0.5); tag.add(bar); scene.add(tag);
+  const h = { id: AF.horses.length, group, horseG, rig: horseG.userData.rig, x: 0, z: 0, yaw: 0, vx: 0, vz: 0, hp: AF_HORSE.hp, maxHp: AF_HORSE.hp, dead: false, deadT: 0, gone: false,
+    rider: null, phase: Math.random() * TAU, sp01: 0, want: 0, pace: 0, wanderT: 1 + Math.random() * 2, wandering: false, wx: 0, wz: 0, tx: 0, tz: 0, tyaw: 0, seen: false, tag, bar };
+  AF.horses.push(h); return h;
+}
+function afDressRig(b) {                                   // which of his weapons shows in his hands
+  const p = b.parts, ranged = b.weapon === 'bow';
+  if (p.bow) p.bow.visible = ranged; if (p.sword) p.sword.visible = !ranged;
+  if (p.shield) { p.shield.visible = !ranged && !b.noShield; if (b.A && b.A.bigShield) p.shield.scale.set(1.3, 1.3, 1.3); }
+}
+function afDismount(b, thrown, quiet) {                    // the man leaves the saddle — on his feet, or thrown flat
+  const h = b.horse; if (!h) return;
+  h.rider = null; b.horse = null; h.x = b.x; h.z = b.z; h.yaw = b.yaw; h.vx = b.vx; h.vz = b.vz; h.sp01 = b.sp01 || 0; h.seen = true; h.tx = h.x; h.tz = h.z; h.tyaw = h.yaw;
+  if (b.riderGroup) { h.group.remove(b.riderGroup); try { disposeGroup(b.riderGroup); } catch (e) {} b.riderGroup = null; }
+  const hm = buildHumanoid(b.pal, b.footScale || 1, b.weapon === 'longsword' ? 'longsword' : 'sword', b.rigOpts || {});
+  b.group = hm.group; b.parts = hm.parts; b.anim = makeAnimator(hm.parts); b.group.rotation.order = 'YXZ'; b.group.userData.afBody = b;
+  b.mounted = false; b.gallop = 0; b.sp01 = 0; b.aimYaw = null; b.twist = 0; b.cav = null; b.tagH = 2.25; b.baseScale = b.group.scale.x; b.mountCd = 2; b.wantHorse = null;
+  b.atk = null; b.charge = null; b.queued = false; b.blocking = false; b.dodgeT = 0; b.rollAng = 0; b.rollSq = 0; b.moving = false; b.remoteSeen = true;
+  afDressRig(b); setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.2); scene.add(b.group);
+  const side = Math.random() < 0.5 ? -1 : 1, rgx = -Math.cos(b.yaw), rgz = Math.sin(b.yaw);   // he lands beside the horse, not inside it
+  b.x += rgx * side * 1.1; b.z += rgz * side * 1.1; b.tx = b.x; b.tz = b.z;
+  if (thrown) { b.downT = 1.4; b.downSide = side; b.vx = h.vx * 0.5 + rgx * side * 3; b.vz = h.vz * 0.5 + rgz * side * 3; b.stagger = 0; b.flinch = 0; b.iframes = 0.3; }
+  else { b.vx = 0; b.vz = 0; }
+  b.group.position.set(b.x, afY(b.x, b.z), b.z); b.group.rotation.y = b.yaw;
+  if (b.inp) { b.inp.steer = null; b.inp.thr = null; }
+  if (b === AF.me) { AF.cam.yaw = b.yaw; }
+  if (!quiet && !thrown) afLogLine(b.name + ' is out of the saddle', b.teamDef.col);
+}
+function afMount(b, h, quiet) {                            // a man on foot swings into a loose horse's saddle
+  if (b.mounted || h.rider || h.dead || h.gone || b.dead) return;
+  scene.remove(b.group); try { disposeGroup(b.group); } catch (e) {}
+  const rider = buildHumanoid(b.pal, 0.88, b.weapon === 'longsword' ? 'longsword' : 'sword', b.rigOpts || {});
+  rider.group.position.set(0, 1.06, -0.06); h.group.add(rider.group);
+  const parts = Object.assign({}, rider.parts, { mount: h.horseG }); saddleRider(parts);
+  b.riderGroup = rider.group; b.group = h.group; b.parts = parts; b.anim = makeAnimator(parts); b.group.userData.afBody = b;
+  b.mounted = true; b.horse = h; h.rider = b; b.x = h.x; b.z = h.z; b.yaw = h.yaw; b.vx = h.vx; b.vz = h.vz; b.gallop = 0; b.sp01 = h.sp01; b.cav = null; b.aimYaw = b.yaw; b.twist = 0; b.wantHorse = null;
+  b.tagH = 3.5; b.baseScale = h.group.scale.x; b.dodgeT = 0; b.rollAng = 0; b.rollSq = 0; b.atk = null; b.charge = null; b.queued = false; b.blocking = false; b.moving = false; b.tx = b.x; b.tz = b.z; b.tyaw = b.yaw;
+  afDressRig(b); setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.2);
+  b.group.position.set(b.x, afY(b.x, b.z), b.z); b.group.rotation.set(0, b.yaw, 0);
+  if (!quiet) { afLogLine(b.name + ' swings into the saddle', b.teamDef.col); AF.events.push({ k: 'horse', e: 'mount', h: h.id, i: b.idx }); }
+  if (b === AF.me) { afPopup(b.group.position, 'MOUNTED', '#ffe089'); AF.cam.yaw = b.yaw; try { SFX.foot(b.group.position); } catch (e) {} }
+}
+function afBlowHitsHorse(t, from, arrow) {                 // a mounted man is a small target on a big one: most blows find the horse — unless they come from another saddle
+  if (t.iframes > 0) return false; return Math.random() < (from.mounted ? 0.25 : arrow ? 0.5 : 0.6);
+}
+function afDamageHorse(h, amt, from, arrow) {
+  if (h.dead || AF.over) return; h.hp -= amt;
+  const pos = h.group.position; tmpV.set(h.x, afY(h.x, h.z) + 1.7, h.z); afSparks(tmpV, 0xff5a3c, arrow ? 3 : 6); try { SFX.hit(pos, false); } catch (e) {}
+  afPopup(pos, 'horse ' + Math.round(amt), '#d8b07a'); afSplat(h.x, h.z, 0.7);
+  const r = h.rider; if (r) { r.hitT = 0.15; r.hitSide = 1; const ax = from.x - h.x, az = from.z - h.z, ad = Math.hypot(ax, az) || 1; r.vx -= ax / ad * 2.5; r.vz -= az / ad * 2.5; if (r === AF.me) { addShake(0.08); AF.hurt = Math.min(1, AF.hurt + 0.25); } } // the horse shies, the man lurches
+  AF.events.push({ k: 'hhit', h: h.id, d: Math.round(amt) });
+  if (h.hp <= 0) afKillHorse(h, from);
+}
+function afKillHorse(h, by, quiet) {
+  if (h.dead) return; h.dead = true; h.deadT = 0; h.hp = 0; h.deadSide = Math.random() < 0.5 ? -1 : 1;
+  const r = h.rider; if (r) afDismount(r, true, true);
+  if (!quiet) { try { SFX.kill(h.group.position); } catch (e) {} afSparks(tmpV.set(h.x, afY(h.x, h.z) + 1.8, h.z), 0xff6b6b, 12);
+    afLogLine((r ? r.name + "'s horse" : 'a loose horse') + ' is cut down' + (by ? ' by ' + by.name : ''), '#c9a27a'); AF.events.push({ k: 'horse', e: 'died', h: h.id, by: by ? by.idx : -1, i: r ? r.idx : -1 }); }
+  afSplat(h.x, h.z, 1.8);
+  if (r === AF.me) { afBanner('THROWN', 'your horse is down — fight on foot', 2); addShake(0.3); }
+  if (h.tag) h.tag.visible = false;
+}
+function afStepHorseDead(h, dt) {
+  if (h.gone) return;
+  h.deadT += dt; const k = clamp(h.deadT / 1.3, 0, 1), e = easeOut(k), M = h.rig, sd = h.deadSide || 1, q = clamp(dt * 8, 0, 1);
+  h.vx *= Math.pow(0.001, dt); h.vz *= Math.pow(0.001, dt); h.x += h.vx * dt; h.z += h.vz * dt;
+  for (const kk of ['FL', 'FR', 'HL', 'HR']) { M['leg' + kk].rotation.x = lerp(M['leg' + kk].rotation.x, kk[0] === 'F' ? 0.9 : -0.9, q); M['knee' + kk].rotation.x = lerp(M['knee' + kk].rotation.x, 1.4, q); }
+  M.neck.rotation.x = lerp(M.neck.rotation.x, M.neckBase + 0.9, q);
+  h.group.rotation.set(0.1 * e, h.yaw, sd * 1.35 * e); h.group.position.set(h.x, afY(h.x, h.z) - 0.2 * e - Math.max(0, h.deadT - 8) * 0.3, h.z);
+  if (k > 0.7 && !h.tinted) { setTint({ m: h.horseG }, 0x1a1214); h.tinted = true; }
+  if (h.deadT > 14) { h.gone = true; scene.remove(h.group); try { disposeGroup(h.group); } catch (e) {} if (h.tag) { scene.remove(h.tag); } }
+}
+function afStepHorse(h, dt, sim) {                        // a LOOSE horse: shies from the fighting, otherwise ambles and grazes
+  if (h.dead) { afStepHorseDead(h, dt); return; }
+  if (h.rider) return;                                     // (its rider's drive moves it)
+  const base = AF_F.move * AF_F.horseSpeed;
+  if (sim) {
+    let nx = 0, nz = 0, n = 0, calm = 0;                     // fighting men within 8 scare it; one man walking up does not (he can catch it)
+    for (const o of AF.bodies) { if (o.dead) continue; const dx = o.x - h.x, dz = o.z - h.z, d2 = dx * dx + dz * dz; if (d2 > 64) continue;
+      if (o.atk || o.charge || o.stagger > 0 || o.flinch > 0 || (o.mounted && o.sp01 > 0.4)) { nx += dx; nz += dz; n++; } else calm++; }
+    if (calm >= 4) { n = Math.max(n, 1); }
+    let ux = 0, uz = 0, pace = 0;
+    if (n) { const cx = n ? nx / n : 0, cz = n ? nz / n : 0, d = Math.hypot(cx, cz) || 1; ux = -cx / d; uz = -cz / d; pace = AF_HORSE.trot; h.wandering = false;
+      const rr = Math.hypot(h.x, h.z); if (rr > AF_F.radius - 9) { ux -= h.x / rr * 0.9; uz -= h.z / rr * 0.9; const m = Math.hypot(ux, uz) || 1; ux /= m; uz /= m; } }   // never into the wall
+    else {
+      h.wanderT -= dt;
+      if (h.wanderT <= 0) { h.wanderT = 3 + Math.random() * 5; if (Math.random() < 0.55) { const a = Math.random() * TAU, r = 4 + Math.random() * 8, pt = afClampPit(h.x + Math.sin(a) * r, h.z + Math.cos(a) * r, 7); h.wx = pt.x; h.wz = pt.z; h.wandering = true; } else h.wandering = false; }
+      if (h.wandering) { const dx = h.wx - h.x, dz = h.wz - h.z, d = Math.hypot(dx, dz); if (d < 1.5) h.wandering = false; else { ux = dx / d; uz = dz / d; pace = AF_HORSE.walk; } }
+    }
+    h.want = pace ? Math.atan2(ux, uz) : h.yaw; h.pace = pace;
+    const maxYaw = lerp(MOUNT.turnStand, MOUNT.turnFull, h.sp01) * dt; h.yaw += clamp(angleDelta(h.yaw, h.want), -maxYaw, maxYaw);
+    const fx = Math.sin(h.yaw), fz = Math.cos(h.yaw), k = clamp(dt * AF_F.accel * 0.5, 0, 1); h.vx = lerp(h.vx, fx * base * h.pace, k); h.vz = lerp(h.vz, fz * base * h.pace, k);
+    for (const o of AF.bodies) { if (o.dead) continue; const dx = h.x - o.x, dz = h.z - o.z, d2 = dx * dx + dz * dz; if (d2 < 2.9 && d2 > 1e-4) { const d = Math.sqrt(d2), ov = 1.7 - d; h.x += dx / d * ov * 0.5; h.z += dz / d * ov * 0.5; } } // shouldered aside
+    afIntegrate(h, dt); h.sp01 = clamp(Math.hypot(h.vx, h.vz) / base, 0, 1);
+  } else {
+    const k = clamp(dt * 10, 0, 1), ox = h.x, oz = h.z; h.x = lerp(h.x, h.tx, k); h.z = lerp(h.z, h.tz, k); h.yaw = angleLerp(h.yaw, h.tyaw, k);
+    h.sp01 = lerp(h.sp01, clamp(Math.hypot(h.x - ox, h.z - oz) / Math.max(dt, 1e-3) / base, 0, 1), clamp(dt * 6, 0, 1));
+  }
+  const M = h.rig;
+  if (h.sp01 > 0.04) { h.phase += dt * (3 + 2.4 * h.sp01 * base); horseGait(M, h.phase, clamp(h.sp01 / 1.3, 0, 1)); h.grazeT = 0; }
+  else { horseRest(M, dt); h.grazeT = (h.grazeT || 0) + dt; if (h.grazeT > 1.5) M.neck.rotation.x = lerp(M.neck.rotation.x, M.neckBase + 0.8 + Math.sin(rtNow * 0.7 + h.phase) * 0.08, clamp(dt * 1.2, 0, 1)); } // head down to the sand
+  h.group.position.set(h.x, afY(h.x, h.z), h.z); h.group.rotation.set(0, h.yaw, 0);
+}
+function afMountCheck() {                                  // a man on foot who reaches a loose horse takes it (a player just walks into it; an NPC has to mean it)
+  for (const h of AF.horses) { if (h.dead || h.rider || h.gone) continue;
+    for (const b of AF.bodies) {
+      if (b.dead || b.mounted || b.downT > 0 || b.dodgeT > 0 || b.stagger > 0 || b.mountCd > 0 || b.atk) continue;
+      if (Math.abs(b.x - h.x) > AF_HORSE.mountR || Math.abs(b.z - h.z) > AF_HORSE.mountR) continue;
+      if (Math.hypot(b.x - h.x, b.z - h.z) <= AF_HORSE.mountR && (b.ctrl !== 'ai' || b.wantHorse === h)) { afMount(b, h); break; }
+    }
+  }
+}
+function afHorseTags() {
+  for (const h of AF.horses) { if (!h.tag) continue; if (h.dead || h.gone) { h.tag.visible = false; continue; }
+    const px = h.rider ? h.rider.x : h.x, pz = h.rider ? h.rider.z : h.z;
+    h.tag.visible = camera.position.distanceToSquared(h.group.position) < (AF.bodies.length > AF_LIM.heroCap ? 900 : 4e4);
+    h.tag.position.set(px, afY(px, pz) + (h.rider ? 3.22 : 2.95), pz); h.bar.quaternion.copy(camera.quaternion); h.bar.userData.fill.scale.x = clamp(h.hp / h.maxHp, 0, 1); }
 }
 // sheathe one, draw the other: bow in the left hand, or sword and shield (the arm settles for a beat)
 function afSetWeapon(b, w) {
@@ -16785,7 +16908,7 @@ function afCommit(b, dt) {
 // sim=true means this client is the authority (hits land); a guest driving its own body passes false.
 function afDrive(b, dt, sim) {
   const I = b.inp, F = AF_F, human = b.ctrl !== 'ai';
-  if (b.dodgeCd > 0) b.dodgeCd -= dt;
+  if (b.dodgeCd > 0) b.dodgeCd -= dt; if (b.mountCd > 0) b.mountCd -= dt;
   if (b.cd > 0 && (human || (!b.atk && !b.charge && !(b.aiHoldT > 0)))) b.cd -= dt;   // an NPC's pause between blows starts once the blow is DONE (it used to run out mid-swing: jab, jab, jab)
   if (b.comboT > 0) { b.comboT -= dt; if (b.comboT <= 0) b.combo = 0; }
   if (b.iframes > 0) b.iframes -= dt;
@@ -17031,6 +17154,7 @@ function afStrike(b, heavy, k) {
 }
 function afDamage(t, amt, from, heavy, exec, arrow, k) {   // heavy: cracks guards; k (0..1): how loaded the blow was (knock, poise)
   if (t.dead || AF.over) return;
+  if (t.mounted && t.horse && !t.horse.dead && !exec && afBlowHitsHorse(t, from, arrow)) { afDamageHorse(t.horse, amt * 0.9, from, arrow); return; }
   const weight = k != null ? k : heavy ? 1 : 0;
   const pos = t.group.position;
   if (t.iframes > 0) { afPopup(pos, 'dodge', '#9fd6ff'); return; }
@@ -17084,6 +17208,7 @@ function afJuice(from, t, amt, heavy, blocked) {
   addFovPunch(FEEL.fovPunchHit * w);
 }
 function afKill(t, by, quiet) {                          // quiet: a guest mirroring the host's verdict (the kill event carries the log line)
+  if (t.mounted && t.horse) afDismount(t, false, true);    // the man falls from the saddle; the horse is left loose
   t.dead = true; t.hp = 0; t.deadT = 0; t.atk = null; t.blocking = false; t.dodgeT = 0; t.tiltX = 0; t.rollAng = 0; t.downT = 0;
   t.flashT = 0; t.flashWhite = false; t.tinted = false; setTint(t.parts, null);   // clear any hit-flash so the corpse darkens instead of glowing white
   if (by && by !== t) by.kills++;
@@ -17351,6 +17476,14 @@ function afThink(b, dt) {
   if (b.aiHoldT > 0) { b.aiHoldT -= dt; I.hold = true; } else I.hold = false;
   const busy = b.atk || b.charge || b.aiHoldT > 0;
   const t = b.target && !b.target.dead ? b.target : null;
+  if (!b.mounted && !busy && AF.horses.length && b.stagger <= 0) {   // a loose horse within reach and no foe at his throat: go and take it
+    const near = t ? Math.hypot(t.x - b.x, t.z - b.z) : 99;
+    if (near > 7 && b.hp > b.maxHp * 0.25 && b.mountCd <= 0) {
+      let best = null, bd = 16; for (const h of AF.horses) { if (h.dead || h.rider || h.gone) continue; const hd = Math.hypot(h.x - b.x, h.z - b.z); if (hd < bd) { bd = hd; best = h; } }
+      if (best) { b.wantHorse = best; const [sx0, sz0] = afSepFrom(b, 2.0), hx = best.x - b.x, hz = best.z - b.z, hd = Math.hypot(hx, hz) || 1; I.yaw = Math.atan2(hx, hz); I.mx = hx / hd + sx0 * 0.4; I.mz = hz / hd + sz0 * 0.4; return; }
+    }
+    b.wantHorse = null;
+  }
   if (!t) { const [sx, sz] = afSepFrom(b, 2.4); I.mx = sx; I.mz = sz; return; }
   const dx = t.x - b.x, dz = t.z - b.z, d = Math.hypot(dx, dz) || 1e-4, ux = dx / d, uz = dz / d;
   const [sx, sz] = afSepFrom(b, 2.6);
@@ -17531,7 +17664,7 @@ function afReadLocalInput() {
 
 // ---- the sim tick (host / solo): brains, drives, arrows, resolution ----
 function afTick(dt) {
-  if (AF.over) { for (const b of AF.bodies) if (b.dead) afStepDead(b, dt); return; }   // the fight is decided, but the last man cut down still falls
+  if (AF.over) { for (const b of AF.bodies) if (b.dead) afStepDead(b, dt); for (const h of AF.horses) if (h.dead) afStepHorseDead(h, dt); return; }   // the fight is decided, but the last man cut down still falls
   afRebuildGrid();
   if ((AF.assignT = (AF.assignT || 0) - dt) <= 0) { afAssignTargets(); AF.assignT = 0.3; }
   if (AF.teams) for (const T of AF.teams) afCaptainThink(T, dt);
@@ -17542,6 +17675,8 @@ function afTick(dt) {
   }
   afSeparate();
   for (const b of AF.bodies) if (!b.dead) b.group.position.set(b.x, b.group.position.y, b.z);
+  for (const h of AF.horses) afStepHorse(h, dt, true);
+  afMountCheck(); afHorseTags();
   afStepArrows(dt, true);
   AF.t += dt;
   const alive = new Map();
@@ -17603,6 +17738,8 @@ function afGuestTick(dt) {
     afApplyRemotePose(b, dt);
     afCommit(b, dt);
   }
+  for (const h of AF.horses) afStepHorse(h, dt, false);
+  afHorseTags();
   afStepArrows(dt, false);
 }
 function afApplyRemotePose(b, dt) {
@@ -17647,7 +17784,15 @@ function afApplySnap(s) {
     if (b.mounted && row[9] != null) b.taim = row[9] / 100;   // the rider's twist in the saddle
     if (!b.remoteSeen) { b.remoteSeen = true; b.x = x; b.z = z; b.yaw = yaw; }
     b.tx = x; b.tz = z; b.tyaw = yaw; b.tstate = code; b.tmove = row[6] || 0; b.hp = hp;
-    if (code === 8 && !b.dead) { b.dead = true; b.deadT = 0; b.hp = 0; b.rollAng = 0; b.flashT = 0; b.flashWhite = false; b.tinted = false; setTint(b.parts, null); }
+    if (code === 8 && !b.dead) { if (b.mounted && b.horse) afDismount(b, false, true); b.dead = true; b.deadT = 0; b.hp = 0; b.rollAng = 0; b.flashT = 0; b.flashWhite = false; b.tinted = false; setTint(b.parts, null); }
+  }
+  for (const row of s.h || []) {                             // the horses: who is in which saddle is the host's word
+    const h = AF.horses[row[0]]; if (!h) continue; const ridx = row[5];
+    if (row[6]) { if (!h.dead) afKillHorse(h, null, true); continue; }
+    h.hp = row[4];
+    if (ridx >= 0) { const b = AF.bodies[ridx]; if (b && h.rider !== b && !b.dead) { if (h.rider) afDismount(h.rider, false, true); if (b.mounted && b.horse !== h) afDismount(b, false, true); afMount(b, h, true); } }
+    else if (h.rider) afDismount(h.rider, false, true);
+    if (!h.rider) { h.tx = row[1] / 100; h.tz = row[2] / 100; h.tyaw = row[3] / 100; if (!h.seen) { h.seen = true; h.x = h.tx; h.z = h.tz; h.yaw = h.tyaw; } }
   }
   for (const ev of s.ev || []) afApplyEvent(ev);
 }
@@ -17672,6 +17817,14 @@ function afApplyEvent(ev) {
     afAddArrow(ev.t, ev.o, ev.p[0], ev.p[1], ev.p[2], new THREE.Vector3(ev.v[0], ev.v[1], ev.v[2]), 9, ev.l);
   } else if (ev.k === 'order') {
     afLogLine(AF_TEAMS[ev.t].name + ' ' + (AF_ORDER_TEXT[ev.o] || ev.o), AF_TEAMS[ev.t].col); if (AF.me && AF.me.team === ev.t) AF.myOrder = ev.o;
+  } else if (ev.k === 'hhit') {
+    const h = AF.horses[ev.h]; if (h) { const px = h.rider ? h.rider.x : h.x, pz = h.rider ? h.rider.z : h.z; tmpV.set(px, afY(px, pz) + 1.7, pz); afSparks(tmpV, 0xff5a3c, 5); afPopup(h.group.position, 'horse ' + ev.d, '#d8b07a'); try { SFX.hit(h.group.position, false); } catch (e) {} if (h.rider === AF.me) { addShake(0.08); AF.hurt = Math.min(1, AF.hurt + 0.25); } }
+  } else if (ev.k === 'horse') {
+    const h = AF.horses[ev.h], by = AF.bodies[ev.by], r = AF.bodies[ev.i];
+    if (!h) return;
+    if (ev.e === 'died') { const wasMine = h.rider === AF.me || r === AF.me; if (!h.dead) afKillHorse(h, by, true); try { SFX.kill(h.group.position); } catch (e) {} afSparks(tmpV.set(h.x, afY(h.x, h.z) + 1.8, h.z), 0xff6b6b, 12);
+      afLogLine((r ? r.name + "'s horse" : 'a loose horse') + ' is cut down' + (by ? ' by ' + by.name : ''), '#c9a27a'); if (wasMine) { afBanner('THROWN', 'your horse is down — fight on foot', 2); addShake(0.3); } }
+    else if (ev.e === 'mount' && r) { if (!r.mounted) afMount(r, h, true); afLogLine(r.name + ' swings into the saddle', r.teamDef.col); }
   }
 }
 
@@ -17682,7 +17835,8 @@ function afNetTick(dt) {
     AF.snapAcc += dt; if (AF.snapAcc < AF_NET.snapDt) return; AF.snapAcc = 0;
     const rows = [];
     for (const b of AF.bodies) rows.push([b.idx, Math.round(b.x * 100), Math.round(b.z * 100), Math.round(b.yaw * 100), Math.round(b.hp), afStateCode(b), b.atk ? b.atk.move : b.charge ? (b.charge.heavyPose ? 3 : b.chargeMove) : 0, b.kills, b.weapon === 'bow' ? 1 : 0, b.mounted ? Math.round(angleDelta(b.yaw, afAimOf(b)) * 100) : 0]);
-    afSend({ k: 'snap', t: +AF.t.toFixed(2), ph: AF.phase, b: rows, ev: AF.events });
+    const hs = AF.horses.map(h => [h.id, Math.round(h.x * 100), Math.round(h.z * 100), Math.round(h.yaw * 100), Math.round(h.hp), h.rider ? h.rider.idx : -1, h.dead ? 1 : 0]);
+    afSend({ k: 'snap', t: +AF.t.toFixed(2), ph: AF.phase, b: rows, h: hs, ev: AF.events });
     AF.events = [];
   } else if (AF.role === 'guest') {
     AF.events = [];
@@ -17996,6 +18150,8 @@ function afClear() {
   for (const b of AF.bodies) { scene.remove(b.group); try { disposeGroup(b.group); } catch (e) {} if (b.tag) { scene.remove(b.tag); try { disposeGroup(b.tag); } catch (e) {} } }
   for (const a of AF.arrows) { scene.remove(a.g); try { disposeGroup(a.g); } catch (e) {} }
   for (const p of AF.props) { scene.remove(p); try { disposeGroup(p); } catch (e) {} }
+  for (const h of AF.horses || []) { if (!h.rider && !h.gone) { scene.remove(h.group); try { disposeGroup(h.group); } catch (e) {} } if (h.tag) { scene.remove(h.tag); try { disposeGroup(h.tag); } catch (e) {} } }
+  AF.horses = [];
   AF.bodies.length = 0; AF.arrows.length = 0; AF.props.length = 0; AF.torches = []; AF.crowd = [];
   for (const o of _afSplats) scene.remove(o.m); _afSplats.length = 0;
   if (AF.ground) { scene.remove(AF.ground); try { disposeGroup(AF.ground); } catch (e) {} AF.ground = null; }
@@ -18429,6 +18585,9 @@ function afTitlePresence() {
 BV.arena = (cfg) => { afOpenLobby('host'); if (cfg && AF.lobby) { if (cfg.teams) AF.lobby.teams = clamp(cfg.teams, AF_LIM.teamsMin, AF_LIM.teamsMax); if (cfg.per) AF.lobby.per = clamp(cfg.per, AF_LIM.perMin, AF_LIM.perMax); if (cfg.xp) AF.lobby.xp = cfg.xp; afResize(AF.lobby);
   if (cfg.npcXp) AF.lobby.npcXp = cfg.npcXp; if (cfg.arch) AF.lobby.npcArch = AF.lobby.npcArch.map(row => row.map(() => cfg.arch)); afLobbyRender(); if (cfg.start) afStartFight(); } return BV.arenaStatus(); }; // (npcXp / arch: test overrides)
 BV.arenaStart = () => { afStartFight(); return BV.arenaStatus(); };
+BV.arenaHorseHit = (id, amt) => { const h = AF.horses[id]; if (h) afDamageHorse(h, amt, AF.bodies.find(b => !b.dead && (!h.rider || b.team !== h.rider.team)) || AF.bodies[0], false); return BV.arenaHorses(); };   // test: wound a horse
+BV.arenaKill = (idx) => { const b = AF.bodies[idx]; if (b && !b.dead) afKill(b, null); return BV.arenaStatus(); };   // test: fell a man
+BV.arenaHorses = () => AF.horses.map(h => ({ id: h.id, hp: Math.round(h.hp), dead: h.dead, rider: h.rider ? h.rider.name : null, x: +h.x.toFixed(1), z: +h.z.toFixed(1), sp: +h.sp01.toFixed(2), pace: h.pace }));
 BV.arenaAutoMe = (xp) => { const b = AF.me; if (!b) return null; b.ctrl = 'ai'; b.inp = afFreshInput(); b.inp.yaw = b.yaw; if (xp != null) { b.xp = xp; b.skill = xp / 100; } AF.me = null; return b.idx; }; // test: hand my fighter to the brain
 BV.arenaInvite = (name) => { afInvite(name); return BV.arenaNet(); };
 BV.arenaAccept = () => { afAcceptInvite(); return BV.arenaNet(); };

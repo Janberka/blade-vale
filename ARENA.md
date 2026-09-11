@@ -299,6 +299,34 @@ steered, not aimed, so without this the two copies drifted apart. Snapshots carr
 twist (row[9]), so other players see riders turn in the saddle. NPC riders now look at their mark
 and cut to either flank as they pass.
 
+**Horses are their own creatures** (`AF.horses`, `afNewHorse`). Every horse has its own health
+(`AF_HORSE.hp` 100), shown as a small tan bar under its rider's. A blow at a mounted man finds the
+horse 60% of the time (arrows 50%, another rider's blow 25%; `afBlowHitsHorse`), for 90% of its
+damage. What happens then:
+
+* **The horse is cut down** (`afKillHorse`): the rider is *thrown*, `afDismount(b, thrown)`. He
+  swaps to a foot rig beside the horse, goes flat for 1.4 s, then gets up and fights on foot with
+  his own health untouched. A player sees THROWN. The horse crumples on its side and the pit
+  takes it after 14 s.
+* **The man dies in the saddle**: `afKill` dismounts him first, so the corpse is a man on the sand
+  and the horse is left **loose**.
+* **A loose horse** (`afStepHorse`) shies from fighting: it trots away from any fighting men
+  within 8 paces (swinging, loading, staggered, or a horse at speed), and from any crowd of four
+  or more, keeping off the wall. Otherwise it ambles to a random spot every few seconds, stands,
+  and drops its head to graze. A lone man walking up does not scare it, so it can be caught.
+* **Anyone can take it** (`afMountCheck`, `afMount`): a man on foot within 1.9 paces swings into
+  the saddle — a player just walks into a loose horse; an NPC has to have chosen it. NPCs on foot
+  with no foe within 7 paces go for a loose horse within 16 (`b.wantHorse`). A captured horse
+  keeps its old team's saddle cloth. Two seconds of `mountCd` after a dismount stop a man
+  re-mounting the horse that just threw him.
+
+Rigs are swapped in place (`buildHumanoid` on foot, a 0.88-scale rider seated with `saddleRider`
+in the horse's group); each body remembers its palette and dressing (`b.pal`, `b.rigOpts`).
+Over the net the host is the authority: snapshots carry a horse row per horse
+(`[id, x, z, yaw, hp, riderIdx, dead]`) and the guest mirrors mounts, dismounts and deaths from
+it, so even the guest's own body is thrown or seated on the host's word; `hhit` and `horse`
+events carry the sparks, the banner and the log line.
+
 **Horsemen** (`afRide`): a rider steers, he does not strafe — the stick's forward component is the
 throttle along the facing, momentum is dragged onto the facing (hooves grip), and the yaw rate collapses
 as speed grows (a galloping horse carves a wide arc, `MOUNT`). Top speed is 1.9× a man's, the reach is
@@ -385,6 +413,8 @@ BV.arenaPump(frames, dt)                      // whole frames incl. network + ca
 BV.arenaInput({ atk: n })                     // poke the local input record
 BV.arena({ xp: 'green', npcXp, arch })       // test overrides: XP band, per-seat XP, one archetype for all
 BV.arenaAutoMe(xp)                            // hand my fighter to the brain (pure NPC battles)
+BV.arenaHorses() / BV.arenaHorseHit(id, dmg)  // every horse's state; wound one (test the throw)
+BV.arenaKill(idx)                             // fell a man (his horse goes loose)
 BV.arenaInvite(name) / BV.arenaAccept()       // send / accept a challenge without the UI
 BV.arenaNet()                                 // socket id, room, lobby seats, roster peers, go-acks
 coop._drop()                                  // kill the socket as a phone would (it reconnects and resumes)

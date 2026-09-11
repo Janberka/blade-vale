@@ -14,6 +14,7 @@ const coop = require('./ws'); // real-time co-op battle relay (WebSocket, no ext
 const chunks = require('./chunks');
 const admin = require('./admin');
 const settlements = require('./settlements');
+const arena = require('./arena');       // the arena career: XP, gold, ranks, the marketplace
 const zlib = require('zlib');
 
 // lazily open the SEPARATE battle-AI training DB (train/ai.db) — optional subsystem; a failure here must
@@ -177,6 +178,16 @@ const server = http.createServer(async (req, res) => {
         if (body.mapLevel != null) db.prepare('UPDATE worlds SET map_level=?, updated_at=unixepoch() WHERE id=?').run(body.mapLevel | 0, world.id);
       })();
       return send(res, 200, { ok: true, savedAt: Date.now() });
+    }
+
+    // ----- the ARENA CAREER (signed-in accounts only: the handle is the seat name the host reports) -----
+    if (p.startsWith('/api/v1/arena/')) {
+      if (!acct || !acct.pass_hash) return send(res, 401, { ok: false, error: 'sign in to keep an arena career' });
+      if (req.method === 'GET' && p === '/api/v1/arena/career') return send(res, 200, { ok: true, career: arena.career(acct.id, url.searchParams.get('seed')) });
+      if (req.method === 'POST' && p === '/api/v1/arena/buy') { const b = await readBody(req); return send(res, 200, arena.buy(acct.id, String(b.item || ''))); }
+      if (req.method === 'POST' && p === '/api/v1/arena/equip') { const b = await readBody(req); return send(res, 200, arena.equip(acct.id, String(b.slot || ''), b.item == null ? null : String(b.item))); }
+      if (req.method === 'POST' && p === '/api/v1/arena/result') { const b = await readBody(req); return send(res, 200, arena.applyResult(acct, b)); }
+      return send(res, 404, { ok: false, error: 'no such arena call' });
     }
 
     if (req.method === 'POST' && p === '/api/v1/deeds') {

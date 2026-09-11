@@ -374,6 +374,48 @@ floor) and falls as streaks around the camera (`afApplyTime`, `afStepWeather`).
 falls (louder for your kills and your death — the roar is synthesised, a swell of band-passed noise,
 `afRoar`), cheer the bell, and every half-minute or so the wave goes round the stands.
 
+### The career: XP, gold, ranks, the marketplace
+
+Signed-in accounts keep an **arena career** on the server (`server/arena.js`, table
+`arena_careers`, catalogue shared by both sides in `arena-items.js`). Without an account the pit
+lends plain gear (iron sword, hunting bow, courser) and pays nothing.
+
+* **Start**: a wooden sword (damage ×0.8) and nothing else. No bow or horse until you buy one; the
+  lobby's Bow / Horse buttons are locked until you do.
+* **Two currencies**: XP ranks you and unlocks the top gear; gold buys from the marketplace.
+* **Ranks** (`ARENA_RANKS`): Rookie 0 · Fighter 150 · Veteran 500 · Champion 1200 · Master 2500 ·
+  Legend 5000 XP. The rank shows on your seat, your name tag and the career sheet.
+* **The payout** (`rewardFor`): base = 6 × enemyPower^0.6, where enemyPower is what your team faced
+  (each NPC 0.6 + XP/100, each player 1.3, summed at the bell). A win ×1.5, a loss ×0.6, a draw ×1;
+  plus 4 XP / 3 gold per kill and damage/50 XP, damage/80 gold. The **★ star of the match** — the
+  best fighter in the pit, players and NPCs alike, by kills×100 + damage + 150 if still standing —
+  earns ×1.6. Trophies: a win adds 1 + √enemyPower/3; a loss takes none. A 2v2 green skirmish
+  pays a star winner ~32 XP / 24 gold; a 50-a-side legion ~240 XP.
+* **Reporting**: the host (or a solo fighter) POSTs `/arena/result` once — `{seed, winner,
+  players:[{handle, team, kills, dmg, alive, star, enemyPower, skills}]}` — and the server pays every
+  account in it, idempotently per `(seed, account)`. Guests poll `/arena/career?seed=` until their
+  reward lands. The end panel shows the purse.
+* **PvP purse**: when real players lose to real players, each loser pays 8% of his gold (cap 60)
+  into a pot split among the winning players. No item theft.
+* **Loot on a win**: 25% a purse of 10–40 gold; 5% a **unique** (plumes, blade tints) — a look and
+  at most +2% damage, never a stat that decides fights.
+* **Marketplace** (`afMarketOpen`): swords, armor, bows, horses; every item has a gold price and a
+  rank lock, and the top of each class also needs a **use-skill** level (sword hits, arrow hits, ten-
+  second stretches in the saddle; level = √(count/5)): Master's sword needs sword 4, Warbow bow 3,
+  Warhorse riding 3. Buying equips at once; you can wear another owned piece or take armor/bow/
+  horse off.
+* **What gear does**: sword damage ×0.8–1.32 and reach; armor +15–90 health, +5–25 poise, −5/6%
+  speed at the top; bow damage ×1.0–1.32 (arrows carry `bowDmg`); horse health 80–170 and pace
+  ×0.9–1.1. The loadout rides in the roster (`gear` per player), so every client builds the same
+  fighter; a wooden sword is brown, a tinted blade shows its tint.
+* **The record**: fights, wins, kills, deaths, damage, stars, trophies and achievements (first
+  blood, 10/50/200/500 kills, 1/10/50/100 fights, 5/25/100 wins, stars, trophies) on the career
+  sheet.
+
+Not built yet from the design note: daily/weekly quests, a seasonal battle pass, trophy-based
+matchmaking. Guests' loadouts are trusted as sent (sanitised against the catalogue, not verified
+against their account) — fine for the beta.
+
 ### Network model
 
 Host-authoritative over the `/coop` relay. The host runs the sim and broadcasts a 20 Hz snapshot

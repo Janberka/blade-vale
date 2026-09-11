@@ -231,6 +231,12 @@
   net.login = function (u, p) { return authCall('/auth/login', u, p); };
   net.logout = function () { try { localStorage.removeItem('bv-session'); } catch (e) {} location.reload(); };
 
+  // ----- the arena career: XP, gold, ranks, the marketplace (signed-in accounts) -----
+  net.arenaCareer = function (seed) { return jfetch('/arena/career' + (seed != null ? '?seed=' + encodeURIComponent(seed) : ''), { method: 'GET' }).then(function (r) { return r && r.career; }).catch(function () { return null; }); };
+  net.arenaBuy = function (item) { return jpost('/arena/buy', { item: item }); };
+  net.arenaEquip = function (slot, item) { return jpost('/arena/equip', { slot: slot, item: item }); };
+  net.arenaResult = function (result) { return jpost('/arena/result', result); };
+
   // ----- multiple characters per account, same map: adopt / switch / split / give -----
   net.charsList = [];   // last server roster [{charId, name, x, z, men, renown, active}]
   function charsCall(path, body) {

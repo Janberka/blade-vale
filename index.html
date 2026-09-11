@@ -261,6 +261,11 @@
   #al-online .al-inv { display: flex; gap: 8px; margin-top: 8px; }
   #al-online .al-inv input { flex: 1; background: rgba(0,0,0,.5); border: 1px solid rgba(120,200,255,.35); border-radius: 6px; color: #e9eef5; padding: 6px 10px; font-size: 13px; outline: none; }
   #al-msg { min-height: 18px; font-size: 13px; color: #ffe089; }
+  #al-career { pointer-events: auto; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: center; font-size: 13px; color: #ffe2a8;
+    border: 1px solid rgba(255,207,91,.3); border-radius: 10px; background: rgba(0,0,0,.28); padding: 7px 14px; }
+  #al-career b { color: #ffd34d; }
+  #al-career button { cursor: pointer; padding: 5px 12px; border-radius: 6px; border: 1px solid #ffcf5b; background: rgba(255,180,80,.16); color: #ffe2a8; font-size: 13px; font-weight: 700; }
+  .al-cfg .al-wpn button.locked { opacity: .35; cursor: not-allowed; }
   .al-btns { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; }
   .al-btns .btn { font-size: 16px; padding: 10px 28px; }
   #al-back { border-color: #9fb2cc; color: #c8d4e6; background: rgba(120,140,170,.12); }
@@ -637,6 +642,7 @@
 <div id="arena-lobby" class="overlay hidden">
   <h1>Arena Fights</h1>
   <div class="al-sub" id="al-sub">Choose the teams, invite players who are online, and every empty place is taken by a fighter of the vale.</div>
+  <div id="al-career" class="hidden"><span id="al-career-txt"></span><button id="al-market">🏪 Marketplace &amp; Career</button></div>
   <div class="al-cfg" id="al-cfg">
     <div class="wp-row"><span>Teams</span><button id="al-teams-minus">−</button><b id="al-teams-n">2</b><button id="al-teams-plus">+</button></div>
     <div class="wp-row"><span>Fighters per team</span><button id="al-per-minus10">«</button><button id="al-per-minus">−</button><b id="al-per-n">3</b><button id="al-per-plus">+</button><button id="al-per-plus10">»</button></div>
@@ -758,8 +764,9 @@
 <script src="sim/terra.js?v=2"></script>
 <script src="sim/settle.js?v=1"></script>
 <script src="sim/battle.js?v=1"></script>
-<script src="client-net.js?v=7"></script>
+<script src="client-net.js?v=8"></script>
+<script src="arena-items.js?v=1"></script>
 <script src="net-battle.js?v=4"></script>
-<script src="game.js?v=98"></script>
+<script src="game.js?v=99"></script>
 </body>
 </html>

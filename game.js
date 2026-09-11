@@ -16669,7 +16669,8 @@ function afMakeBody(entry, idx, r) {
   const archKey = entry.arch || (entry.weapon === 'bow' ? 'archer' : entry.weapon === 'horse' ? 'rider' : 'swordsman'), A = AF_ARCH[archKey] || AF_ARCH.swordsman;
   const mounted = A.weapon === 'horse', weapon = A.weapon === 'bow' ? 'bow' : A.weapon === 'longsword' ? 'longsword' : 'sword';
   const big = AF.cfg.teams * AF.cfg.per > AF_LIM.heroCap;
-  const rigOpts = { hero: entry.kind !== 'npc' || !big, both: A.bow, plume: AF_TEAM_HEX[entry.t] }; // a hundred capes would melt a phone: only the humans dress up in a big fight
+  const G = entry.kind !== 'npc' ? afGearStats(afGearClean(entry.gear)) : null;   // a player's loadout: sword, armor, bow, horse, a plume
+  const rigOpts = { hero: entry.kind !== 'npc' || !big, both: A.bow, plume: G && G.plume != null ? G.plume : AF_TEAM_HEX[entry.t] }; // a hundred capes would melt a phone: only the humans dress up in a big fight
   const h = mounted ? buildCavalry(td.pal, A.scale, 'sword', rigOpts) : buildHumanoid(td.pal, A.scale, A.bow ? weapon : weapon, rigOpts); const group = h.group || h;
   if (h.parts.shield) { h.parts.shield.visible = A.shield && weapon !== 'bow'; if (A.bigShield) h.parts.shield.scale.set(1.3, 1.3, 1.3); }
   group.rotation.order = 'YXZ';                              // yaw first, then a body-local tilt/roll (somersaults, crumples)
@@ -16679,15 +16680,16 @@ function afMakeBody(entry, idx, r) {
     ctrl: entry.kind === 'npc' ? 'ai' : 'input', inp: afFreshInput(),
     group, parts: h.parts, anim: makeAnimator(h.parts),
     x: sp.cx + rgx * off - Math.sin(sp.yaw) * back, z: sp.cz + rgz * off - Math.cos(sp.yaw) * back, yaw: sp.yaw, phase: r() * TAU, tiltX: 0,
-    hp: A.hp, maxHp: A.hp, state: 'idle', atk: null, combo: 0, comboT: 0, blocking: false,
+    hp: A.hp + (G ? G.hp : 0), maxHp: A.hp + (G ? G.hp : 0), state: 'idle', atk: null, combo: 0, comboT: 0, blocking: false,
     dodgeT: 0, dodgeCd: 0, ddx: 0, ddz: 0, iframes: 0, flinch: 0, stagger: 0, dead: false, deadT: 0, tinted: false, kills: 0,
     // (a PLAYER is the hero: ×1.6 poise, so four jabs break it, not three)
-    vx: 0, vz: 0, poise: A.poise * (entry.kind !== 'npc' ? 1.6 : 1), maxPoise: A.poise * (entry.kind !== 'npc' ? 1.6 : 1), queued: false, cd: 0, waiting: false, slotAngle: 0, retreatT: 0, bob: 0,
+    vx: 0, vz: 0, poise: A.poise * (entry.kind !== 'npc' ? 1.6 : 1) + (G ? G.poise : 0), maxPoise: A.poise * (entry.kind !== 'npc' ? 1.6 : 1) + (G ? G.poise : 0), queued: false, cd: 0, waiting: false, slotAngle: 0, retreatT: 0, bob: 0,
     gait: null, hitT: 0, hitSide: 0, lookYaw: 0, headYaw: 0, capeX: 0.12, phase0: r() * TAU, roll: 0, lastStep: 0, flashT: 0, sway: r() * TAU, clashT: 0, clashAtk: false, clashDx: 0, clashDz: 0,
     charge: null, chargeMove: 0, prevHold: false, releaseNow: false, aiHoldT: 0, prefBow: weapon === 'bow', swapT: 0, seenSwap: 0,
     mounted, trampleT: 0, passT: 0, sp01: 0,
     pal: td.pal, rigOpts, footScale: mounted ? 1 : A.scale, riderGroup: h.riderGroup || null, horse: null, mountCd: 0,   // (so he can be re-dressed on foot or in a saddle)
-    arch: archKey, A, moveMul: A.move, dmgMul: A.dmg * (entry.kind === 'npc' ? lerp(0.85, 1.05, xp / 100) : 1), reachBonus: A.reach, noShield: !A.shield, feint: 0,
+    arch: archKey, A, moveMul: A.move * (G ? 1 + G.move : 1), dmgMul: A.dmg * (entry.kind === 'npc' ? lerp(0.85, 1.05, xp / 100) : G.swordDmg), reachBonus: A.reach + (G ? G.reach : 0),
+    bowDmg: G ? G.bowDmg : 1, horseMul: G ? G.horseSpeed : 1, blade: G ? G.blade : null, rank: entry.rank || (entry.gear && entry.gear.rank) || null, dmgDealt: 0, swordHits: 0, bowHits: 0, rideT: 0, noShield: !A.shield, feint: 0,
     seenAtk: 0, seenHeavy: 0, seenDodge: 0,
     // NPC brain traits (seeded so a replay of the same seed fields the same temperaments)
     skill: (r(), xp / 100), heavyBias: A.heavyBias * (0.7 + r() * 0.6), target: null, aiT: r() * 0.3, strafe: r() < 0.5 ? -1 : 1, strafeT: 0.5 + r(), swingT: 0.4 + r() * 0.5, holdBlock: 0, reactedTo: null, shotCd: 1 + r(),
@@ -16695,12 +16697,13 @@ function afMakeBody(entry, idx, r) {
     tx: 0, tz: 0, tyaw: 0, tstate: 0, tmove: 0, rollT: 0, remoteSeen: false,
   };
   b.tx = b.x; b.tz = b.z; b.tyaw = b.yaw; b.inp.yaw = b.yaw; b.tagH = mounted ? 3.5 : 2.25; b.baseScale = group.scale.x;
-  if (mounted) { const hh = afNewHorse(group, h.horse); hh.rider = b; b.horse = hh; hh.x = b.x; hh.z = b.z; hh.yaw = b.yaw; }
+  if (mounted) { const hh = afNewHorse(group, h.horse); hh.rider = b; b.horse = hh; hh.x = b.x; hh.z = b.z; hh.yaw = b.yaw; if (G) hh.hp = hh.maxHp = G.horseHp; }
+  afBladeLook(b);
   group.position.set(b.x, afY(b.x, b.z), b.z); group.rotation.y = b.yaw;
   scene.add(group); group.userData.afBody = b;
   // floating name + health bar (a separate un-rotated tag so the bar can face the camera)
   const tag = new THREE.Group();
-  const tagText = entry.kind === 'npc' ? entry.name + (archKey !== 'swordsman' ? ' · ' + A.label : '') + ' · ' + xp + 'xp' : entry.name;
+  const tagText = entry.kind === 'npc' ? entry.name + (archKey !== 'swordsman' ? ' · ' + A.label : '') + ' · ' + xp + 'xp' : entry.name + (b.rank ? ' · ' + b.rank : '');
   const nm = makeNameSprite(tagText); nm.scale.set(Math.min(3.6, 1.1 + tagText.length * 0.16), 0.36, 1); nm.position.y = 0.34; tag.add(nm);
   const bar = makeHealthBar(parseInt(td.col.slice(1), 16)); bar.visible = true; bar.scale.setScalar(0.6); tag.add(bar);
   b.tag = tag; b.bar = bar; scene.add(tag);
@@ -16729,7 +16732,7 @@ function afDismount(b, thrown, quiet) {                    // the man leaves the
   b.group = hm.group; b.parts = hm.parts; b.anim = makeAnimator(hm.parts); b.group.rotation.order = 'YXZ'; b.group.userData.afBody = b;
   b.mounted = false; b.gallop = 0; b.sp01 = 0; b.aimYaw = null; b.twist = 0; b.cav = null; b.tagH = 2.25; b.baseScale = b.group.scale.x; b.mountCd = 2; b.wantHorse = null;
   b.atk = null; b.charge = null; b.queued = false; b.blocking = false; b.dodgeT = 0; b.rollAng = 0; b.rollSq = 0; b.moving = false; b.remoteSeen = true;
-  afDressRig(b); setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.2); scene.add(b.group);
+  afDressRig(b); afBladeLook(b); setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.2); scene.add(b.group);
   const side = Math.random() < 0.5 ? -1 : 1, rgx = -Math.cos(b.yaw), rgz = Math.sin(b.yaw);   // he lands beside the horse, not inside it
   b.x += rgx * side * 1.1; b.z += rgz * side * 1.1; b.tx = b.x; b.tz = b.z;
   if (thrown) { b.downT = 1.4; b.downSide = side; b.vx = h.vx * 0.5 + rgx * side * 3; b.vz = h.vz * 0.5 + rgz * side * 3; b.stagger = 0; b.flinch = 0; b.iframes = 0.3; }
@@ -16748,7 +16751,7 @@ function afMount(b, h, quiet) {                            // a man on foot swin
   b.riderGroup = rider.group; b.group = h.group; b.parts = parts; b.anim = makeAnimator(parts); b.group.userData.afBody = b;
   b.mounted = true; b.horse = h; h.rider = b; b.x = h.x; b.z = h.z; b.yaw = h.yaw; b.vx = h.vx; b.vz = h.vz; b.gallop = 0; b.sp01 = h.sp01; b.cav = null; b.aimYaw = b.yaw; b.twist = 0; b.wantHorse = null;
   b.tagH = 3.5; b.baseScale = h.group.scale.x; b.dodgeT = 0; b.rollAng = 0; b.rollSq = 0; b.atk = null; b.charge = null; b.queued = false; b.blocking = false; b.moving = false; b.tx = b.x; b.tz = b.z; b.tyaw = b.yaw;
-  afDressRig(b); setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.2);
+  afDressRig(b); afBladeLook(b); setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.2);
   b.group.position.set(b.x, afY(b.x, b.z), b.z); b.group.rotation.set(0, b.yaw, 0);
   if (!quiet) { afLogLine(b.name + ' swings into the saddle', b.teamDef.col); AF.events.push({ k: 'horse', e: 'mount', h: h.id, i: b.idx }); }
   if (b === AF.me) { afPopup(b.group.position, 'MOUNTED', '#ffe089'); AF.cam.yaw = b.yaw; try { SFX.foot(b.group.position); } catch (e) {} }
@@ -16757,7 +16760,7 @@ function afBlowHitsHorse(t, from, arrow) {                 // a mounted man is a
   if (t.iframes > 0) return false; return Math.random() < (from.mounted ? 0.25 : arrow ? 0.5 : 0.6);
 }
 function afDamageHorse(h, amt, from, arrow) {
-  if (h.dead || AF.over) return; h.hp -= amt;
+  if (h.dead || AF.over) return; h.hp -= amt; from.dmgDealt = (from.dmgDealt || 0) + amt; if (arrow) from.bowHits = (from.bowHits || 0) + 1; else from.swordHits = (from.swordHits || 0) + 1;
   const pos = h.group.position; tmpV.set(h.x, afY(h.x, h.z) + 1.7, h.z); afSparks(tmpV, 0xff5a3c, arrow ? 3 : 6); try { SFX.hit(pos, false); } catch (e) {}
   afPopup(pos, 'horse ' + Math.round(amt), '#d8b07a'); afSplat(h.x, h.z, 0.7);
   const r = h.rider; if (r) { r.hitT = 0.15; r.hitSide = 1; const ax = from.x - h.x, az = from.z - h.z, ad = Math.hypot(ax, az) || 1; r.vx -= ax / ad * 2.5; r.vz -= az / ad * 2.5; if (r === AF.me) { addShake(0.08); AF.hurt = Math.min(1, AF.hurt + 0.25); } } // the horse shies, the man lurches
@@ -16829,6 +16832,36 @@ function afHorseTags() {
     h.tag.visible = camera.position.distanceToSquared(h.group.position) < (AF.bodies.length > AF_LIM.heroCap ? 900 : 4e4);
     h.tag.position.set(px, afY(px, pz) + (h.rider ? 3.22 : 2.95), pz); h.bar.quaternion.copy(camera.quaternion); h.bar.userData.fill.scale.x = clamp(h.hp / h.maxHp, 0, 1); }
 }
+/* ---- the CAREER: what you own and have earned rides in with you. Signed-in accounts keep an arena career on the
+   server (XP, gold, rank, loadout); without one the pit lends plain gear and pays nothing. The loadout travels in
+   the roster (gear per player) so every client builds the same fighter. ---- */
+const AF_GEAR_FREE = { sword: 'iron_sword', bow: 'hunting_bow', horse: 'courser' };
+function afCareerLoad(seed) {
+  if (!afSession() || !window.net || !window.net.arenaCareer) { AF.career = null; return Promise.resolve(null); }
+  return window.net.arenaCareer(seed).then(c => { AF.career = c || null; AF.careerAt = Date.now(); if (AF.lobby) { afLobbyRender(); afSendGear(); } if (AF.marketOpen) afMarketRender(); return AF.career; });
+}
+function afGear() {                                        // my loadout as the roster carries it
+  const c = AF.career, eq = c ? c.equipped : AF_GEAR_FREE, I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}, g = {};
+  for (const k of (window.ARENA_CAT ? ARENA_CAT.ARENA_SLOTS : [])) if (eq[k] && I[eq[k]] && I[eq[k]].slot === k) g[k] = eq[k];
+  if (!g.sword) g.sword = c ? 'wood_sword' : 'iron_sword'; if (c) g.rank = c.rank.name; return g;
+}
+function afGearClean(g) {                                  // (a guest's word for his loadout — only real items, in their own slots)
+  const I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}, out = {}; if (!g || typeof g !== 'object') g = AF_GEAR_FREE;
+  for (const k of (window.ARENA_CAT ? ARENA_CAT.ARENA_SLOTS : [])) { const id = g[k]; if (typeof id === 'string' && I[id] && I[id].slot === k) out[k] = id; }
+  if (!out.sword) out.sword = 'iron_sword'; if (typeof g.rank === 'string') out.rank = g.rank.slice(0, 12); return out;
+}
+function afGearStats(g) {                                  // what the loadout does in the pit
+  const I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}, sw = I[g.sword] || { dmg: 1 }, ar = g.armor && I[g.armor], bw = g.bow && I[g.bow], hs = g.horse && I[g.horse], pl = g.plume && I[g.plume], tr = g.trim && I[g.trim];
+  return { swordDmg: (sw.dmg || 1) * (tr && tr.dmg ? tr.dmg : 1), reach: sw.reach || 0, hp: ar ? ar.hp || 0 : 0, poise: ar ? ar.poise || 0 : 0, move: ar ? ar.move || 0 : 0,
+    bow: !!bw, bowDmg: bw ? bw.dmg || 1 : 1, horse: !!hs, horseHp: hs ? hs.hp : AF_HORSE.hp, horseSpeed: hs ? hs.speed || 1 : 1, plume: pl ? pl.plume : null, blade: tr ? tr.blade : g.sword === 'wood_sword' ? 'wood' : null };
+}
+function afSendGear() { const L = AF.lobby; if (!L || L.role !== 'guest' || !window.coop || !window.coop.connected || !window.coop.room) return; window.coop.send({ k: 'gear', gear: afGear() }); }
+function afBladeLook(b) {                                   // a wooden training sword, or a unique's tint on the steel
+  const p = b.parts; if (!p || !p.sword || !b.blade) return;
+  const m = b.blade === 'wood' ? mat(0x8a6a3a, { shared: false }) : mat(b.blade, { metal: 1, shared: false });
+  p.sword.traverse(c => { if (c.isMesh) c.material = m; });
+}
+function afItemName(id) { const I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}; return I[id] ? I[id].name : id; }
 // sheathe one, draw the other: bow in the left hand, or sword and shield (the arm settles for a beat)
 function afSetWeapon(b, w) {
   if (b.weapon === w || (w === 'bow' && !b.parts.bow)) return;
@@ -17066,7 +17099,8 @@ function afCape(b, p, dt, fwd, sp) {
 // RIDING: the stick's forward component is the throttle along the facing; momentum is dragged onto the facing
 // (hooves grip, no strafing); the gait clock runs on the horse; at speed the horse TRAMPLES foot soldiers it runs into.
 function afRide(b, dt, I, mm, canMove, sim) {
-  const F = AF_F, base = F.move * F.horseSpeed * (b.moveMul || 1), sp = Math.hypot(b.vx, b.vz), sp01 = clamp(sp / base, 0, 1);
+  const F = AF_F, base = F.move * F.horseSpeed * (b.moveMul || 1) * (b.horseMul || 1), sp = Math.hypot(b.vx, b.vz), sp01 = clamp(sp / base, 0, 1);
+  if (sim && sp > 0.4) b.rideT = (b.rideT || 0) + dt;      // (the riding skill: time in the saddle at a walk or better)
   const fx = Math.sin(b.yaw), fz = Math.cos(b.yaw);
   const thr = I.thr != null ? clamp(I.thr, -0.45, 1) : mm > 1e-3 ? clamp((I.mx * fx + I.mz * fz) / Math.max(mm, 1e-3) * Math.min(1, mm), -0.45, 1) : 0;
   // THE GALLOP: hold the horse at the top of its canter and it finds another gear — a surge to half again the
@@ -17203,7 +17237,7 @@ function afDamage(t, amt, from, heavy, exec, arrow, k) {   // heavy: cracks guar
     afSplat(t.x, t.z, heavy || exec ? 1.1 : 0.7);
     afPopup(pos, exec ? 'EXECUTE ' + Math.round(amt) : String(Math.round(amt)), exec ? '#ff5a3c' : heavy ? '#ffd27a' : '#ff7d6f');
   }
-  t.hp -= amt;
+  t.hp -= amt; from.dmgDealt = (from.dmgDealt || 0) + amt; if (arrow) from.bowHits = (from.bowHits || 0) + 1; else from.swordHits = (from.swordHits || 0) + 1;   // (the career's ledger)
   if ((from === AF.me || t === AF.me) && AF.role !== 'guest') afJuice(from, t, amt, heavy, blocked); // your blows and your wounds rattle the camera
   AF.events.push({ k: 'hit', i: t.idx, d: Math.round(amt), b: blocked, h: heavy ? 1 : 0, by: from.idx });
   if (t.hp <= 0) afKill(t, from);
@@ -17309,7 +17343,7 @@ function afStepArrows(dt, sim) {
     if (sim && !done) for (const o of AF.bodies) {
       if (o.dead || o.team === a.team) continue;
       const [px, pz] = afHitPoint(o, a.g.position.x, a.g.position.z), dx = px - a.g.position.x, dz = pz - a.g.position.z;
-      if (dx * dx + dz * dz < 1.1 && Math.abs(a.g.position.y - (gy + 1.1)) < 1.6) { afDamage(o, rand(AF_F.bow.dmg[0], AF_F.bow.dmg[1]) * (0.7 + 0.6 * a.k), AF.bodies[a.owner] || o, false, false, true); done = true; break; }
+      if (dx * dx + dz * dz < 1.1 && Math.abs(a.g.position.y - (gy + 1.1)) < 1.6) { const ow = AF.bodies[a.owner]; afDamage(o, rand(AF_F.bow.dmg[0], AF_F.bow.dmg[1]) * (0.7 + 0.6 * a.k) * (ow && ow.bowDmg || 1), ow || o, false, false, true); done = true; break; }
     }
     if (done) { scene.remove(a.g); try { disposeGroup(a.g); } catch (e) {} AF.arrows.splice(i, 1); }
   }
@@ -17724,9 +17758,39 @@ function afStandings() {
   st.sort((a, b) => b.alive - a.alive || b.hp - a.hp || b.kills - a.kills);
   return st;
 }
+function afStarOf() { const score = b => b.kills * 100 + (b.dmgDealt || 0) + (b.dead ? 0 : 150); let best = null; for (const b of AF.bodies) if (!best || score(b) > score(best)) best = b; return best; }
+function afReportResult() {                                // the host (or a solo fighter) tells the war-net how it went; the server pays every player in it
+  if (!afSession() || !window.net || !window.net.arenaResult || AF.reported === AF.seed) return; AF.reported = AF.seed;
+  const best = afStarOf(), players = [];
+  for (const b of AF.bodies) { if (b.kind === 'npc') continue;
+    players.push({ handle: b.kind === 'host' ? afSession() : b.name, team: b.team, kills: b.kills, dmg: Math.round(b.dmgDealt || 0), alive: !b.dead, star: b === best, enemyPower: +(AF.teamPower ? AF.teamPower[b.team] : 1).toFixed(2),
+      skills: { sword: b.swordHits | 0, bow: b.bowHits | 0, riding: Math.floor((b.rideT || 0) / 10) } }); }
+  if (!players.length) return;
+  window.net.arenaResult({ seed: String(AF.seed), winner: AF.winner, players }).then(r => { AF.reward = r && r.ok ? (r.rewards[afSession()] || { error: 'no purse for you this time' }) : { error: (r && r.error) || 'the war-net kept no record of this fight' }; afEndRewards(); if (r && r.ok) afCareerLoad(); });
+}
+function afAwaitReward(tries) {                            // a guest: the host's report lands on the server a moment after the bell
+  if (!afSession() || !window.net || !window.net.arenaCareer) return; tries = tries || 0;
+  window.net.arenaCareer(AF.seed).then(c => { if (c && c.lastReward && c.lastSeed === String(AF.seed)) { AF.career = c; AF.reward = c.lastReward; afEndRewards(); } else if (tries < 8 && AF.on) setTimeout(() => afAwaitReward(tries + 1), 1500); else { AF.reward = { error: 'no word of the purse yet — it will show on your career' }; afEndRewards(); } });
+}
+function afRewardHtml(r) {
+  if (!r) return '<span style="opacity:.6">tallying the purse…</span>';
+  if (r.error) return '<span style="opacity:.7">' + r.error + '</span>';
+  const parts = ['<b style="color:#ffe089">+' + r.xp + ' XP</b>', '<b style="color:#ffd34d">+' + r.gold + ' gold</b>']; if (r.trophies) parts.push('<b>+' + r.trophies + ' 🏆</b>');
+  let html = '<div style="font-size:15px">' + parts.join(' · ') + '</div>';
+  if (r.star) html += '<div style="color:#ffe089">★ Star of the match — the purse is half again</div>';
+  if (r.purse) html += '<div>' + (r.purse > 0 ? 'Taken from the beaten players\' purses: +' + r.purse + ' gold' : 'The winners took ' + (-r.purse) + ' gold from your purse') + '</div>';
+  if (r.lootGold) html += '<div>Loot: a purse of ' + r.lootGold + ' gold</div>';
+  if (r.loot) html += '<div style="color:#ffd34d">✦ Loot: ' + afItemName(r.loot) + ' — yours, and already worn</div>';
+  if (r.rankUp) html += '<div style="color:#9fd6ff;font-weight:700">Rank up — you are now ' + r.rankUp + '</div>';
+  if (r.achievements) html += '<div style="opacity:.8">🏅 ' + r.achievements.join(' · ') + '</div>';
+  return html;
+}
+function afEndRewards() { const el = document.getElementById('af-rewards'); if (el) el.innerHTML = afRewardHtml(AF.reward); }
 function afFinish(winner, standings) {
   AF.over = true; AF.phase = 'over'; AF.winner = winner; AF.standings = standings || afStandings();
-  if (AF.role === 'host') afSend({ k: 'over', winner, standings: AF.standings });
+  if (AF.role !== 'guest') { const st = afStarOf(); AF.starName = st ? st.name : null; }
+  if (AF.role === 'host') afSend({ k: 'over', winner, standings: AF.standings, star: AF.starName });
+  if (AF.role !== 'guest') afReportResult(); else afAwaitReward();
   const mine = AF.me ? AF.me.team : -1;
   afBanner(winner < 0 ? 'DRAW' : winner === mine ? 'VICTORY' : AF_TEAMS[winner].name + ' WINS', winner === mine ? 'your team holds the pit' : winner < 0 ? 'the bell rang on a stalemate' : 'the pit belongs to them', 3.5);
   try { document.exitPointerLock && document.exitPointerLock(); } catch (e) {}
@@ -17881,7 +17945,7 @@ function afOnFightMsg(m) {
     if (d.hy != null) { const hb = inp.body && inp.body.peer === m.from ? inp.body : (inp.body = AF.bodies.find(x => x.peer === m.from)); if (hb && hb.mounted && !hb.dead) hb.yaw = angleLerp(hb.yaw, +d.hy || 0, 0.7); } // a horse's heading is steered, not aimed: the rider's own screen owns it, or the two copies drift apart inp.atk = d.atk | 0; inp.heavy = d.heavy | 0; if ((d.dodge | 0) !== inp.dodge) inp.rollDir = d.roll || 0; inp.dodge = d.dodge | 0; inp.block = !!d.block; inp.hold = !!d.hold; inp.swap = d.swap | 0;
   } else if (AF.role === 'guest') {
     if (d.k === 'snap') afApplySnap(d);
-    else if (d.k === 'over' && !AF.over) afFinish(d.winner, d.standings);
+    else if (d.k === 'over' && !AF.over) { AF.starName = d.star || null; afFinish(d.winner, d.standings); }
     else if (d.k === 'go') { if ((d.seed >>> 0) === AF.seed) afSend({ k: 'go-ack', seed: AF.seed }); else afBoot(d); } // a re-sent start we already run: just ack it; else a rematch
   }
 }
@@ -18179,7 +18243,8 @@ function afEndPanel() {
   if (!p) { p = document.createElement('div'); p.id = 'af-end'; p.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);min-width:340px;max-width:86vw;background:rgba(16,12,24,.95);border:1px solid #ffd34d;border-radius:14px;padding:20px 24px;z-index:60;color:#f3ead8;box-shadow:0 10px 40px rgba(0,0,0,.6);font-family:inherit;text-align:center'; document.body.appendChild(p); }
   const st = AF.standings || afStandings(), w = AF.winner;
   p.innerHTML = '<h2 style="margin:0 0 4px;font-size:26px;color:#ffd34d">' + (w < 0 ? 'Draw' : AF_TEAMS[w].name + ' holds the pit') + '</h2>' +
-    '<div style="font-size:13px;opacity:.7;margin-bottom:12px">' + (AF.me && AF.me.team === w ? 'Your team won.' : AF.me ? 'Your team fell.' : '') + '</div>' +
+    '<div style="font-size:13px;opacity:.7;margin-bottom:8px">' + (AF.me && AF.me.team === w ? 'Your team won.' : AF.me ? 'Your team fell.' : '') + (AF.starName ? ' · ★ Star of the match: <b>' + AF.starName + '</b>' : '') + '</div>' +
+    (AF.me && afSession() ? '<div id="af-rewards" style="margin:0 0 10px;padding:8px 10px;border:1px solid #6b5e3a;border-radius:8px;background:rgba(255,211,77,.06);font-size:13px">' + afRewardHtml(AF.reward) + '</div>' : '') +
     st.map((s, i) => '<div style="display:flex;justify-content:space-between;gap:16px;padding:6px 0;border-top:1px solid #3a3247;font-size:14px"><span><b style="color:' + AF_TEAMS[s.team].col + '">' + (i + 1) + '. ' + AF_TEAMS[s.team].name + '</b> <span style="opacity:.6;font-size:12px">' + (s.names.length ? s.names.join(', ') : 'all fallen') + '</span></span><span>' + s.alive + ' standing · ' + s.kills + ' kills</span></div>').join('') +
     '<div style="display:flex;gap:10px;justify-content:center;margin-top:16px">' +
     (AF.role !== 'guest' ? '<button id="af-rematch" style="background:#3a6fd0;color:#fff;border:none;border-radius:8px;padding:9px 18px;cursor:pointer;font-weight:700">↻ Rematch</button>' : '<span style="font-size:12px;opacity:.7;align-self:center">waiting for the host…</span>') +
@@ -18287,6 +18352,8 @@ function afBoot(spec) {
   AF.spec = { mode: 'orbit', target: null, fx: 0, fz: 0, touched: false };
   AF.orbit.theta = AF.me ? AF.me.yaw + Math.PI : 0.4; AF.roar = 0; AF.waveT = 0; AF.nextWave = 22 + Math.random() * 10;
   AF.teams = null; if (AF.role !== 'guest') afPlanTeams();   // the captains draw up their lines (the sim runs here)
+  AF.teamPower = []; for (let t = 0; t < AF.cfg.teams; t++) { let pw = 0; for (const b of AF.bodies) if (b.team !== t) pw += b.kind === 'npc' ? 0.6 + (b.xp || 50) / 100 : 1.3; AF.teamPower.push(pw); }   // what each team faces (the payout's difficulty)
+  AF.reward = null; AF.starName = null; AF.reported = null;
   afHud();
   afBanner(AF.cfg.teams + ' TEAMS · ' + AF.cfg.per + ' EACH', AF.me ? 'you fight for ' + AF.me.teamDef.name + ' — steel yourself' : '', 2.6);
   if (AF.role === 'guest') afSend({ k: 'go-ack', seed: AF.seed });   // tell the host the start got here (it re-sends until we do)
@@ -18329,7 +18396,7 @@ function afNetWire() {
     AF.netLostAt = 0;
     if (AF.on && AF.role === 'guest') { afBanner('BACK IN THE FIGHT', '', 1.2); afSend({ k: 'rejoin', seed: AF.seed }); }
     else if (AF.on) afBanner('BACK ON THE WAR-NET', '', 1.2);
-    else if (AF.lobby && AF.lobby.role === 'guest') { afLobbyMsg('Back on the war-net.'); afSend({ k: 'lobby-req' }); afLobbyRender(); }
+    else if (AF.lobby && AF.lobby.role === 'guest') { afLobbyMsg('Back on the war-net.'); afSend({ k: 'lobby-req' }); afSendGear(); afLobbyRender(); }
     else if (AF.lobby && AF.lobby.role === 'host') { afLobbyMsg('Back on the war-net.'); C.who(); afLobbyRender(); afLobbyBroadcast(); }
   });
   C.on('resume-fail', () => { AF.netLostAt = 0; afNetGaveUp(); });
@@ -18338,7 +18405,7 @@ function afNetWire() {
     else if (AF.lobby) afLobbyMsg('You joined from somewhere else — this window is no longer in the lobby.');
   });
   setInterval(() => { if (AF.netLostAt && Date.now() - AF.netLostAt > 45000) { AF.netLostAt = 0; afNetGaveUp(); } }, 2000);
-  C.on('joined', m => { if (AF.pendingRoom) { AF.pendingRoom = null; afOpenLobby('guest', m.beacon || {}); } });
+  C.on('joined', m => { if (AF.pendingRoom) { AF.pendingRoom = null; afOpenLobby('guest', m.beacon || {}); afSendGear(); } });
   C.on('join-fail', () => { if (AF.pendingRoom) { AF.pendingRoom = null; afLobbyMsg('That fight is gone — the host left the lobby.'); afOpenLobby('host'); } });
   C.on('host-gone', () => { if (AF.on && AF.role === 'guest') { afBanner('HOST LEFT', 'the fight is over', 3); setTimeout(afLeaveToMenu, 2500); } else if (AF.lobby && AF.lobby.role === 'guest') { afLobbyMsg('The host closed the lobby.'); afOpenLobby('host'); } });
   C.on('disconnect', () => {                               // don't give up the fight on a drop: the socket is already reconnecting
@@ -18354,10 +18421,11 @@ function afNetWire() {
     const d = m.data; if (!d) return;
     if (AF.on) { afOnFightMsg(m); return; }
     if (!AF.lobby) return;
-    if (AF.lobby.role === 'guest') { if (d.k === 'lobby') afLobbyApply(d); else if (d.k === 'go') { AF.role = 'guest'; afCloseLobbyUi(); afBoot(d); } }
+    if (AF.lobby.role === 'guest') { if (d.k === 'lobby') afLobbyApply(d); else if (d.k === 'go') { AF.role = 'guest'; afCloseLobbyUi(); afMarketClose(); afBoot(d); } }
     else if (AF.lobby.role === 'host') {
       if (d.k === 'team') { afMoveSeat(m.from, d.t | 0); afLobbyRender(); afLobbyBroadcast(); }
-      else if (d.k === 'weapon') { const s = afFindSeat(m.from); if (s) { s.weapon = ['bow', 'horse'].includes(d.w) ? d.w : 'sword'; afLobbyRender(); afLobbyBroadcast(); } }
+      else if (d.k === 'weapon') { const s = afFindSeat(m.from); if (s) { const gs = afGearStats(afGearClean(s.gear)); s.weapon = d.w === 'bow' && gs.bow ? 'bow' : d.w === 'horse' && gs.horse ? 'horse' : 'sword'; afLobbyRender(); afLobbyBroadcast(); } }   // (only what he owns)
+      else if (d.k === 'gear') { const s = afFindSeat(m.from); if (s) { s.gear = afGearClean(d.gear); const gs = afGearStats(s.gear); if ((s.weapon === 'bow' && !gs.bow) || (s.weapon === 'horse' && !gs.horse)) s.weapon = 'sword'; afLobbyRender(); afLobbyBroadcast(); } }
       else if (d.k === 'invite-declined') { AF.lobby.invites.set(d.name, 'declined'); afLobbyRender(); }
       else if (d.k === 'lobby-req') afLobbyBroadcast();
     }
@@ -18478,6 +18546,7 @@ function afOpenLobby(role, beacon) {
   if (role === 'guest') { AF.lobby.host = (beacon && beacon.host) || 'the host'; if (beacon) { AF.lobby.teams = beacon.teams || 2; AF.lobby.per = beacon.per || 3; afResize(AF.lobby); } }
   afLobbyMsg('');
   afLobbyRender();
+  afCareerLoad();
   if (afSession() && window.coop) {
     afNetConnect().then(ok => {
       if (!ok) { afLobbyMsg('The war-net is unreachable — you can still fight NPCs.'); afLobbyRender(); return; }
@@ -18491,7 +18560,7 @@ function afOpenLobby(role, beacon) {
 function afLobbyBroadcast() {
   const L = AF.lobby; if (!L || L.role !== 'host' || !window.coop || !window.coop.connected) return;
   window.coop.updateBeacon({ arena: true, host: L.host, teams: L.teams, per: L.per });
-  window.coop.send({ k: 'lobby', teams: L.teams, per: L.per, time: L.time, weather: L.weather, pit: L.pit, xp: L.xp, npcArch: L.npcArch, npcXp: L.npcXp, host: L.host, slots: L.slots.map(row => row.map(s => s ? { kind: s.kind, name: s.name, peer: s.peer, weapon: s.weapon, away: !!(L.away && L.away.has(s.peer)) } : null)) });
+  window.coop.send({ k: 'lobby', teams: L.teams, per: L.per, time: L.time, weather: L.weather, pit: L.pit, xp: L.xp, npcArch: L.npcArch, npcXp: L.npcXp, host: L.host, slots: L.slots.map(row => row.map(s => s ? { kind: s.kind, name: s.name, peer: s.peer, weapon: s.weapon, rank: s.gear && s.gear.rank || null, away: !!(L.away && L.away.has(s.peer)) } : null)) });
 }
 function afLobbyApply(d) {                                   // guest: mirror the host's lobby
   const L = AF.lobby; if (!L || L.role !== 'guest') return;
@@ -18505,7 +18574,14 @@ function afLobbyRender() {
   const host = L.role === 'host', online = !!(window.coop && window.coop.connected), signed = !!afSession();
   document.getElementById('al-teams-n').textContent = L.teams; document.getElementById('al-per-n').textContent = L.per;
   for (const id of ['al-teams-minus', 'al-teams-plus', 'al-per-minus', 'al-per-plus']) document.getElementById(id).disabled = !host;
-  for (const w of ['sword', 'bow', 'horse']) { const el = document.getElementById('al-wpn-' + w); if (el) el.classList.toggle('on', L.weapon === w); }
+  const G = afGearStats(afGear()), can = { sword: true, bow: G.bow, horse: G.horse };
+  if (!can[L.weapon]) { L.weapon = 'sword'; if (host) { const hs = afHostSeat(); if (hs) hs.weapon = 'sword'; } }
+  for (const w of ['sword', 'bow', 'horse']) { const el = document.getElementById('al-wpn-' + w); if (el) { el.classList.toggle('on', L.weapon === w); el.classList.toggle('locked', !can[w]); el.title = can[w] ? '' : 'buy a ' + w + ' in the marketplace first'; } }
+  if (host) { const hs = afHostSeat(); if (hs) hs.gear = afGear(); }
+  const cr = document.getElementById('al-career'), ct = document.getElementById('al-career-txt');
+  if (cr) { cr.classList.toggle('hidden', !signed); if (signed) { const c = AF.career, g = afGear();
+    ct.innerHTML = c ? '<b>' + c.rank.name + '</b> · ' + c.xp + (c.rank.nextAt ? ' / ' + c.rank.nextAt : '') + ' XP · <b>' + c.gold + '</b> gold · 🏆 ' + c.trophies + ' &nbsp;·&nbsp; ' + afItemName(g.sword) + ' · ' + (g.armor ? afItemName(g.armor) : 'no armor') + ' · ' + (g.bow ? afItemName(g.bow) : 'no bow') + ' · ' + (g.horse ? afItemName(g.horse) : 'on foot')
+      : (AF.careerAt ? 'The war-net kept no career for you — the pit lends plain gear.' : 'fetching your career…'); } }
   for (const pt of ['cosy', 'wide', 'vast', 'colossal']) { const el = document.getElementById('al-pit-' + pt); if (el) { el.classList.toggle('on', L.pit === pt); el.disabled = !host; } }
   for (const tm of ['day', 'dusk', 'night']) { const el = document.getElementById('al-time-' + tm); if (el) { el.classList.toggle('on', L.time === tm); el.disabled = !host; } }
   for (const wx of ['clear', 'rain']) { const el = document.getElementById('al-wx-' + wx); if (el) { el.classList.toggle('on', L.weather === wx); el.disabled = !host; } }
@@ -18517,7 +18593,7 @@ function afLobbyRender() {
     const td = AF_TEAMS[t], free = row.indexOf(null) >= 0, mine = !!me && row.indexOf(me) >= 0;
     const pw = L.npcXp ? Math.round(afTeamPower(L, t) / L.per) : 0;   // the team's average XP, a player counting as AF_PLAYER_XP
     return '<div class="al-team" style="--tc:' + td.col + '"><div class="al-tname"><span>' + td.name + (pw ? ' <i style="opacity:.6;font-weight:400;font-size:11px" title="average XP — a player counts as ' + AF_PLAYER_XP + '">avg ' + pw + 'xp</i>' : '') + '</span>' + (!host && free && !mine ? '<button data-team="' + t + '">join</button>' : '') + '</div>' +
-      (L.per > 8 ? row.filter(Boolean) : row).map(s => s ? '<div class="al-slot ' + (s === me ? 'you' : 'player') + '"><span>' + (s === me ? 'You' : s.name) + (s.away || (L.away && L.away.has(s.peer)) ? ' <i style="opacity:.6">· reconnecting…</i>' : '') + '</span><span class="al-tag">' + (s.weapon === 'bow' ? '🏹' : s.weapon === 'horse' ? '🐎' : '🗡') + (s.kind === 'host' && s !== me ? ' host' : '') + '</span></div>'
+      (L.per > 8 ? row.filter(Boolean) : row).map(s => s ? '<div class="al-slot ' + (s === me ? 'you' : 'player') + '"><span>' + (s === me ? 'You' : s.name) + (s.away || (L.away && L.away.has(s.peer)) ? ' <i style="opacity:.6">· reconnecting…</i>' : '') + '</span><span class="al-tag">' + (s.weapon === 'bow' ? '🏹' : s.weapon === 'horse' ? '🐎' : '🗡') + (((s.gear && s.gear.rank) || s.rank) ? ' ' + ((s.gear && s.gear.rank) || s.rank) : '') + (s.kind === 'host' && s !== me ? ' host' : '') + '</span></div>'
                         : null).map((html, i) => { if (html != null) return html; const xp = L.npcXp && L.npcXp[t] ? L.npcXp[t][i] : null;
                           return '<div class="al-slot npc"><span>' + ((L.npcArch && L.npcArch[t] && L.npcArch[t][i]) || 'swordsman') + ' of the vale</span><span class="al-tag">' + (xp != null ? xp + 'xp ' + afXpRank(xp) : 'npc') + '</span></div>'; }).join('') +
       (L.per > 8 ? '<div class="al-slot npc"><span>' + afMixSummary(L, t) + '</span><span class="al-tag">npc</span></div>' : '') + '</div>';
@@ -18592,7 +18668,7 @@ function afStartFight() {
   const pick = arr => arr[Math.floor(r() * arr.length)];
   for (let t = 0; t < L.teams; t++) for (let s = 0; s < L.per; s++) {
     const seat = L.slots[t][s];
-    if (seat) { roster.push({ t, s, name: seat.name, kind: seat.kind, peer: seat.peer, weapon: seat.weapon || 'sword' }); used.add(seat.name); continue; }
+    if (seat) { const gear = seat.kind === 'host' ? afGear() : afGearClean(seat.gear); roster.push({ t, s, name: seat.name, kind: seat.kind, peer: seat.peer, weapon: seat.weapon || 'sword', gear, rank: gear.rank || null }); used.add(seat.name); continue; }
     let nm; do { nm = pick(GIVEN_NAMES) + (r() < 0.35 ? ' ' + pick(BYNAMES) : ''); } while (used.has(nm)); used.add(nm);
     const arch = (L.npcArch && L.npcArch[t] && L.npcArch[t][s]) || 'swordsman';
     roster.push({ t, s, name: nm, kind: 'npc', peer: null, arch, xp: (L.npcXp && L.npcXp[t] && L.npcXp[t][s] != null) ? L.npcXp[t][s] : 50, weapon: AF_ARCH[arch].weapon === 'bow' ? 'bow' : AF_ARCH[arch].weapon === 'horse' ? 'horse' : 'sword' });
@@ -18605,6 +18681,51 @@ function afStartFight() {
   afCloseLobbyUi();
   afBoot(spec);
 }
+/* ---- the MARKETPLACE & career sheet: buy with gold, held back by rank (XP) and use-skill; equip what you own;
+   the record — stats, trophies, achievements, skills. Server-authoritative: every button is a round trip. ---- */
+function afMarketOpen() { AF.marketOpen = true; let p = document.getElementById('af-market'); if (!p) { p = document.createElement('div'); p.id = 'af-market'; p.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(8,6,14,.93);overflow:auto;pointer-events:auto;font:14px system-ui;color:#e8def8'; document.body.appendChild(p); } p.style.display = ''; afMarketRender(); if (!AF.career) afCareerLoad(); }
+function afMarketClose() { AF.marketOpen = false; const p = document.getElementById('af-market'); if (p) p.style.display = 'none'; }
+function afMarketMsg(t, bad) { const el = document.getElementById('af-market-msg'); if (el) { el.textContent = t || ''; el.style.color = bad ? '#ff9a9a' : '#ffe089'; } }
+function afMarketRender() {
+  const p = document.getElementById('af-market'); if (!p || !window.ARENA_CAT) return; const c = AF.career, I = ARENA_CAT.ARENA_ITEMS;
+  const btn = (id, label, dis) => '<button data-act="' + id + '" ' + (dis ? 'disabled' : '') + ' style="cursor:' + (dis ? 'default' : 'pointer') + ';padding:6px 12px;border-radius:7px;border:1px solid #ffcf5b;background:rgba(255,180,80,.16);color:#ffe2a8;font-weight:700;opacity:' + (dis ? .45 : 1) + '">' + label + '</button>';
+  let html = '<div style="max-width:980px;margin:0 auto;padding:18px 16px 60px">';
+  html += '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><h2 style="margin:0;color:#ffd34d;letter-spacing:2px">🏪 Marketplace &amp; Career</h2><button id="af-market-close" style="cursor:pointer;padding:8px 16px;border-radius:8px;border:1px solid #6b5e7a;background:#2a2233;color:#f3ead8;font-weight:700">Back to the lobby</button></div>';
+  if (!c) { html += '<p style="opacity:.7">' + (afSession() ? 'Reaching the war-net for your career…' : 'Sign in on the title screen to keep an arena career.') + '</p></div>'; p.innerHTML = html; document.getElementById('af-market-close').onclick = afMarketClose; return; }
+  const r = c.rank, lo = ARENA_CAT.ARENA_RANKS[r.idx][1], prog = r.nextAt ? Math.round((c.xp - lo) / (r.nextAt - lo) * 100) : 100;
+  html += '<div style="margin:12px 0;padding:12px 14px;border:1px solid rgba(255,207,91,.35);border-radius:10px;background:rgba(0,0,0,.3);display:flex;gap:18px;flex-wrap:wrap;align-items:center">' +
+    '<div><div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;opacity:.7">Rank</div><b style="font-size:20px;color:#ffd34d">' + r.name + '</b><div style="font-size:12px;opacity:.75">' + c.xp + ' XP' + (r.next ? ' · ' + r.next + ' at ' + r.nextAt : ' · the top') + '</div><div style="height:6px;width:160px;background:#2a2438;border-radius:3px;margin-top:4px;overflow:hidden"><div style="height:100%;width:' + prog + '%;background:#ffd34d"></div></div></div>' +
+    '<div><div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;opacity:.7">Gold</div><b style="font-size:20px;color:#ffe089">' + c.gold + '</b></div>' +
+    '<div><div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;opacity:.7">Trophies</div><b style="font-size:20px">🏆 ' + c.trophies + '</b></div>' +
+    '<div style="font-size:12px;opacity:.85;line-height:1.6">' + c.matches + ' fights · ' + c.wins + ' won · ' + c.kills + ' kills · ' + c.deaths + ' deaths · ' + c.stars + '× star · ' + Math.round(c.damage) + ' damage dealt<br>skills: sword ' + c.skills.sword.level + ' (' + c.skills.sword.count + ' hits) · bow ' + c.skills.bow.level + ' (' + c.skills.bow.count + ' hits) · riding ' + c.skills.riding.level + '</div></div>';
+  html += '<div id="af-market-msg" style="min-height:18px;font-size:13px;margin:4px 0 8px"></div>';
+  const slotNames = { sword: 'Swords', armor: 'Armor', bow: 'Bows', horse: 'Horses' };
+  for (const slot of ['sword', 'armor', 'bow', 'horse']) {
+    const eq = c.equipped[slot];
+    html += '<h3 style="margin:16px 0 6px;color:#ffe2a8;letter-spacing:1px">' + slotNames[slot] + ' <span style="font-size:12px;opacity:.7;font-weight:400">— ' + (eq ? 'wearing ' + I[eq].name : slot === 'armor' ? 'none' : 'none (you can\'t ride in with ' + (slot === 'bow' ? 'a bow' : 'a horse') + ' until you own one)') + '</span></h3>';
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px">';
+    for (const id in I) { const it = I[id]; if (it.slot !== slot) continue; const owned = c.items.includes(id), why = ARENA_CAT.lockReason(id, c);
+      const stat = [it.dmg ? 'damage ×' + it.dmg : '', it.reach ? 'reach +' + it.reach : '', it.hp ? (slot === 'horse' ? it.hp + ' health' : '+' + it.hp + ' health') : '', it.poise ? '+' + it.poise + ' poise' : '', it.move ? 'speed ' + Math.round(it.move * 100) + '%' : '', it.speed && it.speed !== 1 ? 'pace ×' + it.speed : ''].filter(Boolean).join(' · ');
+      const need = [it.rank ? ARENA_CAT.ARENA_RANKS[it.rank][0] : '', it.skill ? it.skill[0] + ' skill ' + it.skill[1] : ''].filter(Boolean).join(', ');
+      html += '<div style="border:1px solid ' + (eq === id ? '#ffd34d' : owned ? 'rgba(255,207,91,.5)' : '#3a3247') + ';border-radius:9px;padding:9px 11px;background:rgba(0,0,0,.3)"><div style="display:flex;justify-content:space-between"><b>' + it.name + '</b><span style="color:#ffe089">' + (owned ? (eq === id ? 'worn' : 'owned') : it.price + ' g') + '</span></div>' +
+        '<div style="font-size:12px;opacity:.8;margin:3px 0">' + (stat || 'no bonus') + '</div><div style="font-size:11px;opacity:.6;font-style:italic">' + (it.desc || '') + (need && !owned ? ' · needs ' + need : '') + '</div><div style="margin-top:6px">' +
+        (owned ? (eq === id ? (slot !== 'sword' ? btn('unequip:' + slot, 'Take off') : '') : btn('equip:' + slot + ':' + id, 'Wear')) : btn('buy:' + id, why ? why : 'Buy for ' + it.price + ' g', !!why)) + '</div></div>';
+    }
+    html += '</div>';
+  }
+  const uniques = c.items.filter(id => I[id] && I[id].unique);
+  html += '<h3 style="margin:16px 0 6px;color:#ffe2a8;letter-spacing:1px">Uniques <span style="font-size:12px;opacity:.7;font-weight:400">— loot only; a look, a hair of power</span></h3>';
+  html += uniques.length ? '<div style="display:flex;gap:8px;flex-wrap:wrap">' + uniques.map(id => { const it = I[id], eq = c.equipped[it.slot] === id; return '<div style="border:1px solid ' + (eq ? '#ffd34d' : '#3a3247') + ';border-radius:9px;padding:8px 11px;background:rgba(0,0,0,.3)"><b>' + it.name + '</b> <span style="font-size:11px;opacity:.6">' + it.desc + '</span> ' + (eq ? btn('unequip:' + it.slot, 'Take off') : btn('equip:' + it.slot + ':' + id, 'Wear')) + '</div>'; }).join('') + '</div>' : '<div style="font-size:12px;opacity:.6">Nothing yet — one win in twenty drops a unique.</div>';
+  html += '<h3 style="margin:16px 0 6px;color:#ffe2a8;letter-spacing:1px">Achievements</h3><div style="display:flex;gap:6px;flex-wrap:wrap">' + ARENA_CAT.ARENA_ACHIEVEMENTS.map(([id, label]) => '<span style="font-size:12px;padding:4px 9px;border-radius:12px;border:1px solid ' + (c.achievements.includes(id) ? '#ffd34d;color:#ffe089' : '#3a3247;opacity:.45') + '">' + (c.achievements.includes(id) ? '🏅 ' : '') + label + '</span>').join('') + '</div>';
+  html += '<p style="font-size:12px;opacity:.6;margin-top:18px">XP and gold come from every fight: the bigger and better the army you faced, the more; a win pays half again, and the ★ star of the match (the best fighter in the pit — kills, damage, still standing) 60% more. Beat real players and you take 8% of their purse (at most 60 gold each). One win in four drops a purse, one in twenty a unique.</p></div>';
+  p.innerHTML = html;
+  document.getElementById('af-market-close').onclick = afMarketClose;
+  for (const b of p.querySelectorAll('button[data-act]')) b.onclick = () => {
+    const a = b.getAttribute('data-act').split(':'); afMarketMsg('…');
+    const done = r => { if (r && r.career) AF.career = r.career; if (r && r.ok) afMarketMsg(a[0] === 'buy' ? 'Bought — and worn.' : 'Done.'); else afMarketMsg((r && r.error) || 'the war-net did not answer', true); afMarketRender(); if (AF.lobby) { afLobbyRender(); afSendGear(); } };
+    if (a[0] === 'buy') window.net.arenaBuy(a[1]).then(done); else if (a[0] === 'equip') window.net.arenaEquip(a[1], a[2]).then(done); else if (a[0] === 'unequip') window.net.arenaEquip(a[1], null).then(done);
+  };
+}
 (function afWireLobbyUi() {
   const g = id => document.getElementById(id);
   if (!g('arena-lobby')) return;
@@ -18614,13 +18735,14 @@ function afStartFight() {
   g('al-per-minus').onclick = () => bump('per', -1); g('al-per-plus').onclick = () => bump('per', 1);
   if (g('al-per-minus10')) g('al-per-minus10').onclick = () => bump('per', -10); if (g('al-per-plus10')) g('al-per-plus10').onclick = () => bump('per', 10);
   const setOpt = (key, v) => { const L = AF.lobby; if (!L || L.role !== 'host') return; L[key] = v; afLobbyRender(); afLobbyBroadcast(); };
-  const wpn = w => { const L = AF.lobby; if (!L) return; L.weapon = w;
+  const wpn = w => { const L = AF.lobby; if (!L) return; const gs = afGearStats(afGear()); if ((w === 'bow' && !gs.bow) || (w === 'horse' && !gs.horse)) { afLobbyMsg('You have no ' + w + ' — the marketplace sells them.'); return; } L.weapon = w;
     if (L.role === 'host') { const s = afHostSeat(); if (s) s.weapon = w; afLobbyRender(); afLobbyBroadcast(); } else { if (window.coop) window.coop.send({ k: 'weapon', w }); afLobbyRender(); } };
   g('al-wpn-sword').onclick = () => wpn('sword'); g('al-wpn-bow').onclick = () => wpn('bow'); if (g('al-wpn-horse')) g('al-wpn-horse').onclick = () => wpn('horse');
   for (const pt of ['cosy', 'wide', 'vast', 'colossal']) { const el = g('al-pit-' + pt); if (el) el.onclick = () => setOpt('pit', pt); }
   for (const tm of ['day', 'dusk', 'night']) { const el = g('al-time-' + tm); if (el) el.onclick = () => setOpt('time', tm); }
   for (const wx of ['clear', 'rain']) { const el = g('al-wx-' + wx); if (el) el.onclick = () => setOpt('weather', wx); }
   for (const xb of ['green', 'mixed', 'veteran']) { const el = g('al-xp-' + xb); if (el) el.onclick = () => { const L = AF.lobby; if (!L || L.role !== 'host') return; L.xp = xb; afRollNpcMix(L); afLobbyRender(); afLobbyBroadcast(); }; }
+  if (g('al-market')) g('al-market').onclick = afMarketOpen;
   g('al-inv-btn').onclick = () => { const i = g('al-inv-name'); afInvite(i.value); i.value = ''; };
   g('al-inv-name').addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') { afInvite(g('al-inv-name').value); g('al-inv-name').value = ''; } });
   g('al-start').onclick = () => { if (typeof requestFullscreenSafe === 'function' && TOUCH) requestFullscreenSafe(); SFX.init && SFX.init(); afStartFight(); };

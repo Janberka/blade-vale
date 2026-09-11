@@ -509,88 +509,6 @@ function sigilDecal(size) {                                 // a flat emblem lai
   return new THREE.Mesh(new THREE.PlaneGeometry(size, size), m);
 }
 
-// ---------- Looks: redress the knight after the reference figures ----------
-// Coordinates are upperBody-local (head pieces are re-parented under headPivot on hero rigs, hence hy).
-function dressLook(look, c) {
-  const { upperBody: ub, palette: pal, skin, cloth, plate, brass, slitM } = c;
-  const H = c.headPivot || ub, hy = c.headPivot ? -0.98 : 0;
-  const headAdd = (m, x, y, z) => { m.position.set(x, y + hy, z); H.add(m); return m; };
-  const leather = mat(0x5a3d26, { shared: false }), darkLeather = mat(0x3a2818, { shared: false });
-  const shadow = mat(0x0e0f14, { shared: false });                                  // the face stays in the helm's shadow — no faces
-  const ring = (r0, r1, h, seg = 7) => new THREE.CylinderGeometry(r0, r1, h, seg, 1, true);
-  const lathe = (key, pts, seg = 8) => cachedGeo(key, () => new THREE.LatheGeometry(pts.map(([x, y]) => new THREE.Vector2(x, y)), seg));
-  const strips = (parent, n, r, y, h, m, w = 0.11, rz = 1, a0 = 0) => {                  // pteruges: a curtain of hanging strips
-    for (let k = 0; k < n; k++) { const a = a0 + (k / n) * Math.PI * 2; const st = boxMesh(w, h, 0.03, m); st.position.set(Math.sin(a) * r, y, Math.cos(a) * r * rz); st.rotation.y = a; parent.add(st); }
-  };
-  const litEyes = () => { for (const sd of [-1, 1]) headAdd(boxMesh(0.08, 0.05, 0.05, slitM), 0.09 * sd, 1.25, 0.25); c.eyeSlit.visible = false; c.noseSlit.visible = false; c.head.material = shadow; };
-  const hidePlume = () => { if (c.headPivot) for (const m of c.headPivot.children) if (m.geometry && m.geometry.type === 'LatheGeometry' && m !== c.helm && m.material.color && m.position.z < -0.1) m.visible = false; };
-
-  if (look === 'sallet') {
-    // THE SALLET KNIGHT: a rounded skull with a swept tail, a bevor under a single lit slit, layered pauldrons,
-    // fauld lames over a dark skirt, couters, gauntlets, pointed sabatons and a dark mantle at the neck.
-    c.helm.geometry = lathe('salletHelm', [[0.3, 0], [0.335, 0.12], [0.335, 0.36], [0.29, 0.52], [0.2, 0.64], [0.08, 0.72], [0, 0.74]]);
-    const tail = headAdd(boxMesh(0.5, 0.06, 0.42, plate), 0, 1.1, -0.3); tail.rotation.x = -0.5;              // the tail sweeps down the neck
-    const bevor = headAdd(boxMesh(0.54, 0.3, 0.28, plate), 0, 1.07, 0.19); bevor.rotation.x = 0.12;         // the chin plate
-    c.eyeSlit.scale.set(1.1, 0.7, 1); c.eyeSlit.position.y = 1.27 + hy; c.noseSlit.visible = false; c.brow.position.y = 1.4 + hy;
-    c.crest.position.y = 1.62 + hy; c.band.visible = false;
-    const mantle = new THREE.Mesh(cachedGeo('mantle', () => ring(0.22, 0.52, 0.26)), mat(0x2a2226, { shared: false })); mantle.position.set(0, 0.86, -0.04); ub.add(mantle);
-    const keel = boxMesh(0.05, 0.6, 0.06, plate); keel.position.set(0, 0.44, 0.35); keel.rotation.x = -0.1; ub.add(keel);   // the breastplate's centre ridge
-    for (const [i, [r0, r1, y]] of [[0.4, 0.44, 1.52], [0.44, 0.48, 1.4], [0.48, 0.52, 1.28]].entries()) {                  // fauld lames
-      const l = new THREE.Mesh(cachedGeo('fauldLame' + i, () => ring(r0, r1, 0.11)), plate); l.position.y = y; l.scale.z = 0.88; c.g.add(l); }
-    c.pelvis.material = mat(0x3b2d26, { shared: false }); c.hem.visible = false;
-    for (const A of c.arms) {
-      const sd = A.side;
-      for (const [i, w] of [0.42, 0.38].entries()) { const lame = boxMesh(w, 0.05, 0.34 - i * 0.02, plate); lame.position.set(0.07 * sd, -0.05 - i * 0.11, 0); lame.rotation.z = -0.35 * sd; A.shoulder.add(lame); }
-      const bes = new THREE.Mesh(cachedGeo('besagew', () => new THREE.CylinderGeometry(0.1, 0.1, 0.03, 8)), plate); bes.rotation.x = Math.PI / 2; bes.position.set(-0.1 * sd, -0.1, 0.2); A.shoulder.add(bes);
-      const couter = sphereMesh(0.13, plate, 6, 4); couter.scale.set(1, 1.1, 1); A.elbow.add(couter);
-      const wing = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.16, 5), plate); wing.position.x = 0.15 * sd; wing.rotation.z = -sd * Math.PI / 2; A.elbow.add(wing);
-      const gauntlet = boxMesh(0.24, 0.2, 0.26, plate); gauntlet.position.set(0, -0.01, 0.02); A.hand.add(gauntlet);
-      const cuff = new THREE.Mesh(cachedGeo('cuff', () => new THREE.CylinderGeometry(0.13, 0.17, 0.14, 6)), plate); cuff.position.y = 0.12; A.hand.add(cuff);
-    }
-    for (const L of c.legs) { const pt = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.22, 5), plate); pt.position.set(0, -0.82, 0.5); pt.rotation.x = Math.PI / 2; L.knee.add(pt); }   // pointed sabatons
-  } else if (look === 'legion') {
-    // THE LEGION CENTURION: a galea bowl with cheek guards and a neck guard, a transverse brush, a muscled cuirass,
-    // pteruges at the hips and shoulders, bare arms in bracers, bare thighs over greaves, a cape in the team colour.
-    c.helm.visible = false; c.band.visible = false; c.brow.visible = false; hidePlume(); litEyes();
-    const bowl = headAdd(new THREE.Mesh(lathe('galea', [[0.3, 0], [0.335, 0.1], [0.315, 0.3], [0.22, 0.44], [0.1, 0.52], [0, 0.54]]), plate), 0, 1.18, 0);
-    headAdd(boxMesh(0.58, 0.08, 0.1, brass), 0, 1.2, 0.27);                                                     // the brow reinforce
-    const guard = headAdd(boxMesh(0.62, 0.05, 0.36, plate), 0, 1.12, -0.3); guard.rotation.x = -0.65;         // the neck guard
-    for (const sd of [-1, 1]) headAdd(boxMesh(0.05, 0.34, 0.24, plate), 0.3 * sd, 1.03, 0.08);                 // cheek guards
-    const brush = headAdd(new THREE.Mesh(cachedGeo('brush', () => new THREE.CylinderGeometry(0.14, 0.14, 0.76, 12)), cloth), 0, 1.82, -0.03); brush.rotation.z = Math.PI / 2; brush.scale.z = 0.5;   // the transverse crest: a thin rounded fan across the helm
-    headAdd(boxMesh(0.76, 0.05, 0.14, brass), 0, 1.7, -0.03);
-    c.crest.scale.setScalar(0.65); c.crest.position.set(0, 1.6 + hy, 0.2); c.crest.rotation.x = -0.6;         // the Vale crescent rides the front as a fin
-    for (const sd of [-1, 1]) { const pec = sphereMesh(0.17, plate, 6, 4); pec.scale.set(1.25, 0.75, 0.55); pec.position.set(0.19 * sd, 0.62, 0.34); ub.add(pec);
-      for (const [i, y] of [0.42, 0.3, 0.18].entries()) { const ab = boxMesh(0.14, 0.09, 0.06, plate); ab.position.set(0.09 * sd, y, 0.34 - i * 0.03); ub.add(ab); } }
-    const chestBand = new THREE.Mesh(cachedGeo('chestBand', () => ring(0.405, 0.405, 0.05)), brass); chestBand.position.y = 0.7; chestBand.scale.set(1.4, 1, 0.94); ub.add(chestBand);
-    c.belt.material = leather; for (let i = 0; i < 4; i++) { const pl = boxMesh(0.11, 0.12, 0.03, brass); pl.position.set(-0.27 + 0.18 * i, 0.02, 0.28); ub.add(pl); }
-    for (const A of c.arms) { A.pad.scale.set(0.95, 0.6, 0.85); A.upper.material = skin; A.fore.material = leather;
-      for (let k = 0; k < 5; k++) { const a = -Math.PI * 0.5 + k * Math.PI / 4 - Math.PI / 2 * (A.side - 1) * 0; const st = boxMesh(0.1, 0.32, 0.03, darkLeather); st.position.set(Math.sin(a + Math.PI / 2 * A.side) * 0.24 * A.side, -0.22, Math.cos(a + Math.PI / 2 * A.side) * 0.24); st.rotation.y = a + Math.PI / 2 * A.side; A.shoulder.add(st); } }
-    c.pelvis.material = cloth; c.hem.visible = false; strips(c.g, 12, 0.5, 1.26, 0.46, darkLeather, 0.11, 0.88);
-    for (let k = 0; k < 12; k++) { const a = (k / 12) * Math.PI * 2; const stud = sphereMesh(0.035, brass, 5, 4); stud.position.set(Math.sin(a) * 0.51, 1.47, Math.cos(a) * 0.45); c.g.add(stud); }
-    for (const L of c.legs) { L.thigh.material = skin; L.cop.visible = false; L.foot.material = leather; }
-  } else if (look === 'hoplite') {
-    // THE PAINTED HOPLITE: a domed helm painted in the team colour with brass rim, nasal and cheek guards, a painted
-    // cuirass with brass bands and the Vale mark, gold pteruges, bare arms and legs, a long gold cape.
-    const painted = mat(pal.cloth, { metal: 1, shared: false }), gold = mat(0xd9b24a, { shared: false });
-    c.helm.visible = false; c.brow.visible = false; hidePlume(); litEyes();
-    headAdd(new THREE.Mesh(lathe('hopliteHelm', [[0.31, 0], [0.345, 0.12], [0.325, 0.34], [0.24, 0.5], [0.1, 0.58], [0, 0.6]]), painted), 0, 1.14, 0);
-    c.band.position.y = 1.16 + hy; c.band.scale.set(1.2, 1, 1.2);                                               // the brass rim
-    headAdd(boxMesh(0.06, 0.3, 0.05, brass), 0, 1.1, 0.31);                                                      // the nasal
-    for (const sd of [-1, 1]) { headAdd(boxMesh(0.05, 0.3, 0.22, painted), 0.3 * sd, 1.02, 0.1); headAdd(boxMesh(0.06, 0.05, 0.24, brass), 0.3 * sd, 0.88, 0.1); }
-    c.torso.material = painted;
-    const cb = new THREE.Mesh(cachedGeo('chestBand', () => ring(0.405, 0.405, 0.05)), brass); cb.position.y = 0.7; cb.scale.set(1.4, 1, 0.94); ub.add(cb);
-    const wb = new THREE.Mesh(cachedGeo('waistBand', () => ring(0.3, 0.3, 0.05)), brass); wb.position.y = 0.1; wb.scale.set(1.4, 1, 0.94); ub.add(wb);
-    for (const sd of [-1, 1]) { const strap = boxMesh(0.16, 0.05, 0.5, brass); strap.position.set(0.22 * sd, 0.8, 0.08); ub.add(strap); }
-    if (c.hero) for (const m of ub.children) if (m.geometry && m.geometry.type === 'BoxGeometry' && Math.abs(m.position.z - 0.36) < 0.02 && m.position.y > 0.1) m.visible = false;   // no tabard over a painted cuirass
-    const mark = sigilDecal(0.3); mark.position.set(0, 0.5, 0.41); ub.add(mark);                                 // THE VALE MARK straight on the cuirass
-    for (const A of c.arms) { A.pad.material = painted; A.pad.scale.set(0.95, 0.6, 0.85); A.upper.material = skin; A.fore.material = leather;
-      for (let k = 0; k < 5; k++) { const a = -Math.PI * 0.5 + k * Math.PI / 4; const st = boxMesh(0.1, 0.3, 0.03, gold); st.position.set(Math.sin(a + Math.PI / 2 * A.side) * 0.24 * A.side, -0.22, Math.cos(a + Math.PI / 2 * A.side) * 0.24); st.rotation.y = a + Math.PI / 2 * A.side; A.shoulder.add(st); } }
-    c.pelvis.material = gold; c.hem.visible = false; strips(c.g, 12, 0.5, 1.26, 0.46, gold, 0.11, 0.88);
-    for (const L of c.legs) { L.thigh.material = skin; L.cop.visible = false; L.shin.material = leather; L.foot.material = leather;
-      const top = new THREE.Mesh(cachedGeo('bootTop', () => ring(0.19, 0.19, 0.05)), brass); top.position.y = -0.06; top.scale.set(1.3, 1, 1.3); L.knee.add(top); }
-    if (c.headPivot) for (const seg of (ub.children.find(m => m.userData && m.userData.segs) || {}).userData?.segs || []) for (const m of seg.children) if (m.isMesh && m.material === cloth) m.material = gold;   // the long gold cape
-  }
-}
 function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
   const g = new THREE.Group();
   const variant = opts.variant || null; // null in the live game & the "before" figure; 'after' on soldier 2
@@ -820,14 +738,6 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
   }
   const sword = held;
 
-  // THE LOOKS (opts.look): the same rig redressed after the reference figures — a sallet knight, a legion
-  // centurion, a painted hoplite. Every one keeps the five signatures (CHARACTERS.md); 'knight' is the base.
-  if (opts.look && opts.look !== 'knight') dressLook(opts.look, {
-    g, upperBody, headPivot, palette, skin, cloth, accent, plate, brass, slitM, casters,
-    head, neck, helm, brow, crest, band, eyeSlit, noseSlit, torso, belt, buckle, pelvis, hem,
-    legs: [legL, legR], arms: [armL, armR], hero: !!opts.hero,
-  });
-
   // shadow budget: only big silhouette parts cast, characters never receive —
   // PCF blur erases sub-0.2-unit features, so the ground shadow looks identical
   // while the shadow pass shrinks ~4x and character fragments skip PCF sampling
@@ -852,53 +762,84 @@ const SWORD_BASE_X = 1.4;
 // ---------- Real-mesh fighters: a sculpted figure skinned onto the procedural rig's pivots ----------
 // The figure (assets/rigs/<name>/: decimated glTF + rig.json joint spec) is normalised to height 1 facing +Z,
 // skinned with two bones per vertex (real-skin.js) and bound to the SAME pivot groups the animator drives —
-// so every move, swing, block and death the plastic knight has, the real one has too.
-const REAL_RIGS = new Map();
-async function loadRealRig(name) {
-  if (REAL_RIGS.has(name)) return REAL_RIGS.get(name);
+// so every move, swing, block and death the plastic knight has, the real one has too. The cape is bound to the
+// hinged cape chain, so the arena's cloth sim swings it; a 'tint' vertex flag marks the cloth that takes the team colour.
+const REAL_RIGS = new Map(), REAL_SPECS = new Map(), REAL_TEX = new Map();
+let REAL_SWORD = null;                                     // the knight's own sword, lifted off the figure, shared by everyone
+async function loadRealRig(name, variant) {
+  const key = name + (variant ? ':' + variant : ''); if (REAL_RIGS.has(key)) return REAL_RIGS.get(key);
   const base = 'assets/rigs/' + name + '/';
-  const spec = await (await fetch(base + 'rig.json')).json();
-  const g = await (await fetch(base + 'scene.gltf')).json();
+  const spec = REAL_SPECS.get(name) || await (await fetch(base + 'rig.json')).json(); REAL_SPECS.set(name, spec);
+  const g = await (await fetch(base + (variant === 'lo' ? 'lo.gltf' : 'scene.gltf'))).json();
   const bin = await (await fetch(base + g.buffers[0].uri)).arrayBuffer();
   const CT = { 5121: Uint8Array, 5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array }, NC = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 };
   const acc = i => { const a = g.accessors[i], bv = g.bufferViews[a.bufferView], T = CT[a.componentType], n = NC[a.type]; return new T(bin, (bv.byteOffset || 0) + (a.byteOffset || 0), a.count * n); };
-  const prim = g.meshes[0].primitives[0];
-  const N = RealSkin.normalise(acc(prim.attributes.POSITION), spec.yaw), idx = RealSkin.cut(N, acc(prim.indices), spec.cut), sk = RealSkin.weights(N, spec);
+  const prim = g.meshes[0].primitives[0], uv = acc(prim.attributes.TEXCOORD_0), idxRaw = acc(prim.indices);
+  const N = RealSkin.normalise(acc(prim.attributes.POSITION), spec.yaw), idx = RealSkin.cut(N, idxRaw, spec.cut), sk = RealSkin.weights(N, spec);
   const S = spec.height || 3.3, pos = new Float32Array(N.length); for (let i = 0; i < N.length; i++) pos[i] = N[i] * S;
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  geo.setAttribute('uv', new THREE.BufferAttribute(acc(prim.attributes.TEXCOORD_0), 2));
+  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
   geo.setAttribute('skinIndex', new THREE.BufferAttribute(sk.idx, 4));
   geo.setAttribute('skinWeight', new THREE.BufferAttribute(sk.w, 4));
+  geo.setAttribute('tint', new THREE.BufferAttribute(sk.tint, 1));
   geo.setIndex(new THREE.BufferAttribute(idx, 1)); geo.computeVertexNormals();
-  const tex = new THREE.TextureLoader().load(base + g.images[0].uri); tex.encoding = THREE.sRGBEncoding; tex.flipY = false; tex.anisotropy = 4;
-  const entry = { geo, tex, spec }; REAL_RIGS.set(name, entry); return entry;
+  let tex = REAL_TEX.get(name); if (!tex) { tex = new THREE.TextureLoader().load(base + g.images[0].uri); tex.encoding = THREE.sRGBEncoding; tex.flipY = false; tex.anisotropy = 4; REAL_TEX.set(name, tex); }
+  if (spec.swordBox && !variant && !REAL_SWORD) {          // the sword: lifted out, grip end at the origin, blade up +Y like the plastic one
+    const e = RealSkin.extract(N, uv, idxRaw, [spec.swordBox]); let top = -1, tip = 1e9, ti = 0; const n = e.pos.length / 3;
+    for (let v = 0; v < n; v++) { top = Math.max(top, e.pos[v * 3 + 1]); if (e.pos[v * 3 + 1] < tip) { tip = e.pos[v * 3 + 1]; ti = v; } }
+    const o = new THREE.Vector3(), c = 0; let k = 0; for (let v = 0; v < n; v++) if (e.pos[v * 3 + 1] > top - 0.02) { o.x += e.pos[v * 3]; o.y += e.pos[v * 3 + 1]; o.z += e.pos[v * 3 + 2]; k++; } o.divideScalar(k || 1);
+    const axis = new THREE.Vector3(e.pos[ti * 3], e.pos[ti * 3 + 1], e.pos[ti * 3 + 2]).sub(o).normalize(), q = new THREE.Quaternion().setFromUnitVectors(axis, new THREE.Vector3(0, 1, 0));
+    const sg = new THREE.BufferGeometry(); sg.setAttribute('position', new THREE.BufferAttribute(e.pos, 3)); sg.setAttribute('uv', new THREE.BufferAttribute(e.uv, 2)); sg.setIndex(new THREE.BufferAttribute(e.idx, 1));
+    sg.translate(-o.x, -o.y, -o.z); sg.applyMatrix4(new THREE.Matrix4().makeRotationFromQuaternion(q)); sg.scale(S, S, S); sg.translate(0, 0.08, 0); sg.computeVertexNormals();
+    REAL_SWORD = { geo: sg, tex };
+  }
+  const entry = { geo, tex, spec, nBones: sk.nBones, CAPE0: sk.CAPE0 }; REAL_RIGS.set(key, entry); return entry;
 }
-// Swap a built rig's plastic body for the real figure. Keeps the held sword/bow (the figure has no weapon of its own).
-function wearRealRig(h, name) {
-  const R = REAL_RIGS.get(name); if (!R || !h || !h.parts) return false;
+function realMaterial(tex, teamHex) {                      // the figure's texture, with the flagged cloth dyed in the team colour
+  const m = new THREE.MeshPhongMaterial({ map: tex, shininess: 14, specular: 0x2a2a2a });
+  m.onBeforeCompile = sh => {
+    sh.uniforms.uTeam = { value: new THREE.Color(teamHex == null ? 0x888888 : teamHex) };
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', 'attribute float tint; varying float vTint;\n#include <common>').replace('#include <begin_vertex>', '#include <begin_vertex>\nvTint = tint;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', 'uniform vec3 uTeam; varying float vTint;\n#include <common>')
+      .replace('#include <map_fragment>', '#include <map_fragment>\n{ float lum = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11)); diffuseColor.rgb = mix(diffuseColor.rgb, uTeam * (0.2 + lum * 1.5), 0.65 * vTint); }');
+    m.userData.shader = sh;
+  };
+  m.customProgramCacheKey = () => 'realTint';
+  return m;
+}
+// Swap a built rig's plastic body for the real figure. Keeps the held sword/bow groups (the real sword mesh rides the sword group).
+function wearRealRig(h, name, o = {}) {
+  const R = REAL_RIGS.get(name + (o.lo ? ':lo' : '')) || REAL_RIGS.get(name); if (!R || !h || !h.parts) return false;
   const P = h.parts, g = h.group, S = R.spec.height || 3.3, J = R.spec.joints;
   const v = k => new THREE.Vector3().fromArray(J[k]).multiplyScalar(S), d = (a, b) => v(a).sub(v(b));
-  const keep = new Set(); for (const k of ['sword', 'bow']) if (P[k]) P[k].traverse(o => keep.add(o));
-  g.traverse(o => { if (o.isMesh && !keep.has(o)) o.visible = false; });
-  if (P.shield) P.shield.visible = false;
+  const keep = new Set(); for (const k of ['sword', 'bow']) if (P[k]) P[k].traverse(x => keep.add(x));
+  g.traverse(x => { if (x.isMesh && !keep.has(x)) x.visible = false; });
+  if (P.shield && P.shield.parent) P.shield.parent.remove(P.shield);   // the figure's own arm shows; a plastic shield would float beside it
   P.hipL.position.copy(v('hipL')); P.kneeL.position.copy(d('kneeL', 'hipL'));
   P.hipR.position.copy(v('hipR')); P.kneeR.position.copy(d('kneeR', 'hipR'));
   P.upperBody.position.copy(v('waist'));
   let headBone = P.headPivot; if (!headBone) { headBone = new THREE.Group(); P.upperBody.add(headBone); } headBone.position.copy(d('neck', 'waist'));
   const handOf = side => P['elbow' + side].children.find(c => c.type === 'Group');
   for (const side of ['L', 'R']) { P['shoulder' + side].position.copy(d('shoulder' + side, 'waist')); P['elbow' + side].position.copy(d('elbow' + side, 'shoulder' + side)); const hand = handOf(side); if (hand) hand.position.copy(d('wrist' + side, 'elbow' + side)); }
-  const bones = [g, P.upperBody, headBone, P.hipL, P.kneeL, P.hipR, P.kneeR, P.shoulderL, P.elbowL, handOf('L'), P.shoulderR, P.elbowR, handOf('R')];   // RealSkin.BONES order
+  // the cape chain: hung at the back of the neck, links sized so the last one reaches the hem — the arena's spring sim swings it
+  const capeTop = R.spec.capeTop || 0.82, segH = capeTop / RealSkin.NCAPE * S; let capeBones = [];
+  if (P.cape && P.cape.userData.segs) { P.cape.position.set(J.neck[0] * S - v('waist').x, capeTop * S - v('waist').y, (R.spec.capeZ - 0.01) * S - v('waist').z); P.cape.rotation.set(0, 0, 0);
+    P.cape.userData.segs.forEach((sg, i) => { sg.position.y = i ? -segH : 0; sg.rotation.set(0, 0, 0); }); capeBones = P.cape.userData.segs; }
+  while (capeBones.length < RealSkin.NCAPE) capeBones = capeBones.concat([P.upperBody]);   // no cape chain (plain rigs): the cape hangs stiff off the torso
+  const bones = [g, P.upperBody, headBone, P.hipL, P.kneeL, P.hipR, P.kneeR, P.shoulderL, P.elbowL, handOf('L'), P.shoulderR, P.elbowR, handOf('R')].concat(capeBones);   // RealSkin.BONES order + cape links
   g.updateMatrixWorld(true);
-  const m = new THREE.MeshPhongMaterial({ map: R.tex, shininess: 14, specular: 0x2a2a2a });
-  const sm = new THREE.SkinnedMesh(R.geo, m); sm.frustumCulled = false; sm.castShadow = true; g.add(sm); sm.bind(new THREE.Skeleton(bones));
-  P.realMesh = sm; g.userData.real = name; return true;
+  const sm = new THREE.SkinnedMesh(R.geo, realMaterial(R.tex, o.team)); sm.frustumCulled = false; sm.castShadow = true; g.add(sm); sm.bind(new THREE.Skeleton(bones));
+  P.realMesh = sm; g.userData.real = name;
+  if (P.sword && REAL_SWORD) { const sw = new THREE.Mesh(REAL_SWORD.geo, new THREE.MeshPhongMaterial({ map: REAL_SWORD.tex, shininess: 60, specular: 0x777777 })); sw.castShadow = true; sw.scale.setScalar(o.swordScale || 1);
+    P.sword.userData.realSword = sw; for (const c of P.sword.children) c.visible = false; P.sword.add(sw); }
+  return true;
 }
 BV.realRig = { load: loadRealRig, wear: wearRealRig, loaded: () => [...REAL_RIGS.keys()] };
-// the demo switch: ?real (or localStorage bv-real) dresses arena teams in the real figures — AZURE knights, CRIMSON centurions
-const REAL_ON = /[?&]real\b/.test(location.search) || (() => { try { return localStorage.getItem('bv-real') === '1'; } catch (e) { return false; } })();
-const REAL_TEAM = ['knight', 'centurion', 'knight', 'centurion', 'knight', 'centurion'];
-if (REAL_ON) Promise.all(['knight', 'centurion'].map(loadRealRig)).then(() => { BV.realReady = true; console.log('[real] rigs ready'); }, e => console.error('[real] load failed', e));
+// the switch: ?real (or localStorage bv-real) dresses arena teams in the real figures — AZURE knights, CRIMSON centurions, VERDANT hoplites…
+const REAL_ON = !/[?&]plastic\b/.test(location.search);   // the real figures are the default now; ?plastic brings the old rigs back for comparison
+const REAL_TEAM = ['knight', 'centurion', 'hoplite', 'knight', 'centurion', 'hoplite'];
+if (REAL_ON) Promise.all(['knight', 'centurion', 'hoplite'].flatMap(n => [loadRealRig(n), loadRealRig(n, 'lo')])).then(() => { BV.realReady = true; console.log('[real] rigs ready'); }, e => console.error('[real] load failed', e));
 
 
 // ---------- Cavalry builder ----------
@@ -3558,6 +3499,7 @@ function disposeGroup(g) {
       return;
     }
     if (!c.isMesh && !c.isLine && !c.isPoints) return;   // Lines/Points carry their own geo+material too — free them (was leaking march path lines)
+    if (c.isInstancedMesh) { try { c.dispose(); } catch (e) {} }   // (the arena crowd)
     // cached geometries/materials are shared across many objects — never dispose them
     if (c.geometry && !c.geometry.userData.cached) c.geometry.dispose();
     if (c.material && !c.material.userData.cached) {
@@ -16673,7 +16615,7 @@ BV.AF = AF;
 // ---- the pit: a seeded, gently rolling floor inside a ring wall; the same on every client ----
 function afY(x, z) {
   const T = AF.terr; if (!T) return 0;
-  const d = Math.hypot(x, z), rim = clamp((d - AF_F.radius) / 30, 0, 1);
+  const d = Math.hypot(x, z), rim = clamp((d - AF_F.radius - AF_AMPH.out - 4) / 30, 0, 1);   // (flat under the amphitheatre; the bowl climbs beyond its outer wall)
   let h = 0.28 * Math.sin(x * 0.11 + T.p1) * Math.cos(z * 0.09 + T.p2) + 0.16 * Math.sin((x + z) * 0.17 + T.p3);
   h += rim * rim * (6 + 5 * Math.sin(Math.atan2(z, x) * 3 + T.p1));   // the ground climbs into a bowl beyond the wall
   if (T.hills.length) h += afHillY(x, z);
@@ -16861,7 +16803,7 @@ function afApplyTime() {
   if (AF.ground) { AF.ground.material.shininess = rain ? 42 : 2; AF.ground.material.specular.setHex(rain ? 0x3a3a3a : 0x000000); AF.ground.material.needsUpdate = true; }
   for (const t of AF.torches) {                              // after dark the torches carry the light
     if (t.userData.light) { t.userData.light.intensity = T.torch || 1.3; t.userData.light.distance = T.torch ? 30 : 18; }
-    else if (T.torch) { const light = new THREE.PointLight(0xff7b3e, T.torch, 30, 2); light.position.y = 3.7; t.add(light); t.userData.light = light; }
+    else if (T.torch) { const light = new THREE.PointLight(0xff7b3e, T.torch, 30, 2); light.position.y = t.userData.flame.position.y + 0.1; t.add(light); t.userData.light = light; }
     t.userData.flame.scale.setScalar(T.flame); t.userData.flameBase = T.flame;
   }
   if (AF.stars) { scene.remove(AF.stars); AF.stars = null; }
@@ -16885,13 +16827,7 @@ function afStepCrowd(dt) {
   if (AF.roar > 0) AF.roar -= dt;
   if (AF.phase === 'fight' && !AF.over) { AF.nextWave -= dt; if (AF.nextWave <= 0) { AF.waveT = 3.4; AF.waveAng = -0.6; AF.nextWave = 26 + Math.random() * 14; } }
   if (AF.waveT > 0) { AF.waveT -= dt; AF.waveAng += dt * 2.2; }
-  const rk = clamp(AF.roar / 1.4, 0, 1);
-  for (const c of AF.crowd) {
-    let y = Math.sin(rtNow * 2.2 + c.phase) * 0.025;
-    if (rk > 0) y += Math.abs(Math.sin(rtNow * 11 + c.phase)) * 0.42 * rk * c.amp;
-    if (AF.waveT > 0) { const w = angleDelta(c.ang, AF.waveAng); if (Math.abs(w) < 0.55) y += Math.cos(w * 2.85) * 0.6; }
-    c.body.position.y = c.y0 + y; c.head.position.y = c.y0 + 0.7 + y;
-  }
+  AF_CROWD_U.uT.value = rtNow; AF_CROWD_U.uRoar.value = clamp(AF.roar / 1.4, 0, 1); AF_CROWD_U.uWaveAng.value = AF.waveAng; AF_CROWD_U.uWaveT.value = AF.waveT;   // the crowd itself moves in its vertex shader (afCrowdMat)
 }
 // the roar: a swell of band-passed noise (the synth has no samples) — bigger when it's your kill, or your fall
 function afRoar(vol) {
@@ -16914,85 +16850,301 @@ function afStepWeather(dt) {
     a.needsUpdate = true; AF.rain.position.set(camera.position.x, 0, camera.position.z);
   }
 }
-function afMakeTorch(x, z, yaw, withLight) {
-  const g = new THREE.Group();
-  const pole = boxMesh(0.22, 3.2, 0.22, mat(0x4a3520)); pole.position.y = 1.6; pole.castShadow = false; g.add(pole);
-  const cup = new THREE.Mesh(cachedGeo('af-cup', () => new THREE.CylinderGeometry(0.22, 0.12, 0.3, 6)), mat(0x2a2422, { metal: 1 })); cup.position.y = 3.2; g.add(cup);
+function afMakeTorch(x, z, yaw, withLight, bracket, y) {   // a standing torch on a pole — or (bracket) an iron wall bracket at height y, its arm along local +Z into the stone
+  const g = new THREE.Group(), top = bracket ? 1.2 : 3.2;
+  if (bracket) { const arm = boxMesh(0.14, 0.14, 0.9, mat(0x2a2422, { metal: 1 })); arm.position.set(0, 0.25, 0.4); arm.castShadow = false; g.add(arm); const stub = boxMesh(0.18, 1.0, 0.18, mat(0x4a3520)); stub.position.y = 0.7; stub.castShadow = false; g.add(stub); }
+  else { const pole = boxMesh(0.22, 3.2, 0.22, mat(0x4a3520)); pole.position.y = 1.6; pole.castShadow = false; g.add(pole); }
+  const cup = new THREE.Mesh(cachedGeo('af-cup', () => new THREE.CylinderGeometry(0.22, 0.12, 0.3, 6)), mat(0x2a2422, { metal: 1 })); cup.position.y = top; g.add(cup);
   const flame = new THREE.Mesh(cachedGeo('flame', () => new THREE.IcosahedronGeometry(0.45, 0)), mat(0xff7b2e, { emissive: 0xff5a1e, emissiveI: 2.2 }));
-  flame.position.y = 3.6; g.add(flame); g.userData.flame = flame;
-  if (withLight) { const light = new THREE.PointLight(0xff7b3e, 1.3, 18, 2); light.position.y = 3.7; g.add(light); g.userData.light = light; }
-  g.position.set(x, afY(x, z), z); g.rotation.y = yaw; return g;
+  flame.position.y = top + 0.4; g.add(flame); g.userData.flame = flame;
+  if (withLight) { const light = new THREE.PointLight(0xff7b3e, 1.3, 18, 2); light.position.y = top + 0.5; g.add(light); g.userData.light = light; }
+  g.position.set(x, y != null ? y : afY(x, z), z); g.rotation.y = yaw; return g;
+}
+/* ---- THE COLOSSEUM: the pit's architecture, after the Flavian amphitheatre ----
+   Radially from the sand: a PODIUM wall (eight metres of rusticated stone — two knights tall — under a cornice and a
+   balustrade, with pilasters, torch brackets and the teams' drapes over the gates), the podium walkway for the
+   dignitaries and the imperial box, two maenianae of five stone rows split by a praecinctio (with stair aisles and
+   dark vomitoria), a colonnaded gallery on top under a tiled roof, the attic with its parapet statues, and the masts
+   that carry the VELARIUM — striped sails shading the seats and leaving the sand in the sun. Outside: three storeys
+   of arcades with engaged columns, statues in the upper arches, and a pilastered attic hung with bronze shields.
+   Everything but the crowd is baked into two vertex-coloured meshes (stone, cloth) by afMesher, so a whole
+   amphitheatre costs a handful of draw calls; the crowd is instanced (afCrowdMat: it bobs, leaps, waves and flies
+   its flags in the vertex shader). Sizes are absolute — a building is a building — so a colossal pit gets a
+   proportionally thinner ring round a bigger sand. Heights are world y (the ground under the ring is flat: afY). */
+const AF_AMPH = { wall: 8.0, wallIn: 0.3, wallOut: 1.9, walk: 3.0, rows: 5, rise: 1.0, tread: 1.7, prae: 2.6, colH: 5.4, back: 27.4, backing: 27.9, face: 28.7, out: 29.3, top: 26.4, attic: 24.0, mast: 6.5, sailIn: 10, sailY: 22, crowdCap: 6500 };
+const _afCol = new THREE.Color();
+// the cavea's height at a radius from the centre (the surface a camera must stay above) — 0 over the sand and beyond the ring
+function afArchTop(d) {
+  const A = AF_AMPH, r = d - AF_F.radius;
+  if (r < -0.5 || r > A.out + 2) return 0;
+  if (r < A.wallOut + A.walk) return A.wall + 1.3;
+  if (r < 13.4) return 8.5 + Math.floor((r - 4.9) / A.tread) + 1;
+  if (r < 16) return 13.5;
+  if (r < 24.5) return 13.5 + Math.floor((r - 16) / A.tread) + 1;
+  return A.top + 1.2;
+}
+// bakes many shapes into ONE vertex-coloured, flat-shaded mesh: positions are transformed on the CPU, colour per piece
+function afMesher() {
+  const pos = [], col = [], c = new THREE.Color(), M = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(0, 0, 0, 'YXZ'), sV = new THREE.Vector3(), pV = new THREE.Vector3(), v = new THREE.Vector3();
+  const self = {
+    n: 0,
+    add(geo, x, y, z, ry, hex, sx = 1, sy = 1, sz = 1, rx = 0, rz = 0) {
+      const g = geo.index ? cachedGeo('ni:' + geo.uuid, () => geo.toNonIndexed()) : geo, a = g.attributes.position;
+      M.compose(pV.set(x, y, z), q.setFromEuler(e.set(rx, ry, rz, 'YXZ')), sV.set(sx, sy, sz)); c.setHex(hex);
+      for (let i = 0; i < a.count; i++) { v.fromBufferAttribute(a, i).applyMatrix4(M); pos.push(v.x, v.y, v.z); col.push(c.r, c.g, c.b); }
+      self.n += a.count; return self;
+    },
+    box(w, h, d, x, y, z, ry, hex) { return self.add(cachedGeo('box:' + w + ',' + h + ',' + d, () => new THREE.BoxGeometry(w, h, d)), x, y, z, ry, hex); },
+    cyl(rt, rb, h, seg, x, y, z, ry, hex, rx = 0) { return self.add(cachedGeo('cyl:' + rt + ',' + rb + ',' + h + ',' + seg, () => new THREE.CylinderGeometry(rt, rb, h, seg)), x, y, z, ry, hex, 1, 1, 1, rx, 0); },
+    raw(attr, hexAt) {                                       // untransformed positions, colour by vertex index
+      let hex = 0; for (let i = 0; i < attr.count; i++) { if (i % 6 === 0) { hex = hexAt(i); c.setHex(hex); } pos.push(attr.getX(i), attr.getY(i), attr.getZ(i)); col.push(c.r, c.g, c.b); }
+      self.n += attr.count; return self;
+    },
+    tri(p1, p2, p3, hex) { c.setHex(hex); for (const p of [p1, p2, p3]) { pos.push(p[0], p[1], p[2]); col.push(c.r, c.g, c.b); } self.n += 3; return self; },
+    quad(p1, p2, p3, p4, hex) { return self.tri(p1, p2, p3, hex).tri(p1, p3, p4, hex); },
+    // a LATHE: pts [{r, y, c, k}] — a segment takes the colour of the point it ends on, tinted per quad by tintK·k (the block look).
+    // Three's lathe faces (dy, −dr): write a closed loop counter-clockwise in (r, y) for outward faces, an open profile
+    // from the outside in for a surface that faces the pit and the sky. Arena bearing a ↔ lathe φ = π/2 − a.
+    lathe(pts, segs, a0, a1, tintK, hash) {
+      const geo = new THREE.LatheGeometry(pts.map(p => new THREE.Vector2(p.r, p.y)), segs, a1 == null ? 0 : Math.PI / 2 - a1, a1 == null ? TAU : a1 - a0).toNonIndexed();
+      const np = pts.length - 1;
+      self.raw(geo.attributes.position, (i) => { const f = (i / 6) | 0, si = (f / np) | 0, j = f % np, p = pts[j + 1]; return tintK && p.k ? afTint(p.c, tintK * p.k, hash(si, j)) : p.c; });
+      geo.dispose(); return self;
+    },
+    geo() {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+      geo.computeVertexNormals(); return geo;
+    },
+    build(opts = {}) {
+      const m = new THREE.Mesh(self.geo(), new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: true, shininess: opts.shininess ?? 4, specular: opts.specular ?? 0x0a0a0a, side: opts.side ?? THREE.FrontSide }));
+      m.castShadow = opts.cast ?? true; m.receiveShadow = opts.receive ?? true; return m;
+    },
+  };
+  return self;
+}
+function afTint(hex, k, u) { return _afCol.setHex(hex).offsetHSL(0, 0, (u - 0.5) * k).getHex(); }
+function afHash(i, j) { let h = (i * 374761393 + j * 668265263) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; }
+// the crowd's vertex shader: the same bob / leap / wave as the old per-body step, but for thousands at once.
+// aCrowd = (phase, bearing, amplitude); uniforms are shared by every crowd material (afStepCrowd writes them).
+const AF_CROWD_U = { uT: { value: 0 }, uRoar: { value: 0 }, uWaveAng: { value: 0 }, uWaveT: { value: 0 } };
+const AF_CROWD_GLSL = (() => {
+  const common = `float cW = aCrowd.y - uWaveAng; cW = mod(cW + 3.14159265, 6.2831853) - 3.14159265;
+  float cWave = (uWaveT > 0.0 && abs(cW) < 0.55) ? cos(cW * 2.85) : 0.0;
+  float cJump = abs(sin(uT * 11.0 + aCrowd.x)) * uRoar * aCrowd.z;
+  float cY = sin(uT * 2.2 + aCrowd.x) * 0.025 + cJump * 0.42 + cWave * 0.6;\n`;
+  return {
+    body: common + 'transformed.y += cY;',
+    arm: common + 'float cUp = clamp(0.2 + max(uRoar * aCrowd.z, cWave) * 0.95, 0.2, 1.0); transformed.y = transformed.y * cUp + 1.25 + cY; transformed.x *= mix(1.0, 1.3, cUp);',   // arms rise with the roar (and the wave)
+    flag: common + 'transformed.x += sin(uT * 5.0 + aCrowd.x) * 0.14 * clamp(transformed.y - 1.6, 0.0, 1.0); transformed.y += cY + max(uRoar * aCrowd.z, cWave) * 0.5;',
+  };
+})();
+function afCrowdMat(kind, hex, vcol) {
+  const m = new THREE.MeshPhongMaterial({ color: hex, flatShading: true, shininess: 4, specular: 0x0a0a0a, vertexColors: !!vcol });
+  m.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, AF_CROWD_U);
+    sh.vertexShader = 'attribute vec3 aCrowd;\nuniform float uT, uRoar, uWaveAng, uWaveT;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n' + AF_CROWD_GLSL[kind]);
+  };
+  m.customProgramCacheKey = () => 'af-crowd-' + kind + (vcol ? 'c' : '');   // (three keys programs by onBeforeCompile's source — every kind would share the first one compiled)
+  return m;
 }
 function afBuildWall() {
-  const g = new THREE.Group(), kR = AF_F.radius / 34, kRVis = Math.min(kR, 3), N = Math.round(36 * kRVis), R = AF_F.radius + 0.9, seg = (2 * Math.PI * R) / N; // kRVis caps decoration at what 'colossal' already draws — a legion doesn't also draw a legion of benches
-  const wm = mat(0x8a8378), cap = mat(0x5e5850), wood = mat(0x6b4a2e), woodDk = mat(0x4e351f), rope = mat(0xb8a27a);
-  for (let i = 0; i < N; i++) {                              // the ring wall: stone blocks with capstones every third
-    const a = (i / N) * TAU, x = Math.cos(a) * R, z = Math.sin(a) * R, h = 2.1 + (i % 3 === 0 ? 0.7 : 0);
-    if (afNearGate(a, AF_INTRO.gateW / 2 + seg * 1.04 / 2, R)) continue;   // a gate stands here (afBuildGates fills the rest of the hole)
-    const tang = -a - Math.PI / 2;                          // a box's +X must run ALONG the ring (tangent), not point at the centre
-    const b = boxMesh(seg * 1.04, h, 1.2, wm); b.position.set(x, afY(x, z) + h / 2, z); b.rotation.y = tang; g.add(b);
-    if (i % 3 === 0) { const t = boxMesh(1.4, 0.35, 1.5, cap); t.position.set(x, afY(x, z) + h + 0.17, z); t.rotation.y = tang; g.add(t); }
+  const R0 = AF_F.radius, A = AF_AMPH, g = new THREE.Group(), teams = AF.cfg.teams, seed = _mulberry32(AF.seed ^ 0x5bd1e995), W = AF_INTRO.gateW;
+  const S = afMesher(), C = afMesher();                     // S: stone, timber and metal (one-sided); C: cloth (the sails are seen from beneath)
+  const at = (r, a, y) => [Math.cos(a) * r, y, Math.sin(a) * r], tang = (a) => -a - Math.PI / 2, arcN = (r, len) => Math.max(4, Math.round((TAU * r) / len));
+  const ST = 0xcbbc9e, ST_D = 0x9e917a, ST_L = 0xdcd0b6, SEAT = 0xd8cdb4, RISER = 0xb3a68b, WALK = 0xb0a488, FRIEZE = 0x5a3028, DARK = 0x231e1b, WOOD = 0x4a3520, GOLD = 0xc9a24a, ROOF = 0x8e4f36, ROOF_D = 0x5e3424, MARBLE = 0xe4dccb, CRIMSON = 0x7a1f22;
+  const mid = afGateAngle(0) + Math.PI / teams;              // the imperial box: midway between the first two gates
+  const teamCloth = (t) => AF_TEAMS[t % teams].pal.cloth;
+  const gateTeamAt = (a) => { let bt = 0, bd = 1e9; for (let t = 0; t < teams; t++) { const d = Math.abs(angleDelta(a, afGateAngle(t))); if (d < bd) { bd = d; bt = t; } } return { t: bt, d: bd }; };
+  // ---- the CAVEA: one lathe from the exterior's dark backing over the attic and down the seats to the podium cornice
+  const P = [], pt = (r, y, c, k) => P.push({ r: R0 + r, y, c, k: k == null ? 0 : k });
+  pt(A.backing, -0.6, DARK); pt(A.backing, A.attic, DARK, 0.3);              // the dark backing the arcades open onto
+  pt(A.out, A.attic, ST_D); pt(A.out, A.top, ST, 1);                        // the attic's outer face
+  pt(A.back + 0.6, A.top, ST_L, 0.3); pt(A.back + 0.6, A.top + 0.6, ST, 0.6); pt(A.back, A.top + 0.6, ST_L, 0.3);   // the top and its parapet
+  pt(A.back, 18.0, ST, 1);                                                   // the gallery's back wall (the attic's inner face)
+  pt(24.5, 18.0, WALK, 0.6);                                                 // the gallery floor
+  for (let j = A.rows - 1; j >= 0; j--) { const r = 16.0 + j * A.tread, y = 13.5 + j; pt(r + A.tread, y, RISER, 0.5); pt(r, y, SEAT, 0.5); }   // the upper maenianum
+  pt(16.0, 13.0, RISER, 0.5); pt(13.4, 13.0, WALK, 0.6);                     // the praecinctio
+  for (let i = A.rows - 1; i >= 0; i--) { const r = 4.9 + i * A.tread, y = 8.5 + i; pt(r + A.tread, y, RISER, 0.5); pt(r, y, SEAT, 0.5); }    // the lower maenianum
+  pt(4.9, A.wall, RISER, 0.5); pt(-0.2, A.wall, WALK, 0.6);                  // the podium walkway, out to the cornice's lip over the sand
+  pt(-0.2, 7.55, ST_L, 0.3); pt(0.2, 7.4, ST_D); pt(0.2, 6.85, FRIEZE, 0.2); pt(A.wallIn, 6.85, ST_D);   // cornice, frieze
+  const segs = arcN(R0 + 15, 2.4);
+  S.lathe(P, segs, null, null, 0.07, afHash);
+  // ---- the PODIUM WALL below the frieze: six rusticated courses on a plinth, in arcs between the gates' pillars
+  const PW = [{ r: R0 + A.wallIn, y: 6.85, c: ST }];
+  for (let k = 5; k >= 0; k--) { const y0 = 0.85 + k, r = R0 + A.wallIn + (k % 2 ? 0.05 : 0); PW.push({ r, y: y0 + 1, c: ST_L, k: 0.4 }, { r, y: y0, c: ST, k: 1 }); }
+  PW.push({ r: R0 + 0.1, y: 0.85, c: ST_L, k: 0.3 }, { r: R0 + 0.1, y: -0.6, c: ST_D, k: 0.6 });
+  const hw = (W / 2 + 1.1 + 0.05) / (R0 + A.wallIn);          // half the gate hole, to the pillars' outer edges, as an angle
+  for (let t = 0; t < teams; t++) { const a0 = afGateAngle(t) + hw, a1 = afGateAngle(t + 1) - hw; S.lathe(PW, Math.max(4, Math.round((a1 - a0) * (R0 + A.wallIn) / 2.2)), a0, a1, 0.07, afHash); }
+  // pilasters with torch brackets (six of them lit), and the balustrade along the wall's top
+  AF.torches = [];
+  const NT = arcN(R0, 13), litEvery = Math.max(1, Math.round(NT / 6)); let lit = 0, tk = 0;
+  for (let k = 0; k < NT; k++) {
+    const a = ((k + 0.5) / NT) * TAU; if (afNearGate(a, W / 2 + 2.8, R0)) continue;
+    S.box(1.0, 5.6, 0.5, ...at(R0 + 0.12, a, 3.65), tang(a), afTint(ST_D, 0.06, seed()));
+    const p = at(R0 - 0.42, a, 4.4), on = tk++ % litEvery === 0 && lit < 6; if (on) lit++;
+    const torch = afMakeTorch(p[0], p[2], Math.PI / 2 - a, on, true, 4.4); g.add(torch); AF.torches.push(torch);
   }
-  // the STANDS: three timber tiers climbing away from the wall, and a crowd on them in every colour of the vale
-  AF.crowd = [];
-  const NS = Math.round(30 * kRVis), crowdCols = [0x9a3b2f, 0x3b5a9a, 0xd9b04a, 0x6b8f3a, 0x7a4a8a, 0xd8d2c0, 0x4a3520, 0xc86a3a];
-  const crowdMats = crowdCols.map(cn => mat(cn));
-  const seed = _mulberry32(AF.seed ^ 0x5bd1e995);
-  for (let tier = 0; tier < 3; tier++) {
-    const r = AF_F.radius + 4.2 + tier * 2.6, hgt = 1.1 + tier * 1.35, segL = (2 * Math.PI * r) / NS;
-    for (let i = 0; i < NS; i++) {
-      const a = ((i + 0.5) / NS) * TAU, x = Math.cos(a) * r, z = Math.sin(a) * r, gy = afY(x, z);
-      const tang = -a - Math.PI / 2;
-      if (afNearGate(a, AF_INTRO.gateW / 2 + 1.5 + segL * 1.02 / 2, r)) continue;   // the tunnel runs out through the stands here
-      const bench = boxMesh(segL * 1.02, 0.5, 2.2, tier % 2 ? woodDk : wood); bench.position.set(x, gy + hgt, z); bench.rotation.y = tang; bench.castShadow = false; g.add(bench);
-      const face = boxMesh(segL * 1.02, hgt + 0.25, 0.25, woodDk); face.position.set(Math.cos(a) * (r - 1.1), gy + (hgt + 0.25) / 2, Math.sin(a) * (r - 1.1)); face.rotation.y = tang; face.castShadow = false; face.receiveShadow = false; g.add(face);
-      if (seed() < 0.85) {                                   // a spectator (or two) on the bench
-        const n = 1 + (seed() < 0.5 ? 1 : 0);
-        for (let k = 0; k < n; k++) {
-          const off = (seed() - 0.5) * segL * 0.7, px = x + Math.cos(a + Math.PI / 2) * off, pz = z + Math.sin(a + Math.PI / 2) * off;
-          const body = new THREE.Mesh(cachedGeo('af-crowd', () => new THREE.CylinderGeometry(0.28, 0.36, 1.2, 6)), crowdMats[(seed() * crowdMats.length) | 0]);
-          body.position.set(px, gy + hgt + 0.85, pz); body.castShadow = false; body.receiveShadow = false; g.add(body);
-          const hd = sphereMesh(0.2, mat(0xe0b088), 6, 5); hd.position.set(px, gy + hgt + 1.55, pz); hd.castShadow = false; hd.receiveShadow = false; g.add(hd);
-          AF.crowd.push({ body, head: hd, y0: gy + hgt + 0.85, phase: seed() * TAU, ang: a, amp: 0.7 + seed() * 0.6 });
-        }
-      }
+  const NP = arcN(R0 + 0.35, 2.4);
+  for (let k = 0; k < NP; k++) { const a = (k / NP) * TAU; S.box(0.34, 1.0, 0.34, ...at(R0 + 0.35, a, A.wall + 0.5), tang(a), ST_L); }
+  S.lathe([{ r: R0 + 0.55, y: 9.0, c: ST }, { r: R0 + 0.55, y: 9.25, c: ST }, { r: R0 + 0.15, y: 9.25, c: ST_L }, { r: R0 + 0.15, y: 9.0, c: ST }, { r: R0 + 0.55, y: 9.0, c: ST_D }], segs);
+  // the teams' drapes hung over the balustrade above their gates, with a gold hem
+  for (let t = 0; t < teams; t++) { const a = afGateAngle(t); S.box(W - 1.0, 2.4, 0.14, ...at(R0 - 0.38, a, 8.05), tang(a), teamCloth(t)); S.box(W - 1.0, 0.22, 0.18, ...at(R0 - 0.4, a, 6.96), tang(a), GOLD); }
+  // ---- the AISLES: stair steps down every cuneus, dark vomitoria where they meet the praecinctio, doors out of the gallery
+  const NA = arcN(R0 + 15, 21), aisles = [];
+  for (let k = 0; k < NA; k++) { const a = ((k + 0.5) / NA) * TAU; if (Math.abs(angleDelta(a, mid)) * R0 < 6) continue; aisles.push(a); }
+  const nearAisle = (a, r) => { for (const q of aisles) if (Math.abs(angleDelta(a, q)) * r < 1.7) return true; return false; };
+  for (const a of aisles) {
+    for (let i = 1; i < A.rows; i++) { S.box(2.2, 0.5, 0.85, ...at(R0 + 4.9 + i * A.tread - 0.425, a, 8.5 + i - 1 + 0.25), tang(a), ST_D); S.box(2.2, 0.5, 0.85, ...at(R0 + 16.0 + i * A.tread - 0.425, a, 13.5 + i - 1 + 0.25), tang(a), ST_D); }
+    S.box(2.6, 2.5, 2.2, ...at(R0 + 17.13, a, 14.25), tang(a), DARK);        // the vomitorium: a vault under the upper rows
+    for (const s of [-1, 1]) { const p = at(R0 + 15.9, a, 14.35); S.box(0.35, 2.7, 0.3, p[0] - Math.sin(a) * s * 1.45, p[1], p[2] + Math.cos(a) * s * 1.45, tang(a), ST_L); }
+    S.box(3.25, 0.4, 0.3, ...at(R0 + 15.9, a, 15.9), tang(a), ST_L);
+    S.box(2.4, 3.8, 0.2, ...at(R0 + A.back - 0.1, a, 19.9), tang(a), DARK);   // the door out of the gallery
+    S.box(3.0, 0.4, 0.3, ...at(R0 + A.back - 0.15, a, 22.0), tang(a), ST_L);
+  }
+  // ---- the GALLERY: a colonnade under a tiled roof, the teams' long drapes on the wall behind it
+  const rC = R0 + 25.2, NC = arcN(rC, 3.6);
+  for (let k = 0; k < NC; k++) {
+    const a = (k / NC) * TAU;
+    S.cyl(0.38, 0.42, A.colH, 8, ...at(rC, a, 18.0 + A.colH / 2), tang(a), afTint(ST_L, 0.05, seed()));
+    S.box(1.0, 0.3, 1.0, ...at(rC, a, 18.15), tang(a), ST); S.box(1.0, 0.5, 1.0, ...at(rC, a, 23.15), tang(a), ST);
+    if (k % 3 === 1) { const am = ((k + 0.5) / NC) * TAU, t = gateTeamAt(am).t; S.box(2.6, 4.0, 0.12, ...at(R0 + A.back - 0.2, am, 21.4), tang(am), teamCloth(t)); S.box(2.6, 0.25, 0.16, ...at(R0 + A.back - 0.22, am, 19.5), tang(am), GOLD); }
+  }
+  S.lathe([{ r: rC + 0.5, y: 23.4, c: ST_D }, { r: rC + 0.5, y: 24.2, c: ST_D }, { r: rC - 0.5, y: 24.2, c: ST }, { r: rC - 0.5, y: 23.4, c: ST_D }, { r: rC + 0.5, y: 23.4, c: ST_D }], segs);   // the beam
+  S.lathe([{ r: R0 + 24.6, y: 23.95, c: ROOF_D }, { r: R0 + A.back - 0.1, y: 25.05, c: ROOF_D }, { r: R0 + A.back - 0.1, y: 25.3, c: ROOF_D }, { r: R0 + 24.6, y: 24.2, c: ROOF, k: 1 }, { r: R0 + 24.6, y: 23.95, c: ROOF_D }], segs, null, null, 0.06, afHash);   // the roof
+  // ---- the IMPERIAL BOX on the podium walkway: a marble dais under a crimson canopy, a gilded seat
+  { const a = mid, dx = -Math.sin(a), dz = Math.cos(a), P0 = at(R0 + 3.3, a, 8.25);
+    S.box(7.4, 0.5, 2.6, ...P0, tang(a), MARBLE);
+    for (const s of [-3.4, 3.4]) for (const r of [R0 + 2.3, R0 + 4.4]) { const p = at(r, a, 10.7); S.cyl(0.26, 0.28, 4.4, 8, p[0] + dx * s, p[1], p[2] + dz * s, tang(a), ST_L); S.box(0.7, 0.3, 0.7, p[0] + dx * s, 13.0, p[2] + dz * s, tang(a), GOLD); }
+    S.box(8.0, 0.35, 3.4, ...at(R0 + 3.35, a, 13.3), tang(a), CRIMSON); S.box(8.2, 0.14, 3.6, ...at(R0 + 3.35, a, 13.06), tang(a), GOLD);
+    S.box(7.4, 3.6, 0.12, ...at(R0 + 4.7, a, 10.7), tang(a), CRIMSON); S.box(1.4, 1.6, 1.0, ...at(R0 + 3.7, a, 9.3), tang(a), GOLD); }
+  // ---- the ATTIC and the VELARIUM: parapet statues, masts leaning out over the street, ropes to a ring over the seats, striped sails between
+  const rF = R0 + A.face, NB = arcN(rF, 5.5), pitch = TAU * rF / NB, sw = +(pitch - 1.0).toFixed(2), sh = +(sw / 2 + 0.9).toFixed(2);
+  const statue = (r, a, y, hex) => { S.box(1.4, 0.8, 1.0, ...at(r, a, y + 0.4), tang(a), ST_D); S.box(0.9, 2.6, 0.7, ...at(r, a, y + 2.1), tang(a), hex); S.box(1.4, 0.5, 0.75, ...at(r, a, y + 3.2), tang(a), hex); S.add(cachedGeo('sph:0.36,7,5', () => new THREE.SphereGeometry(0.36, 7, 5)), ...at(r, a, y + 3.75), tang(a), hex); };
+  const ropes = [], lean = 0.16, mastTop = [];
+  for (let b = 0; b < NB; b++) {
+    const a = (b / NB) * TAU, am = ((b + 0.5) / NB) * TAU;
+    const mb = at(R0 + A.back + 1.4, a, A.top), tip = at(R0 + A.back + 1.4 + Math.sin(lean) * A.mast, a, A.top + Math.cos(lean) * A.mast);
+    S.box(0.34, A.mast, 0.34, (mb[0] + tip[0]) / 2, (mb[1] + tip[1]) / 2, (mb[2] + tip[2]) / 2, tang(a), WOOD); S.add(cachedGeo('box:0.5,0.5,0.5', () => new THREE.BoxGeometry(0.5, 0.5, 0.5)), ...tip, tang(a), GOLD, 1, 1, 1, -lean, 0);
+    mastTop.push(tip); const inner = at(R0 + A.sailIn, a, A.sailY); ropes.push(tip, inner); if (b) ropes.push(inner, at(R0 + A.sailIn, ((b - 1) / NB) * TAU, A.sailY)); if (b === NB - 1) ropes.push(inner, at(R0 + A.sailIn, 0, A.sailY));
+    if (b % 3 === 1) statue(R0 + A.back + 0.3, am, A.top + 0.6, MARBLE);
+    if (b % 3 !== 2) {                                       // a sail: two bays of cloth, one of sky, sagging between its ropes
+      const ga = 0.18 / rF, a0 = a + ga, a1 = ((b + 1) / NB) * TAU - ga, hex = b % 3 ? 0xc9a862 : 0xe6d8b8, K = 4, pts = [];
+      for (let k = 0; k <= K; k++) { const t = k / K, r = lerp(R0 + A.back + 2.2, R0 + A.sailIn, t), y = lerp(A.top + Math.cos(lean) * A.mast - 0.4, A.sailY, t) - Math.sin(t * Math.PI) * 1.5; pts.push([at(r, a0, y), at(r, (a0 + a1) / 2, y - 0.45 * Math.sin(t * Math.PI) - 0.15), at(r, a1, y)]); }
+      for (let k = 0; k < K; k++) { C.quad(pts[k][0], pts[k][1], pts[k + 1][1], pts[k + 1][0], hex); C.quad(pts[k][1], pts[k][2], pts[k + 1][2], pts[k + 1][1], afTint(hex, 0.08, 0.3)); }
+    }
+    // the ATTIC outside: pilasters at the bay lines, a window or a bronze shield in each bay
+    S.box(0.9, 2.4, 0.3, ...at(R0 + A.out + 0.15, a, 25.2), tang(a), ST_L);
+    if (b % 2) S.box(1.3, 1.5, 0.12, ...at(R0 + A.out + 0.02, am, 25.3), tang(am), DARK); else S.cyl(0.85, 0.85, 0.14, 10, ...at(R0 + A.out + 0.08, am, 25.2), tang(am), GOLD, Math.PI / 2);
+    // ---- three STOREYS of arcades: a pier, a spandrel over the arch, the arch's ring and keystone, an engaged column, statues in the upper arches
+    for (let s = 0; s < 3; s++) {
+      const y0 = s * 8.0, capH = [0.45, 0.55, 0.75][s];
+      S.box(1.0, 7.4, 1.4, ...at(rF, a, y0 + 3.7), tang(a), afTint(ST, 0.06, seed()));
+      S.add(cachedGeo('af-spandrel:' + sw + ',' + sh, () => { const q = new THREE.Shape(); q.moveTo(-sw / 2, 0); q.lineTo(-sw / 2, sh); q.lineTo(sw / 2, sh); q.lineTo(sw / 2, 0); q.absarc(0, 0, sw / 2, 0, Math.PI, false); const e = new THREE.ExtrudeGeometry(q, { depth: 1.4, bevelEnabled: false, curveSegments: 7 }); e.translate(0, 0, -0.7); return e; }), ...at(rF, am, y0 + 7.4 - sh), tang(am), afTint(ST, 0.05, seed()));
+      S.add(cachedGeo('af-archring:' + sw, () => { const ro = sw / 2 + 0.42, ri = sw / 2, q = new THREE.Shape(); q.moveTo(ro, 0); q.absarc(0, 0, ro, 0, Math.PI, false); q.lineTo(-ri, 0); q.absarc(0, 0, ri, Math.PI, 0, true); const e = new THREE.ExtrudeGeometry(q, { depth: 0.5, bevelEnabled: false, curveSegments: 7 }); e.translate(0, 0, -0.25); return e; }), ...at(rF + 0.75, am, y0 + 7.4 - sh), tang(am), ST_D);
+      S.box(0.7, 0.9, 0.6, ...at(rF + 0.8, am, y0 + 7.4 - sh + sw / 2 + 0.2), tang(am), ST_L);
+      S.cyl(0.42, 0.46, 5.5, 8, ...at(rF + 1.05, a, y0 + 3.65), tang(a), ST_L); S.box(1.1, 0.35, 1.1, ...at(rF + 1.05, a, y0 + 0.72), tang(a), ST); S.box(1.15, capH, 1.15, ...at(rF + 1.05, a, y0 + 6.4 + capH / 2), tang(a), ST_L);
+      if (s && b % 3 === 1) statue(rF, am, y0 + 0.6, MARBLE);
     }
   }
-  // banner poles on the wall in the fighting teams' colours, and torches between them
-  const NB = Math.max(6, Math.round(AF.cfg.teams * 3 * kRVis));
-  AF.torches = [];
-  let lights = 0;
-  for (let i = 0; i < NB; i++) {
-    const a = (i / NB) * TAU, x = Math.cos(a) * (R + 1.6), z = Math.sin(a) * (R + 1.6);
-    if (afNearGate(a, AF_INTRO.gateW / 2 + 2.4, R + 1.6)) continue;
-    try { const ban = makeBanner(AF_TEAMS[i % AF.cfg.teams].pal.cloth); ban.position.set(x, afY(x, z) + 1.2, z); ban.rotation.y = -a + Math.PI / 2; ban.scale.setScalar(1.25); g.add(ban); } catch (e) {}
-    const ta = a + Math.PI / NB, tx = Math.cos(ta) * (R + 1.5), tz = Math.sin(ta) * (R + 1.5);
-    if (afNearGate(ta, AF_INTRO.gateW / 2 + 2.4, R + 1.5)) continue;
-    const torch = afMakeTorch(tx, tz, -ta, lights < 6); if (torch.userData.light) lights++;
-    g.add(torch); AF.torches.push(torch);
-  }
-  // rope + posts around the sand's edge
-  const NP = Math.round(24 * kRVis);
-  for (let i = 0; i < NP; i++) { const a = (i / NP) * TAU, x = Math.cos(a) * (AF_F.radius - 0.2), z = Math.sin(a) * (AF_F.radius - 0.2); if (afNearGate(a, AF_INTRO.gateW / 2 + 1.2, AF_F.radius)) continue; const post = boxMesh(0.16, 0.9, 0.16, rope); post.position.set(x, afY(x, z) + 0.45, z); post.castShadow = false; g.add(post); }
-  // PENNANT strings sag between the banner poles above the wall, little flags in the fighting colours
-  const flagGeo = cachedGeo('af-flag', () => { const sh = new THREE.Shape(); sh.moveTo(0, 0); sh.lineTo(0.5, 0); sh.lineTo(0.06, -0.55); sh.closePath(); return new THREE.ShapeGeometry(sh); });
-  const flagMats = AF_TEAMS.slice(0, AF.cfg.teams).map(t => new THREE.MeshPhongMaterial({ color: t.pal.cloth, side: THREE.DoubleSide, flatShading: true }));
+  for (let s = 0; s < 3; s++) { const y0 = s * 8.0; S.lathe([{ r: rF + 1.0, y: y0 + 7.4, c: ST_D }, { r: rF + 1.0, y: y0 + 8.0, c: ST }, { r: rF + 0.4, y: y0 + 8.0, c: ST_L }, { r: rF + 0.4, y: y0 + 7.4, c: ST_D }, { r: rF + 1.0, y: y0 + 7.4, c: ST_D }], NB * 2); }   // the storeys' cornices
+  if (ropes.length) { const rg = new THREE.BufferGeometry().setFromPoints(ropes.map(p => new THREE.Vector3(p[0], p[1], p[2]))); const rl = new THREE.LineSegments(rg, new THREE.LineBasicMaterial({ color: 0x2e261e })); g.add(rl); }
+  // ---- banner poles on the walkway with pennant strings between them (as before, one ring higher)
+  const NBn = Math.max(6, Math.round(teams * 3 * Math.min(AF_F.radius / 34, 3))), rB = R0 + 2.4, poles = [];
+  for (let i = 0; i < NBn; i++) { const a = (i / NBn) * TAU; if (Math.abs(angleDelta(a, mid)) * R0 < 5.5) continue; try { const ban = makeBanner(teamCloth(i)); const p = at(rB, a, A.wall); ban.position.set(p[0], p[1], p[2]); ban.rotation.y = -a + Math.PI / 2; ban.scale.setScalar(1.1); g.add(ban); poles.push(a); } catch (e) {} }
+  const flagGeo = cachedGeo('af-flag', () => { const q = new THREE.Shape(); q.moveTo(0, 0); q.lineTo(0.5, 0); q.lineTo(0.06, -0.55); q.closePath(); return new THREE.ShapeGeometry(q); });
+  const flagMats = AF_TEAMS.slice(0, teams).map(t => new THREE.MeshPhongMaterial({ color: t.pal.cloth, side: THREE.DoubleSide, flatShading: true }));
   const ropeMat = new THREE.LineBasicMaterial({ color: 0x3a2e22 });
-  for (let i = 0; i < NB; i++) {
-    const a0 = (i / NB) * TAU, a1 = ((i + 1) / NB) * TAU, rr = R + 1.6; if (afNearGate(a0, AF_INTRO.gateW / 2 + 2.4, rr) || afNearGate(a1, AF_INTRO.gateW / 2 + 2.4, rr)) continue; const y0 = afY(Math.cos(a0) * rr, Math.sin(a0) * rr) + 5.6, y1 = afY(Math.cos(a1) * rr, Math.sin(a1) * rr) + 5.6;
-    const pts = [], K = 10;
-    for (let k = 0; k <= K; k++) { const t = k / K, a = a0 + (a1 - a0) * t, sag = Math.sin(t * Math.PI) * 1.3; pts.push(new THREE.Vector3(Math.cos(a) * rr, lerp(y0, y1, t) - sag, Math.sin(a) * rr)); }
+  for (let i = 0; i < NBn; i++) {
+    const a0 = (i / NBn) * TAU, a1 = ((i + 1) / NBn) * TAU; if (!poles.includes(a0) || !poles.includes(((i + 1) % NBn / NBn) * TAU)) continue;   // a string only between two standing poles
+    const pts = [], K = 10, y0 = A.wall + 4.55;
+    for (let k = 0; k <= K; k++) { const t = k / K, a = a0 + (a1 - a0) * t, sag = Math.sin(t * Math.PI) * 0.9; pts.push(new THREE.Vector3(Math.cos(a) * rB, y0 - sag, Math.sin(a) * rB)); }
     g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), ropeMat));
     for (let k = 1; k < K; k += 2) { const f = new THREE.Mesh(flagGeo, flagMats[(i + k) % flagMats.length]); f.position.copy(pts[k]); f.rotation.y = -(a0 + (a1 - a0) * (k / K)) + Math.PI / 2; f.castShadow = false; g.add(f); }
   }
-  // DEBRIS in the sand: pebbles, a split shield, a snapped blade or two
-  const dbg = _mulberry32(AF.seed ^ 0x2545f491), rockM = mat(0x8d8578);
+  // rope + posts around the sand's edge
+  const NPst = arcN(R0, 9), ropeM = mat(0xb8a27a);
+  for (let i = 0; i < NPst; i++) { const a = (i / NPst) * TAU, x = Math.cos(a) * (R0 - 0.2), z = Math.sin(a) * (R0 - 0.2); if (afNearGate(a, W / 2 + 1.2, R0)) continue; const post = boxMesh(0.16, 0.9, 0.16, ropeM); post.position.set(x, afY(x, z) + 0.45, z); post.castShadow = false; g.add(post); }
+  // DEBRIS in the sand: pebbles, a snapped blade or two
+  const kRVis = Math.min(AF_F.radius / 34, 3), dbg = _mulberry32(AF.seed ^ 0x2545f491), rockM = mat(0x8d8578);
   for (let i = 0; i < Math.round(46 * kRVis * kRVis); i++) { const a = dbg() * TAU, rr = 8 + dbg() * (AF_F.radius - 10), x = Math.cos(a) * rr, z = Math.sin(a) * rr, sz = 0.1 + dbg() * 0.22;
     const rk = new THREE.Mesh(cachedGeo('af-rock', () => new THREE.IcosahedronGeometry(1, 0)), rockM); rk.position.set(x, afY(x, z) + sz * 0.3, z); rk.scale.set(sz * 1.4, sz * 0.7, sz); rk.rotation.y = dbg() * TAU; rk.castShadow = false; g.add(rk); }
   for (let i = 0; i < 3; i++) { const a = dbg() * TAU, rr = 10 + dbg() * 18, x = Math.cos(a) * rr, z = Math.sin(a) * rr;
     const bl = boxMesh(0.09, 0.9, 0.2, mat(0xb9c2cc, { metal: 1 })); bl.position.set(x, afY(x, z) + 0.05, z); bl.rotation.set(Math.PI / 2 - 0.15, dbg() * TAU, 0); bl.castShadow = false; g.add(bl); }
-  try { afBuildGates(g, N, seg); } catch (e) { console.warn('[arena] gates', e); AF.gates = []; }   // a gate and a tunnel behind every team
+  // ---- the CROWD: seated on every row, standing in the gallery, the dignitaries on the walkway; partisan colours near each team's gate
+  const rows = [{ r: 3.4, y: A.wall, kind: 'vip' }];
+  for (let i = 0; i < A.rows; i++) rows.push({ r: 4.9 + i * A.tread + 0.95, y: 8.5 + i, kind: 'seat' });
+  for (let j = 0; j < A.rows; j++) rows.push({ r: 16.0 + j * A.tread + 0.95, y: 13.5 + j, kind: 'seat' });
+  rows.push({ r: 26.3, y: 18.0, kind: 'stand' });
+  const cols = [0x9a3b2f, 0x3b5a9a, 0xd9b04a, 0x6b8f3a, 0x7a4a8a, 0xd8d2c0, 0x4a3520, 0xc86a3a], vipCols = [0xf0ead8, 0xe8dcc0, 0x5a2d82, 0xb8322a, 0xd9b04a, 0xf0ead8], poorCols = [0x6b5a48, 0x4a3520, 0x8a7a66, 0x9a3b2f, 0x3b5a9a, 0x5a5048];
+  let est = 0; for (const rw of rows) est += TAU * (R0 + rw.r) / 1.45 * 0.86;
+  const spacing = 1.45 * Math.max(1, est / A.crowdCap), list = [];
+  for (const rw of rows) {
+    const r = R0 + rw.r, n = Math.round(TAU * r / spacing);
+    for (let k = 0; k < n; k++) {
+      const a = ((k + 0.2 + seed() * 0.6) / n) * TAU; if (seed() > 0.86 || nearAisle(a, r)) continue;
+      if (rw.kind === 'vip' && Math.abs(angleDelta(a, mid)) * r < 5.2) continue;
+      const rr = r + (seed() - 0.5) * 0.3, x = Math.cos(a) * rr, z = Math.sin(a) * rr, gt = gateTeamAt(a), partisan = gt.d < (Math.PI / teams) * 0.7 && seed() < 0.4;
+      const col = rw.kind === 'vip' ? vipCols[(seed() * vipCols.length) | 0] : rw.kind === 'stand' ? poorCols[(seed() * poorCols.length) | 0] : partisan ? teamCloth(gt.t) : cols[(seed() * cols.length) | 0];
+      list.push({ x, y: rw.y, z, yaw: Math.atan2(-x, -z), s: 0.86 + seed() * 0.26, sy: rw.kind === 'stand' ? 1.35 : 1, col, ph: seed() * TAU, ang: a, amp: 0.6 + seed() * 0.7, flag: rw.kind === 'seat' && seed() < 0.12 ? teamCloth(gt.t) : 0 });
+    }
+  }
+  for (const s of [-0.9, 0.9]) { const p = at(R0 + 3.1, mid, 8.5); list.push({ x: p[0] - Math.sin(mid) * s, y: 8.5, z: p[2] + Math.cos(mid) * s, yaw: Math.atan2(-p[0], -p[2]), s: 1.3, sy: 1, col: s < 0 ? 0xf0ead8 : 0x5a2d82, ph: seed() * TAU, ang: mid, amp: 0.3, flag: 0 }); }   // the box's two dignitaries
+  const n = list.length, cr = new Float32Array(n * 3), mtx = new THREE.Matrix4(), qt = new THREE.Quaternion(), YAX = new THREE.Vector3(0, 1, 0), pv = new THREE.Vector3(), sv = new THREE.Vector3(), cc = new THREE.Color();
+  list.forEach((p, i) => { cr[i * 3] = p.ph; cr[i * 3 + 1] = p.ang; cr[i * 3 + 2] = p.amp; });
+  const inst = (key, make, kind, hex, vcol, count, pick) => {   // vcol: per-instance colours (and vertex colours if the geometry carries them)
+    const geo = cachedGeo(key, make).clone(); geo.userData.cached = false; geo.setAttribute('aCrowd', new THREE.InstancedBufferAttribute(new Float32Array(count * 3), 3));
+    const im = new THREE.InstancedMesh(geo, afCrowdMat(kind, hex, vcol && !!geo.attributes.color), count); im.castShadow = false; im.receiveShadow = true; im.frustumCulled = false;
+    let k = 0; const ac = geo.attributes.aCrowd.array;
+    list.forEach((p, i) => { if (pick && !pick(p)) return; mtx.compose(pv.set(p.x, p.y, p.z), qt.setFromAxisAngle(YAX, p.yaw), sv.set(p.s, p.s * p.sy, p.s)); im.setMatrixAt(k, mtx); if (vcol) im.setColorAt(k, cc.setHex(pick ? p.flag : p.col)); ac[k * 3] = cr[i * 3]; ac[k * 3 + 1] = cr[i * 3 + 1]; ac[k * 3 + 2] = cr[i * 3 + 2]; k++; });
+    im.instanceMatrix.needsUpdate = true; if (im.instanceColor) im.instanceColor.needsUpdate = true; g.add(im); return im;
+  };
+  const nFlags = list.filter(p => p.flag).length;
+  inst('af-crowd-body', () => new THREE.CylinderGeometry(0.42, 0.55, 1.6, 6).translate(0, 0.8, 0), 'body', 0xffffff, true, n);
+  inst('af-crowd-head', () => new THREE.SphereGeometry(0.3, 6, 5).translate(0, 1.92, 0), 'body', 0xe0b088, false, n);
+  inst('af-crowd-arm', () => { const m = afMesher(); m.box(0.14, 1.1, 0.14, -0.5, 0.55, 0, 0, 0xe0b088); m.box(0.14, 1.1, 0.14, 0.5, 0.55, 0, 0, 0xe0b088); return m.geo(); }, 'arm', 0xe0b088, false, n);
+  if (nFlags) inst('af-crowd-flag', () => { const m = afMesher(); m.box(0.06, 1.7, 0.06, 0.6, 0.85, 0.1, 0, 0x5a4636); const q = new THREE.Shape(); q.moveTo(0, 0); q.lineTo(0.9, -0.15); q.lineTo(0, -0.62); q.closePath(); m.add(new THREE.ShapeGeometry(q), 0.63, 1.7, 0.1, 0, 0xffffff); return m.geo(); }, 'flag', 0xffffff, true, nFlags, p => p.flag);
+  AF.crowd = []; AF.crowdN = n;
+  afBuildRuins(S, seed);
+  g.add(S.build()); g.add(C.build({ side: THREE.DoubleSide, receive: false }));
+  try { afBuildGates(g, 0, 0); } catch (e) { console.warn('[arena] gates', e); AF.gates = []; }   // a gate and a tunnel behind every team
   return g;
+}
+// RUINS on the grass round the amphitheatre — an older city the pit was built over: broken colonnades, a lone arch,
+// wall stubs with ragged tops, fallen drums and toppled statues, rubble. Seeded; baked into the stone mesh.
+function afBuildRuins(S, seed) {
+  const R0 = AF_F.radius, A = AF_AMPH, at = (r, a, y) => [Math.cos(a) * r, y, Math.sin(a) * r], tang = (a) => -a - Math.PI / 2;
+  const OLD = 0xa89c86, OLD_D = 0x857a66, MOSS = 0x8a8f6a, MARBLE = 0xd9d0bd, rmin = R0 + A.out + 5, rmax = Math.min(R0 + A.out + 34, AF_F.radius * 2.55);
+  const stone = () => afTint(seed() < 0.3 ? MOSS : OLD, 0.12, seed()), gy = (x, z) => afY(x, z);
+  const sites = 7 + Math.round(seed() * 4);
+  for (let s = 0; s < sites; s++) {
+    const sa = seed() * TAU, sr = rmin + seed() * (rmax - rmin), kind = seed(), sx = Math.cos(sa) * sr, sz = Math.sin(sa) * sr, yaw = seed() * TAU;
+    const near = (dx, dz) => { const x = sx + Math.cos(yaw) * dx - Math.sin(yaw) * dz, z = sz + Math.sin(yaw) * dx + Math.cos(yaw) * dz; return [x, gy(x, z), z]; };
+    if (kind < 0.3) {                                        // a COLONNADE: a row of column stumps, one or two still whole, drums fallen between
+      const n = 3 + Math.round(seed() * 3);
+      for (let i = 0; i < n; i++) { const p = near((i - (n - 1) / 2) * 3.2, 0), h = seed() < 0.3 ? 6.5 : 1 + seed() * 3.5, c = stone();
+        S.box(1.5, 0.5, 1.5, p[0], p[1] + 0.05, p[2], yaw, OLD_D); S.cyl(0.5, 0.56, h, 8, p[0], p[1] + 0.3 + h / 2, p[2], yaw, c);
+        if (h > 6) S.box(1.4, 0.5, 1.4, p[0], p[1] + 0.3 + h + 0.25, p[2], yaw, c);
+        else if (seed() < 0.7) { const q = near((i - (n - 1) / 2) * 3.2 + 1.2 + seed(), 2 + seed() * 2.5); S.cyl(0.5, 0.5, 2 + seed() * 2, 8, q[0], q[1] + 0.4, q[2], yaw + seed() * 1.5, c, Math.PI / 2); } }
+      if (n > 3 && seed() < 0.6) { const p = near(0, 0); S.box((n - 1) * 3.2 * 0.6, 0.6, 1.2, p[0], p[1] + 0.3 + 6.5 + 0.8, p[2], yaw, OLD_D); }   // a length of lintel still up
+    } else if (kind < 0.5) {                                 // a lone ARCH
+      const w = 4.2, p = near(0, 0), c = stone();
+      for (const sg of [-1, 1]) { const q = near(sg * (w / 2 + 0.5), 0); S.box(1.0, 5.2, 1.4, q[0], q[1] + 2.6, q[2], yaw, c); }
+      S.add(cachedGeo('af-spandrel:' + w + ',' + (w / 2 + 0.8), () => { const q = new THREE.Shape(); q.moveTo(-w / 2, 0); q.lineTo(-w / 2, w / 2 + 0.8); q.lineTo(w / 2, w / 2 + 0.8); q.lineTo(w / 2, 0); q.absarc(0, 0, w / 2, 0, Math.PI, false); const e = new THREE.ExtrudeGeometry(q, { depth: 1.4, bevelEnabled: false, curveSegments: 7 }); e.translate(0, 0, -0.7); return e; }), p[0], p[1] + 5.2 - (w / 2 + 0.8) + 2.9, p[2], yaw, c);
+      const q = near(3.5, 1.5); S.box(2.0, 1.4, 1.2, q[0], q[1] + 0.6, q[2], yaw + 0.4, OLD_D);
+    } else if (kind < 0.8) {                                 // WALL STUBS with ragged tops, an L of them
+      for (const [dx, dz, ry, L] of [[0, 0, 0, 6 + seed() * 4], [-(3 + seed() * 2), 3, Math.PI / 2, 4 + seed() * 3]]) {
+        const p = near(dx, dz), c = stone(), h = 2 + seed() * 3;
+        S.box(L, h, 1.0, p[0], p[1] + h / 2, p[2], yaw + ry, c); S.box(L * 0.6, 0.9, 1.0, p[0], p[1] + h + 0.45, p[2], yaw + ry, c); S.box(L * 0.25, 0.8, 1.0, p[0], p[1] + h + 1.3, p[2], yaw + ry, afTint(c, 0.1, seed()));
+      }
+      for (let i = 0; i < 5; i++) { const q = near(seed() * 6 - 3, 2 + seed() * 4), sz = 0.3 + seed() * 0.5; S.add(cachedGeo('af-rock', () => new THREE.IcosahedronGeometry(1, 0)), q[0], q[1] + sz * 0.3, q[2], seed() * TAU, OLD_D, sz * 1.3, sz * 0.7, sz); }
+    } else {                                                 // a TOPPLED STATUE on its plinth's stump
+      const p = near(0, 0), q = near(2.6, 0.6), c = MARBLE;
+      S.box(2.0, 1.2, 2.0, p[0], p[1] + 0.6, p[2], yaw, OLD_D);
+      S.add(cachedGeo('box:0.9,2.6,0.7', () => new THREE.BoxGeometry(0.9, 2.6, 0.7)), q[0], q[1] + 0.4, q[2], yaw + 0.3, c, 1, 1, 1, Math.PI / 2, 0); S.add(cachedGeo('box:1.4,0.5,0.75', () => new THREE.BoxGeometry(1.4, 0.5, 0.75)), q[0] - Math.sin(yaw + 0.3) * 1.4, q[1] + 0.4, q[2] + Math.cos(yaw + 0.3) * 1.4, yaw + 0.3, c, 1, 1, 1, Math.PI / 2, 0);   // lying on its face
+      const hq = near(4.8, 1.4); S.add(cachedGeo('sph:0.36,7,5', () => new THREE.SphereGeometry(0.36, 7, 5)), hq[0], hq[1] + 0.3, hq[2], 0, c);
+    }
+  }
 }
 // team spawn points: evenly around the ring, each facing the centre
 function afSpawn(teamIdx, teams) {
@@ -17033,10 +17185,7 @@ function afBuildGates(g, N, seg) {
   for (let t = 0; t < AF.cfg.teams; t++) {
     const F = afGateFrame(t), gy = afY(F.gx, F.gz);
     const at = (d, s) => ({ x: F.gx + F.ux * d + F.wx * s, z: F.gz + F.uz * d + F.wz * s });   // d: out along the tunnel, s: sideways along the wall
-    let gap = W / 2;                                         // the hole the skipped wall blocks left: fill from the door frame out to the next block
-    for (let i = 0; i < N; i++) { const d = Math.abs(angleDelta((i / N) * TAU, F.a)) * F.R; if (d < W / 2 + seg * 1.04 / 2) gap = Math.max(gap, d + seg * 1.04 / 2); }
-    for (const sgn of [-1, 1]) {
-      const fl = gap - W / 2 - 0.55; if (fl > 0.2) { const p = at(0, sgn * (W / 2 + 0.55 + fl / 2)), b = boxMesh(fl + 0.1, 2.1, 1.2, stone); b.position.set(p.x, afY(p.x, p.z) + 1.05, p.z); b.rotation.y = F.tang; g.add(b); }
+    for (const sgn of [-1, 1]) {                             // (the podium wall's arcs end at the pillars' outer edges — afBuildWall)
       const pp = at(0, sgn * (W / 2 + 0.55)), pil = boxMesh(1.1, H + 0.9, 1.7, stone); pil.position.set(pp.x, afY(pp.x, pp.z) + (H + 0.9) / 2, pp.z); pil.rotation.y = F.tang; g.add(pil);
       const cap = boxMesh(1.4, 0.35, 2.0, dark); cap.position.set(pp.x, afY(pp.x, pp.z) + H + 0.9 + 0.17, pp.z); cap.rotation.y = F.tang; g.add(cap);
     }
@@ -17107,24 +17256,32 @@ function afPickStars() {                                     // per team: the hi
 /* THE FILMS — six ways to bring an army into the pit. One is dealt from the seed per fight (never the one this
    device saw last), each a director function that lays routes for the men (afIntroRoute) and a shot list from the
    shared lens kit (afIntroLens). All of them share the set: the pens, the gates, the stars, the columns. */
-const AF_FILMS = {
-  pen:      { title: 'THE PEN',      weight: 3, ok: () => true },
-  champion: { title: 'THE CHAMPION', weight: 3, ok: () => AF.cfg.per >= 2 },
-  legion:   { title: 'THE LEGION',   weight: () => AF.cfg.per >= 12 ? 4 : AF.cfg.per >= 5 ? 2 : 0.5, ok: () => AF.cfg.per >= 3 },
-  captains: { title: 'THE CAPTAINS', weight: 3, ok: () => AF.cfg.per >= 2 && AF_F.radius <= 52 },
-  riders:   { title: 'THE RIDERS',   weight: 4, ok: () => AF.bodies.some(b => b.mounted) },
-  duel:     { title: 'THE DUEL',     weight: 6, ok: () => AF.cfg.per <= 2 && AF.cfg.teams === 2 && AF_F.radius <= 52 },
+/* THE ACTS — how ONE team comes into the pit. Every team is dealt its own act from the seed (a different one
+   from the other teams' where the roster allows, and for your own team never the one this device saw last), so a
+   fight's entrance is a bill of two or more styles, then a shared finale: the crane over the pit and the face-off. */
+const AF_ACTS = {
+  pen:      { title: 'THE PEN',      weight: 3, ok: (t, n) => true },
+  champion: { title: 'THE CHAMPION', weight: 3, ok: (t, n) => n >= 2 },
+  legion:   { title: 'THE LEGION',   weight: (t, n) => n >= 12 ? 4 : n >= 5 ? 2 : 0.5, ok: (t, n) => n >= 3 },
+  captain:  { title: 'THE CAPTAIN',  weight: 3, ok: (t, n) => n >= 2 && AF_F.radius <= 52 },
+  riders:   { title: 'THE RIDERS',   weight: 4, ok: (t, n) => AF.bodies.some(b => b.team === t && b.mounted) },
+  duel:     { title: 'THE DUEL',     weight: 6, ok: (t, n) => n <= 2 && AF_F.radius <= 52 },
 };
-function afPickFilm(rnd) {
+function afPickActs(rnd, order) {
   let last = null; try { last = localStorage.getItem('bv-intro-last'); } catch (e) {}
-  const pool = Object.keys(AF_FILMS).filter(k => AF_FILMS[k].ok());
-  let pick = pool.filter(k => k !== last); if (!pick.length) pick = pool;
-  const w = k => typeof AF_FILMS[k].weight === 'function' ? AF_FILMS[k].weight() : AF_FILMS[k].weight;
-  let tot = 0; for (const k of pick) tot += w(k); let x = rnd() * tot, film = pick[pick.length - 1];
-  for (const k of pick) { x -= w(k); if (x <= 0) { film = k; break; } }
-  if (AF.introFilm && AF_FILMS[AF.introFilm]) film = AF.introFilm;   // (test override)
-  try { localStorage.setItem('bv-intro-last', film); } catch (e) {}
-  return film;
+  const forced = (AF.introFilm || '').split(',').filter(k => AF_ACTS[k]);   // ?film=champion,riders — my team's act, then the others'
+  const styles = [], taken = new Set();
+  order.forEach((t, k) => {
+    const n = AF.bodies.filter(b => b.team === t).length, pool = Object.keys(AF_ACTS).filter(a => AF_ACTS[a].ok(t, n));
+    let pick = pool.filter(a => !taken.has(a) && (k > 0 || a !== last)); if (!pick.length) pick = pool.filter(a => !taken.has(a)); if (!pick.length) pick = pool;
+    const w = a => { const v = AF_ACTS[a].weight; return typeof v === 'function' ? v(t, n) : v; };
+    let tot = 0; for (const a of pick) tot += w(a); let x = rnd() * tot, style = pick[pick.length - 1];
+    for (const a of pick) { x -= w(a); if (x <= 0) { style = a; break; } }
+    if (forced[k] && AF_ACTS[forced[k]].ok(t, n)) style = forced[k];
+    styles[t] = style; taken.add(style);
+  });
+  try { localStorage.setItem('bv-intro-last', styles[order[0]]); } catch (e) {}
+  return styles;
 }
 function afIntroStart() {
   const rnd = _mulberry32(AF.seed ^ 0x9e3779b9), myT = AF.me ? AF.me.team : 0, order = [myT]; for (let t = 0; t < AF.cfg.teams; t++) if (t !== myT) order.push(t);
@@ -17132,7 +17289,7 @@ function afIntroStart() {
   AF.timeScale = 1; AF.fov = CAM_BASE_FOV;
   for (let t = 0; t < AF.cfg.teams; t++) { I.frames.push(afGateFrame(t)); I.release.push(1e9); }
   const seatKey = b => { const so = afSlotOffset(AF.roster[b.idx].s, AF.cfg.per); return so.back * 100 + Math.abs(so.right); };
-  I.film = afPickFilm(rnd); const ridersFirst = I.film === 'riders';
+  I.styles = afPickActs(rnd, order); I.film = order.map(t => I.styles[t]).join('+');
   for (let t = 0; t < AF.cfg.teams; t++) {                  // the stars take the front rank's middle: swap muster points with whoever held them
     const F = I.frames[t], members = AF.bodies.filter(b => b.team === t), keys = new Map(members.map(b => [b, seatKey(b)])), claimed = new Set();
     for (const s of I.stars[t]) {
@@ -17143,7 +17300,7 @@ function afIntroStart() {
     for (const b of members) b.home = { x: b.x, z: b.z, yaw: b.yaw };
     // the COLUMN in the tunnel: stars first, then the front ranks, riders at the back; three abreast, one rider to a rank
     const rest = members.filter(b => !claimed.has(b)).sort((a, b) => (a.mounted - b.mounted) || keys.get(a) - keys.get(b));
-    const col = ridersFirst ? [...members.filter(b => b.mounted).sort((a, b) => (claimed.has(b) - claimed.has(a)) || keys.get(a) - keys.get(b)), ...I.stars[t].filter(b => !b.mounted), ...rest.filter(b => !b.mounted)] : [...I.stars[t], ...rest];
+    const col = I.styles[t] === 'riders' ? [...members.filter(b => b.mounted).sort((a, b) => (claimed.has(b) - claimed.has(a)) || keys.get(a) - keys.get(b)), ...I.stars[t].filter(b => !b.mounted), ...rest.filter(b => !b.mounted)] : [...I.stars[t], ...rest];
     let depth = 2.2, k = 0;
     const rows = [];
     while (k < col.length) {
@@ -17166,8 +17323,7 @@ function afIntroStart() {
   for (const b of AF.bodies) afIntroRoute(b, []);          // the plain route: out of the tunnel, then to his muster point
   for (let t = 0; t < AF.cfg.teams; t++) I.stars[t].forEach((b, k) => { if (!b.mounted) b.intro.penRallyAt = 0.3 + k * 1.6 + rnd() * 0.5; });   // the stars work the ranks up while they wait
   const L = afIntroLens(I, rnd);
-  (AF_FILM_DIRECTORS[I.film] || AF_FILM_DIRECTORS.pen)(I, L, rnd);
-  if (I.shots.length) { const s0 = I.shots[0]; s0.cap = '<div style="font-size:.68em;letter-spacing:5px;opacity:.7;margin-bottom:6px">' + AF_FILMS[I.film].title + '</div>' + (s0.cap || ''); }
+  afIntroCompose(I, L);
   afIntroUi(true); afIntroApplyShot();
   const fade = document.getElementById('af-intro-fade'); if (fade) { fade.style.transition = 'none'; fade.style.opacity = '1'; requestAnimationFrame(() => { fade.style.transition = 'opacity .9s'; fade.style.opacity = '0'; }); }
   afDrum(0.5);
@@ -17256,15 +17412,15 @@ function afIntroLens(I, rnd) {
     return shot(dur, ts, (k, dt) => { const lead = I.stars[t][0] || AF.bodies.find(b => b.team === t); if (!lead) return; const f = fwd(lead), ah = lerp(7, 6.2, k), px = lead.x + f.fx * ah + f.rx * side, pz = lead.z + f.fz * ah + f.rz * side;
       afIntroCam(px, gy(px, pz) + 1.0, pz, lead.x - f.rx * side * 0.4, gy(lead.x, lead.z) + AF_INTRO.chest, lead.z - f.rz * side * 0.4, 50, dt * 9); }, null, null); };
   // from the STANDS: a spectator's seat at this bearing, the crowd's heads in the foreground
-  L.stands = (ang, dur, look, onStart) => { const r0 = R() + 4.2 + 2 * 2.6 + 0.8, drift = sideOf() * 0.18;
+  L.stands = (ang, dur, look, onStart) => { const r0 = R() + 3.3, drift = sideOf() * 0.18;   // standing at the podium's balustrade, over the dignitaries' heads
     return shot(dur, 1, (k) => { const a = ang + drift * k, px = Math.cos(a) * r0, pz = Math.sin(a) * r0, lk = look(k);
-      afIntroCam(px, gy(px, pz) + 1.1 + 2 * 1.35 + 2.3, pz, lk.x, lk.y, lk.z, lk.fov || 50, 0); }, onStart, null); };
+      afIntroCam(px, AF_AMPH.wall + 2.4, pz, lk.x, lk.y, lk.z, lk.fov || 50, 0); }, onStart, null); };
   // the CRANE: up from behind a gate over the whole pit
   L.crane = (t, dur, onStart) => { const F = I.frames[t];
     return shot(dur, 1, (k) => { const e = k * k * (3 - 2 * k), Rr = R(), d = lerp(2.5, Rr * 0.42, e), h = lerp(AF_INTRO.gateH + 3.5, Rr * 0.78 + 8, e), px = F.gx + F.ux * d, pz = F.gz + F.uz * d;
       afIntroCam(px, Math.max(gy(px, pz) + 2, h), pz, lerp(F.gx * 0.5, 0, e), 2.5, lerp(F.gz * 0.5, 0, e), 55, 0); }, onStart, null); };
   // the AERIAL: high over the pit, descending and turning
-  L.aerial = (dur, onStart) => { const a0 = rnd() * TAU, dir = sideOf();
+  L.aerial = (dur, onStart, ang) => { const a0 = ang != null ? ang + 0.4 : rnd() * TAU, dir = sideOf();
     return shot(dur, 1, (k) => { const e = k * k * (3 - 2 * k), Rr = R(), a = a0 + dir * e * 0.9, r = lerp(Rr * 1.5, Rr * 0.9, e), h = lerp(Rr * 1.6 + 20, Rr * 0.7 + 8, e);
       afIntroCam(Math.cos(a) * r, h, Math.sin(a) * r, 0, 1, 0, 50, 0); }, onStart, null); };
   // TOP-DOWN over a team's block as it forms up
@@ -17284,98 +17440,87 @@ function afIntroLens(I, rnd) {
   L.roar = (big, ang) => { afCrowdReact(big); if (ang != null) { AF.waveT = 3.4; AF.waveAng = ang - 0.6; } };
   return L;
 }
-const AF_FILM_DIRECTORS = {
-  // THE PEN — the original cut: every pen, the gates, the stars in slow motion, the column, the crane, the face-off
-  pen(I, L) {
-    const many = AF.cfg.teams > 2, my = I.stars[I.myT], foe = I.foeT != null ? I.stars[I.foeT] : [];
-    for (const t of I.order) L.pen(t, many ? 1.7 : 2.3);
-    L.gateLow(I.myT, 1.9, () => { afIntroOpen(I, I.order); afHorn(); L.roar(true, I.frames[I.myT].a); });
-    if (I.foeT != null) L.gateLow(I.foeT, 1.2);
-    const seq = []; for (let k = 0; k < 2; k++) { if (my[k]) seq.push(my[k]); if (foe[k]) seq.push(foe[k]); }
-    if (many) for (const t of I.order.slice(2)) if (I.stars[t][0]) seq.push(I.stars[t][0]);
-    seq.forEach((b, k) => L.star(b, k < 2 ? 2.2 : 1.5, AF_INTRO.slow));
-    L.column(I.myT, 1.4);
-    L.crane(I.myT, 3.2, L.banner);
-    L.faceoff(my[0] || AF.me || AF.bodies[0], 2.0, 0.5);
+const AF_ACT_DIRECTORS = {
+  // THE PEN — over the helmets at the shut gate, the gate from the sand, the stars in slow motion, the column
+  pen(I, L, t, m) {
+    const st = I.stars[t], F = I.frames[t];
+    L.pen(t, 2.2 * m);
+    L.gateLow(t, 1.8 * m, () => { afIntroOpen(I, [t]); afHorn(); L.roar(true, F.a); });
+    if (st[0]) L.star(st[0], 2.1 * m, AF_INTRO.slow);
+    if (st[1]) L.star(st[1], 1.5 * m, AF_INTRO.slow);
+    L.column(t, 1.3 * m);
   },
-  // THE CHAMPION — the best fighter in the pit comes out alone, and only then the rest
-  champion(I, L) {
-    const C = AF.bodies.slice().sort((a, b) => (b.xp || 0) - (a.xp || 0) || (a.kind === 'npc') - (b.kind === 'npc') || a.idx - b.idx)[0], ct = C.team;
-    const other = I.order.filter(t => t !== ct), mine = ct === I.myT ? (I.stars[I.foeT] || [])[0] : I.stars[I.myT][0], FC = I.frames[ct];
-    for (const b of AF.bodies) if (b.team === ct) b.intro.release = 1e9;   // his team waits on him, and he waits on the gate
+  // THE CHAMPION — the team's best comes out alone: a seat in the stands, low in the tunnel, his profile, the sun behind him
+  champion(I, L, t, m) {
+    const C = I.stars[t][0], F = I.frames[t];
+    for (const b of AF.bodies) if (b.team === t) b.intro.release = 1e9;   // they wait on him, and he waits on the gate
     C.intro.spd = AF_INTRO.starWalk * 0.9;
-    L.stands(FC.a + L.sideOf() * 0.95, 2.0, (k) => ({ x: FC.gx * lerp(0.75, 0.6, k), y: 3, z: FC.gz * lerp(0.75, 0.6, k), fov: 44 }));
-    L.penStar(C, 1.8);
-    L.gateLow(ct, 2.0, () => { afIntroOpen(I, [ct], 1e9); C.intro.release = I.t + 0.2; afHorn(); L.roar(true, FC.a); });
-    L.profile(C, 2.4, 0.3);
-    const sl = Math.hypot(sun.position.x, sun.position.z) || 1, sunBehind = (sun.position.x / sl) * FC.ux + (sun.position.z / sl) * FC.uz;
-    if (sunBehind > 0.3 && AF.cfg.time !== 'night') L.backlit(C, 1.8, 0.5); else L.star(C, 1.8, 0.45);
-    const rest = I.order.filter(t => t !== ct);
-    L.column(I.myT === ct ? (I.foeT != null ? I.foeT : ct) : I.myT, 1.5).onStart = () => { afIntroOpen(I, rest, 0.4); for (const b of AF.bodies) if (b.team === ct && b !== C) b.intro.release = I.t + 0.4; L.roar(false); };
-    if (mine) L.star(mine, 1.8, AF_INTRO.slow);
-    L.crane(I.myT, 2.8, L.banner);
-    L.faceoff(I.stars[I.myT][0] || AF.me || AF.bodies[0], 2.0, 0.5);
+    L.stands(F.a + L.sideOf() * 0.95, 1.8 * m, (k) => ({ x: F.gx * lerp(0.75, 0.6, k), y: 3, z: F.gz * lerp(0.75, 0.6, k), fov: 44 }));
+    L.penStar(C, 1.6 * m);
+    L.gateLow(t, 1.9 * m, () => { afIntroOpen(I, [t], 1e9); C.intro.release = I.t + 0.2; afHorn(); L.roar(true, F.a); });
+    L.profile(C, 2.2 * m, 0.3);
+    const sl = Math.hypot(sun.position.x, sun.position.z) || 1, sunBehind = (sun.position.x / sl) * F.ux + (sun.position.z / sl) * F.uz;
+    if (sunBehind > 0.3 && AF.cfg.time !== 'night') L.backlit(C, 1.6 * m, 0.5); else L.star(C, 1.6 * m, 0.45);
+    L.column(t, 1.3 * m).onStart = () => { for (const b of AF.bodies) if (b.team === t && b !== C) b.intro.release = I.t + 0.3; L.roar(false); };
   },
-  // THE LEGION — drums, an aerial, every gate at once, the columns as a marching mass, the blocks from above
-  legion(I, L) {
-    const my = I.stars[I.myT][0] || AF.bodies[0], F = I.frames[I.myT];
+  // THE LEGION — drums, an aerial over their side, the gate from a seat, a dolly along the column, the front rank, the block from above
+  legion(I, L, t, m) {
+    const F = I.frames[t];
     I.drums = 'heavy';
-    L.aerial(2.6);
-    const mid = F.a + L.sideOf() * Math.PI / 2;
-    L.stands(mid, 1.8, (k) => ({ x: F.gx * 0.7, y: 3, z: F.gz * 0.7, fov: 44 }), () => { afIntroOpen(I, I.order, 0.6); afHorn(); setTimeout(afHorn, 350); L.roar(true, mid); });
-    L.dolly(I.myT, 2.4, 0.6);
-    if (I.foeT != null) L.front(I.foeT, 2.0, 0.5);
-    L.top(I.myT, 2.4);
-    L.behind(my, 1.6, 1);
-    L.crane(I.myT, 2.6, L.banner);
-    L.faceoff(my, 2.0, 0.5);
+    L.aerial(2.2 * m, null, F.a);
+    L.stands(F.a + L.sideOf() * Math.PI / 2, 1.6 * m, (k) => ({ x: F.gx * 0.7, y: 3, z: F.gz * 0.7, fov: 44 }), () => { afIntroOpen(I, [t], 0.6); afHorn(); setTimeout(afHorn, 350); L.roar(true, F.a); });
+    L.dolly(t, 2.2 * m, 0.6);
+    L.front(t, 1.8 * m, 0.5);
+    L.top(t, 2.0 * m);
   },
-  // THE CAPTAINS — the two stars walk out alone to meet in the middle; the armies come on behind them
-  captains(I, L) {
-    const A = I.stars[I.myT][0], B = I.foeT != null ? I.stars[I.foeT][0] : null, leads = [A, B].filter(Boolean);
-    const spot = b => { const F = I.frames[b.team], d = AF.cfg.teams === 2 ? 2.8 : 3.4; return { x: -F.ux * d, z: -F.uz * d }; };
-    for (const b of AF.bodies) b.intro.release = 1e9;
-    for (const b of leads) { const s = spot(b); b.intro.spd = 7.0; afIntroRoute(b, [{ x: s.x, z: s.z, spd: 7.0, gait: 'run', tol: 0.5, pause: 1e9, face: () => Math.atan2(-b.x, -b.z) }]); }
-    L.pen(I.myT, 1.6);
-    L.gateLow(I.myT, 1.4, () => { afIntroOpen(I, I.order, 1e9); for (const b of leads) b.intro.release = I.t + 0.2; afHorn(); L.roar(false, I.frames[I.myT].a); });
-    L.stands(I.frames[I.myT].a + L.sideOf() * Math.PI / 2, 2.4, (k) => ({ x: A.x * (1 - k * 0.5), y: 2, z: A.z * (1 - k * 0.5), fov: 40 }));
-    L.star(A, 1.4, 0.5);
-    if (B) L.star(B, 1.2, 0.5);
-    L.orbit(() => ({ x: leads.reduce((a, b) => a + b.x, 0) / leads.length, z: leads.reduce((a, b) => a + b.z, 0) / leads.length }), 8.5, 2.4, 3.2, 0.7, 38).onStart = () => { for (const b of AF.bodies) if (!leads.includes(b)) b.intro.release = I.t + 0.3; L.roar(true); };
-    L.crane(I.myT, 2.6, L.banner);
-    L.faceoff(A, 2.0, 0.5);
+  // THE CAPTAIN — the star strides out alone to the middle and holds it, rallying, while the camera circles him; then his men
+  captain(I, L, t, m) {
+    const A = I.stars[t][0], F = I.frames[t], d = AF.cfg.teams === 2 ? 2.8 : 3.4, spot = { x: -F.ux * d, z: -F.uz * d };
+    for (const b of AF.bodies) if (b.team === t) b.intro.release = 1e9;
+    A.intro.spd = 7.0; afIntroRoute(A, [{ x: spot.x, z: spot.z, spd: 7.0, gait: 'run', tol: 0.5, pause: 1e9, face: () => Math.atan2(-A.x, -A.z) }]);
+    L.pen(t, 1.5 * m);
+    L.gateLow(t, 1.3 * m, () => { afIntroOpen(I, [t], 1e9); A.intro.release = I.t + 0.2; afHorn(); L.roar(false, F.a); });
+    L.stands(F.a + L.sideOf() * Math.PI / 2, 2.2 * m, (k) => ({ x: A.x * (1 - k * 0.5), y: 2, z: A.z * (1 - k * 0.5), fov: 40 }));
+    L.star(A, 1.4 * m, 0.5);
+    L.orbit(() => ({ x: A.x, z: A.z }), 7.5, 2.4, 2.6 * m, 0.7, 38).onStart = () => { for (const b of AF.bodies) if (b.team === t && b !== A) b.intro.release = I.t + 0.3; L.roar(true); };
   },
-  // THE RIDERS — the horse comes out first and takes a lap along the wall before the foot
-  riders(I, L) {
-    const riders = AF.bodies.filter(b => b.mounted), byTeam = t => riders.filter(b => b.team === t), lead = byTeam(I.myT)[0] || riders[0], lt = lead.team, FL = I.frames[lt];
-    for (const b of AF.bodies) b.intro.release = 1e9;
-    const way = L.sideOf();
-    for (const b of riders) {                                // the lap: a sweep of the ring at a canter (every squadron the same way round), then home
-      const F = I.frames[b.team], r = AF_F.radius - 8, n = 6, arc = 3.4, pts = [];
-      for (let k = 1; k <= n; k++) { const a = F.a + way * (k / n) * arc; pts.push({ x: Math.cos(a) * r, z: Math.sin(a) * r, spd: 9.5, gait: 'canter', tol: 3.5 }); }
-      afIntroRoute(b, pts);
-    }
-    L.gateLow(lt, 1.8, () => { afIntroOpen(I, I.order, 1e9); for (const b of riders) b.intro.release = I.t + 0.3; afHorn(); L.roar(true, FL.a); afDrum(0.6); });
-    L.ride(lead, 2.6, 0.55);
-    L.stands(FL.a + 1.2, 1.8, (k) => ({ x: lead.x, y: 2, z: lead.z, fov: 40 }));
-    L.column(I.myT, 1.5).onStart = () => { for (const b of AF.bodies) if (!b.mounted) b.intro.release = I.t + 0.2; L.roar(false); };
-    const st = I.stars[I.myT].find(b => !b.mounted) || I.stars[I.myT][0]; if (st) L.star(st, 2.0, AF_INTRO.slow);
-    L.crane(I.myT, 2.8, L.banner);
-    L.faceoff(I.stars[I.myT][0] || AF.me || AF.bodies[0], 2.0, 0.5);
+  // THE RIDERS — the horse leads out and laps the ring at a canter, tracked alongside; the foot follows
+  riders(I, L, t, m) {
+    const riders = AF.bodies.filter(b => b.team === t && b.mounted), lead = riders[0], F = I.frames[t], way = L.sideOf();
+    for (const b of AF.bodies) if (b.team === t) b.intro.release = 1e9;
+    for (const b of riders) { const r = AF_F.radius - 8, n = 6, arc = 3.4, pts = []; for (let k = 1; k <= n; k++) { const a = F.a + way * (k / n) * arc; pts.push({ x: Math.cos(a) * r, z: Math.sin(a) * r, spd: 9.5, gait: 'canter', tol: 3.5 }); } afIntroRoute(b, pts); }
+    L.gateLow(t, 1.7 * m, () => { afIntroOpen(I, [t], 1e9); for (const b of riders) b.intro.release = I.t + 0.3; afHorn(); L.roar(true, F.a); afDrum(0.6); });
+    L.ride(lead, 2.4 * m, 0.55);
+    L.stands(F.a + way * 1.2, 1.6 * m, (k) => ({ x: lead.x, y: 2, z: lead.z, fov: 40 }));
+    L.column(t, 1.4 * m).onStart = () => { for (const b of AF.bodies) if (b.team === t && !b.mounted) b.intro.release = I.t + 0.2; L.roar(false); };
+    const st = I.stars[t].find(b => !b.mounted); if (st) L.star(st, 1.6 * m, AF_INTRO.slow);
   },
-  // THE DUEL — two men, two gates, cuts between them as they walk to the middle and take each other's measure
-  duel(I, L) {
-    const A = I.stars[I.myT][0], B = I.stars[I.foeT][0], spot = b => { const F = I.frames[b.team]; return { x: -F.ux * 3.0, z: -F.uz * 3.0 }; };
-    for (const b of [A, B]) { const s = spot(b); b.intro.spd = 6.6; afIntroRoute(b, [{ x: s.x, z: s.z, spd: 6.6, gait: 'run', tol: 0.5, pause: 1e9, face: () => Math.atan2(-b.x, -b.z) }]); }
-    L.penStar(A, 1.5); L.penStar(B, 1.5);
-    L.gateLow(I.myT, 1.3, () => { afIntroOpen(I, I.order, 0.4); afHorn(); L.roar(false, I.frames[I.myT].a); });
-    L.gateLow(I.foeT, 1.1);
-    L.star(A, 2.0, AF_INTRO.slow); L.star(B, 1.8, AF_INTRO.slow);
-    L.stands(I.frames[I.myT].a + L.sideOf() * Math.PI / 2, 3.0, (k) => ({ x: 0, y: 2, z: 0, fov: 42 }));
-    L.orbit(() => ({ x: (A.x + B.x) / 2, z: (A.z + B.z) / 2 }), 8, 2.2, 2.8, 0.6, 38).onStart = () => { L.roar(true); L.banner(); };
-    L.faceoff(A, 2.0, 0.5);
+  // THE DUEL — a lone fighter: low in the pen, the gate, the run out in slow motion, the seat as he makes for the middle
+  duel(I, L, t, m) {
+    const A = I.stars[t][0], F = I.frames[t], spot = { x: -F.ux * 3.0, z: -F.uz * 3.0 };
+    A.intro.spd = 6.6; afIntroRoute(A, [{ x: spot.x, z: spot.z, spd: 6.6, gait: 'run', tol: 0.5, pause: 1e9, face: () => Math.atan2(-A.x, -A.z) }]);
+    L.penStar(A, 1.6 * m);
+    L.gateLow(t, 1.3 * m, () => { afIntroOpen(I, [t], 0.4); afHorn(); L.roar(false, F.a); });
+    L.star(A, 2.0 * m, AF_INTRO.slow);
+    L.stands(F.a + L.sideOf() * Math.PI / 2, 2.2 * m, (k) => ({ x: A.x * (1 - k * 0.6), y: 2, z: A.z * (1 - k * 0.6), fov: 42 }));
   },
 };
+// the BILL: each team's act in order (mine first), then the finale everyone shares
+function afIntroCompose(I, L) {
+  const m = AF.cfg.teams <= 2 ? 1 : AF.cfg.teams === 3 ? 0.8 : 0.65;
+  I.order.forEach((t, k) => {
+    const n0 = I.shots.length, style = I.styles[t];
+    (AF_ACT_DIRECTORS[style] || AF_ACT_DIRECTORS.pen)(I, L, t, k >= 3 ? m * 0.8 : m);
+    const s0 = I.shots[n0]; if (s0) s0.cap = '<div style="font-size:.68em;letter-spacing:5px;opacity:.7;margin-bottom:6px">' + AF_ACTS[style].title + ' · <span style="color:' + AF_TEAMS[t].col + '">' + AF_TEAMS[t].name + '</span></div>' + (s0.cap || '');
+  });
+  const A = I.stars[I.myT][0] || AF.me || AF.bodies[0];
+  L.crane(I.myT, 2.8, () => {                              // the finale: anyone still in his tunnel comes on now
+    for (let t = 0; t < AF.cfg.teams; t++) { const G = AF.gates[t]; if (G && !G.want) { G.want = 1; afGateCreak(G); } if (I.release[t] > 1e8) I.release[t] = I.t + 0.2; }
+    for (const b of AF.bodies) if (b.intro && b.intro.phase === 'wait' && b.intro.release != null && b.intro.release > 1e8) b.intro.release = I.t + 0.2;
+    L.banner();
+  });
+  L.faceoff(A, 2.0, 0.5);
+}
 function afIntroCam(px, py, pz, lx, ly, lz, fov, smooth) {
   const I = AF.intro; tmpV.set(px, py, pz);
   if (I.cut || !smooth) camera.position.copy(tmpV); else camera.position.lerp(tmpV, clamp(smooth, 0, 1));
@@ -17484,7 +17629,7 @@ function afMakeBody(entry, idx, r) {
   const rigOpts = { hero: entry.kind !== 'npc' || !big, both: A.bow, plume: G && G.plume != null ? G.plume : AF_TEAM_HEX[entry.t] }; // a hundred capes would melt a phone: only the humans dress up in a big fight
   const hsz = G.horse && AF_LOOK.horse[gear.horse] ? AF_LOOK.horse[gear.horse].scale : 1;   // a nag is small, a warhorse big
   const h = mounted ? buildCavalry(td.pal, A.scale * hsz, 'sword', rigOpts) : buildHumanoid(td.pal, A.scale, A.bow ? weapon : weapon, rigOpts); const group = h.group || h;
-  if (REAL_ON && !mounted && BV.realReady) wearRealRig(h, REAL_TEAM[entry.t % REAL_TEAM.length] || 'knight');   // the real-figure demo
+  if (REAL_ON && !mounted && BV.realReady) wearRealRig(h, REAL_TEAM[entry.t % REAL_TEAM.length] || 'knight', { lo: big && npc, team: td.pal.cloth, swordScale: A.weapon === 'longsword' ? 1.25 : 1 });   // the real figures
   if (h.parts.shield) { h.parts.shield.visible = A.shield && weapon !== 'bow'; if (A.bigShield) h.parts.shield.scale.set(1.3, 1.3, 1.3); }
   group.rotation.order = 'YXZ';                              // yaw first, then a body-local tilt/roll (somersaults, crumples)
   const sp = afSpawn(entry.t, AF.cfg.teams), rgx = -Math.cos(sp.yaw), rgz = Math.sin(sp.yaw), so = afSlotOffset(entry.s, AF.cfg.per), off = so.right, back = so.back * (mounted ? 1.3 : 1);
@@ -17719,7 +17864,7 @@ function afDressGear(parts, gear, pal) {
   if (!parts || !window.ARENA_CAT) return; const I = ARENA_CAT.ARENA_ITEMS; gear = gear || {};
   // every dressing pass starts clean: the pieces the last pass hung on the rig come off
   for (const m of parts.gearBits || []) { if (m.parent) m.parent.remove(m); try { disposeGroup(m); } catch (e) {} } parts.gearBits = [];
-  const bit = (parent, mesh) => { parent.add(mesh); parts.gearBits.push(mesh); return mesh; };
+  const bit = (parent, mesh) => { parent.add(mesh); parts.gearBits.push(mesh); if (parts.realMesh) mesh.visible = false; return mesh; };   // a real figure wears its own sculpted armour
   const ar = AF_LOOK.armor[gear.armor || 'none'], ub = parts.upperBody;
   const pads = []; for (const sh of [parts.shoulderL, parts.shoulderR]) if (sh) { const pad = sh.children.find(c => c.isMesh); if (pad) pads.push(pad); }
   if (parts.torso && ub) {
@@ -17728,7 +17873,7 @@ function afDressGear(parts, gear, pal) {
       parts.torso.material = mat(clothC, { shared: false }); pads.forEach(p => { p.visible = false; });
       const dark = new THREE.Color(clothC).multiplyScalar(0.62).getHex(); for (const y of [0.22, 0.4, 0.58]) { const q = bit(ub, boxMesh(0.9, 0.025, 0.7, mat(dark, { shared: false }))); q.position.y = y; }
     } else {
-      parts.torso.material = mat(ar.torso, { metal: ar.metal, shared: false }); pads.forEach(p => { p.visible = true; p.material = mat(ar.pad, { metal: ar.metal, shared: false }); p.scale.set(ar.gorget ? 1.6 : 1.28, ar.gorget ? 0.9 : 0.68, ar.gorget ? 1.2 : 0.95); if (p.userData.big) p.scale.multiplyScalar(1.22); });
+      parts.torso.material = mat(ar.torso, { metal: ar.metal, shared: false }); pads.forEach(p => { p.visible = !parts.realMesh; p.material = mat(ar.pad, { metal: ar.metal, shared: false }); p.scale.set(ar.gorget ? 1.6 : 1.28, ar.gorget ? 0.9 : 0.68, ar.gorget ? 1.2 : 0.95); if (p.userData.big) p.scale.multiplyScalar(1.22); });
       const M = (c, metal) => mat(c, { metal: metal == null ? ar.metal : metal, shared: false });
       if (ar.straps) {                                       // a baldric across the chest and a row of studs
         const st = bit(ub, boxMesh(0.14, 0.95, 0.06, M(0x3a2414, 0))); st.position.set(0, 0.42, 0.34); st.rotation.z = 0.55;
@@ -17743,7 +17888,7 @@ function afDressGear(parts, gear, pal) {
       if (ar.crest) { const hp = parts.headPivot; const cr = bit(hp || ub, boxMesh(0.07, 0.2, 0.46, M(ar.crest, 1))); cr.position.set(0, (hp ? 0.62 : 1.6), 0.02); }
       if (ar.gorget && !parts.gorget) { const gt = new THREE.Mesh(cachedGeo('gorget', () => new THREE.CylinderGeometry(0.3, 0.44, 0.22, 7)), M(ar.gold ? 0xd9b24a : ar.torso, 1)); gt.position.y = 0.84; ub.add(gt); parts.gorget = gt; }
     }
-    if (parts.gorget) { parts.gorget.visible = !!(ar && ar.gorget); if (ar && ar.gorget) parts.gorget.material = mat(ar.gold ? 0xd9b24a : ar.rim || ar.torso, { metal: 1, shared: false }); }
+    if (parts.gorget) { parts.gorget.visible = !!(ar && ar.gorget) && !parts.realMesh; if (ar && ar.gorget) parts.gorget.material = mat(ar.gold ? 0xd9b24a : ar.rim || ar.torso, { metal: 1, shared: false }); }
   }
   const hs = gear.horse && AF_LOOK.horse[gear.horse], H = parts.mount && parts.mount.userData.rig;
   if (H && hs) {                                             // the horse: coat, a nag's droop and thin neck, cloth barding, a steel chamfron and crinet
@@ -17769,6 +17914,7 @@ function afDressGear(parts, gear, pal) {
 // from the spec — a plain straight blade, a curve of stacked slabs, a wavy flamberge, a thin rapier with a cup, a
 // broad cleaver, a greatsword with a fuller, a serrated edge; gold hilts and glowing steel for the rare ones.
 function afBuildSword(g, sw, tint) {
+  const real = g.userData.realSword; if (real) g.remove(real);   // the real figure's sword rides along; the plastic one below is built then hidden
   for (const c of g.children.slice()) { g.remove(c); try { disposeGroup(c); } catch (e) {} }
   const len = 1.35 * (sw.len || 1), w = sw.w || 0.2, t = sw.style === 'thin' ? 0.05 : 0.085, great = sw.style === 'great';
   const bladeM = mat(tint || sw.blade, { metal: sw.metal === 0 && !tint ? 0 : 1, shared: false, emissive: sw.glow || 0x000000, emissiveI: sw.glow ? 0.55 : 1 });
@@ -17801,6 +17947,7 @@ function afBuildSword(g, sw, tint) {
     const hole = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, t * 1.3, 8), mat(0x1a1214, { shared: false })); hole.rotation.x = Math.PI / 2; hole.position.set(w * 0.45, y0 + len - 0.1, 0); g.add(hole);
   }
   g.scale.set(1, 1, 1); g.rotation.y = Math.PI / 2;        // (the grip: edge forward, guard vertical to the wrist — same as makeSword)
+  if (real) { for (const c of g.children) c.visible = false; g.add(real); }
 }
 function afBladeLook(b) { afDressGear(b.parts, b.gear, b.pal); }   // (the rig swaps on mount / dismount re-dress the man)
 function afItemName(id) { const I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}; return I[id] ? I[id].name : id; }
@@ -18992,6 +19139,10 @@ function afFrame(now, noRaf) {
   if (AF_POST.on) afPostRender(); else renderer.render(scene, camera);
   if (!noRaf) requestAnimationFrame(loop);
 }
+function afCamInPit() {                                   // the podium wall is solid stone now: a lens behind a man at the wall slides along it instead of through it
+  const c = camera.position, d = Math.hypot(c.x, c.z), lim = AF_F.radius - 0.7; if (d > lim) { const k = lim / d; c.x *= k; c.z *= k; }
+}
+function afCamOverBuilding() { const c = camera.position, top = afArchTop(Math.hypot(c.x, c.z)); if (top && c.y < top + 1.6) c.y = top + 1.6; }   // the free camera rides over the seats, never inside the shell
 function afCamAboveGround(clr) {                          // the lens never sinks into a hill behind you, nor into a boulder
   const c = camera.position; let floor = afY(c.x, c.z) + clr;
   if (AF.terr.rocks.length) { const K = afRockAt(c.x, c.z, 0.3); if (K) floor = Math.max(floor, K.top + 0.4); }
@@ -19011,10 +19162,10 @@ function afCamera(dt) {
     tmpV.set(me.x - Math.sin(cam.yaw) * dist * cp, hy + dist * Math.sin(cam.pitch) + 0.6 + lift, me.z - Math.cos(cam.yaw) * dist * cp);
     if (AF.phase === 'countdown') {                          // the SWEEP: from high over the pit down onto your shoulder as the bell nears
       const k = 1 - clamp(AF.countdown / AF_F.countdown, 0, 1), e = k * k * (3 - 2 * k), a = cam.yaw + Math.PI * 0.9 * (1 - e);
-      const r = lerp(AF_F.radius * 1.5, cam.dist, e), h = lerp(AF_F.radius, tmpV.y - hy, e);
+      const r = lerp(AF_F.radius * 1.12, cam.dist, e), h = lerp(clamp(AF_F.radius * 0.55 + 6, 12, 19), tmpV.y - hy, e);   // (from over the lower rows, under the sails, down onto the shoulder)
       tmpV2.set(me.x - Math.sin(a) * r, hy + h, me.z - Math.cos(a) * r);
       camera.position.copy(tmpV2); camera.lookAt(me.x, hy + 0.2, me.z);
-    } else { const la = 3 * AF.camLift; camera.position.lerp(tmpV, clamp(dt * 14, 0, 1)); afCamAboveGround(0.7); camera.lookAt(me.x + Math.sin(cam.yaw) * la, hy + 0.9 * AF.camLift, me.z + Math.cos(cam.yaw) * la); } // lifted: look ahead over the fight, not down at your own helmet
+    } else { const la = 3 * AF.camLift; camera.position.lerp(tmpV, clamp(dt * 14, 0, 1)); afCamInPit(); afCamAboveGround(0.7); camera.lookAt(me.x + Math.sin(cam.yaw) * la, hy + 0.9 * AF.camLift, me.z + Math.cos(cam.yaw) * la); } // lifted: look ahead over the fight, not down at your own helmet
     const sp = Math.hypot(me.vx, me.vz); AF.fov = lerp(AF.fov, CAM_BASE_FOV + clamp(sp / AF_F.move, 0, 1.2) * 5, clamp(dt * 4, 0, 1)); // a run widens the lens
   } else {                                                  // SPECTATING: ride on any fighter's shoulder, or a free camera over the pit
     const S = AF.spec, o = AF.orbit;
@@ -19023,7 +19174,7 @@ function afCamera(dt) {
       const t = S.target, hy = afY(t.x, t.z) + 1.55;
       if (performance.now() - (AF.lookAt || 0) > 2500) cam.yaw = angleLerp(cam.yaw, t.yaw, clamp(dt * 1.5, 0, 1));   // settles behind him unless you're looking round
       const cp = Math.cos(cam.pitch); tmpV.set(t.x - Math.sin(cam.yaw) * cam.dist * cp, hy + cam.dist * Math.sin(cam.pitch) + 0.6, t.z - Math.cos(cam.yaw) * cam.dist * cp);
-      camera.position.lerp(tmpV, clamp(dt * 10, 0, 1)); afCamAboveGround(0.7); camera.lookAt(t.x, hy + 0.2, t.z);
+      camera.position.lerp(tmpV, clamp(dt * 10, 0, 1)); afCamInPit(); afCamAboveGround(0.7); camera.lookAt(t.x, hy + 0.2, t.z);
       AF.fov = lerp(AF.fov, CAM_BASE_FOV + clamp(Math.hypot(t.vx, t.vz) / AF_F.move, 0, 1.2) * 5, clamp(dt * 4, 0, 1));
     } else {
       const K = AF.keys; let f = 0, sd = 0;                   // WASD / the stick glide the focus across the sand; drag turns, wheel or −/+ zooms
@@ -19034,7 +19185,7 @@ function afCamera(dt) {
       if (!o.drag && !S.touched) o.theta += dt * 0.06;
       const st = Math.sin(o.phi), orr = o.r * AF_F.radius / 34;
       tmpV.set(S.fx + orr * st * Math.sin(o.theta), 2 + orr * Math.cos(o.phi), S.fz + orr * st * Math.cos(o.theta));
-      camera.position.lerp(tmpV, clamp(dt * 4, 0, 1)); camera.lookAt(S.fx, 1.6, S.fz);
+      camera.position.lerp(tmpV, clamp(dt * 4, 0, 1)); afCamOverBuilding(); camera.lookAt(S.fx, 1.6, S.fz);
       AF.fov = lerp(AF.fov, CAM_BASE_FOV, clamp(dt * 4, 0, 1));
     }
     afSpecLabel();
@@ -19320,7 +19471,7 @@ function afBoot(spec) {
     if (AF.whoTimer) { clearInterval(AF.whoTimer); AF.whoTimer = null; }
   }
   afClear();
-  try { const sc = sun.shadow.camera, e = AF_F.radius + 20; sc.left = -e; sc.right = e; sc.top = e; sc.bottom = -e; sc.updateProjectionMatrix(); } catch (e) {}
+  try { const sc = sun.shadow.camera, e = AF_F.radius + AF_AMPH.out + 6; sc.left = -e; sc.right = e; sc.top = e; sc.bottom = -e; sc.far = 220 + AF_F.radius * 2; sc.updateProjectionMatrix(); } catch (e) {}   // (the ring and its masts cast too)
   const r = _mulberry32(AF.seed);
   AF.terr = { p1: r() * TAU, p2: r() * TAU, p3: r() * TAU, hills: [], rocks: [] };
   try { afGenTerrain(r); } catch (e) { console.warn('[arena] terrain', e); AF.terr.hills = []; AF.terr.rocks = []; }   // the hills and the stones (from the seed — every client the same)
@@ -19860,21 +20011,6 @@ BV.arenaIntro = (cmd) => { if (cmd === 'skip') afIntroSkip(); else if (typeof cm
 BV.arenaStep = (steps = 60, dt = 1 / 60) => { if (AF.phase === 'intro') afIntroEnd(); if (AF.phase === 'countdown') { AF.phase = 'fight'; AF.countdown = 0; } for (let i = 0; i < steps; i++) afTick(dt); return BV.arenaStatus(); };
 BV.arenaInput = (patch) => { Object.assign(AF.locIn, patch || {}); return { ...AF.locIn }; };
 
-// BV.lineup(looks, teamIdx): stand one hero rig per look in a row in front of the camera (a showcase; BV.lineup() again clears)
-BV.lineup = (looks, teamIdx = 0, gap = 3.2) => {
-  if (BV._lineup) { scene.remove(BV._lineup); BV._lineup = null; if (!looks) return null; }
-  looks = looks || ['knight', 'sallet', 'legion', 'hoplite'];
-  const pal = (AF_TEAMS[teamIdx] && AF_TEAMS[teamIdx].pal) || AF_TEAMS[0].pal;
-  const grp = new THREE.Group(); const fwd = new THREE.Vector3(); camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
-  const right = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0)); const base = camera.position.clone().add(fwd.clone().multiplyScalar(11)); base.y = 0;
-  looks.forEach((look, i) => { const h = buildHumanoid(pal, 1, 'sword', { hero: true, look }); const p = base.clone().add(right.clone().multiplyScalar((i - (looks.length - 1) / 2) * gap));
-    h.group.position.copy(p); h.group.rotation.y = Math.atan2(camera.position.x - p.x, camera.position.z - p.z); h.group.userData.look = look; grp.add(h.group); });
-  scene.add(grp); BV._lineup = grp; BV.lineupSnap(); return grp;
-};
-BV.lineupSnap = () => {                                     // drop every figure of the lineup onto whatever ground is under it
-  const grp = BV._lineup; if (!grp) return; const rc = new THREE.Raycaster(); const others = scene.children.filter(o => o !== grp);
-  for (const c of grp.children) { rc.set(new THREE.Vector3(c.position.x, 40, c.position.z), new THREE.Vector3(0, -1, 0)); const hit = rc.intersectObjects(others, true).find(h => h.object.isMesh && !h.object.isSprite); if (hit) c.position.y = hit.point.y; }
-};
 BV.arenaShot = (w = 1280, h = 720) => {              // headless: render one frame at a fixed size (a hidden tab has none) and hand back a JPEG data URL
   const sz = renderer.getSize(new THREE.Vector2()), pr = renderer.getPixelRatio();
   renderer.setPixelRatio(1); renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();

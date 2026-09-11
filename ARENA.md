@@ -82,8 +82,10 @@ mark's rear arc and committing only from behind, where guards can't reach. In a 
 closes at a charge and circles near contact, keeps the blade's length between blows, cracks a raised
 guard with a heavy or goes around it, **punishes** a foe's follow-through or stagger, rolls away from
 heavies, blocks or dodges a seen light by skill, and when badly hurt and outnumbered backs off toward
-his team with his guard up. Archers hold range, drift sideways between shots, and shoot a swordsman
-who keeps coming even while giving ground.
+his team with his guard up. Archers hold range (`AF_TACT.bowNear`–`bowFar`, 11–22 paces from the nearest
+foe, loosing out to `bowShot`), drift sideways between shots, keep `bowRoom` of clear sand from their own
+swordsmen (`afArcherRoom` — a bowman in the press is neither seen nor useful), and when a foe comes inside
+`bowNear` leave the line and give ground away from the enemy's mass, shooting a swordsman who keeps coming.
 
 Bodies are `buildHumanoid` figures animated by the shared pose system (`setPose`/`MOVES`/
 `walkLegs`), exactly like the battle editor, so any change to the rig or poses shows up here.
@@ -130,19 +132,23 @@ gates swing open to a horn, a creak and the roar, low from the sand → the star
 my tunnel → a crane up over the whole pit → over my star's shoulder at the enemy line. Meanwhile the columns march
 in (`afIntroBody`: down the tunnel, then each man to his own muster point; a star raises his blade on arrival),
 and at the end everyone snaps to his point under a blink of black, the gates close behind them and the countdown
-sweep takes over. **Six films** (`AF_FILMS` / `AF_FILM_DIRECTORS`), one dealt per fight from the seed and never the
-one this device saw last (`localStorage['bv-intro-last']`): *the pen* (the cut above), *the champion* (the best fighter
-in the whole match comes out alone — a seat in the stands, a low tunnel shot, his profile and a backlit walk into the
-sun — before the rest), *the legion* (drums, an aerial, every gate at once, a dolly along the column, the enemy's front
-rank coming on, the blocks from above; weighted toward big rosters), *the captains* (the two stars stride out alone to
-meet in the middle while the camera circles them, then the armies flood in), *the riders* (the horse leads out and laps
-the ring at a canter, tracked alongside; only when someone fields cavalry) and *the duel* (two lone fighters, cut
-against each other, running to meet in the middle; one or two a side). Every film is built from the same lens kit
-(`afIntroLens`: pen, gate, star, profile, backlit, ride, behind, column, dolly, front, stands, crane, aerial, top,
-orbit, face-off) and the same route system (`afIntroRoute`: waypoints with speed, gait, a pause and a facing). The
-**stars rally** their men (`AF_RALLIES`, poses `rally` / `rallyPump` / `point`): in the pen they turn to the ranks with
-the blade up and pump it, and on taking their place they raise it to the crowd or point it across the sand — three
-routines each, dealt per star. `?film=champion` (or `BV.arena({ film })`) forces one. Camera sides, star order and beats are dealt from the seed, so every client sees the same film;
+sweep takes over. **Six acts, a bill per fight** (`AF_ACTS` / `AF_ACT_DIRECTORS` / `afIntroCompose`): every
+*team* is dealt its own entrance style from the seed — a different one from the other teams' where the roster
+allows, and for your own team never the one this device saw last (`localStorage['bv-intro-last']`) — so one fight
+might open with Azure's champion walking out alone and Crimson's cavalry lapping the ring. The acts: *the pen* (the
+cut above, per team), *the champion* (the team's best comes out alone — a seat in the stands, low in the tunnel, his
+profile, a backlit walk into the sun — then the rest), *the legion* (drums, an aerial over their side, the gate from
+a seat, a dolly along the column, the front rank coming on, the block from above; weighted toward big rosters), *the
+captain* (the star strides out alone to the middle and holds it, rallying, while the camera circles him; then his
+men), *the riders* (the horse leads out and laps the ring at a canter, tracked alongside; only for a team with
+cavalry) and *the duel* (a lone fighter, low in the pen, the run out in slow motion; teams of one or two). Two
+captains or duellists meet in the middle. After every act the shared finale: the crane over the pit with the banner,
+and the face-off over your star's shoulder. Every act is built from the same lens kit (`afIntroLens`: pen, gate,
+star, profile, backlit, ride, behind, column, dolly, front, stands, crane, aerial, top, orbit, face-off) and the same
+route system (`afIntroRoute`: waypoints with speed, gait, a pause and a facing). The **stars rally** their men
+(`AF_RALLIES`, poses `rally` / `rallyPump` / `point`): in the pen they turn to the ranks with the blade up and pump
+it, and on taking their place they raise it to the crowd or point it across the sand — three routines each, dealt
+per star. `?film=champion,riders` (or `BV.arena({ film })`) forces the acts, your team's first. Camera sides, star order and beats are dealt from the seed, so every client sees the same film;
 nothing is simulated in the phase (no `afTick`), so the net cannot drift, and a guest still watching when the host's
 first `fight` snapshot arrives is snapped forward. Skip with Space / Enter / Esc or the button; `?nointro` in the
 URL (or `BV.arena({ intro: false })`) turns it off. Test hooks: `BV.arenaIntro()` reads it, `BV.arenaIntro(n)` jumps
@@ -161,7 +167,8 @@ at the heavy line. NPCs load their swings the same way, so a long visible hold i
 
 **The captain** (`afPlanTeams` / `afCaptainThink`): each team's NPCs are organised, not a mob. At the
 bell the captain reads his roster and draws a formation — guardsmen centre-front, swordsmen and brutes
-filling the front rank, duelists on its ends, archers a rank behind, riders on the wing — and issues orders
+filling the front rank, duelists on its ends, the archers in their own block `AF_TACT.bowGap` (6) behind the last
+rank of swords so they read as a separate line, riders on the wing — and issues orders
 through the fight: *form up* (1.6 s), *advance* as a line at a walk toward the enemy, *send the riders
 wide* to a flanking mark, *charge* at contact, *regroup* when the line has scattered and the fight is
 even, *fall back* a dozen paces to re-form when losing badly (it used to be a long walk to the wall with backs turned — a massacre at legion scale) and charge
@@ -171,9 +178,9 @@ but see their captain's order in the HUD; the log narrates every shift, on guest
 
 **Army-scale mixes**: bigger rosters field proportionally more archers and cavalry, the way a
 real army's specialist ranks grow with its size — `afArchWeights(per)` slides the archetype odds
-from a skirmish mix (mostly swordsmen) toward a legion mix (a third archers, a quarter riders) as
-`per` climbs toward ~40. A tiny duel still rolls mostly swordsmen; a 200-a-side legion fields ranks
-of bowmen and real wings of horse.
+from a skirmish mix (a quarter archers, the rest mostly swords) toward a legion mix (a third archers, a
+fifth riders) as `per` climbs toward ~40. Even a small fight fields a visible rank of bowmen (one in
+eight was invisible in the press); a 200-a-side legion fields deep ranks of them and real wings of horse.
 
 **Fighters of the vale** (`AF_ARCH`): the NPCs come in six archetypes, each a build (rig, weapon, size),
 a body (health, poise, speed, damage) and a temperament. *Swordsman*: sword and shield, the baseline.
@@ -291,7 +298,9 @@ skirmishes into one continuous front:
   again as a line. And an isolated man heads for the *enemy's* mass, never his own side's centre —
   walking to our own centre is what turned a lull into two piles spinning at each other.
 - **Archers close**: late in a big fight the survivors are mostly bowmen; they used to hold at 22
-  and strafe in circles at each other forever. They now close to 14 and strafe less.
+  and strafe in circles at each other forever. They now close to `bowFar` (22 → the stand-off band
+  starts at 11) and strafe less; a bow-only endgame still resolves because the band's near edge is
+  inside their own decisive range.
 - **Regroup scales with roster size** (`T.regroupSpread`): a fixed 9-unit trigger either never fired
   for a 50-man block or fired constantly; it's now proportional to √(team size).
 

@@ -18683,22 +18683,23 @@ function afStartFight() {
 }
 /* ---- the MARKETPLACE & career sheet: buy with gold, held back by rank (XP) and use-skill; equip what you own;
    the record — stats, trophies, achievements, skills. Server-authoritative: every button is a round trip. ---- */
-function afMarketOpen() { AF.marketOpen = true; let p = document.getElementById('af-market'); if (!p) { p = document.createElement('div'); p.id = 'af-market'; p.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(8,6,14,.93);overflow:auto;pointer-events:auto;font:14px system-ui;color:#e8def8'; document.body.appendChild(p); } p.style.display = ''; afMarketRender(); if (!AF.career) afCareerLoad(); }
+function afMarketOpen() { AF.marketOpen = true; let p = document.getElementById('af-market'); if (!p) { p = document.createElement('div'); p.id = 'af-market'; p.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(8,6,14,.93);overflow:auto;pointer-events:auto;font:14px system-ui;color:#e8def8'; document.body.appendChild(p); } p.style.display = ''; p.scrollTop = 0; afMarketRender(); afCareerLoad(); }   // (always re-read the purse: a fight may just have paid out)
 function afMarketClose() { AF.marketOpen = false; const p = document.getElementById('af-market'); if (p) p.style.display = 'none'; }
-function afMarketMsg(t, bad) { const el = document.getElementById('af-market-msg'); if (el) { el.textContent = t || ''; el.style.color = bad ? '#ff9a9a' : '#ffe089'; } }
+function afMarketMsg(t, bad) { AF.marketMsg = t ? { t, bad } : null; const el = document.getElementById('af-market-msg'); if (el) { el.textContent = t || ''; el.style.color = bad ? '#ff9a9a' : '#ffe089'; el.style.display = t ? '' : 'none'; } }
 function afMarketRender() {
-  const p = document.getElementById('af-market'); if (!p || !window.ARENA_CAT) return; const c = AF.career, I = ARENA_CAT.ARENA_ITEMS;
-  const btn = (id, label, dis) => '<button data-act="' + id + '" ' + (dis ? 'disabled' : '') + ' style="cursor:' + (dis ? 'default' : 'pointer') + ';padding:6px 12px;border-radius:7px;border:1px solid #ffcf5b;background:rgba(255,180,80,.16);color:#ffe2a8;font-weight:700;opacity:' + (dis ? .45 : 1) + '">' + label + '</button>';
-  let html = '<div style="max-width:980px;margin:0 auto;padding:18px 16px 60px">';
-  html += '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><h2 style="margin:0;color:#ffd34d;letter-spacing:2px">🏪 Marketplace &amp; Career</h2><button id="af-market-close" style="cursor:pointer;padding:8px 16px;border-radius:8px;border:1px solid #6b5e7a;background:#2a2233;color:#f3ead8;font-weight:700">Back to the lobby</button></div>';
-  if (!c) { html += '<p style="opacity:.7">' + (afSession() ? 'Reaching the war-net for your career…' : 'Sign in on the title screen to keep an arena career.') + '</p></div>'; p.innerHTML = html; document.getElementById('af-market-close').onclick = afMarketClose; return; }
+  const p = document.getElementById('af-market'); if (!p || !window.ARENA_CAT) return; const c = AF.career, I = ARENA_CAT.ARENA_ITEMS, keepScroll = p.scrollTop;
+  const btn = (id, label, dis) => '<button data-act="' + id + '" ' + (dis ? 'disabled' : '') + ' style="cursor:' + (dis ? 'default' : 'pointer') + ';padding:' + (TOUCH ? '10px 14px' : '6px 12px') + ';border-radius:7px;border:1px solid #ffcf5b;background:rgba(255,180,80,.16);color:#ffe2a8;font-weight:700;opacity:' + (dis ? .45 : 1) + ';touch-action:manipulation">' + label + '</button>';
+  let html = '<div style="max-width:980px;margin:0 auto;padding:0 16px 60px">';
+  // the head stays put while you scroll the wares — the purse and the word on your last buy are always in view
+  html += '<div style="position:sticky;top:0;z-index:2;background:rgba(8,6,14,.97);padding:14px 0 8px;border-bottom:1px solid #3a3247"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><h2 style="margin:0;color:#ffd34d;letter-spacing:2px;font-size:20px">🏪 Marketplace &amp; Career' + (c ? ' <span style="font-size:14px;color:#ffe089;font-weight:400;margin-left:8px">' + c.gold + ' gold · ' + c.rank.name + '</span>' : '') + '</h2><button id="af-market-close" style="cursor:pointer;padding:8px 16px;border-radius:8px;border:1px solid #6b5e7a;background:#2a2233;color:#f3ead8;font-weight:700;touch-action:manipulation">Back to the lobby</button></div>' +
+    '<div id="af-market-msg" style="display:' + (AF.marketMsg ? '' : 'none') + ';margin-top:8px;padding:8px 12px;border-radius:8px;background:rgba(255,211,77,.12);border:1px solid rgba(255,207,91,.5);font-size:14px;font-weight:700;color:' + (AF.marketMsg && AF.marketMsg.bad ? '#ff9a9a' : '#ffe089') + '">' + (AF.marketMsg ? AF.marketMsg.t : '') + '</div></div>';
+  if (!c) { html += '<p style="opacity:.7;margin-top:14px">' + (afSession() ? 'Reaching the war-net for your career…' : 'Sign in on the title screen to keep an arena career.') + '</p></div>'; p.innerHTML = html; document.getElementById('af-market-close').onclick = afMarketClose; return; }
   const r = c.rank, lo = ARENA_CAT.ARENA_RANKS[r.idx][1], prog = r.nextAt ? Math.round((c.xp - lo) / (r.nextAt - lo) * 100) : 100;
   html += '<div style="margin:12px 0;padding:12px 14px;border:1px solid rgba(255,207,91,.35);border-radius:10px;background:rgba(0,0,0,.3);display:flex;gap:18px;flex-wrap:wrap;align-items:center">' +
     '<div><div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;opacity:.7">Rank</div><b style="font-size:20px;color:#ffd34d">' + r.name + '</b><div style="font-size:12px;opacity:.75">' + c.xp + ' XP' + (r.next ? ' · ' + r.next + ' at ' + r.nextAt : ' · the top') + '</div><div style="height:6px;width:160px;background:#2a2438;border-radius:3px;margin-top:4px;overflow:hidden"><div style="height:100%;width:' + prog + '%;background:#ffd34d"></div></div></div>' +
     '<div><div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;opacity:.7">Gold</div><b style="font-size:20px;color:#ffe089">' + c.gold + '</b></div>' +
     '<div><div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;opacity:.7">Trophies</div><b style="font-size:20px">🏆 ' + c.trophies + '</b></div>' +
     '<div style="font-size:12px;opacity:.85;line-height:1.6">' + c.matches + ' fights · ' + c.wins + ' won · ' + c.kills + ' kills · ' + c.deaths + ' deaths · ' + c.stars + '× star · ' + Math.round(c.damage) + ' damage dealt<br>skills: sword ' + c.skills.sword.level + ' (' + c.skills.sword.count + ' hits) · bow ' + c.skills.bow.level + ' (' + c.skills.bow.count + ' hits) · riding ' + c.skills.riding.level + '</div></div>';
-  html += '<div id="af-market-msg" style="min-height:18px;font-size:13px;margin:4px 0 8px"></div>';
   const slotNames = { sword: 'Swords', armor: 'Armor', bow: 'Bows', horse: 'Horses' };
   for (const slot of ['sword', 'armor', 'bow', 'horse']) {
     const eq = c.equipped[slot];
@@ -18718,11 +18719,14 @@ function afMarketRender() {
   html += uniques.length ? '<div style="display:flex;gap:8px;flex-wrap:wrap">' + uniques.map(id => { const it = I[id], eq = c.equipped[it.slot] === id; return '<div style="border:1px solid ' + (eq ? '#ffd34d' : '#3a3247') + ';border-radius:9px;padding:8px 11px;background:rgba(0,0,0,.3)"><b>' + it.name + '</b> <span style="font-size:11px;opacity:.6">' + it.desc + '</span> ' + (eq ? btn('unequip:' + it.slot, 'Take off') : btn('equip:' + it.slot + ':' + id, 'Wear')) + '</div>'; }).join('') + '</div>' : '<div style="font-size:12px;opacity:.6">Nothing yet — one win in twenty drops a unique.</div>';
   html += '<h3 style="margin:16px 0 6px;color:#ffe2a8;letter-spacing:1px">Achievements</h3><div style="display:flex;gap:6px;flex-wrap:wrap">' + ARENA_CAT.ARENA_ACHIEVEMENTS.map(([id, label]) => '<span style="font-size:12px;padding:4px 9px;border-radius:12px;border:1px solid ' + (c.achievements.includes(id) ? '#ffd34d;color:#ffe089' : '#3a3247;opacity:.45') + '">' + (c.achievements.includes(id) ? '🏅 ' : '') + label + '</span>').join('') + '</div>';
   html += '<p style="font-size:12px;opacity:.6;margin-top:18px">XP and gold come from every fight: the bigger and better the army you faced, the more; a win pays half again, and the ★ star of the match (the best fighter in the pit — kills, damage, still standing) 60% more. Beat real players and you take 8% of their purse (at most 60 gold each). One win in four drops a purse, one in twenty a unique.</p></div>';
-  p.innerHTML = html;
+  p.innerHTML = html; p.scrollTop = keepScroll;
   document.getElementById('af-market-close').onclick = afMarketClose;
   for (const b of p.querySelectorAll('button[data-act]')) b.onclick = () => {
-    const a = b.getAttribute('data-act').split(':'); afMarketMsg('…');
-    const done = r => { if (r && r.career) AF.career = r.career; if (r && r.ok) afMarketMsg(a[0] === 'buy' ? 'Bought — and worn.' : 'Done.'); else afMarketMsg((r && r.error) || 'the war-net did not answer', true); afMarketRender(); if (AF.lobby) { afLobbyRender(); afSendGear(); } };
+    const a = b.getAttribute('data-act').split(':'), it = I[a[a.length - 1]]; afMarketMsg('Asking the war-net…'); b.disabled = true;
+    const done = r => { if (r && r.career) AF.career = r.career;
+      if (r && r.ok) afMarketMsg(a[0] === 'buy' ? '✓ Bought ' + (it ? it.name : '') + ' for ' + (it ? it.price : '?') + ' gold — you are wearing it. ' + AF.career.gold + ' gold left.' : a[0] === 'equip' ? '✓ Wearing ' + (it ? it.name : '') + '.' : '✓ Taken off.');
+      else afMarketMsg('✗ ' + ((r && r.error) || 'the war-net did not answer — check the connection and try again'), true);
+      afMarketRender(); if (AF.lobby) { afLobbyRender(); afSendGear(); } };
     if (a[0] === 'buy') window.net.arenaBuy(a[1]).then(done); else if (a[0] === 'equip') window.net.arenaEquip(a[1], a[2]).then(done); else if (a[0] === 'unequip') window.net.arenaEquip(a[1], null).then(done);
   };
 }

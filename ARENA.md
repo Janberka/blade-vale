@@ -408,6 +408,14 @@ lends plain gear (iron sword, hunting bow, courser) and pays nothing.
   speed at the top; bow damage ×1.0–1.32 (arrows carry `bowDmg`); horse health 80–170 and pace
   ×0.9–1.1. The loadout rides in the roster (`gear` per player), so every client builds the same
   fighter; a wooden sword is brown, a tinted blade shows its tint.
+* **You see what you wear** (`AF_LOOK`, `afDressGear`): no armor is a padded jack in the team cloth
+  with no pauldrons; leather, mail, plate and the champion's gold-trimmed harness recolour the
+  breastplate and pauldrons (plate and above add a gorget); swords change blade colour and length
+  (wood is brown and short, the master's has a gold hilt; a unique tint wins); bows grow and darken;
+  a nag is small, a warhorse big. The same dressing runs in the pit and in the **fighter preview**
+  at the top of the marketplace — a turning 3D figure on its own renderer (`afPreviewEl` /
+  `afPreviewSet`), drag to turn, with an "In the saddle" toggle when a horse is owned and a
+  summary of the loadout's numbers.
 * **The record**: fights, wins, kills, deaths, damage, stars, trophies and achievements (first
   blood, 10/50/200/500 kills, 1/10/50/100 fights, 5/25/100 wins, stars, trophies) on the career
   sheet.

@@ -16671,7 +16671,8 @@ function afMakeBody(entry, idx, r) {
   const big = AF.cfg.teams * AF.cfg.per > AF_LIM.heroCap;
   const G = entry.kind !== 'npc' ? afGearStats(afGearClean(entry.gear)) : null;   // a player's loadout: sword, armor, bow, horse, a plume
   const rigOpts = { hero: entry.kind !== 'npc' || !big, both: A.bow, plume: G && G.plume != null ? G.plume : AF_TEAM_HEX[entry.t] }; // a hundred capes would melt a phone: only the humans dress up in a big fight
-  const h = mounted ? buildCavalry(td.pal, A.scale, 'sword', rigOpts) : buildHumanoid(td.pal, A.scale, A.bow ? weapon : weapon, rigOpts); const group = h.group || h;
+  const hsz = G && G.horse && AF_LOOK.horse[afGearClean(entry.gear).horse] ? AF_LOOK.horse[afGearClean(entry.gear).horse].scale : 1;   // a nag is small, a warhorse big
+  const h = mounted ? buildCavalry(td.pal, A.scale * hsz, 'sword', rigOpts) : buildHumanoid(td.pal, A.scale, A.bow ? weapon : weapon, rigOpts); const group = h.group || h;
   if (h.parts.shield) { h.parts.shield.visible = A.shield && weapon !== 'bow'; if (A.bigShield) h.parts.shield.scale.set(1.3, 1.3, 1.3); }
   group.rotation.order = 'YXZ';                              // yaw first, then a body-local tilt/roll (somersaults, crumples)
   const sp = afSpawn(entry.t, AF.cfg.teams), rgx = -Math.cos(sp.yaw), rgz = Math.sin(sp.yaw), so = afSlotOffset(entry.s, AF.cfg.per), off = so.right, back = so.back * (mounted ? 1.3 : 1);
@@ -16689,7 +16690,7 @@ function afMakeBody(entry, idx, r) {
     mounted, trampleT: 0, passT: 0, sp01: 0,
     pal: td.pal, rigOpts, footScale: mounted ? 1 : A.scale, riderGroup: h.riderGroup || null, horse: null, mountCd: 0,   // (so he can be re-dressed on foot or in a saddle)
     arch: archKey, A, moveMul: A.move * (G ? 1 + G.move : 1), dmgMul: A.dmg * (entry.kind === 'npc' ? lerp(0.85, 1.05, xp / 100) : G.swordDmg), reachBonus: A.reach + (G ? G.reach : 0),
-    bowDmg: G ? G.bowDmg : 1, horseMul: G ? G.horseSpeed : 1, blade: G ? G.blade : null, rank: entry.rank || (entry.gear && entry.gear.rank) || null, dmgDealt: 0, swordHits: 0, bowHits: 0, rideT: 0, noShield: !A.shield, feint: 0,
+    bowDmg: G ? G.bowDmg : 1, horseMul: G ? G.horseSpeed : 1, blade: G ? G.blade : null, gear: G ? afGearClean(entry.gear) : null, rank: entry.rank || (entry.gear && entry.gear.rank) || null, dmgDealt: 0, swordHits: 0, bowHits: 0, rideT: 0, noShield: !A.shield, feint: 0,
     seenAtk: 0, seenHeavy: 0, seenDodge: 0,
     // NPC brain traits (seeded so a replay of the same seed fields the same temperaments)
     skill: (r(), xp / 100), heavyBias: A.heavyBias * (0.7 + r() * 0.6), target: null, aiT: r() * 0.3, strafe: r() < 0.5 ? -1 : 1, strafeT: 0.5 + r(), swingT: 0.4 + r() * 0.5, holdBlock: 0, reactedTo: null, shotCd: 1 + r(),
@@ -16698,7 +16699,7 @@ function afMakeBody(entry, idx, r) {
   };
   b.tx = b.x; b.tz = b.z; b.tyaw = b.yaw; b.inp.yaw = b.yaw; b.tagH = mounted ? 3.5 : 2.25; b.baseScale = group.scale.x;
   if (mounted) { const hh = afNewHorse(group, h.horse); hh.rider = b; b.horse = hh; hh.x = b.x; hh.z = b.z; hh.yaw = b.yaw; if (G) hh.hp = hh.maxHp = G.horseHp; }
-  afBladeLook(b);
+  if (G) afDressGear(b.parts, b.gear, td.pal);
   group.position.set(b.x, afY(b.x, b.z), b.z); group.rotation.y = b.yaw;
   scene.add(group); group.userData.afBody = b;
   // floating name + health bar (a separate un-rotated tag so the bar can face the camera)
@@ -16856,11 +16857,37 @@ function afGearStats(g) {                                  // what the loadout d
     bow: !!bw, bowDmg: bw ? bw.dmg || 1 : 1, horse: !!hs, horseHp: hs ? hs.hp : AF_HORSE.hp, horseSpeed: hs ? hs.speed || 1 : 1, plume: pl ? pl.plume : null, blade: tr ? tr.blade : g.sword === 'wood_sword' ? 'wood' : null };
 }
 function afSendGear() { const L = AF.lobby; if (!L || L.role !== 'guest' || !window.coop || !window.coop.connected || !window.coop.room) return; window.coop.send({ k: 'gear', gear: afGear() }); }
-function afBladeLook(b) {                                   // a wooden training sword, or a unique's tint on the steel
-  const p = b.parts; if (!p || !p.sword || !b.blade) return;
-  const m = b.blade === 'wood' ? mat(0x8a6a3a, { shared: false }) : mat(b.blade, { metal: 1, shared: false });
-  p.sword.traverse(c => { if (c.isMesh) c.material = m; });
+// THE LOOK of gear — you see what you wear: no armor is a padded jack in the team cloth; leather, mail, plate and
+// the champion's gold-trimmed harness recolour the breastplate and pauldrons (plate adds a gorget); swords change
+// blade colour and length (a unique's tint wins); bows grow and darken; horses come in sizes.
+const AF_LOOK = {
+  armor: { none: null, leather: { torso: 0x6b4a2a, pad: 0x5a3d22, metal: 0 }, mail: { torso: 0x7a808a, pad: 0x6e747e, metal: 1 }, plate: { torso: 0xc8ccd4, pad: 0xc8ccd4, metal: 1, gorget: true }, champion_plate: { torso: 0xd6ccb0, pad: 0xd9b24a, metal: 1, gorget: true, gold: true } },
+  sword: { wood_sword: { blade: 0x8a6a3a, metal: 0, len: 0.9 }, iron_sword: { blade: 0xb9c0c8, len: 1 }, steel_sword: { blade: 0xe3e9f0, len: 1.05 }, vale_blade: { blade: 0xc9d8f0, len: 1.18 }, master_sword: { blade: 0xeef1f5, len: 1.28, gold: true } },
+  bow: { hunting_bow: { scale: 1, wood: 0x6b4a2e }, longbow: { scale: 1.15, wood: 0x4e3620 }, warbow: { scale: 1.3, wood: 0x2e2116 } },
+  horse: { nag: { scale: 0.9 }, courser: { scale: 1 }, destrier: { scale: 1.08 }, warhorse: { scale: 1.14 } },
+};
+function afDressGear(parts, gear, pal) {
+  if (!parts || !window.ARENA_CAT) return; const I = ARENA_CAT.ARENA_ITEMS; gear = gear || {};
+  const ar = AF_LOOK.armor[gear.armor || 'none'];
+  const pads = []; for (const sh of [parts.shoulderL, parts.shoulderR]) if (sh) { const pad = sh.children.find(c => c.isMesh); if (pad) pads.push(pad); }
+  if (parts.torso) {
+    if (!ar) { parts.torso.material = mat(pal ? pal.cloth : 0x4a4a52, { shared: false }); pads.forEach(p => { p.visible = false; }); }
+    else { parts.torso.material = mat(ar.torso, { metal: ar.metal, shared: false }); pads.forEach(p => { p.visible = true; p.material = mat(ar.pad, { metal: ar.metal, shared: false }); p.scale.set(ar.gorget ? 1.6 : 1.28, ar.gorget ? 0.9 : 0.68, ar.gorget ? 1.2 : 0.95); }); }
+    if (ar && ar.gorget && !parts.gorget) { const gt = new THREE.Mesh(cachedGeo('gorget', () => new THREE.CylinderGeometry(0.3, 0.44, 0.22, 7)), mat(ar.gold ? 0xd9b24a : ar.torso, { metal: 1, shared: false })); gt.position.y = 0.84; parts.upperBody.add(gt); parts.gorget = gt; }
+    if (parts.gorget) { parts.gorget.visible = !!(ar && ar.gorget); if (ar && ar.gorget) parts.gorget.material = mat(ar.gold ? 0xd9b24a : ar.torso, { metal: 1, shared: false }); }
+  }
+  const sw = AF_LOOK.sword[gear.sword] || AF_LOOK.sword.iron_sword, trim = gear.trim && I[gear.trim];
+  if (parts.sword) {
+    const meshes = []; parts.sword.traverse(c => { if (c.isMesh) meshes.push(c); });
+    const blade = meshes.find(m => m.geometry.type === 'BoxGeometry' && m.geometry.parameters.height > 1), tip = meshes.find(m => m.geometry.type === 'ConeGeometry');
+    const bm = mat(trim ? trim.blade : sw.blade, { metal: sw.metal === 0 && !trim ? 0 : 1, shared: false }); if (blade) blade.material = bm; if (tip) tip.material = bm;
+    if (sw.gold) for (const m of meshes) if (m !== blade && m !== tip && m.geometry.type !== 'CylinderGeometry') m.material = mat(0xd9b24a, { metal: 1, shared: false });
+    parts.sword.scale.set(1, sw.len, 1);
+  }
+  const bw = gear.bow && AF_LOOK.bow[gear.bow];
+  if (parts.bow && bw) { parts.bow.scale.setScalar(bw.scale); parts.bow.traverse(c => { if (c.isMesh && c.geometry.type === 'TorusGeometry') c.material = mat(bw.wood, { smooth: true, shared: false }); }); }
 }
+function afBladeLook(b) { afDressGear(b.parts, b.gear, b.pal); }   // (the rig swaps on mount / dismount re-dress the man)
 function afItemName(id) { const I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}; return I[id] ? I[id].name : id; }
 // sheathe one, draw the other: bow in the left hand, or sword and shield (the arm settles for a beat)
 function afSetWeapon(b, w) {
@@ -18683,7 +18710,55 @@ function afStartFight() {
 }
 /* ---- the MARKETPLACE & career sheet: buy with gold, held back by rank (XP) and use-skill; equip what you own;
    the record — stats, trophies, achievements, skills. Server-authoritative: every button is a round trip. ---- */
-function afMarketOpen() { AF.marketOpen = true; let p = document.getElementById('af-market'); if (!p) { p = document.createElement('div'); p.id = 'af-market'; p.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(8,6,14,.93);overflow:auto;pointer-events:auto;font:14px system-ui;color:#e8def8'; document.body.appendChild(p); } p.style.display = ''; p.scrollTop = 0; afMarketRender(); afCareerLoad(); }   // (always re-read the purse: a fight may just have paid out)
+// YOUR FIGHTER, TURNING: a little scene of its own on a second renderer, showing the loadout as the pit will build it
+function afPreviewEl() {
+  if (AF.previewEl) return AF.previewEl;
+  const wrap = document.createElement('div'); wrap.id = 'af-preview'; wrap.style.cssText = 'display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap';
+  const W = TOUCH ? 220 : 300, H = TOUCH ? 260 : 380;
+  const cv = document.createElement('canvas'); cv.width = W * 2; cv.height = H * 2; cv.style.cssText = 'width:' + W + 'px;height:' + H + 'px;border-radius:12px;background:radial-gradient(ellipse at 50% 70%,rgba(255,211,77,.10),rgba(0,0,0,.35));border:1px solid rgba(255,207,91,.35);cursor:grab;touch-action:none';
+  wrap.appendChild(cv);
+  const side = document.createElement('div'); side.id = 'af-preview-side'; side.style.cssText = 'flex:1;min-width:180px;font-size:13px;line-height:1.7'; wrap.appendChild(side);
+  const P = AF.preview = { wrap, cv, W, H, renderer: null, scene: new THREE.Scene(), camera: new THREE.PerspectiveCamera(30, W / H, 0.1, 60), rig: null, yaw: 0.5, mounted: false, drag: null };
+  try { P.renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: true }); P.renderer.setPixelRatio(2); P.renderer.setSize(W, H, false); P.renderer.toneMapping = THREE.ACESFilmicToneMapping; P.renderer.toneMappingExposure = 1.0; } catch (e) { P.renderer = null; }
+  P.scene.add(new THREE.HemisphereLight(0xbfd8ff, 0x6a5a44, 0.9)); const sun = new THREE.DirectionalLight(0xfff0d0, 1.1); sun.position.set(3, 6, 4); P.scene.add(sun);
+  const disc = new THREE.Mesh(new THREE.CircleGeometry(1.6, 24), mat(0xc9b79a, { shared: false })); disc.rotation.x = -Math.PI / 2; P.scene.add(disc);
+  // drag to turn him round (mouse or thumb)
+  const down = e => { P.drag = { x: e.clientX, yaw: P.yaw }; P.holdT = performance.now(); }; const move = e => { if (P.drag) { P.yaw = P.drag.yaw + (e.clientX - P.drag.x) * 0.012; P.holdT = performance.now(); } }; const up = () => { P.drag = null; };
+  cv.addEventListener('pointerdown', down); cv.addEventListener('pointermove', move); cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up); cv.addEventListener('pointerleave', up);
+  AF.previewEl = wrap; return wrap;
+}
+function afPreviewSet(gear, pal, mounted) {
+  const P = AF.preview; if (!P) return;
+  if (P.rig) { P.scene.remove(P.rig.group); try { disposeGroup(P.rig.group); } catch (e) {} P.rig = null; }
+  gear = afGearClean(gear || afGear()); pal = pal || AF_TEAMS[0].pal; const G = afGearStats(gear);
+  P.mounted = !!(mounted && G.horse);
+  const opts = { hero: true, both: true, plume: G.plume != null ? G.plume : AF_TEAM_HEX[0] };
+  const hsz = P.mounted && AF_LOOK.horse[gear.horse] ? AF_LOOK.horse[gear.horse].scale : 1;
+  const r = P.mounted ? buildCavalry(pal, hsz, 'sword', opts) : buildHumanoid(pal, 1, 'sword', opts);
+  P.rig = { group: r.group || r, parts: P.mounted ? Object.assign({}, r.parts, { mount: r.horse }) : r.parts };
+  if (P.rig.parts.shield) P.rig.parts.shield.visible = true; if (P.rig.parts.bow) { P.rig.parts.bow.visible = !!G.bow; if (G.bow) { P.rig.parts.bow.visible = false; } }   // (the bow rides on the back — shown on the side panel instead)
+  afDressGear(P.rig.parts, gear, pal); P.scene.add(P.rig.group);
+  if (P.mounted) saddleRider(P.rig.parts); else { restLegs(P.rig.parts, 1, true); }
+  const anim = makeAnimator(P.rig.parts); setPose(anim, 'guard', 0.01); updateAnimator(anim, 1); P.anim = anim;
+  P.camera.position.set(0, P.mounted ? 2.9 : 2.0, P.mounted ? 9.4 : 6.4); P.camera.lookAt(0, P.mounted ? 2.2 : 1.75, 0);
+  const I = ARENA_CAT.ARENA_ITEMS, row = (label, id, none) => '<div><span style="opacity:.6;font-size:11px;letter-spacing:1px;text-transform:uppercase">' + label + '</span><br><b>' + (id && I[id] ? I[id].name : none) + '</b>' + (id && I[id] && I[id].desc ? ' <span style="opacity:.55;font-size:11px">' + I[id].desc + '</span>' : '') + '</div>';
+  const side = P.wrap.querySelector('#af-preview-side');
+  side.innerHTML = '<div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;opacity:.7;margin-bottom:4px">Your fighter · ' + (gear.rank || (AF.career ? AF.career.rank.name : '')) + '</div>' + row('Sword', gear.sword, 'bare hands') + row('Armor', gear.armor, 'a padded jack') + row('Bow', gear.bow, 'none') + row('Horse', gear.horse, 'on foot') + (gear.plume || gear.trim ? row('Unique', gear.plume || gear.trim, '') : '') +
+    '<div style="margin-top:8px;font-size:12px;opacity:.8">health ' + (100 + G.hp) + ' · damage ×' + G.swordDmg.toFixed(2) + (G.reach ? ' · reach +' + G.reach : '') + (G.bow ? ' · arrows ×' + G.bowDmg.toFixed(2) : '') + (G.horse ? ' · horse ' + G.horseHp + ' hp, pace ×' + G.horseSpeed : '') + '</div>' +
+    (G.horse ? '<button id="af-preview-mount" style="margin-top:8px;cursor:pointer;padding:6px 12px;border-radius:7px;border:1px solid #ffcf5b;background:rgba(255,180,80,.16);color:#ffe2a8;font-weight:700;touch-action:manipulation">' + (P.mounted ? '🚶 On foot' : '🐎 In the saddle') + '</button>' : '') + '<div style="font-size:11px;opacity:.5;margin-top:6px">drag to turn him</div>';
+  const mb = side.querySelector('#af-preview-mount'); if (mb) mb.onclick = () => afPreviewSet(gear, pal, !P.mounted);
+  P.gear = gear; P.pal = pal;
+}
+function afPreviewFrame() {
+  const P = AF.preview; if (!P || !AF.marketOpen || !P.renderer || !P.rig) return;
+  if (!P.drag && performance.now() - (P.holdT || 0) > 1500) P.yaw += 0.006;
+  P.rig.group.rotation.y = P.yaw; P.rig.group.position.y = 0;
+  if (P.rig.parts.mount) saddleRider(P.rig.parts);
+  if (P.rig.parts.cape) { const segs = P.rig.parts.cape.userData.segs || []; segs.forEach((sg, i) => { sg.rotation.x = 0.06 + Math.sin(performance.now() / 700 + i) * 0.03; }); }
+  P.renderer.render(P.scene, P.camera);
+  requestAnimationFrame(afPreviewFrame);
+}
+function afMarketOpen() { AF.marketOpen = true; let p = document.getElementById('af-market'); if (!p) { p = document.createElement('div'); p.id = 'af-market'; p.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(8,6,14,.93);overflow:auto;pointer-events:auto;font:14px system-ui;color:#e8def8'; document.body.appendChild(p); } p.style.display = ''; p.scrollTop = 0; afMarketRender(); afCareerLoad(); requestAnimationFrame(afPreviewFrame); }   // (always re-read the purse: a fight may just have paid out)
 function afMarketClose() { AF.marketOpen = false; const p = document.getElementById('af-market'); if (p) p.style.display = 'none'; }
 function afMarketMsg(t, bad) { AF.marketMsg = t ? { t, bad } : null; const el = document.getElementById('af-market-msg'); if (el) { el.textContent = t || ''; el.style.color = bad ? '#ff9a9a' : '#ffe089'; el.style.display = t ? '' : 'none'; } }
 function afMarketRender() {
@@ -18700,6 +18775,7 @@ function afMarketRender() {
     '<div><div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;opacity:.7">Gold</div><b style="font-size:20px;color:#ffe089">' + c.gold + '</b></div>' +
     '<div><div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;opacity:.7">Trophies</div><b style="font-size:20px">🏆 ' + c.trophies + '</b></div>' +
     '<div style="font-size:12px;opacity:.85;line-height:1.6">' + c.matches + ' fights · ' + c.wins + ' won · ' + c.kills + ' kills · ' + c.deaths + ' deaths · ' + c.stars + '× star · ' + Math.round(c.damage) + ' damage dealt<br>skills: sword ' + c.skills.sword.level + ' (' + c.skills.sword.count + ' hits) · bow ' + c.skills.bow.level + ' (' + c.skills.bow.count + ' hits) · riding ' + c.skills.riding.level + '</div></div>';
+  html += '<div id="af-preview-slot" style="margin:12px 0"></div>';
   const slotNames = { sword: 'Swords', armor: 'Armor', bow: 'Bows', horse: 'Horses' };
   for (const slot of ['sword', 'armor', 'bow', 'horse']) {
     const eq = c.equipped[slot];
@@ -18720,6 +18796,7 @@ function afMarketRender() {
   html += '<h3 style="margin:16px 0 6px;color:#ffe2a8;letter-spacing:1px">Achievements</h3><div style="display:flex;gap:6px;flex-wrap:wrap">' + ARENA_CAT.ARENA_ACHIEVEMENTS.map(([id, label]) => '<span style="font-size:12px;padding:4px 9px;border-radius:12px;border:1px solid ' + (c.achievements.includes(id) ? '#ffd34d;color:#ffe089' : '#3a3247;opacity:.45') + '">' + (c.achievements.includes(id) ? '🏅 ' : '') + label + '</span>').join('') + '</div>';
   html += '<p style="font-size:12px;opacity:.6;margin-top:18px">XP and gold come from every fight: the bigger and better the army you faced, the more; a win pays half again, and the ★ star of the match (the best fighter in the pit — kills, damage, still standing) 60% more. Beat real players and you take 8% of their purse (at most 60 gold each). One win in four drops a purse, one in twenty a unique.</p></div>';
   p.innerHTML = html; p.scrollTop = keepScroll;
+  const slot = document.getElementById('af-preview-slot'); if (slot) { slot.appendChild(afPreviewEl()); const pal = (AF.lobby && afHostSeat() ? AF_TEAMS[AF.lobby.slots.findIndex(r => r.includes(afHostSeat()))] : AF_TEAMS[0]) || AF_TEAMS[0]; const g = afGear(); if (!AF.preview.rig || JSON.stringify(AF.preview.gear) !== JSON.stringify(afGearClean(g))) afPreviewSet(g, pal.pal, AF.preview.mounted); }
   document.getElementById('af-market-close').onclick = afMarketClose;
   for (const b of p.querySelectorAll('button[data-act]')) b.onclick = () => {
     const a = b.getAttribute('data-act').split(':'), it = I[a[a.length - 1]]; afMarketMsg('Asking the war-net…'); b.disabled = true;

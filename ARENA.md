@@ -56,7 +56,7 @@ The host can call a **Rematch** (same seats, fresh pit) or everyone can **Leave 
 | Lobby markup + CSS, challenge prompt | `index.html` — `#arena-btn`, `#arena-lobby`, `#arena-invite` | |
 | The whole mode | `game.js` — the `ARENA FIGHTS` section (state object `AF`, functions `af*`) | the main loop hands the frame to `afFrame` while `AF.on` |
 | Directed invites on the relay | `server/ws.js` — `who`, `invite`, `dm` | `hello` now carries `acct` (the signed-in username) — the address invites go to |
-| Socket client | `net-battle.js` — `coop.who / invite / dm`, multiple handlers per event, re-`hello` on reconnect | |
+| Socket client | `net-battle.js` — `coop.who / invite / dm`, multiple handlers per event, reconnect with seat resume, dead-link watchdog | |
 
 ### The fight
 
@@ -241,8 +241,35 @@ Host-authoritative over the `/coop` relay. The host runs the sim and broadcasts 
 events). Guests send their input record at 20 Hz (`{k:'in'}`), drive their **own** body locally
 so movement never waits for the round trip (softly corrected toward the host's truth), and
 interpolate everyone else. Every client builds the identical pit from the shared `seed` + roster
-in the `{k:'go'}` message, so bodies are addressed by roster index. If a guest drops, an NPC
-takes over their fighter; if the host leaves, the fight ends for everyone.
+in the `{k:'go'}` message, so bodies are addressed by roster index. If a guest leaves for good, an
+NPC takes over their fighter; if the host leaves, the fight ends for everyone.
+
+**Phones drop their socket** whenever the player switches apps, locks the screen or changes
+network, so the arena survives it instead of treating a drop as leaving:
+
+* **The start is acknowledged.** Each guest answers the `go` with `{k:'go-ack', seed}`. The host
+  re-sends the `go` to that guest alone every 1.5 s, then every 5 s after the first minute, for as
+  long as they hold a seat. A duplicate `go` for the running fight is just re-acked. This fixed the
+  first real two-phone test, where the invited player never saw the fight start.
+* **The relay holds the seat** (`server/ws.js`). A socket that dies without a `leave` keeps its room
+  membership for 25 s. The host hears `peer-away` (the guests hear `host-away`) instead of
+  `peer-leave` / `host-gone`. While a guest is away, their fighter fights on its own (AI).
+* **Reconnects resume.** `net-battle.js` remembers `coop.lastRoom` and puts `resume: room` in the
+  reconnect `hello`. The relay matches the account and hands the seat to the new socket
+  (`resumed`). The host hears `peer-rejoin {oldId, id}` and remaps every roster entry, body and
+  input to the new id. The resumed guest then sends `{k:'lobby-req'}` or `{k:'rejoin', seed}`, and
+  the host answers with the lobby, the `go` they missed, or the final `over`. If the old socket is
+  still listed, it is told `superseded` and closed.
+* **Dead links are noticed.** The relay pings every socket and sends `{t:'beat'}` every 10 s, and
+  it reaps sockets that have been silent for 35 s (ghost connections used to pile up in `who`). The
+  client drops its own socket after 25 s without a message, or on returning to the tab after
+  12 s of silence, then reconnects at once.
+* A seat not reclaimed within the grace period is released for real: `peer-leave` (the fighter
+  becomes an NPC) or `host-gone`. A player who stays offline for 45 s falls back to the menu, or
+  to a solo fight if they were the host.
+
+Caveat: the host runs the simulation, so if the **host's** phone backgrounds the page, the browser
+throttles it and the fight freezes for everyone until they come back.
 
 Lobby messages (`{k:'lobby'}` host→guests, `{k:'team'}` / `{k:'weapon'}` guest→host,
 `{k:'invite-declined'}` via `dm`) ride the same room.
@@ -262,4 +289,7 @@ BV.arenaStatus()                              // phase, roster, every body's hp/
 BV.arenaStep(steps, dt)                       // headless sim ticks (no render)
 BV.arenaPump(frames, dt)                      // whole frames incl. network + camera, without rAF
 BV.arenaInput({ atk: n })                     // poke the local input record
+BV.arenaInvite(name) / BV.arenaAccept()       // send / accept a challenge without the UI
+BV.arenaNet()                                 // socket id, room, lobby seats, roster peers, go-acks
+coop._drop()                                  // kill the socket as a phone would (it reconnects and resumes)
 ```

@@ -11047,6 +11047,7 @@ function wireCoop() {
   window.coop.on('joined', onCoopJoined);
   window.coop.on('host-gone', () => { if (coopRole === 'guest') { showWaveBanner('Battle Over', 'Your ally\'s battle has ended.'); leaveCoopGuest(); } });
   window.coop.on('disconnect', () => { // socket dropped: never strand a guest in the co-op view
+    if (coopRole) window.coop.lastRoom = null;                   // (field co-op starts over rather than resuming its room)
     if (coopRole === 'guest') { showWaveBanner('Disconnected', 'Lost contact with your ally\'s battle.'); leaveCoopGuest(); }
     else if (coopRole === 'host') { coopRole = null; coopJoined.clear(); }
   });
@@ -17574,8 +17575,26 @@ function afNetTick(dt) {
     afSend({ k: 'in', mx: +I.mx.toFixed(2), mz: +I.mz.toFixed(2), yaw: +I.yaw.toFixed(3), atk: I.atk, heavy: I.heavy, dodge: I.dodge, roll: I.rollDir || 0, block: I.block ? 1 : 0, hold: I.hold ? 1 : 0, swap: I.swap });
   } else AF.events = [];
 }
+// the START must reach every player: a phone that was switching apps (or asleep on a dead socket) when the host
+// pressed Start missed the one 'go' for good and sat in the lobby forever. Now every guest ACKS the go and the host
+// re-sends it — to that guest alone — until it does (every 1.5 s for a minute, then every 5 s while they hold a seat).
+function afGoSend(spec) { AF.goSpec = spec; AF.goAcks = new Set(); AF.goT0 = AF.goT = performance.now(); afSend(spec); }
+function afGoSpecNow() { return AF.goSpec ? { ...AF.goSpec, roster: AF.roster } : null; }   // (the roster carries remapped peer ids)
+function afGoResend(now) {
+  if (AF.role !== 'host' || !AF.goSpec || AF.goSpec.seed !== AF.seed) return;
+  if (now - AF.goT < (now - AF.goT0 < 60000 ? 1500 : 5000)) return; AF.goT = now;
+  let spec = null;
+  for (const e of AF.roster) if (e.kind === 'player' && e.peer && !e.away && !AF.goAcks.has(e.peer)) afSend(spec = spec || afGoSpecNow(), e.peer);
+}
 function afOnFightMsg(m) {
   const d = m.data; if (!d) return;
+  if (AF.role === 'host' && (d.k === 'go-ack' || d.k === 'lobby-req' || d.k === 'rejoin')) {
+    const e = AF.roster.find(x => x.kind === 'player' && x.peer === m.from); if (!e) return;     // (not one of this fight's players)
+    if (d.k === 'go-ack') { if ((d.seed >>> 0) === AF.seed && AF.goAcks) AF.goAcks.add(m.from); return; }
+    if ((d.seed >>> 0) !== AF.seed) afSend(afGoSpecNow(), m.from);                              // they never saw this fight start: send it now
+    else if (AF.over) afSend({ k: 'over', winner: AF.winner, standings: AF.standings }, m.from); // they missed the final bell
+    return;
+  }
   if (AF.role === 'host' && d.k === 'in') {
     let inp = AF.inputs.get(m.from);
     if (!inp) { inp = afFreshInput(); AF.inputs.set(m.from, inp); const b = AF.bodies.find(x => x.peer === m.from); if (b) b.inp = inp; }
@@ -17583,8 +17602,22 @@ function afOnFightMsg(m) {
   } else if (AF.role === 'guest') {
     if (d.k === 'snap') afApplySnap(d);
     else if (d.k === 'over' && !AF.over) afFinish(d.winner, d.standings);
-    else if (d.k === 'go') afBoot(d);                        // a rematch
+    else if (d.k === 'go') { if ((d.seed >>> 0) === AF.seed) afSend({ k: 'go-ack', seed: AF.seed }); else afBoot(d); } // a re-sent start we already run: just ack it; else a rematch
   }
+}
+// a guest's link dropped: the relay HOLDS their seat for a while. Their fighter keeps fighting on its own until
+// they are back (peer-rejoin hands it to them again) or the grace runs out (peer-leave makes it an NPC for good).
+function afPeerAway(id) {
+  const b = AF.bodies.find(x => x.peer === id);
+  if (b && !b.dead && b.ctrl === 'input') { b.awayPeer = true; b.ctrl = 'ai'; b.inp = afFreshInput(); b.inp.yaw = b.yaw; afLogLine(b.name + ' lost the link — holding their place', '#c9bfda'); }
+  for (const r of AF.roster) if (r.peer === id) r.away = true;
+}
+function afPeerRejoin(oldId, id) {                            // same player, new socket: every reference to the old id moves over
+  for (const r of AF.roster) if (r.peer === oldId) { r.peer = id; r.away = false; }
+  const inp = AF.inputs.get(oldId); if (inp) { AF.inputs.delete(oldId); AF.inputs.set(id, inp); }
+  if (AF.goAcks && AF.goAcks.delete(oldId)) AF.goAcks.add(id);
+  const b = AF.bodies.find(x => x.peer === oldId);
+  if (b) { b.peer = id; if (b.awayPeer) { b.awayPeer = false; if (!b.dead) { b.ctrl = 'input'; b.inp = AF.inputs.get(id) || afFreshInput(); AF.inputs.set(id, b.inp); b.inp.yaw = b.yaw; } afLogLine(b.name + ' is back', '#c9bfda'); } }
 }
 function afPeerLeftFight(id) {
   const b = AF.bodies.find(x => x.peer === id);
@@ -17601,6 +17634,7 @@ function afFrame(now, noRaf) {
   if (AF.hitstop > 0) { AF.hitstop -= dt; gdt = dt * 0.08; }
   if (AF.phase === 'countdown') { AF.countdown -= dt; if (AF.countdown <= 0) { AF.phase = 'fight'; afBanner('FIGHT', '', 1.0); afCrowdReact(false); } } // guests count too (the host's snapshot also flips it)
   if (AF.me && !AF.me.dead && AF.phase === 'fight') afReadLocalInput(); else { const I = AF.locIn; I.mx = I.mz = 0; I.block = false; }
+  afGoResend(now);
   if (AF.phase === 'fight' || AF.phase === 'over') {
     if (AF.role === 'guest') afGuestTick(gdt);
     else afTick(gdt);
@@ -17832,7 +17866,7 @@ function afEndPanel() {
 }
 function afRematch() {
   const spec = { k: 'go', seed: (Math.random() * 0xffffffff) >>> 0, teams: AF.cfg.teams, per: AF.cfg.per, time: AF.cfg.time, weather: AF.cfg.weather, pit: AF.cfg.pit, roster: AF.roster.map(r => ({ ...r })) };
-  if (AF.role === 'host') afSend(spec);
+  if (AF.role === 'host') afGoSend(spec);
   afBoot(spec);
 }
 function afLeaveToMenu() {
@@ -17906,12 +17940,18 @@ function afBoot(spec) {
     try { const sp = afSpawn(t, AF.cfg.teams), ban = makeBanner(AF_TEAMS[t].pal.cloth); const bx = sp.cx * 1.32, bz = sp.cz * 1.32; ban.position.set(bx, afY(bx, bz), bz); ban.rotation.y = sp.yaw; scene.add(ban); AF.props.push(ban); } catch (e) {}
   }
   AF.me = null; AF.inputs.clear();
+  let myIdx = -1;
+  if (AF.role === 'guest') {                                 // my seat: my socket id — or, if it changed under a reconnect, my name
+    myIdx = spec.roster.findIndex(e => e.kind === 'player' && e.peer === window.coop.id);
+    if (myIdx < 0) myIdx = spec.roster.findIndex(e => e.kind === 'player' && e.name === (afSession() || window.coop.name));
+  }
   spec.roster.forEach((entry, i) => {
     const b = afMakeBody(entry, i, r);
     AF.bodies.push(b);
-    const mine = AF.role === 'guest' ? (entry.kind === 'player' && entry.peer === window.coop.id) : entry.kind === 'host';
+    const mine = AF.role === 'guest' ? i === myIdx : entry.kind === 'host';
     if (mine) { AF.me = b; b.inp = AF.locIn; }
-    else if (entry.kind === 'player' && AF.role === 'host') { const inp = AF.inputs.get(entry.peer) || afFreshInput(); inp.yaw = b.yaw; AF.inputs.set(entry.peer, inp); b.inp = inp; b.peer = entry.peer; }
+    else if (entry.kind === 'player' && AF.role === 'host') { const inp = AF.inputs.get(entry.peer) || afFreshInput(); inp.yaw = b.yaw; AF.inputs.set(entry.peer, inp); b.inp = inp; b.peer = entry.peer;
+      if (entry.away) { b.awayPeer = true; b.ctrl = 'ai'; b.inp = afFreshInput(); b.inp.yaw = b.yaw; } }   // still reconnecting: fights on its own until they're back
     else if (entry.kind !== 'npc' && AF.role === 'guest') { b.ctrl = 'remote'; }
     else if (entry.kind !== 'npc') { b.ctrl = 'ai'; }        // a solo fight lists no players; a stale peer becomes an NPC
   });
@@ -17922,6 +17962,7 @@ function afBoot(spec) {
   AF.teams = null; if (AF.role !== 'guest') afPlanTeams();   // the captains draw up their lines (the sim runs here)
   afHud();
   afBanner(AF.cfg.teams + ' TEAMS · ' + AF.cfg.per + ' EACH', AF.me ? 'you fight for ' + AF.me.teamDef.name + ' — steel yourself' : '', 2.6);
+  if (AF.role === 'guest') afSend({ k: 'go-ack', seed: AF.seed });   // tell the host the start got here (it re-sends until we do)
   try { console.log('[arena]', JSON.stringify({ seed: AF.seed, teams: AF.cfg.teams, per: AF.cfg.per, role: AF.role, bodies: AF.bodies.length })); } catch (e) {}
 }
 
@@ -17940,15 +17981,47 @@ function afNetWire() {
   C.on('invite-fail', m => { if (AF.lobby) { AF.lobby.invites.set(m.to, 'not online'); afLobbyRender(); } });
   C.on('who', m => { AF.online = m.list || []; if (AF.lobby) afLobbyRender(); });
   C.on('peer-join', m => { if (AF.lobby && AF.lobby.role === 'host') { afSeat(m.id, m.name); afLobbyRender(); afLobbyBroadcast(); } });
-  C.on('peer-leave', m => { if (AF.on && AF.role === 'host') afPeerLeftFight(m.id); if (AF.lobby && AF.lobby.role === 'host') { afUnseat(m.id); afLobbyRender(); afLobbyBroadcast(); } });
+  C.on('peer-leave', m => { if (AF.on && AF.role === 'host') afPeerLeftFight(m.id); if (AF.lobby && AF.lobby.role === 'host') { if (AF.lobby.away) AF.lobby.away.delete(m.id); afUnseat(m.id); afLobbyRender(); afLobbyBroadcast(); } });
+  // PHONES DROP THEIR SOCKET (app switch, screen lock, a flaky mobile network). The relay holds the seat for ~25 s
+  // and the socket reconnects asking for it back ('resume'); only when that fails is the player really gone.
+  C.on('peer-away', m => {
+    if (AF.on && AF.role === 'host') afPeerAway(m.id);
+    else if (AF.lobby && AF.lobby.role === 'host') { (AF.lobby.away = AF.lobby.away || new Set()).add(m.id); afLobbyRender(); }
+  });
+  C.on('peer-rejoin', m => {
+    if (AF.lobby && AF.lobby.role === 'host') { const st = afFindSeat(m.oldId); if (st) st.peer = m.id; if (AF.lobby.away) AF.lobby.away.delete(m.oldId); }
+    if (AF.on && AF.role === 'host') afPeerRejoin(m.oldId, m.id);
+    else if (AF.lobby && AF.lobby.role === 'host') { afLobbyRender(); afLobbyBroadcast(); }
+  });
+  C.on('host-away', () => { if (AF.on && AF.role === 'guest') afBanner('HOST LOST THE LINK', 'waiting for them to come back…', 4); else if (AF.lobby && AF.lobby.role === 'guest') afLobbyMsg(AF.lobby.host + ' lost the link — waiting for them…'); });
+  C.on('host-back', () => {
+    if (AF.on && AF.role === 'guest') { afBanner('HOST IS BACK', '', 1.2); afSend({ k: 'rejoin', seed: AF.seed }); }
+    else if (AF.lobby && AF.lobby.role === 'guest') { afLobbyMsg(''); afSend({ k: 'lobby-req' }); }
+  });
+  C.on('resumed', m => {                                     // our seat survived the drop — catch up on whatever we missed
+    AF.netLostAt = 0;
+    if (AF.on && AF.role === 'guest') { afBanner('BACK IN THE FIGHT', '', 1.2); afSend({ k: 'rejoin', seed: AF.seed }); }
+    else if (AF.on) afBanner('BACK ON THE WAR-NET', '', 1.2);
+    else if (AF.lobby && AF.lobby.role === 'guest') { afLobbyMsg('Back on the war-net.'); afSend({ k: 'lobby-req' }); afLobbyRender(); }
+    else if (AF.lobby && AF.lobby.role === 'host') { afLobbyMsg('Back on the war-net.'); C.who(); afLobbyRender(); afLobbyBroadcast(); }
+  });
+  C.on('resume-fail', () => { AF.netLostAt = 0; afNetGaveUp(); });
+  C.on('superseded', () => {                                 // the same account opened the arena on another device/tab
+    if (AF.on && AF.role !== 'solo') { afBanner('PLAYING ELSEWHERE', 'this window lost its seat', 3); setTimeout(afLeaveToMenu, 2500); }
+    else if (AF.lobby) afLobbyMsg('You joined from somewhere else — this window is no longer in the lobby.');
+  });
+  setInterval(() => { if (AF.netLostAt && Date.now() - AF.netLostAt > 45000) { AF.netLostAt = 0; afNetGaveUp(); } }, 2000);
   C.on('joined', m => { if (AF.pendingRoom) { AF.pendingRoom = null; afOpenLobby('guest', m.beacon || {}); } });
   C.on('join-fail', () => { if (AF.pendingRoom) { AF.pendingRoom = null; afLobbyMsg('That fight is gone — the host left the lobby.'); afOpenLobby('host'); } });
   C.on('host-gone', () => { if (AF.on && AF.role === 'guest') { afBanner('HOST LEFT', 'the fight is over', 3); setTimeout(afLeaveToMenu, 2500); } else if (AF.lobby && AF.lobby.role === 'guest') { afLobbyMsg('The host closed the lobby.'); afOpenLobby('host'); } });
-  C.on('disconnect', () => { if (AF.on && AF.role !== 'solo') { afBanner('DISCONNECTED', 'lost the war-net', 3); setTimeout(afLeaveToMenu, 2500); } else if (AF.lobby) { afLobbyMsg('Lost the war-net — reconnecting…'); afLobbyRender(); } });
-  C.on('reconnect', () => {                                 // back on the net: a host re-opens its room, a guest has lost the host's room
-    if (AF.on) return;
-    if (AF.lobby && AF.lobby.role === 'host') { C.host({ arena: true, host: AF.lobby.host, teams: AF.lobby.teams, per: AF.lobby.per }); afLobbyMsg('Back on the war-net.'); C.who(); afLobbyRender(); }
-    else if (AF.lobby && AF.lobby.role === 'guest') { afLobbyMsg('The war-net dropped — the host\'s lobby is gone. Ask for a new challenge.'); afOpenLobby('host'); }
+  C.on('disconnect', () => {                               // don't give up the fight on a drop: the socket is already reconnecting
+    AF.netLostAt = AF.netLostAt || Date.now();
+    if (AF.on && AF.role !== 'solo') afBanner('RECONNECTING…', 'the war-net dropped — holding your place', 3);
+    else if (AF.lobby) { afLobbyMsg('Lost the war-net — reconnecting…'); afLobbyRender(); }
+  });
+  C.on('reconnect', () => {                                 // back on the net but NOT resuming a room (resumed/resume-fail handle that)
+    if (C.resuming) return;
+    AF.netLostAt = 0; afNetGaveUp();
   });
   C.on('msg', m => {
     const d = m.data; if (!d) return;
@@ -17959,8 +18032,25 @@ function afNetWire() {
       if (d.k === 'team') { afMoveSeat(m.from, d.t | 0); afLobbyRender(); afLobbyBroadcast(); }
       else if (d.k === 'weapon') { const s = afFindSeat(m.from); if (s) { s.weapon = ['bow', 'horse'].includes(d.w) ? d.w : 'sword'; afLobbyRender(); afLobbyBroadcast(); } }
       else if (d.k === 'invite-declined') { AF.lobby.invites.set(d.name, 'declined'); afLobbyRender(); }
+      else if (d.k === 'lobby-req') afLobbyBroadcast();
     }
   });
+}
+// the seat is lost for good (the relay's grace ran out, or it restarted): fall back without stranding anyone
+function afNetGaveUp() {
+  const C = window.coop;
+  if (AF.on && AF.role === 'guest') { afBanner('DISCONNECTED', 'lost the fight', 3); setTimeout(afLeaveToMenu, 2500); }
+  else if (AF.on && AF.role === 'host') {                   // our guests were told the host is gone: their fighters fight on as NPCs
+    for (const e of AF.roster.slice()) if (e.kind === 'player' && e.peer) afPeerLeftFight(e.peer);
+    AF.role = 'solo'; AF.goSpec = null; afBanner('OFF THE WAR-NET', 'the others were cut off — fighters of the vale take their places', 3);
+  }
+  else if (AF.lobby && AF.lobby.role === 'host') {
+    for (const row of AF.lobby.slots) for (let i = 0; i < row.length; i++) if (row[i] && row[i].kind === 'player') { AF.lobby.invites.delete(row[i].name); row[i] = null; }
+    AF.lobby.away = null;
+    if (C && C.connected) { C.host({ arena: true, host: AF.lobby.host, teams: AF.lobby.teams, per: AF.lobby.per }); C.who(); afLobbyMsg('Back on the war-net — invite your players again.'); }
+    afLobbyRender();
+  }
+  else if (AF.lobby && AF.lobby.role === 'guest') { afLobbyMsg('The war-net dropped — the host\'s lobby is gone. Ask for a new challenge.'); afOpenLobby('host'); }
 }
 function afNewLobby(role) {
   const L = { role, teams: 2, per: 3, weapon: 'sword', time: 'day', weather: 'clear', pit: 'wide', slots: [], invites: new Map(), host: afSession() || 'You', room: null };
@@ -18024,7 +18114,7 @@ function afOpenLobby(role, beacon) {
 function afLobbyBroadcast() {
   const L = AF.lobby; if (!L || L.role !== 'host' || !window.coop || !window.coop.connected) return;
   window.coop.updateBeacon({ arena: true, host: L.host, teams: L.teams, per: L.per });
-  window.coop.send({ k: 'lobby', teams: L.teams, per: L.per, time: L.time, weather: L.weather, pit: L.pit, npcArch: L.npcArch, host: L.host, slots: L.slots.map(row => row.map(s => s ? { kind: s.kind, name: s.name, peer: s.peer, weapon: s.weapon } : null)) });
+  window.coop.send({ k: 'lobby', teams: L.teams, per: L.per, time: L.time, weather: L.weather, pit: L.pit, npcArch: L.npcArch, host: L.host, slots: L.slots.map(row => row.map(s => s ? { kind: s.kind, name: s.name, peer: s.peer, weapon: s.weapon, away: !!(L.away && L.away.has(s.peer)) } : null)) });
 }
 function afLobbyApply(d) {                                   // guest: mirror the host's lobby
   const L = AF.lobby; if (!L || L.role !== 'guest') return;
@@ -18047,7 +18137,7 @@ function afLobbyRender() {
   grid.innerHTML = L.slots.map((row, t) => {
     const td = AF_TEAMS[t], free = row.indexOf(null) >= 0, mine = !!me && row.indexOf(me) >= 0;
     return '<div class="al-team" style="--tc:' + td.col + '"><div class="al-tname"><span>' + td.name + '</span>' + (!host && free && !mine ? '<button data-team="' + t + '">join</button>' : '') + '</div>' +
-      (L.per > 8 ? row.filter(Boolean) : row).map(s => s ? '<div class="al-slot ' + (s === me ? 'you' : 'player') + '"><span>' + (s === me ? 'You' : s.name) + '</span><span class="al-tag">' + (s.weapon === 'bow' ? '🏹' : s.weapon === 'horse' ? '🐎' : '🗡') + (s.kind === 'host' && s !== me ? ' host' : '') + '</span></div>'
+      (L.per > 8 ? row.filter(Boolean) : row).map(s => s ? '<div class="al-slot ' + (s === me ? 'you' : 'player') + '"><span>' + (s === me ? 'You' : s.name) + (s.away || (L.away && L.away.has(s.peer)) ? ' <i style="opacity:.6">· reconnecting…</i>' : '') + '</span><span class="al-tag">' + (s.weapon === 'bow' ? '🏹' : s.weapon === 'horse' ? '🐎' : '🗡') + (s.kind === 'host' && s !== me ? ' host' : '') + '</span></div>'
                         : null).map((html, i) => html != null ? html : '<div class="al-slot npc"><span>' + ((L.npcArch && L.npcArch[t] && L.npcArch[t][i]) || 'swordsman') + ' of the vale</span><span class="al-tag">npc</span></div>').join('') +
       (L.per > 8 ? '<div class="al-slot npc"><span>' + afMixSummary(L, t) + '</span><span class="al-tag">npc</span></div>' : '') + '</div>';
   }).join('');
@@ -18124,10 +18214,11 @@ function afStartFight() {
     const arch = (L.npcArch && L.npcArch[t] && L.npcArch[t][s]) || 'swordsman';
     roster.push({ t, s, name: nm, kind: 'npc', peer: null, arch, weapon: AF_ARCH[arch].weapon === 'bow' ? 'bow' : AF_ARCH[arch].weapon === 'horse' ? 'horse' : 'sword' });
   }
+  for (const e of roster) if (e.kind === 'player' && L.away && L.away.has(e.peer)) e.away = true;   // (a seat whose phone is mid-reconnect)
   const humans = roster.filter(x => x.kind === 'player').length;
   AF.role = humans ? 'host' : 'solo';
   const spec = { k: 'go', seed: (Math.random() * 0xffffffff) >>> 0, teams: L.teams, per: L.per, time: L.time, weather: L.weather, pit: afPitFor(L.pit, L.per), roster };
-  if (humans) afSend(spec);
+  if (humans) afGoSend(spec);
   afCloseLobbyUi();
   afBoot(spec);
 }
@@ -18163,6 +18254,12 @@ function afTitlePresence() {
 }
 BV.arena = (cfg) => { afOpenLobby('host'); if (cfg && AF.lobby) { if (cfg.teams) AF.lobby.teams = clamp(cfg.teams, AF_LIM.teamsMin, AF_LIM.teamsMax); if (cfg.per) AF.lobby.per = clamp(cfg.per, AF_LIM.perMin, AF_LIM.perMax); afResize(AF.lobby); afLobbyRender(); if (cfg.start) afStartFight(); } return BV.arenaStatus(); };
 BV.arenaStart = () => { afStartFight(); return BV.arenaStatus(); };
+BV.arenaInvite = (name) => { afInvite(name); return BV.arenaNet(); };
+BV.arenaAccept = () => { afAcceptInvite(); return BV.arenaNet(); };
+BV.arenaNet = () => ({ id: window.coop && window.coop.id, room: window.coop && window.coop.room, connected: !!(window.coop && window.coop.connected), on: AF.on, role: AF.role, seed: AF.seed, phase: AF.phase, me: AF.me ? AF.me.idx : null,
+  lobby: AF.lobby ? { role: AF.lobby.role, seats: AF.lobby.slots.flat().filter(Boolean).map(x => x.name + ':' + x.kind + ':' + x.peer + (x.away ? ':away' : '')), msg: (document.getElementById('al-msg') || {}).textContent } : null,
+  roster: AF.on ? AF.roster.filter(e => e.kind !== 'npc').map(e => e.name + ':' + e.kind + ':' + e.peer + (e.away ? ':away' : '')) : null, acks: AF.goAcks ? [...AF.goAcks] : null,
+  bodies: AF.on ? AF.bodies.filter(b => b.kind !== 'npc' || b.awayPeer).map(b => b.name + ':' + b.ctrl + ':' + (b.peer || '')) : null });
 BV.arenaStatus = () => ({ on: AF.on, role: AF.role, phase: AF.phase, t: +AF.t.toFixed(1), teams: AF.cfg.teams, per: AF.cfg.per, seed: AF.seed, over: AF.over, winner: AF.winner,
   bodies: AF.bodies.map(b => ({ i: b.idx, name: b.name, team: b.team, kind: b.kind, ctrl: b.ctrl, weapon: b.weapon, hp: Math.round(b.hp), dead: b.dead, kills: b.kills, x: +b.x.toFixed(1), z: +b.z.toFixed(1), state: afStateCode(b) })),
   me: AF.me ? AF.me.idx : null, lobby: AF.lobby ? { role: AF.lobby.role, teams: AF.lobby.teams, per: AF.lobby.per, seats: AF.lobby.slots.map(r => r.map(s => s ? s.name : null)) } : null, online: AF.online.map(p => p.name) });

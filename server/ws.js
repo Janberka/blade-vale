@@ -14,6 +14,16 @@
 //   who                            -> who {list:[{id,name,busy}]}   (everyone online, for arena invites)
 //   invite{to,cfg}                 -> the named player gets invite {from,name,room,cfg} | invite-fail {to}
 //   dm    {to,data}                -> msg {from,data,dm:true} to ONE connection, room or not (invite replies)
+//
+// STAYING CONNECTED (phones drop sockets every time you switch apps):
+//   * every 10 s the server pings each socket and sends {t:'beat'}; a socket silent for 35 s is reaped —
+//     a phone that vanished never closes its TCP socket, and those ghosts used to pile up forever
+//   * a socket that DIES (not an explicit leave) keeps its seat for GRACE_MS: the host hears peer-away
+//     (or the guests hear host-away) instead of peer-leave / host-gone
+//   * hello {resume: room} from the same account takes the seat back -> resumed {room,isHost,oldId,peers};
+//     the host hears peer-rejoin {oldId,id,name} (or the guests hear host-back). A still-listed old socket
+//     of that account (the server hadn't noticed it die yet) is told 'superseded' and closed.
+//   * a seat not reclaimed within GRACE_MS is let go for real: peer-leave / host-gone, exactly as before
 const crypto = require('crypto');
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const acceptKey = (key) => crypto.createHash('sha1').update(key + WS_GUID).digest('base64');
@@ -66,6 +76,62 @@ function attach(server, opts) {
   const conns = new Map();  // id -> conn
   const rooms = new Map();  // room -> { hostId, beacon, members:Set, world }
 
+  const GRACE_MS = opts.graceMs || 25000, BEAT_MS = opts.beatMs || 10000, DEAD_MS = opts.deadMs || 35000;
+  // the socket died (not an explicit leave): hold the seat for a grace period instead of giving it away
+  function dropConn(conn) {
+    conns.delete(conn.id);
+    const r = conn.room && rooms.get(conn.room); if (!r) return;
+    const wasHost = r.hostId === conn.id;
+    (r.away = r.away || new Map()).set(conn.id, { acct: conn.acct, name: conn.name, at: Date.now(), wasHost });
+    if (wasHost) { for (const mid of r.members) { if (mid === conn.id) continue; const m = conns.get(mid); if (m) m.send({ t: 'host-away', room: conn.room }); } }
+    else { const h = conns.get(r.hostId); if (h) h.send({ t: 'peer-away', room: conn.room, id: conn.id, name: conn.name }); }
+  }
+  // a seat nobody came back for within the grace period is let go for real
+  function expireAway(now) {
+    for (const [room, r] of rooms) {
+      if (!r.away) continue;
+      for (const [oid, a] of r.away) {
+        if (now - a.at < GRACE_MS) continue;
+        r.away.delete(oid); r.members.delete(oid);
+        if (a.wasHost) { for (const mid of r.members) { const m = conns.get(mid); if (m) { m.send({ t: 'host-gone', room }); m.room = null; } } rooms.delete(room); break; }
+        const h = conns.get(r.hostId); if (h) h.send({ t: 'peer-leave', room, id: oid });
+        if (!r.members.size) rooms.delete(room);
+      }
+    }
+  }
+  // take a seat back: the old id's membership (and hosting) passes to the new connection
+  function adopt(r, room, oldId, conn, wasHost) {
+    r.members.delete(oldId); r.members.add(conn.id); if (r.away) r.away.delete(oldId);
+    if (wasHost) r.hostId = conn.id;
+    conn.room = room;
+    const peers = []; if (wasHost) for (const mid of r.members) { if (mid === conn.id) continue; const c = conns.get(mid); if (c) peers.push({ id: mid, name: c.name }); }
+    conn.send({ t: 'resumed', room, isHost: wasHost, oldId, beacon: r.beacon, peers });
+    if (wasHost) { for (const mid of r.members) { if (mid === conn.id) continue; const c = conns.get(mid); if (c) c.send({ t: 'host-back', room }); } }
+    else { const h = conns.get(r.hostId); if (h) h.send({ t: 'peer-rejoin', room, oldId, id: conn.id, name: conn.name }); }
+  }
+  function resume(conn, room) {
+    const r = rooms.get(room); if (!r) { conn.send({ t: 'resume-fail', room }); return; }
+    const same = (a, n) => (conn.acct && a === conn.acct) || (!conn.acct && n === conn.name);
+    if (r.away) for (const [oid, a] of r.away) if (same(a.acct, a.name)) { adopt(r, room, oid, conn, a.wasHost); return; }
+    for (const mid of r.members) {                            // the server hasn't noticed the old socket die yet: supersede it
+      const c = conns.get(mid); if (!c || c === conn || !same(c.acct, c.name)) continue;
+      const wasHost = r.hostId === mid;
+      c.superseded = true; conns.delete(mid); c.send({ t: 'superseded' }); try { c.socket.destroy(); } catch (e) {}
+      adopt(r, room, mid, conn, wasHost); return;
+    }
+    conn.send({ t: 'resume-fail', room });                     // not in that room any more (the grace ran out)
+  }
+  const beat = setInterval(() => {
+    const now = Date.now();
+    for (const [, c] of conns) {
+      if (now - (c.lastSeen || now) > DEAD_MS) { try { c.socket.destroy(); } catch (e) {} continue; }   // a ghost: the close handler drops it
+      try { c.socket.write(Buffer.from([0x89, 0x00])); } catch (e) {}                                     // ping: a live browser pongs by itself
+      c.send({ t: 'beat' });                                                                              // …and a message the page can see, so it can tell a dead link too
+    }
+    expireAway(now);
+  }, BEAT_MS);
+  if (beat.unref) beat.unref();
+
   function leaveRoom(conn) {
     const r = conn.room && rooms.get(conn.room); if (!r) { conn.room = null; return; }
     r.members.delete(conn.id);
@@ -84,7 +150,9 @@ function attach(server, opts) {
       case 'hello':
         conn.world = String(m.world || 'default'); conn.name = String(m.name || 'Ally').slice(0, 40);
         conn.acct = String(m.acct || '').slice(0, 40); conn.hello = true; // acct = signed-in username: the stable invite address
-        conn.send({ t: 'hello-ok', id: conn.id }); break;
+        conn.send({ t: 'hello-ok', id: conn.id });
+        if (m.resume && !conn.room) resume(conn, String(m.resume)); // a dropped phone coming back takes its seat back
+        break;
       case 'who': {                              // everyone online right now (arena invite roster)
         const list = [];
         for (const [id, c] of conns) if (id !== conn.id && c.hello) list.push({ id, name: c.acct || c.name, busy: !!c.room });
@@ -138,17 +206,18 @@ function attach(server, opts) {
     if (!key) { socket.destroy(); return; }
     socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + acceptKey(key) + '\r\n\r\n');
     socket.setNoDelay(true);
-    const conn = { id: nextId++, socket, world: 'default', name: 'Ally', room: null,
+    const conn = { id: nextId++, socket, world: 'default', name: 'Ally', room: null, lastSeen: Date.now(),
       send(obj) { try { socket.write(encodeFrame(JSON.stringify(obj))); } catch (e) {} } };
     conns.set(conn.id, conn);
-    const cleanup = () => { leaveRoom(conn); conns.delete(conn.id); };
+    let cleaned = false;
+    const cleanup = () => { if (cleaned) return; cleaned = true; if (conn.superseded) { conns.delete(conn.id); return; } dropConn(conn); }; // a dead socket keeps its seat for a while
     const parser = makeParser(socket, (msg) => handle(conn, msg), () => { cleanup(); try { socket.end(); } catch (e) {} });
-    socket.on('data', (c) => { try { parser(c); } catch (e) { cleanup(); try { socket.destroy(); } catch (e2) {} } });
+    socket.on('data', (c) => { conn.lastSeen = Date.now(); try { parser(c); } catch (e) { cleanup(); try { socket.destroy(); } catch (e2) {} } });
     socket.on('close', cleanup);
     socket.on('error', () => { cleanup(); try { socket.destroy(); } catch (e) {} });
   });
   if (opts.log !== false) console.log('Blade Vale co-op relay attached on /coop');
-  return { rooms, conns, encodeFrame, acceptKey };
+  return { rooms, conns, encodeFrame, acceptKey, stop() { clearInterval(beat); } };
 }
 
 module.exports = { attach, encodeFrame, acceptKey };

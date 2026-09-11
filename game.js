@@ -16669,28 +16669,29 @@ function afMakeBody(entry, idx, r) {
   const archKey = entry.arch || (entry.weapon === 'bow' ? 'archer' : entry.weapon === 'horse' ? 'rider' : 'swordsman'), A = AF_ARCH[archKey] || AF_ARCH.swordsman;
   const mounted = A.weapon === 'horse', weapon = A.weapon === 'bow' ? 'bow' : A.weapon === 'longsword' ? 'longsword' : 'sword';
   const big = AF.cfg.teams * AF.cfg.per > AF_LIM.heroCap;
-  const G = entry.kind !== 'npc' ? afGearStats(afGearClean(entry.gear)) : null;   // a player's loadout: sword, armor, bow, horse, a plume
+  const xp = entry.kind === 'npc' ? (entry.xp != null ? clamp(entry.xp | 0, 0, 100) : 60) : 75;   // (a player's body only thinks for itself if they leave)
+  const npc = entry.kind === 'npc', gear = npc ? afNpcGear(entry, xp, r) : afGearClean(entry.gear), G0 = afGearStats(gear), K = npc ? AF_NPC_GEAR_K : 1;   // a loadout for everyone: a player's own, an NPC's by XP
+  const G = { swordDmg: lerp(1, G0.swordDmg, K), reach: G0.reach * K, hp: G0.hp * K, poise: G0.poise * K, move: G0.move * K, bow: G0.bow, bowDmg: lerp(1, G0.bowDmg, K), horse: G0.horse, horseHp: lerp(AF_HORSE.hp, G0.horseHp, K), horseSpeed: lerp(1, G0.horseSpeed, K), plume: npc ? null : G0.plume };
   const rigOpts = { hero: entry.kind !== 'npc' || !big, both: A.bow, plume: G && G.plume != null ? G.plume : AF_TEAM_HEX[entry.t] }; // a hundred capes would melt a phone: only the humans dress up in a big fight
-  const hsz = G && G.horse && AF_LOOK.horse[afGearClean(entry.gear).horse] ? AF_LOOK.horse[afGearClean(entry.gear).horse].scale : 1;   // a nag is small, a warhorse big
+  const hsz = G.horse && AF_LOOK.horse[gear.horse] ? AF_LOOK.horse[gear.horse].scale : 1;   // a nag is small, a warhorse big
   const h = mounted ? buildCavalry(td.pal, A.scale * hsz, 'sword', rigOpts) : buildHumanoid(td.pal, A.scale, A.bow ? weapon : weapon, rigOpts); const group = h.group || h;
   if (h.parts.shield) { h.parts.shield.visible = A.shield && weapon !== 'bow'; if (A.bigShield) h.parts.shield.scale.set(1.3, 1.3, 1.3); }
   group.rotation.order = 'YXZ';                              // yaw first, then a body-local tilt/roll (somersaults, crumples)
   const sp = afSpawn(entry.t, AF.cfg.teams), rgx = -Math.cos(sp.yaw), rgz = Math.sin(sp.yaw), so = afSlotOffset(entry.s, AF.cfg.per), off = so.right, back = so.back * (mounted ? 1.3 : 1);
-  const xp = entry.kind === 'npc' ? (entry.xp != null ? clamp(entry.xp | 0, 0, 100) : 60) : 75;   // (a player's body only thinks for itself if they leave)
   const b = { id: idx, idx, team: entry.t, teamDef: td, name: entry.name, kind: entry.kind, peer: entry.peer || null, weapon, xp,
     ctrl: entry.kind === 'npc' ? 'ai' : 'input', inp: afFreshInput(),
     group, parts: h.parts, anim: makeAnimator(h.parts),
     x: sp.cx + rgx * off - Math.sin(sp.yaw) * back, z: sp.cz + rgz * off - Math.cos(sp.yaw) * back, yaw: sp.yaw, phase: r() * TAU, tiltX: 0,
-    hp: A.hp + (G ? G.hp : 0), maxHp: A.hp + (G ? G.hp : 0), state: 'idle', atk: null, combo: 0, comboT: 0, blocking: false,
+    hp: A.hp + G.hp, maxHp: A.hp + G.hp, state: 'idle', atk: null, combo: 0, comboT: 0, blocking: false,
     dodgeT: 0, dodgeCd: 0, ddx: 0, ddz: 0, iframes: 0, flinch: 0, stagger: 0, dead: false, deadT: 0, tinted: false, kills: 0,
     // (a PLAYER is the hero: ×1.6 poise, so four jabs break it, not three)
-    vx: 0, vz: 0, poise: A.poise * (entry.kind !== 'npc' ? 1.6 : 1) + (G ? G.poise : 0), maxPoise: A.poise * (entry.kind !== 'npc' ? 1.6 : 1) + (G ? G.poise : 0), queued: false, cd: 0, waiting: false, slotAngle: 0, retreatT: 0, bob: 0,
+    vx: 0, vz: 0, poise: A.poise * (entry.kind !== 'npc' ? 1.6 : 1) + G.poise, maxPoise: A.poise * (entry.kind !== 'npc' ? 1.6 : 1) + G.poise, queued: false, cd: 0, waiting: false, slotAngle: 0, retreatT: 0, bob: 0,
     gait: null, hitT: 0, hitSide: 0, lookYaw: 0, headYaw: 0, capeX: 0.12, phase0: r() * TAU, roll: 0, lastStep: 0, flashT: 0, sway: r() * TAU, clashT: 0, clashAtk: false, clashDx: 0, clashDz: 0,
     charge: null, chargeMove: 0, prevHold: false, releaseNow: false, aiHoldT: 0, prefBow: weapon === 'bow', swapT: 0, seenSwap: 0,
     mounted, trampleT: 0, passT: 0, sp01: 0,
     pal: td.pal, rigOpts, footScale: mounted ? 1 : A.scale, riderGroup: h.riderGroup || null, horse: null, mountCd: 0,   // (so he can be re-dressed on foot or in a saddle)
-    arch: archKey, A, moveMul: A.move * (G ? 1 + G.move : 1), dmgMul: A.dmg * (entry.kind === 'npc' ? lerp(0.85, 1.05, xp / 100) : G.swordDmg), reachBonus: A.reach + (G ? G.reach : 0),
-    bowDmg: G ? G.bowDmg : 1, horseMul: G ? G.horseSpeed : 1, blade: G ? G.blade : null, gear: G ? afGearClean(entry.gear) : null, rank: entry.rank || (entry.gear && entry.gear.rank) || null, dmgDealt: 0, swordHits: 0, bowHits: 0, rideT: 0, noShield: !A.shield, feint: 0,
+    arch: archKey, A, moveMul: A.move * (1 + G.move), dmgMul: A.dmg * G.swordDmg * (npc ? lerp(0.92, 1.0, xp / 100) : 1), reachBonus: A.reach + G.reach,   // (the sword carries the XP damage step now)
+    bowDmg: G.bowDmg, horseMul: G.horseSpeed, blade: G0.blade, gear, rank: entry.rank || (entry.gear && entry.gear.rank) || null, dmgDealt: 0, swordHits: 0, bowHits: 0, rideT: 0, noShield: !A.shield, feint: 0,
     seenAtk: 0, seenHeavy: 0, seenDodge: 0,
     // NPC brain traits (seeded so a replay of the same seed fields the same temperaments)
     skill: (r(), xp / 100), heavyBias: A.heavyBias * (0.7 + r() * 0.6), target: null, aiT: r() * 0.3, strafe: r() < 0.5 ? -1 : 1, strafeT: 0.5 + r(), swingT: 0.4 + r() * 0.5, holdBlock: 0, reactedTo: null, shotCd: 1 + r(),
@@ -16698,13 +16699,13 @@ function afMakeBody(entry, idx, r) {
     tx: 0, tz: 0, tyaw: 0, tstate: 0, tmove: 0, rollT: 0, remoteSeen: false,
   };
   b.tx = b.x; b.tz = b.z; b.tyaw = b.yaw; b.inp.yaw = b.yaw; b.tagH = mounted ? 3.5 : 2.25; b.baseScale = group.scale.x;
-  if (mounted) { const hh = afNewHorse(group, h.horse); hh.rider = b; b.horse = hh; hh.x = b.x; hh.z = b.z; hh.yaw = b.yaw; if (G) hh.hp = hh.maxHp = G.horseHp; }
-  if (G) afDressGear(b.parts, b.gear, td.pal);
+  if (mounted) { const hh = afNewHorse(group, h.horse); hh.rider = b; b.horse = hh; hh.x = b.x; hh.z = b.z; hh.yaw = b.yaw; hh.hp = hh.maxHp = Math.round(G.horseHp); }
+  afDressGear(b.parts, b.gear, td.pal);
   group.position.set(b.x, afY(b.x, b.z), b.z); group.rotation.y = b.yaw;
   scene.add(group); group.userData.afBody = b;
   // floating name + health bar (a separate un-rotated tag so the bar can face the camera)
   const tag = new THREE.Group();
-  const tagText = entry.kind === 'npc' ? entry.name + (archKey !== 'swordsman' ? ' · ' + A.label : '') + ' · ' + xp + 'xp' : entry.name + (b.rank ? ' · ' + b.rank : '');
+  const tagText = entry.kind === 'npc' ? entry.name + (archKey !== 'swordsman' ? ' · ' + A.label : '') + ' · ' + xp + 'xp' + (xp >= 82 && gear.sword && window.ARENA_CAT ? ' · ' + ARENA_CAT.ARENA_ITEMS[gear.sword].name : '') : entry.name + (b.rank ? ' · ' + b.rank : '');
   const nm = makeNameSprite(tagText); nm.scale.set(Math.min(3.6, 1.1 + tagText.length * 0.16), 0.36, 1); nm.position.y = 0.34; tag.add(nm);
   const bar = makeHealthBar(parseInt(td.col.slice(1), 16)); bar.visible = true; bar.scale.setScalar(0.6); tag.add(bar);
   b.tag = tag; b.bar = bar; scene.add(tag);
@@ -16855,6 +16856,19 @@ function afGearStats(g) {                                  // what the loadout d
   const I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}, sw = I[g.sword] || { dmg: 1 }, ar = g.armor && I[g.armor], bw = g.bow && I[g.bow], hs = g.horse && I[g.horse], pl = g.plume && I[g.plume], tr = g.trim && I[g.trim];
   return { swordDmg: (sw.dmg || 1) * (tr && tr.dmg ? tr.dmg : 1), reach: sw.reach || 0, hp: ar ? ar.hp || 0 : 0, poise: ar ? ar.poise || 0 : 0, move: ar ? ar.move || 0 : 0,
     bow: !!bw, bowDmg: bw ? bw.dmg || 1 : 1, horse: !!hs, horseHp: hs ? hs.hp : AF_HORSE.hp, horseSpeed: hs ? hs.speed || 1 : 1, plume: pl ? pl.plume : null, blade: tr ? tr.blade : g.sword === 'wood_sword' ? 'wood' : null };
+}
+// NPCS DRESS BY XP: a recruit in wood and cloth, a soldier in mail with a falchion, a veteran in plate with a
+// scimitar, a champion with a greatsword — rolled from the roster seed (host and guests draw the same), and worth
+// AF_NPC_GEAR_K of a player's stats so the XP curve keeps its shape (the archetype is still the body)
+const AF_NPC_GEAR_K = 0.6;
+function afNpcGear(entry, xp, r) {
+  const pick = a => a[Math.floor(r() * a.length)], A = AF_ARCH[entry.arch] || AF_ARCH.swordsman, g = {};
+  g.sword = xp < 25 ? pick(['wood_sword', 'iron_sword']) : xp < 45 ? pick(['iron_sword', 'falchion']) : xp < 60 ? pick(['steel_sword', 'cleaver', 'rapier']) : xp < 82 ? pick(['vale_blade', 'scimitar', 'flamberge']) : xp < 95 ? pick(['doomsword', 'master_sword']) : pick(['master_sword', 'sun_blade', 'ember_blade', 'frost_fang', 'black_night']);
+  if (A.weapon === 'longsword' && xp >= 45) g.sword = xp < 82 ? 'cleaver' : 'doomsword';     // a brute swings something broad
+  if (xp >= 20) g.armor = xp < 40 ? (r() < 0.6 ? 'leather' : undefined) : xp < 60 ? 'mail' : xp < 82 ? 'plate' : 'champion_plate';
+  if (A.weapon === 'bow') g.bow = xp < 40 ? 'hunting_bow' : xp < 70 ? 'longbow' : 'warbow';
+  if (A.weapon === 'horse') g.horse = xp < 35 ? 'nag' : xp < 65 ? 'courser' : xp < 85 ? 'destrier' : 'warhorse';
+  for (const k in g) if (!g[k]) delete g[k]; return g;
 }
 function afSendGear() { const L = AF.lobby; if (!L || L.role !== 'guest' || !window.coop || !window.coop.connected || !window.coop.room) return; window.coop.send({ k: 'gear', gear: afGear() }); }
 // THE LOOK of gear — you see what you wear: no armor is a padded jack in the team cloth; leather, mail, plate and

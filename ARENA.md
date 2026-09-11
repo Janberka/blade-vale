@@ -429,6 +429,14 @@ lends plain gear (iron sword, hunting bow, courser) and pays nothing.
   Serpent flamberge 1600 → Doomsword 2400 (Champion, reach +0.3, −3% speed) → Master's 3000 →
   Sun-forged 6000 (Legend, sword skill 5, ×1.4). Ember blade, Frost fang and Black Night are
   loot-only unique swords (×1.12).
+* **NPCs dress by XP** (`afNpcGear`, rolled from the roster seed so every client builds the same
+  man): a recruit under 25 carries wood or iron in cloth; 25–45 iron or a falchion in leather;
+  45–60 steel, a cleaver or a Needle in mail; 60–82 the Blade of the Vale, a scimitar or a
+  flamberge in plate; 82+ a Doomsword or Master's sword in the champion's plate; 95+ may carry a
+  Sun-forged blade or one of the unique blades. Brutes swing cleavers and Doomswords; archers'
+  bows and riders' horses climb the same way. NPC gear is worth `AF_NPC_GEAR_K` = 60% of a
+  player's stats (the sword now carries the XP damage step), so the XP difficulty curve keeps
+  its shape. Champions' name tags name their blade.
 * **The record**: fights, wins, kills, deaths, damage, stars, trophies and achievements (first
   blood, 10/50/200/500 kills, 1/10/50/100 fights, 5/25/100 wins, stars, trophies) on the career
   sheet.

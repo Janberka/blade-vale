@@ -16754,8 +16754,12 @@ function afCommit(b, dt) {
       p.upperBody.rotation.x -= k * 0.32; p.upperBody.rotation.z += b.hitSide * k * 0.22;
       if (p.headPivot) p.headPivot.rotation.x = -k * 0.35;
     } else if (p.headPivot) p.headPivot.rotation.x = lerp(p.headPivot.rotation.x, 0, clamp(dt * 8, 0, 1));
+    if (b.mounted && !b.dead) {                              // the RIDER turns in the saddle: shoulders follow the aim (a torso's travel), legs stay astride
+      const tw = b.aimYaw != null ? clamp(angleDelta(b.yaw, afAimOf(b)), -1.25, 1.25) : 0;
+      b.twist = lerp(b.twist || 0, tw, clamp(dt * 9, 0, 1)); p.upperBody.rotation.y += b.twist;
+    }
     if (p.headPivot) {                                       // look at the mark (clamped to a neck's travel), under the torso twist
-      const want = clamp(angleDelta(b.yaw, b.lookYaw), -0.85, 0.85) - p.upperBody.rotation.y;
+      const want = b.mounted ? clamp(angleDelta(b.yaw, b.lookYaw) - p.upperBody.rotation.y, -0.85, 0.85) : clamp(angleDelta(b.yaw, b.lookYaw), -0.85, 0.85) - p.upperBody.rotation.y;
       b.headYaw = lerp(b.headYaw, want, clamp(dt * 7, 0, 1)); p.headPivot.rotation.y = b.headYaw;
     }
     if (p.cape) afCape(b, p, dt, fwd, sp);
@@ -16832,7 +16836,14 @@ function afDrive(b, dt, sim) {
   // facing: everyone turns, nobody snaps — a player's aim leads, an NPC's intent follows (a horse wheels slower the faster it goes)
   if (b.trampleT > 0) b.trampleT -= dt;
   if (!b.mounted) b.yaw = angleLerp(b.yaw, I.yaw, clamp(dt * (human ? 14 : 9), 0, 1));
-  else { const maxYaw = lerp(MOUNT.turnStand, MOUNT.turnFull, b.sp01) * (1 - 0.35 * (b.gallop || 0)) * dt; b.yaw += clamp(angleDelta(b.yaw, I.yaw), -maxYaw, maxYaw); }
+  else {
+    const maxYaw = lerp(MOUNT.turnStand, MOUNT.turnFull, b.sp01) * (1 - 0.35 * (b.gallop || 0)) * dt;
+    if (I.steer != null) {                                   // a player: the reins turn the horse (a touch nimbler than the herd's — ~1 rad/s at the gallop), the aim is the rider's
+      b.yaw -= clamp(I.steer, -1, 1) * lerp(2.4, MOUNT.turnFull * 1.6, b.sp01) * (1 - 0.25 * (b.gallop || 0)) * dt;
+      if (!b.atk) b.aimYaw = I.yaw;
+    }
+    else b.yaw += clamp(angleDelta(b.yaw, I.yaw), -maxYaw, maxYaw);
+  }
   if (human) b.lookYaw = I.yaw; else if (b.target && !b.target.dead) b.lookYaw = Math.atan2(b.target.x - b.x, b.target.z - b.z); else b.lookYaw = b.yaw;
   if (I.swap !== b.seenSwap) { b.seenSwap = I.swap; if (!b.atk && b.clashT <= 0) afSetWeapon(b, b.weapon === 'bow' ? 'sword' : 'bow'); }
   if (b.swapT > 0) { b.swapT -= dt; b.charge = null; }         // hands busy changing weapons
@@ -16858,8 +16869,14 @@ function afDrive(b, dt, sim) {
   if (b.atk) {
     const a = b.atk; a.t += dt;
     if (human && !a.hit && !a.bow && Math.abs(angleDelta(I.yaw, b.prevInYaw == null ? I.yaw : b.prevInYaw)) < dt * 0.9) { // aim assist — but the moment you turn, your aim wins
-      const tg = afNearestFoeInCone(b, F.reach * 1.9, 0.7);
-      if (tg) b.yaw = angleLerp(b.yaw, Math.atan2(tg.x - b.x, tg.z - b.z), clamp(dt * 6, 0, 1));
+      if (b.mounted) {                                       // (in the saddle it bends the RIDER's cut, never the horse's line)
+        const ay = afAimOf(b), ax = Math.sin(ay), az = Math.cos(ay), R2 = F.reach + F.horseReach + 0.6; let tg = null, bd = R2;
+        for (const o of AF.bodies) { if (o.dead || o.team === b.team) continue; const ox = o.x - b.x, oz = o.z - b.z, od = Math.hypot(ox, oz); if (od < bd && (ox * ax + oz * az) / (od || 1) > 0.6) { bd = od; tg = o; } }
+        if (tg) b.aimYaw = angleLerp(ay, Math.atan2(tg.x - b.x, tg.z - b.z), clamp(dt * 6, 0, 1));
+      } else {
+        const tg = afNearestFoeInCone(b, F.reach * 1.9, 0.7);
+        if (tg) b.yaw = angleLerp(b.yaw, Math.atan2(tg.x - b.x, tg.z - b.z), clamp(dt * 6, 0, 1));
+      }
     }
     b.prevInYaw = I.yaw;
     if (!a.bow && a.t < a.wind + a.strike)                   // lunge with the blow, harder the more it was loaded
@@ -16870,7 +16887,7 @@ function afDrive(b, dt, sim) {
       else {
         const mv = MOVES[AF_MOVES[a.move]], col = AF_TEAM_HEX[b.team];
         b.anim.ease = AF_EASE_BACK; setPose(b.anim, mv.strike, a.heavy ? 0.09 : 0.1);   // the blade whips PAST the mark and settles
-        try { spawnSlashArc(b.group.position, b.yaw, mv, 1 + 0.6 * (a.k || 0), col); spawnTrail(b, 1.7, col); } catch (e) {}
+        try { spawnSlashArc(b.group.position, afAimOf(b), mv, 1 + 0.6 * (a.k || 0), col); spawnTrail(b, 1.7, col); } catch (e) {}
         if (b === AF.me) addShake(0.09 + 0.07 * (a.k || 0));
         try { SFX.swing(b.group.position); } catch (e) {}
         if (sim) afStrike(b, a.heavy, a.k || 0);
@@ -16923,7 +16940,7 @@ function afCape(b, p, dt, fwd, sp) {
 function afRide(b, dt, I, mm, canMove, sim) {
   const F = AF_F, base = F.move * F.horseSpeed * (b.moveMul || 1), sp = Math.hypot(b.vx, b.vz), sp01 = clamp(sp / base, 0, 1);
   const fx = Math.sin(b.yaw), fz = Math.cos(b.yaw);
-  const thr = mm > 1e-3 ? clamp((I.mx * fx + I.mz * fz) / Math.max(mm, 1e-3) * Math.min(1, mm), -0.45, 1) : 0;
+  const thr = I.thr != null ? clamp(I.thr, -0.45, 1) : mm > 1e-3 ? clamp((I.mx * fx + I.mz * fz) / Math.max(mm, 1e-3) * Math.min(1, mm), -0.45, 1) : 0;
   // THE GALLOP: hold the horse at the top of its canter and it finds another gear — a surge to half again the
   // speed. It builds over about a second, and bleeds away when you ease off, load a swing, or haul the head round.
   if (thr > 0.7 && sp > base * 0.85 && canMove && !b.charge) b.gallop = Math.min(1, (b.gallop || 0) + dt / 1.1);
@@ -16996,8 +17013,11 @@ function afRelease(b, k) {
   b.atk = { heavy, k, t: 0, wind: 0.06 + 0.08 * k, strike: lerp(F.light.strike, F.heavy.strike, k), rec: lerp(F.light.rec, F.heavy.rec, k), hit: false, move };
   b.blocking = false;
 }
+// where a fighter's blow goes: his facing — or, in the saddle, where the RIDER is turned (a man can twist to cut
+// at either flank, not behind his own back)
+function afAimOf(b) { return b.mounted && b.aimYaw != null ? b.yaw + clamp(angleDelta(b.yaw, b.aimYaw), -2.0, 2.0) : b.yaw; }
 function afStrike(b, heavy, k) {
-  const F = AF_F, w = k || 0, reach = lerp(F.reach, F.reach * 1.25, w) + (b.mounted ? F.horseReach : 0) + (b.reachBonus || 0), fdx = Math.sin(b.yaw), fdz = Math.cos(b.yaw), cone = lerp(F.cone, 0.1, w);
+  const F = AF_F, w = k || 0, reach = lerp(F.reach, F.reach * 1.25, w) + (b.mounted ? F.horseReach : 0) + (b.reachBonus || 0), ay = afAimOf(b), fdx = Math.sin(ay), fdz = Math.cos(ay), cone = lerp(F.cone, 0.1, w);
   const shock = (b.mounted ? 1 + MOUNT.chargeDmg * b.sp01 : 1) * (b.dmgMul || 1);   // a blow at full tilt lands harder; a brute's lands harder still
   for (const o of AF.bodies) {
     if (o.dead || o.team === b.team || o === b) continue;
@@ -17119,7 +17139,7 @@ function afStepSplats(dt) {
 }
 // arrows: ballistic; the authority tests hits, everyone flies them (guests get the spawn as an event)
 function afShoot(b, k) {                                    // a longer draw flies faster and hits harder
-  const fdx = Math.sin(b.yaw), fdz = Math.cos(b.yaw), w = k || 0;
+  const ay = afAimOf(b), fdx = Math.sin(ay), fdz = Math.cos(ay), w = k || 0;
   let best = null, bd = AF_F.bow.range;                      // aim assist: the nearest foe inside a frontal cone
   for (const o of AF.bodies) { if (o.dead || o.team === b.team) continue; const dx = o.x - b.x, dz = o.z - b.z, dd = Math.hypot(dx, dz); if (dd < bd && (dx * fdx + dz * fdz) / (dd || 1) > 0.86) { bd = dd; best = o; } }
   let tx = best ? best.x : b.x + fdx * 30, tz = best ? best.z : b.z + fdz * 30;
@@ -17379,8 +17399,9 @@ function afThink(b, dt) {
     // horse's turning circle is what spun whole squadrons on the spot: a horse can't pivot on a target at its flank.)
     const reach = F.reach + F.horseReach, R0 = AF_F.radius;
     const foeNear = r => { for (const o of AF.bodies) if (!o.dead && o.team !== b.team && Math.abs(o.x - b.x) < r && Math.abs(o.z - b.z) < r && Math.hypot(o.x - b.x, o.z - b.z) < r) return o; return null; };
+    if (!b.atk && !b.charge) b.aimYaw = Math.atan2(dx, dz);   // his eyes (and his sword arm) on his mark, whichever way the horse is going
     const strikeInPassing = () => { if (busy || b.cd > 0) return; const fx = Math.sin(b.yaw), fz = Math.cos(b.yaw);
-      for (const o of AF.bodies) { if (o.dead || o.team === b.team) continue; const ox = o.x - b.x, oz = o.z - b.z, od = Math.hypot(ox, oz); if (od < reach && (ox * fx + oz * fz) / (od || 1) > 0.2) { afAiSwing(b, false); b.cd = 0.4 + Math.random() * 0.3; return; } } };
+      for (const o of AF.bodies) { if (o.dead || o.team === b.team) continue; const ox = o.x - b.x, oz = o.z - b.z, od = Math.hypot(ox, oz); if (od < reach && (ox * fx + oz * fz) / (od || 1) > -0.3) { b.aimYaw = Math.atan2(ox, oz); afAiSwing(b, false); b.cd = 0.4 + Math.random() * 0.3; return; } } };   // (a cut to either flank as he passes)
     const nearWall = Math.hypot(b.x, b.z) > R0 - 7;
     if (b.cav === 'out') {                                   // through and past: hold the line of the charge, cutting at whoever's in reach
       b.outT -= dt; I.yaw = b.outYaw; I.mx = Math.sin(b.yaw) + sx * 0.4; I.mz = Math.cos(b.yaw) + sz * 0.4; strikeInPassing();   // (heels in along the facing: the reins do the turning, the horse never brakes to pivot)
@@ -17489,7 +17510,18 @@ function afReadLocalInput() {
     const A = AF.autoTurn; if (Math.abs(angleDelta(cam.yaw, A.last)) > 0.02) AF.autoTurn = null;
     else { cam.yaw += angleDelta(cam.yaw, A.yaw) * 0.22; A.last = cam.yaw; A.t -= 1 / 60; if (A.t <= 0 || Math.abs(angleDelta(cam.yaw, A.yaw)) < 0.03) AF.autoTurn = null; }
   }
-  I.mx = fx * f + rx * s; I.mz = fz * f + rz * s; I.yaw = cam.yaw;
+  const me = AF.me;
+  if (me && me.mounted) {
+    // ON HORSEBACK THE STICK IS THE REINS: left/right turns the horse, up/down is the pace (A/D, W/S) — it no longer
+    // points at a spot on the screen. The right side (the mouse) aims the RIDER: head and shoulders twist to look,
+    // cut and shoot to either side while the horse holds its line.
+    const dzn = v => Math.abs(v) < 0.12 ? 0 : v;
+    I.steer = dzn(s); I.thr = dzn(f);
+    I.mx = Math.sin(me.yaw) * I.thr; I.mz = Math.cos(me.yaw) * I.thr;
+    // not aiming for a moment? the lens settles back behind the horse, so the reins keep making sense
+    if (performance.now() - (AF.lookAt || 0) > 900 && !I.hold && !AF.autoTurn && me.sp01 > 0.15) cam.yaw += angleDelta(cam.yaw, me.yaw) * 0.035;
+  } else { I.steer = null; I.thr = null; I.mx = fx * f + rx * s; I.mz = fz * f + rz * s; }
+  I.yaw = cam.yaw;
   I.block = K.has('shift') || AF.mouseRight || !!(typeof keys !== 'undefined' && keys['ShiftLeft'] && TOUCH);
   // HOLD the attack to load it, RELEASE to swing: the held mouse button or the held ATK touch button
   const atkEl = TOUCH ? document.getElementById('tb-attack') : null;
@@ -17576,6 +17608,7 @@ function afGuestTick(dt) {
 function afApplyRemotePose(b, dt) {
   const s = b.tstate, mv = AF_MOVES[b.tmove] || 'slashR';
   b.lookYaw = b.tyaw;                                        // a remote fighter looks where he faces (the host's snapshot carries no target)
+  if (b.mounted) { b.aimYaw = b.yaw + (b.taim || 0); b.lookYaw = b.aimYaw; }   // …a rider where he's turned in the saddle
   const hurt = s === 5 || s === 11;
   if (hurt && !b.tinted) { setTint(b.parts, 0x551111); b.tinted = true; } else if (!hurt && b.tinted) { setTint(b.parts, null); b.tinted = false; }
   b.tiltX = 0;
@@ -17611,6 +17644,7 @@ function afApplySnap(s) {
       if (ed > 4) { b.x = x; b.z = z; } else { b.x += ex * 0.25; b.z += ez * 0.25; }
       continue;
     }
+    if (b.mounted && row[9] != null) b.taim = row[9] / 100;   // the rider's twist in the saddle
     if (!b.remoteSeen) { b.remoteSeen = true; b.x = x; b.z = z; b.yaw = yaw; }
     b.tx = x; b.tz = z; b.tyaw = yaw; b.tstate = code; b.tmove = row[6] || 0; b.hp = hp;
     if (code === 8 && !b.dead) { b.dead = true; b.deadT = 0; b.hp = 0; b.rollAng = 0; b.flashT = 0; b.flashWhite = false; b.tinted = false; setTint(b.parts, null); }
@@ -17647,14 +17681,14 @@ function afNetTick(dt) {
   if (AF.role === 'host') {
     AF.snapAcc += dt; if (AF.snapAcc < AF_NET.snapDt) return; AF.snapAcc = 0;
     const rows = [];
-    for (const b of AF.bodies) rows.push([b.idx, Math.round(b.x * 100), Math.round(b.z * 100), Math.round(b.yaw * 100), Math.round(b.hp), afStateCode(b), b.atk ? b.atk.move : b.charge ? (b.charge.heavyPose ? 3 : b.chargeMove) : 0, b.kills, b.weapon === 'bow' ? 1 : 0]);
+    for (const b of AF.bodies) rows.push([b.idx, Math.round(b.x * 100), Math.round(b.z * 100), Math.round(b.yaw * 100), Math.round(b.hp), afStateCode(b), b.atk ? b.atk.move : b.charge ? (b.charge.heavyPose ? 3 : b.chargeMove) : 0, b.kills, b.weapon === 'bow' ? 1 : 0, b.mounted ? Math.round(angleDelta(b.yaw, afAimOf(b)) * 100) : 0]);
     afSend({ k: 'snap', t: +AF.t.toFixed(2), ph: AF.phase, b: rows, ev: AF.events });
     AF.events = [];
   } else if (AF.role === 'guest') {
     AF.events = [];
     AF.inAcc += dt; if (AF.inAcc < AF_NET.inDt) return; AF.inAcc = 0;
     const I = AF.locIn;
-    afSend({ k: 'in', mx: +I.mx.toFixed(2), mz: +I.mz.toFixed(2), yaw: +I.yaw.toFixed(3), atk: I.atk, heavy: I.heavy, dodge: I.dodge, roll: I.rollDir || 0, block: I.block ? 1 : 0, hold: I.hold ? 1 : 0, swap: I.swap });
+    afSend({ k: 'in', mx: +I.mx.toFixed(2), mz: +I.mz.toFixed(2), yaw: +I.yaw.toFixed(3), st: I.steer == null ? null : +I.steer.toFixed(2), th: I.thr == null ? null : +I.thr.toFixed(2), hy: AF.me && AF.me.mounted ? +AF.me.yaw.toFixed(3) : null, atk: I.atk, heavy: I.heavy, dodge: I.dodge, roll: I.rollDir || 0, block: I.block ? 1 : 0, hold: I.hold ? 1 : 0, swap: I.swap });
   } else AF.events = [];
 }
 // the START must reach every player: a phone that was switching apps (or asleep on a dead socket) when the host
@@ -17680,7 +17714,8 @@ function afOnFightMsg(m) {
   if (AF.role === 'host' && d.k === 'in') {
     let inp = AF.inputs.get(m.from);
     if (!inp) { inp = afFreshInput(); AF.inputs.set(m.from, inp); const b = AF.bodies.find(x => x.peer === m.from); if (b) b.inp = inp; }
-    inp.mx = +d.mx || 0; inp.mz = +d.mz || 0; inp.yaw = +d.yaw || 0; inp.atk = d.atk | 0; inp.heavy = d.heavy | 0; if ((d.dodge | 0) !== inp.dodge) inp.rollDir = d.roll || 0; inp.dodge = d.dodge | 0; inp.block = !!d.block; inp.hold = !!d.hold; inp.swap = d.swap | 0;
+    inp.mx = +d.mx || 0; inp.mz = +d.mz || 0; inp.yaw = +d.yaw || 0; inp.steer = d.st == null ? null : +d.st || 0; inp.thr = d.th == null ? null : +d.th || 0;
+    if (d.hy != null) { const hb = inp.body && inp.body.peer === m.from ? inp.body : (inp.body = AF.bodies.find(x => x.peer === m.from)); if (hb && hb.mounted && !hb.dead) hb.yaw = angleLerp(hb.yaw, +d.hy || 0, 0.7); } // a horse's heading is steered, not aimed: the rider's own screen owns it, or the two copies drift apart inp.atk = d.atk | 0; inp.heavy = d.heavy | 0; if ((d.dodge | 0) !== inp.dodge) inp.rollDir = d.roll || 0; inp.dodge = d.dodge | 0; inp.block = !!d.block; inp.hold = !!d.hold; inp.swap = d.swap | 0;
   } else if (AF.role === 'guest') {
     if (d.k === 'snap') afApplySnap(d);
     else if (d.k === 'over' && !AF.over) afFinish(d.winner, d.standings);
@@ -17836,7 +17871,7 @@ function afInstallControls() {
   });
   window.addEventListener('pointermove', e => {
     if (!AF.on) return;
-    if (AF.me && !AF.me.dead) { if (!locked()) return; AF.cam.yaw -= (e.movementX || 0) * 0.0026; AF.cam.pitch = clamp(AF.cam.pitch + (e.movementY || 0) * 0.0022, -0.1, 1.1); return; }
+    if (AF.me && !AF.me.dead) { if (!locked()) return; AF.lookAt = performance.now(); AF.cam.yaw -= (e.movementX || 0) * 0.0026; AF.cam.pitch = clamp(AF.cam.pitch + (e.movementY || 0) * 0.0022, -0.1, 1.1); return; }
     if (!o.drag) return;
     o.theta -= (e.clientX - px) * 0.01; o.phi = clamp(o.phi - (e.clientY - py) * 0.01, 0.15, 1.45); px = e.clientX; py = e.clientY;
   });
@@ -17867,7 +17902,7 @@ function afInstallControls() {
       if (onBtn || (target === canvas && t.clientX > innerWidth * 0.5)) { lookId = t.identifier; lx = t.clientX; ly = t.clientY; }
     };
     addEventListener('touchstart', e => { if (!AF.on) return; for (const t of e.changedTouches) grab(t, e.target); }, { passive: true, capture: true });
-    addEventListener('touchmove', e => { if (!AF.on || lookId === null) return; for (const t of e.changedTouches) if (t.identifier === lookId) { AF.cam.yaw -= (t.clientX - lx) * 0.0055; AF.cam.pitch = clamp(AF.cam.pitch + (t.clientY - ly) * 0.003, -0.1, 1.1); lx = t.clientX; ly = t.clientY; } }, { passive: true, capture: true });
+    addEventListener('touchmove', e => { if (!AF.on || lookId === null) return; for (const t of e.changedTouches) if (t.identifier === lookId) { AF.lookAt = performance.now(); AF.cam.yaw -= (t.clientX - lx) * 0.0055; AF.cam.pitch = clamp(AF.cam.pitch + (t.clientY - ly) * 0.003, -0.1, 1.1); lx = t.clientX; ly = t.clientY; } }, { passive: true, capture: true });
     const end = e => { for (const t of e.changedTouches) if (t.identifier === lookId) lookId = null; };
     addEventListener('touchend', end, { capture: true }); addEventListener('touchcancel', end, { capture: true });
   }
@@ -17909,7 +17944,7 @@ function afUpdateHud() {
       const hp = clamp(b.hp / b.maxHp, 0, 1);
       me.innerHTML = '<div style="display:flex;justify-content:space-between;gap:12px"><b style="color:' + b.teamDef.col + '">' + b.name + '</b><span style="color:#c9bfda">' + b.kills + ' kill' + (b.kills === 1 ? '' : 's') + '</span></div>' +
         '<div style="height:8px;margin:5px 0 4px;border-radius:4px;background:#2a2438;overflow:hidden"><div style="height:100%;width:' + Math.round(hp * 100) + '%;background:' + (hp > 0.35 ? '#8fd08f' : '#ff6a5a') + '"></div></div>' +
-        '<div style="font-size:11px;color:#9a90ab">' + (b.dead ? 'you fell — drag to look around' : TOUCH ? 'stick move · drag right side aim · hold ATK to load, release to swing · SWAP sword/bow · BLOCK · ◀ ROLL ▶' : 'WASD move · mouse aim · hold click to load, release to ' + (b.weapon === 'bow' ? 'loose' : 'strike') + ' · F ' + (b.weapon === 'bow' ? 'sword' : 'bow') + ' · Shift / right-click block · Q / E roll' + (document.pointerLockElement === canvas ? '' : ' · <b style="color:#ffe089">click to aim</b>')) + '</div>';
+        '<div style="font-size:11px;color:#9a90ab">' + (b.dead ? 'you fell — drag to look around' : b.mounted ? (TOUCH ? 'stick: left/right turns the horse, up/down the pace · drag right side to aim the rider · hold ATK, release to strike · SWAP sword/bow' : 'A/D turn the horse · W/S pace · mouse aims the rider · hold click, release to strike · F sword/bow' + (document.pointerLockElement === canvas ? '' : ' · <b style="color:#ffe089">click to aim</b>')) : TOUCH ? 'stick move · drag right side aim · hold ATK to load, release to swing · SWAP sword/bow · BLOCK · ◀ ROLL ▶' : 'WASD move · mouse aim · hold click to load, release to ' + (b.weapon === 'bow' ? 'loose' : 'strike') + ' · F ' + (b.weapon === 'bow' ? 'sword' : 'bow') + ' · Shift / right-click block · Q / E roll' + (document.pointerLockElement === canvas ? '' : ' · <b style="color:#ffe089">click to aim</b>')) + '</div>';
     } else me.innerHTML = '<span style="color:#9a90ab">spectating</span>';
   }
 }

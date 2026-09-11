@@ -285,6 +285,20 @@ tucked into a ball and pivoted about its middle, the feet swinging over and land
 left or right (Q / E, the two touch buttons, or Space toward the side the stick leans) and never changes your
 facing. NPCs roll away from the side the danger comes from. The side rides the state code so guests see it.
 
+**Riding controls** (players): on horseback the stick is the reins. Left and right turn the horse,
+up and down set the pace (A/D and W/S on a keyboard); it no longer points the horse at a spot on
+the screen. The right side of the screen (the mouse on desktop) aims the **rider**: his shoulders
+twist up to ±1.25 rad in the saddle and his head takes the rest. Cuts and arrows go where he is
+turned (`afAimOf`, up to ±2 rad off the horse's line), so you can gallop past a man and cut to the
+flank. Aim assist bends the rider's cut, never the horse's line. After 0.9 s without aiming, the
+camera settles back behind the horse.
+
+Your own horse turns at 2.4 rad/s standing and about 1 rad/s at a gallop. A guest's input carries
+`st`/`th` (reins) and `hy`, the horse's heading, which the host adopts. A horse's heading is
+steered, not aimed, so without this the two copies drifted apart. Snapshots carry each rider's
+twist (row[9]), so other players see riders turn in the saddle. NPC riders now look at their mark
+and cut to either flank as they pass.
+
 **Horsemen** (`afRide`): a rider steers, he does not strafe — the stick's forward component is the
 throttle along the facing, momentum is dragged onto the facing (hooves grip), and the yaw rate collapses
 as speed grows (a galloping horse carves a wide arc, `MOUNT`). Top speed is 1.9× a man's, the reach is

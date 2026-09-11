@@ -350,8 +350,9 @@ above 70% of its top) *and* square on (within 0.75 paces of its line — its own
 cantering horse, or a clip off the shoulder at speed, only shoves: a flinch, a step sideways,
 3–8 damage, and he keeps his feet. (A walk past the line used to floor everyone in reach.)
 
-**The character look** is documented in `CHARACTERS.md`: the brass Vale crescent on every helm, the
-lit visor, brass trim, the Vale mark on tabard, cape and shield, the big left shoulder.
+**The character look** is documented in `CHARACTERS.md`: the faceted knight (domed Y-visor helm,
+square pauldrons, hero-chunk proportions), the brass Vale crescent on every helm, the lit visor,
+brass trim, the Vale mark on tabard, cape and shield, the big left shoulder.
 
 **Horsemen** (`afRide`): a rider steers, he does not strafe — the stick's forward component is the
 throttle along the facing, momentum is dragged onto the facing (hooves grip), and the yaw rate collapses

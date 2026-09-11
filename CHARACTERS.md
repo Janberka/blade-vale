@@ -6,8 +6,8 @@ fighter — the player, the arena's NPCs, the thousand-man hosts of the vale —
 
 ## The five signatures
 
-1. **The Vale crescent.** A brass crescent-blade fin rises from the crown of every helm, swept a
-   little back. It is the silhouette: the "blade" in the name, readable across the pit and in a
+1. **The Vale crescent.** A brass crescent-blade fin rises from the crown of every helm — a domed,
+   faceted helm with a brow ridge and a Y visor (`cachedGeo('knightHelm')`) — swept a little back. It is the silhouette: the "blade" in the name, readable across the pit and in a
    crowd of a hundred. (`cachedGeo('valeCrest')`, one extruded crescent, shared by every rig.)
 2. **The lit visor.** The great helm's T-slit glows in the wearer's colour — team cloth in the
    arena. The bloom pass catches it; at night in the pit a line of fighters is a line of coloured
@@ -35,11 +35,17 @@ swords, bows and horses are built per item. None of it touches the five signatur
 stays brass, the visor stays lit, the mark stays on the tabard and shield, the left shoulder stays
 big. A unique may recolour the plume or the blade; it never removes the crescent.
 
-## Proportions
+## Proportions — the knight
 
-~6.5 heads tall, a broad deep chest, thick legs on a wide stance, big fists, a great helm that
-hides the head. Heroic, not realistic; low-poly flat shading, so plates read as angular facets.
-Keep it: hit heights (1.8 / 2.1 / 2.6 × scale) and every animation assume it.
+The reference is the faceted low-poly knight: a big domed helm with a brow ridge and a Y visor,
+square pauldrons, a barrel chest over a belted faulds skirt, thick forearms and big fists, short
+thick legs on a wide stance. ~5.5 heads tall ("hero chunk"): `hipY` 1.52, the upper body at
+1.68, torso ×1.38 wide, forearm radius 0.15, fists 0.16, and the head sits inside the helm.
+Total height stays ~3.3 so the hit heights (1.8 / 2.1 / 2.6 × scale) and every animation still
+land; the cavalry seat moved with it (`rider.group.position.y` 1.22).
+
+Flat-shaded low poly, so plates read as angular facets — that IS the look; do not smooth it and do
+not cel-shade it. No faces: the helm is the identity.
 
 ## Adding a new fighter type
 

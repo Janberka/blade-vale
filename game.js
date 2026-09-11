@@ -529,22 +529,22 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
   // --- Legs (attached to root so torso lean doesn't drag them) ---
   // capsule total height = length + 2·radius; every joint OVERLAPS its neighbor so
   // nothing shows daylight when the pose bends
-  const hipY = 1.7; // crotch at ~half height — legs are half the figure
+  const hipY = 1.52; // HERO CHUNK: shorter, thicker legs under a big chest (~5.5 heads); total height stays ~3.3 for the hit heights
   // leg day — thick thighs/calves on a wide stance so the heavy upper body has a base to stand on
   function makeLeg(side) {
     const hip = new THREE.Group(); hip.position.set(0.245 * side, hipY, 0);
-    const thigh = softCapsule(0.16, 0.44, cloth, 6); thigh.position.y = -0.34;
+    const thigh = softCapsule(0.19, 0.36, cloth, 6); thigh.position.y = -0.3;
     thigh.scale.set(1.4, 1, 1.4); hip.add(thigh);
-    const knee = new THREE.Group(); knee.position.y = -0.7; hip.add(knee);
+    const knee = new THREE.Group(); knee.position.y = -0.62; hip.add(knee);
     // knee cop + tapered greave, chunky sabaton
     const cop = sphereMesh(0.15, plate, 6, 4); cop.position.set(0, 0.02, 0.05);
     cop.scale.set(1.3, 1, 1.3); knee.add(cop);
     const shin = new THREE.Mesh(cachedGeo('greave', () =>
-      new THREE.CylinderGeometry(0.15, 0.11, 0.62, 6)), plate);
-    shin.position.y = -0.34; shin.scale.set(1.3, 1, 1.3); knee.add(shin);
+      new THREE.CylinderGeometry(0.17, 0.125, 0.55, 6)), plate);
+    shin.position.y = -0.3; shin.scale.set(1.3, 1, 1.3); knee.add(shin);
     casters.push(thigh, shin);
-    const foot = sphereMesh(0.17, plate, 7, 5);
-    foot.position.set(0, -0.87, 0.1); foot.scale.set(1.15, 0.68, 1.6); knee.add(foot);
+    const foot = sphereMesh(0.2, plate, 7, 5);
+    foot.position.set(0, -0.76, 0.12); foot.scale.set(1.15, 0.6, 1.6); knee.add(foot);
     g.add(hip);
     return { hip, knee };
   }
@@ -554,18 +554,18 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
   // --- Pelvis: the faulds — a flared faceted skirt over the hips ---
   const pelvis = new THREE.Mesh(cachedGeo('faulds', () =>
     new THREE.CylinderGeometry(0.33, 0.46, 0.5, 7)), cloth);
-  pelvis.position.y = 1.56; pelvis.scale.z = 0.88; g.add(pelvis);
+  pelvis.position.y = 1.38; pelvis.scale.z = 0.88; g.add(pelvis);
   const hem = new THREE.Mesh(cachedGeo('fauldsHem', () => new THREE.CylinderGeometry(0.465, 0.475, 0.05, 7, 1, true)), brass);   // brass hem on the skirt
-  hem.position.y = 1.56 - 0.24; hem.scale.z = 0.88; g.add(hem);
+  hem.position.y = 1.38 - 0.24; hem.scale.z = 0.88; g.add(hem);
 
   // --- Upper body (pivots at the waist for lean / twist) ---
-  const upperBody = new THREE.Group(); upperBody.position.y = 1.86; g.add(upperBody);
+  const upperBody = new THREE.Group(); upperBody.position.y = 1.68; g.add(upperBody);
 
   // breastplate: broad at the chest, tapering into the belt
   const torso = new THREE.Mesh(cachedGeo('breastplate', () =>
     new THREE.CylinderGeometry(0.4, 0.28, 0.78, 7)), plate);
   // broad, deep chest — the heavy-fighter baseline (X/Z scale on the shared breastplate geo)
-  torso.position.y = 0.42; torso.scale.set(1.2, 1, 0.86);
+  torso.position.y = 0.42; torso.scale.set(1.38, 1, 0.92);   // a big barrel chest
   upperBody.add(torso);
 
   // belt squares off the waist between breastplate and faulds
@@ -575,14 +575,17 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
 
   // Neck + head — the head hides inside the great helm; it stays as the horn anchor
   const neck = softCapsule(0.09, 0.14, skin, 6); neck.position.y = 0.94; upperBody.add(neck);
-  const head = sphereMesh(0.22, skin, 10, 7);
-  head.position.y = 1.16; upperBody.add(head);
+  const head = sphereMesh(0.24, skin, 10, 7);
+  head.position.y = 1.2; upperBody.add(head);
   // great helm: faceted lathe — cylindrical cheeks rising into a conical crown
-  const helm = new THREE.Mesh(cachedGeo('greatHelm', () => new THREE.LatheGeometry([
-    new THREE.Vector2(0.26, 0), new THREE.Vector2(0.275, 0.08), new THREE.Vector2(0.26, 0.3),
-    new THREE.Vector2(0.17, 0.46), new THREE.Vector2(0, 0.56),
-  ], 7)), plate);
-  helm.position.y = 0.98; upperBody.add(helm);
+  // THE HELM: a big faceted dome with cheeks that flare at the jaw, a brow ridge and a Y visor — the knight's
+  // silhouette; the head sits well inside it
+  const helm = new THREE.Mesh(cachedGeo('knightHelm', () => new THREE.LatheGeometry([
+    new THREE.Vector2(0.3, 0), new THREE.Vector2(0.33, 0.1), new THREE.Vector2(0.325, 0.32), new THREE.Vector2(0.3, 0.5),
+    new THREE.Vector2(0.22, 0.64), new THREE.Vector2(0.1, 0.72), new THREE.Vector2(0, 0.74),
+  ], 8)), plate);
+  helm.position.y = 0.96; upperBody.add(helm);
+  const brow = boxMesh(0.5, 0.06, 0.12, plate); brow.position.set(0, 1.38, 0.28); brow.rotation.x = 0.35; upperBody.add(brow);   // the brow ridge over the visor
   // raised crest ridge along the crown
   // THE VALE CRESCENT: a brass crescent-blade fin rising from the crown, swept back — the silhouette of the game
   const crest = new THREE.Mesh(cachedGeo('valeCrest', () => {
@@ -591,22 +594,22 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
     sh.lineTo(0.3 * Math.cos(a1), 0.09 + 0.3 * Math.sin(a1)); sh.absarc(0, 0.09, 0.3, a1, a0, true); sh.closePath();
     const geo = new THREE.ExtrudeGeometry(sh, { depth: 0.05, bevelEnabled: false }); geo.translate(0, 0, -0.025); geo.rotateY(Math.PI / 2); return geo;
   }), brass);
-  crest.position.set(0, 1.46, -0.03); crest.rotation.x = -0.18; upperBody.add(crest);
+  crest.position.set(0, 1.58, -0.04); crest.rotation.x = -0.18; upperBody.add(crest);
   const band = new THREE.Mesh(cachedGeo('helmBand', () => new THREE.CylinderGeometry(0.285, 0.29, 0.06, 7, 1, true)), brass);   // a brass band at the brow
-  band.position.y = 1.29; upperBody.add(band);
+  band.position.y = 1.44; band.scale.set(1.12, 1, 1.12); upperBody.add(band);
   // dark T-visor: eye slit + breath slit
   const slitM = mat(0x14161c, { shared: false, emissive: palette.cloth, emissiveI: 0.9 });   // THE LIT VISOR: the slits glow in the wearer's colour
-  const eyeSlit = boxMesh(0.3, 0.05, 0.06, slitM);
-  eyeSlit.position.set(0, 1.26, 0.235); upperBody.add(eyeSlit);
-  const noseSlit = boxMesh(0.05, 0.16, 0.06, slitM);
-  noseSlit.position.set(0, 1.17, 0.24); upperBody.add(noseSlit);
+  const eyeSlit = boxMesh(0.4, 0.06, 0.06, slitM);                        // the Y visor: a wide eye slit, a nose bar down the middle
+  eyeSlit.position.set(0, 1.28, 0.3); upperBody.add(eyeSlit);
+  const noseSlit = boxMesh(0.06, 0.24, 0.06, slitM);
+  noseSlit.position.set(0, 1.14, 0.31); upperBody.add(noseSlit);
   // HERO dressing (opts.hero — the arena fighters / a featured figure, never the 1000-man hosts):
   // the whole head rides a pivot so it can LOOK at a foe, a plume in the team colour crowns the helm,
   // a tabard carries the team cloth on the chest, and a cape hangs off the shoulders to flare on the run.
   let headPivot = null, cape = null;
   if (opts.hero) {
     headPivot = new THREE.Group(); headPivot.position.y = 0.98; upperBody.add(headPivot);
-    for (const m of [head, helm, crest, band, eyeSlit, noseSlit]) { upperBody.remove(m); m.position.y -= 0.98; headPivot.add(m); }
+    for (const m of [head, helm, brow, crest, band, eyeSlit, noseSlit]) { upperBody.remove(m); m.position.y -= 0.98; headPivot.add(m); }
     const plume = softCapsule(0.07, 0.42, mat(opts.plume != null ? opts.plume : palette.cloth, { shared: false }), 6);
     plume.position.set(0, 0.62, -0.14); plume.rotation.x = 0.6; headPivot.add(plume);
     const tabard = boxMesh(0.42, 0.5, 0.05, cloth); tabard.position.set(0, 0.42, 0.36); upperBody.add(tabard);
@@ -630,26 +633,26 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
     const shoulder = new THREE.Group();
     // pivot hung OUTBOARD (past the broad breastplate, ~0.48 radius) so the arm/shoulder clears the
     // chest instead of sinking into it — the wide torso needs the arms set wide.
-    shoulder.position.set(0.48 * side, 0.80, 0);
+    shoulder.position.set(0.55 * side, 0.80, 0);
     // pauldron: one plate capping the TOP of the joint (lifted + narrow), NOT sleeving down the arm —
     // the tapered upper arm below carries the deltoid mass the plate used to fake.
-    const pad = sphereMesh(0.17, plate, 7, 4);
+    const pad = new THREE.Mesh(cachedGeo('pauldron', () => { const geo = new THREE.CylinderGeometry(0.12, 0.2, 0.2, 5, 1); geo.rotateY(Math.PI / 5); return geo; }), plate);   // a faceted plate, broad at the arm, capped at the top
     pad.position.set(0.05 * side, 0.09, 0); pad.scale.set(1.28, 0.68, 0.95);
     if (side === 1) { pad.scale.multiplyScalar(1.22); pad.userData.big = true; }   // ONE BIG SHOULDER: the shield side
     const rim = sphereMesh(0.17, brass, 7, 4); rim.position.y = -0.05; rim.scale.set(1.12, 0.3, 1.1); pad.add(rim);   // a brass rim under every pauldron
     shoulder.add(pad);
     // deltoid taper — thick at the shoulder, narrowing to the elbow — so the arm fills out under the plate
     const upper = new THREE.Mesh(cachedGeo('upperArm', () =>
-      new THREE.CylinderGeometry(0.2, 0.115, 0.5, 7)), cloth);
+      new THREE.CylinderGeometry(0.23, 0.15, 0.5, 7)), cloth);
     upper.position.y = -0.27;
     shoulder.add(upper);
     const elbow = new THREE.Group(); elbow.position.y = -0.46; shoulder.add(elbow);
     // bracer from elbow to wrist
     const fore = new THREE.Mesh(cachedGeo('bracer', () =>
-      new THREE.CylinderGeometry(0.105, 0.085, 0.36, 6)), plate);
+      new THREE.CylinderGeometry(0.15, 0.12, 0.36, 6)), plate);   // thick forearms
     fore.position.y = -0.21; elbow.add(fore);
     const hand = new THREE.Group(); hand.position.y = -0.44; elbow.add(hand);
-    const fist = sphereMesh(0.105, skin, 7, 5); hand.add(fist);
+    const fist = sphereMesh(0.16, skin, 7, 5); hand.add(fist);   // big fists
     upperBody.add(shoulder);
     return { shoulder, elbow, hand };
   }
@@ -843,7 +846,7 @@ function buildCavalry(palette, scale = 1, weapon = 'longsword', opts = {}) {
 
   // --- the rider: the real humanoid rig, legs posed astride (saddleRider re-asserts each frame) ---
   const rider = buildHumanoid(palette, 0.88, weapon, opts);
-  rider.group.position.set(0, 1.06, -0.06);        // crotch (hipY 1.7×0.88) lands on the saddle seat
+  rider.group.position.set(0, 1.22, -0.06);        // crotch (hipY 1.52×0.88) lands on the saddle seat
   g.add(rider.group);
 
   horse.userData.rig = {
@@ -16804,7 +16807,7 @@ function afMount(b, h, quiet) {                            // a man on foot swin
   if (b.mounted || h.rider || h.dead || h.gone || b.dead) return;
   scene.remove(b.group); try { disposeGroup(b.group); } catch (e) {}
   const rider = buildHumanoid(b.pal, 0.88, b.weapon === 'longsword' ? 'longsword' : 'sword', b.rigOpts || {});
-  rider.group.position.set(0, 1.06, -0.06); h.group.add(rider.group);
+  rider.group.position.set(0, 1.22, -0.06); h.group.add(rider.group);
   const parts = Object.assign({}, rider.parts, { mount: h.horseG }); saddleRider(parts);
   b.riderGroup = rider.group; b.group = h.group; b.parts = parts; b.anim = makeAnimator(parts); b.group.userData.afBody = b;
   b.mounted = true; b.horse = h; h.rider = b; b.x = h.x; b.z = h.z; b.yaw = h.yaw; b.vx = h.vx; b.vz = h.vz; b.gallop = 0; b.sp01 = h.sp01; b.cav = null; b.aimYaw = b.yaw; b.twist = 0; b.wantHorse = null;

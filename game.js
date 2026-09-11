@@ -18111,16 +18111,60 @@ function afRollNpcMix(L) {                                 // who the fighters o
   const table = afArchWeights(L.per).filter(([k]) => k !== 'rider' || L.per >= 2), tot = table.reduce((a, [, w]) => a + w, 0);
   const shares = table.map(([k, w]) => ({ k, n: Math.floor(w / tot * L.per), rem: (w / tot * L.per) % 1 }));
   let left = L.per - shares.reduce((a, x) => a + x.n, 0); shares.slice().sort((a, b) => b.rem - a.rem).forEach(x => { if (left > 0) { x.n++; left--; } });
-  // …and XP with it: one list of (archetype, XP) pairs — the XP spread stratified over the band, paired at random
-  // once — and every team gets exactly those pairs, shuffled into its seats. Both sides field the same army.
-  const rx = _mulberry32((L.mixSeed ^ 0x5bd1e995 ^ (L.per * 131)) >>> 0), xs = [];
-  for (let i = 0; i < L.per; i++) xs.push(afXpAt((i + rx()) / L.per, L.xp));
-  for (let i = xs.length - 1; i > 0; i--) { const j = Math.floor(rx() * (i + 1)); const tmp = xs[i]; xs[i] = xs[j]; xs[j] = tmp; }
-  const pairs = []; { let i = 0; for (const x of shares) for (let n = 0; n < x.n; n++) { pairs.push([x.k, xs[i]]); i++; } }
+  // …and XP per soldier, NOT a copy per team: every class draws one pool of XP scores for all teams together
+  // (stratified over the band, so each pool spans recruit to champion), dealt out at random — one team's archers may
+  // be a veteran and a recruit where another's are two soldiers. Then random same-class swaps between teams pull
+  // the teams level: team XP totals first, each class's total a softer second. Different men, balanced armies.
+  const rx = _mulberry32((L.mixSeed ^ 0x5bd1e995 ^ (L.per * 131) ^ (L.teams * 7919)) >>> 0), T = L.teams;
+  const sum = a => a.reduce((p, v) => p + v, 0);
+  const deal = () => {                                       // one random deal, levelled by swaps; returns { own, cost }
+    const own = [];                                          // own[t][ci] = XP list of class ci on team t
+    for (let t = 0; t < T; t++) own.push(shares.map(() => []));
+    shares.forEach((x, ci) => {
+      const n = x.n * T; if (!n) return; const pool = [];
+      for (let i = 0; i < n; i++) pool.push(afXpAt((i + rx()) / n, L.xp));
+      for (let i = n - 1; i > 0; i--) { const j = Math.floor(rx() * (i + 1)); const tmp = pool[i]; pool[i] = pool[j]; pool[j] = tmp; }
+      for (let t = 0; t < T; t++) own[t][ci] = pool.slice(t * x.n, (t + 1) * x.n);
+    });
+    const tSum = own.map(row => sum(row.map(sum))), cSum = own.map(row => row.map(sum));
+    const cMean = shares.map((_, ci) => sum(own.map(row => sum(row[ci]))) / T), tMean = sum(tSum) / T;
+    const cost = () => { let c = 0; for (let t = 0; t < T; t++) { c += (tSum[t] - tMean) ** 2; for (let ci = 0; ci < shares.length; ci++) c += 0.6 * (cSum[t][ci] - cMean[ci]) ** 2; } return c; };
+    let cur = cost();
+    for (let it = 0, itMax = Math.min(60 * L.per * T, 12000); it < itMax && T > 1; it++) {
+      const ci = Math.floor(rx() * shares.length); if (!shares[ci].n) continue;
+      const a = Math.floor(rx() * T), b = (a + 1 + Math.floor(rx() * (T - 1))) % T, ia = Math.floor(rx() * shares[ci].n), ib = Math.floor(rx() * shares[ci].n);
+      const va = own[a][ci][ia], vb = own[b][ci][ib], dv = vb - va; if (!dv) continue;
+      tSum[a] += dv; tSum[b] -= dv; cSum[a][ci] += dv; cSum[b][ci] -= dv;
+      const nc = cost(); if (nc < cur) { cur = nc; own[a][ci][ia] = vb; own[b][ci][ib] = va; }
+      else { tSum[a] -= dv; tSum[b] += dv; cSum[a][ci] -= dv; cSum[b][ci] += dv; }
+    }
+    return { own, cost: cur };
+  };
+  let best = null;                                           // a small roster has few swaps to play with: deal a few times, keep the fairest
+  for (let k = 0; k < (L.per <= 12 ? 24 : 4); k++) { const d = deal(); if (!best || d.cost < best.cost) best = d; }
+  const own = best.own;
   L.npcArch = []; L.npcXp = [];
-  for (let t = 0; t < L.teams; t++) {
-    const row = pairs.slice(); for (let i = row.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); const tmp = row[i]; row[i] = row[j]; row[j] = tmp; }
-    L.npcArch.push(row.map(p => p[0])); L.npcXp.push(row.map(p => p[1]));
+  for (let t = 0; t < T; t++) {
+    const row = []; shares.forEach((x, ci) => { for (const v of own[t][ci]) row.push([x.k, v]); });
+    for (let i = row.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); const tmp = row[i]; row[i] = row[j]; row[j] = tmp; }
+    L.npcArch.push(row.map(q => q[0])); L.npcXp.push(row.map(q => q[1]));
+  }
+}
+// SEATS CHANGE THE SUMS: a player sitting down takes an NPC's place, so the teams are levelled again over the seats
+// as they actually are — a player counts as AF_PLAYER_XP — by swapping XP between NPCs of the same class across
+// teams. Idempotent (only improving swaps), so it can run on every lobby change.
+const AF_PLAYER_XP = 70;
+function afTeamPower(L, t) { let sum = 0; for (let i = 0; i < L.per; i++) sum += L.slots[t][i] ? AF_PLAYER_XP : ((L.npcXp && L.npcXp[t] && L.npcXp[t][i]) || 0); return sum; }
+function afBalanceXp(L) {
+  if (!L || L.role !== 'host' || !L.npcXp || L.teams < 2) return;
+  const T = L.teams, tot = [], byK = {};
+  for (let t = 0; t < T; t++) { tot.push(afTeamPower(L, t)); for (let i = 0; i < L.per; i++) if (!L.slots[t][i]) { const k = L.npcArch[t][i]; (byK[k] = byK[k] || []).push({ t, i }); } }
+  const mean = tot.reduce((a, b) => a + b, 0) / T, ks = Object.keys(byK).filter(k => byK[k].length > 1), rng = _mulberry32((L.mixSeed ^ 0x9e3779b9) >>> 0);
+  for (let it = 0, n = Math.min(6000, L.per * T * 40); it < n && ks.length; it++) {
+    const arr = byK[ks[Math.floor(rng() * ks.length)]], a = arr[Math.floor(rng() * arr.length)], b = arr[Math.floor(rng() * arr.length)];
+    if (a.t === b.t) continue; const va = L.npcXp[a.t][a.i], vb = L.npcXp[b.t][b.i], dv = vb - va; if (!dv) continue;
+    const na = tot[a.t] + dv, nb = tot[b.t] - dv;
+    if ((na - mean) ** 2 + (nb - mean) ** 2 < (tot[a.t] - mean) ** 2 + (tot[b.t] - mean) ** 2 - 1e-9) { tot[a.t] = na; tot[b.t] = nb; L.npcXp[a.t][a.i] = vb; L.npcXp[b.t][b.i] = va; }
   }
 }
 function afSeat(peer, name) { const L = AF.lobby; if (afFindSeat(peer)) return; afPlace(L, { kind: 'player', name: String(name || 'Ally').slice(0, 24), peer, weapon: 'sword' }); L.invites.set(name, 'joined'); }
@@ -18162,6 +18206,7 @@ function afLobbyApply(d) {                                   // guest: mirror th
 }
 function afLobbyRender() {
   const L = AF.lobby; if (!L) return;
+  afBalanceXp(L);                                            // (the host re-levels on every change; guests mirror the result)
   const host = L.role === 'host', online = !!(window.coop && window.coop.connected), signed = !!afSession();
   document.getElementById('al-teams-n').textContent = L.teams; document.getElementById('al-per-n').textContent = L.per;
   for (const id of ['al-teams-minus', 'al-teams-plus', 'al-per-minus', 'al-per-plus']) document.getElementById(id).disabled = !host;
@@ -18175,7 +18220,8 @@ function afLobbyRender() {
   const grid = document.getElementById('al-teams');
   grid.innerHTML = L.slots.map((row, t) => {
     const td = AF_TEAMS[t], free = row.indexOf(null) >= 0, mine = !!me && row.indexOf(me) >= 0;
-    return '<div class="al-team" style="--tc:' + td.col + '"><div class="al-tname"><span>' + td.name + '</span>' + (!host && free && !mine ? '<button data-team="' + t + '">join</button>' : '') + '</div>' +
+    const pw = L.npcXp ? Math.round(afTeamPower(L, t) / L.per) : 0;   // the team's average XP, a player counting as AF_PLAYER_XP
+    return '<div class="al-team" style="--tc:' + td.col + '"><div class="al-tname"><span>' + td.name + (pw ? ' <i style="opacity:.6;font-weight:400;font-size:11px" title="average XP — a player counts as ' + AF_PLAYER_XP + '">avg ' + pw + 'xp</i>' : '') + '</span>' + (!host && free && !mine ? '<button data-team="' + t + '">join</button>' : '') + '</div>' +
       (L.per > 8 ? row.filter(Boolean) : row).map(s => s ? '<div class="al-slot ' + (s === me ? 'you' : 'player') + '"><span>' + (s === me ? 'You' : s.name) + (s.away || (L.away && L.away.has(s.peer)) ? ' <i style="opacity:.6">· reconnecting…</i>' : '') + '</span><span class="al-tag">' + (s.weapon === 'bow' ? '🏹' : s.weapon === 'horse' ? '🐎' : '🗡') + (s.kind === 'host' && s !== me ? ' host' : '') + '</span></div>'
                         : null).map((html, i) => { if (html != null) return html; const xp = L.npcXp && L.npcXp[t] ? L.npcXp[t][i] : null;
                           return '<div class="al-slot npc"><span>' + ((L.npcArch && L.npcArch[t] && L.npcArch[t][i]) || 'swordsman') + ' of the vale</span><span class="al-tag">' + (xp != null ? xp + 'xp ' + afXpRank(xp) : 'npc') + '</span></div>'; }).join('') +
@@ -18246,6 +18292,7 @@ function afJoin(room, hostName) {
 }
 function afStartFight() {
   const L = AF.lobby; if (!L || L.role !== 'host') return;
+  afBalanceXp(L);
   const r = _mulberry32((Math.random() * 0xffffffff) >>> 0), used = new Set(), roster = [];
   const pick = arr => arr[Math.floor(r() * arr.length)];
   for (let t = 0; t < L.teams; t++) for (let s = 0; s < L.per; s++) {

@@ -175,8 +175,17 @@ The lobby's **Foes** row picks the band:
 | Mixed (default) | 30% recruits 10–35, 35% soldiers 35–60, 22% veterans 60–82, 13% champions 82–98 |
 | Veteran | 60–97 |
 
-XP is dealt with the archetype as matched pairs, so every team fields the same army in a different
-seat order. Seats show "51xp soldier", and name tags show "Lorne · 82xp".
+**Dealing XP: different men, level armies.** For each archetype, the lobby draws one pool of XP
+scores for all teams together. The pool is spread across the band, so every class runs from
+recruit to champion, and it is dealt out at random. One team's duelists might be XP 20 and 78,
+another's 42 and 60. Swaps between teams, always within the same class, then level each team's XP
+total, with each class's total as a softer second aim. Small rosters are dealt 24 times and the
+fairest deal is kept.
+
+A player's seat counts as XP 70 (`AF_PLAYER_XP`). Whenever seats change, `afBalanceXp` levels
+the teams again, so a team with two human players gets weaker NPCs. The team header shows the
+result, for example "AZURE avg 52xp". Seats show "51xp soldier", and name tags show
+"Lorne · 82xp".
 
 **Fair to the player.** Against a player who holds to load and releases, like a phone player
 (`__xptest.js`), 1v1 results are:

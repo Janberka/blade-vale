@@ -632,6 +632,7 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
     const tip = new THREE.Mesh(new THREE.ConeGeometry(0.105, 0.22, 4), blade.material);
     tip.position.y = 0.2 + bladeLen + 0.13; tip.rotation.y = Math.PI / 4; tip.castShadow = true; g.add(tip);
     g.rotation.x = SWORD_BASE_X;
+    g.rotation.y = Math.PI / 2;                              // a real grip: the EDGE faces the foe, the crossguard stands vertical to the wrist (not flat like a display piece)
     armR.hand.add(g);
     return g;
   }
@@ -645,7 +646,7 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
     const string = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 2 * 0.85 * Math.sin(arcLen / 2), 4), mat(0xddddcc, { smooth: true }));
     string.position.x = 0.85 * Math.cos(arcLen / 2);
     b.add(string);
-    b.rotation.x = Math.PI / 2;
+    b.rotation.set(Math.PI / 2, Math.PI / 2, 0);            // held edge-on to the target, the string toward the archer — not flat like a shield
     b.userData.fixedGrip = true; // the wrist channel must not spin the bow
     armL.hand.add(b);
     return b;
@@ -16989,7 +16990,7 @@ function afBuildSword(g, sw, tint) {
     const nose = boxMesh(w * 1.1, 0.34, t, bladeM); nose.position.set(w * 0.42, y0 + len + 0.12, 0); nose.rotation.z = 0.5; g.add(nose);
     const hole = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, t * 1.3, 8), mat(0x1a1214, { shared: false })); hole.rotation.x = Math.PI / 2; hole.position.set(w * 0.45, y0 + len - 0.1, 0); g.add(hole);
   }
-  g.scale.set(1, 1, 1);
+  g.scale.set(1, 1, 1); g.rotation.y = Math.PI / 2;        // (the grip: edge forward, guard vertical to the wrist — same as makeSword)
 }
 function afBladeLook(b) { afDressGear(b.parts, b.gear, b.pal); }   // (the rig swaps on mount / dismount re-dress the man)
 function afItemName(id) { const I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}; return I[id] ? I[id].name : id; }

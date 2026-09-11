@@ -429,6 +429,11 @@ lends plain gear (iron sword, hunting bow, courser) and pays nothing.
   drooping, thin neck; the destrier wears a caparison in the team cloth; the warhorse a caparison,
   a steel chamfron and crinet plates on the neck. NPCs roll these by XP like everything else
   (brigandine or plate at 60–82, dragon plate for some 95+, recurves for 90+ archers).
+* **The grip is real**: the sword is spun 90° about its blade (`rotation.y` in `makeSword` /
+  `afBuildSword`) so the edge faces the foe and the crossguard stands vertical to the wrist — it
+  used to sit flat like a display piece — and the bow is held edge-on to the target with the string
+  toward the archer, not flat like a shield. A curved blade's sweep therefore runs up toward the
+  enemy. This is the base rig, so the world's fighters hold them the same way.
 * **Swords are built, not recoloured** (`AF_LOOK.sword`, `afBuildSword`): each item is a
   silhouette — straight, a curve of stacked slabs (falchion, scimitar, Black Night), a zigzag
   flamberge (Serpent flamberge, Ember blade), a thin cup-hilted rapier (Needle), a broad

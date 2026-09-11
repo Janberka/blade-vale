@@ -16453,7 +16453,7 @@ const AF = {
   phase: 'lobby',                          // 'lobby' | 'countdown' | 'fight' | 'over'
   bodies: [], arrows: [], ground: null, props: [], seed: 1, cfg: { teams: 2, per: 3 }, roster: [],
   me: null, keys: new Set(), locIn: { mx: 0, mz: 0, yaw: 0, atk: 0, heavy: 0, dodge: 0, block: false, hold: false, swap: 0 },
-  cam: { yaw: 0, pitch: 0.3, dist: 6.5 }, orbit: { theta: 0.4, phi: 0.9, r: 62, drag: false },
+  cam: { yaw: 0, pitch: 0.3, dist: 6.5 }, orbit: { theta: 0.4, phi: 0.9, r: 62, drag: false }, spec: { mode: 'orbit', target: null, fx: 0, fz: 0, touched: false },
   last: 0, t: 0, countdown: 0, over: false, winner: -1, standings: null, hudEl: null, events: [],
   inputs: new Map(), snapAcc: 0, inAcc: 0, lastSnap: 0, installed: false, log: [], torches: [], motes: null, hurt: 0, fov: CAM_BASE_FOV,
   sky: null, stars: null, rain: null, sunSpr: null, crowd: [], roar: 0, waveT: 0, waveAng: 0, nextWave: 0,
@@ -16973,9 +16973,11 @@ function afDrive(b, dt, sim) {
   if (b.charge && I.block) { b.charge = null; b.cd = 0.05; b.anim.ease = null; }   // block-cancel out of a load
   // HOLD to load, RELEASE to swing. A press starts the load (the arm goes up, and past ~0.35 s coils into the heavy
   // windup); the release swings with a weight k = hold time / chargeMax — a tap is a quick light, a full hold a heavy.
-  const holdNow = !!I.hold, pressed = holdNow && !b.prevHold, tapped = I.atk !== b.seenAtk;
+  const holdNow = !!I.hold, pressed = holdNow && !b.prevHold, tapped = I.atk !== b.seenAtk, bow = b.weapon === 'bow';
+  // THE BOW IS HOLD-AND-RELEASE ONLY: a tap never looses an arrow (on a phone a tap between shots used to queue the
+  // sword combo — an archer swinging his bow like a blade), and a draw let go inside 0.12 s is simply lowered
   if (!b.atk) {
-    if (!b.charge && (pressed || tapped) && b.swapT <= 0) {
+    if (!b.charge && (pressed || (tapped && !bow)) && b.swapT <= 0) {
       if (!human || b.cd <= 0) { b.charge = { t: 0, heavyPose: false }; b.chargeMove = b.combo % 3; b.anim.ease = null;
         setPose(b.anim, b.weapon === 'bow' ? 'aimBow' : MOVES[AF_MOVES[b.chargeMove]].windup, 0.1); b.blocking = false;
         b.releaseNow = tapped && !holdNow;                   // a tap that came and went between samples: swing at once
@@ -16985,9 +16987,12 @@ function afDrive(b, dt, sim) {
       b.charge.t += dt;
       if (b.charge.t > 0.35 && !b.charge.heavyPose && b.weapon !== 'bow') { setPose(b.anim, 'windupHeavy', 0.2); b.charge.heavyPose = true; }
       const released = b.releaseNow || (!holdNow && b.prevHold) || tapped;
-      if (released) { b.seenAtk = I.atk; b.releaseNow = false; afRelease(b, clamp(b.charge.t / F.chargeMax, 0, 1)); b.charge = null; }
+      if (released) { b.seenAtk = I.atk; b.releaseNow = false;
+        if (bow && b.charge.t < 0.12) { b.anim.ease = null; setPose(b.anim, 'relax', 0.15); }   // too short to be a shot: the bow comes down
+        else afRelease(b, clamp(b.charge.t / F.chargeMax, 0, 1));
+        b.charge = null; }
     } else b.seenAtk = I.atk;
-  } else { if (pressed || tapped) b.queued = true; b.seenAtk = I.atk; } // a press mid-swing queues the next light of the combo
+  } else { if ((pressed || tapped) && !bow) b.queued = true; b.seenAtk = I.atk; } // a press mid-swing queues the next light of the combo (blades only)
   b.prevHold = holdNow; b.seenHeavy = I.heavy;
   if (b.atk) {
     const a = b.atk; a.t += dt;
@@ -17124,6 +17129,7 @@ function afNearestFoeInCone(b, R, cosMin) {
 }
 const AF_EASE_BACK = t => { const c = 1.9, u = t - 1; return 1 + (c + 1) * u * u * u + c * u * u; }; // ease-out-back: overshoot, then settle
 function afStartAttack(b, heavy) {                          // (kept for the hooks: an instant swing at a fixed weight)
+  if (b.weapon === 'bow') { afRelease(b, 0.5); return; }    // (never a sword move with a bow in hand)
   b.anim.ease = null; b.charge = { t: heavy ? AF_F.chargeMax : 0, heavyPose: heavy }; b.chargeMove = b.combo % 3;
   afRelease(b, heavy ? 1 : 0); b.charge = null;
 }
@@ -17139,12 +17145,15 @@ function afRelease(b, k) {
 // where a fighter's blow goes: his facing — or, in the saddle, where the RIDER is turned (a man can twist to cut
 // at either flank, not behind his own back)
 function afAimOf(b) { return b.mounted && b.aimYaw != null ? b.yaw + clamp(angleDelta(b.yaw, b.aimYaw), -2.0, 2.0) : b.yaw; }
+// where a blow at a rider lands: the nearest point of the HORSE (a 2.6-pace body along its facing) — a cut at the
+// head or the rump connects, not only one at the saddle
+function afHitPoint(o, x, z) { if (!o.mounted) return [o.x, o.z]; const fx = Math.sin(o.yaw), fz = Math.cos(o.yaw), t = clamp((x - o.x) * fx + (z - o.z) * fz, -1.3, 1.3); return [o.x + fx * t, o.z + fz * t]; }
 function afStrike(b, heavy, k) {
   const F = AF_F, w = k || 0, reach = lerp(F.reach, F.reach * 1.25, w) + (b.mounted ? F.horseReach : 0) + (b.reachBonus || 0), ay = afAimOf(b), fdx = Math.sin(ay), fdz = Math.cos(ay), cone = lerp(F.cone, 0.1, w);
   const shock = (b.mounted ? 1 + MOUNT.chargeDmg * b.sp01 : 1) * (b.dmgMul || 1);   // a blow at full tilt lands harder; a brute's lands harder still
   for (const o of AF.bodies) {
     if (o.dead || o.team === b.team || o === b) continue;
-    const dx = o.x - b.x, dz = o.z - b.z, dd = Math.hypot(dx, dz); if (dd > reach) continue;
+    const [px, pz] = afHitPoint(o, b.x, b.z), dx = px - b.x, dz = pz - b.z, dd = Math.hypot(dx, dz); if (dd > reach) continue;
     if ((dx * fdx + dz * fdz) / (dd || 1) < cone) continue;  // a loaded blow cleaves a wider arc
     let dmg = (lerp(rand(F.light.dmg[0], F.light.dmg[1]), rand(F.heavy.dmg[0], F.heavy.dmg[1]), w) + b.combo * 1.5) * shock;
     const exec = o.stagger > 0;                            // a staggered foe is open: the execution lands for real
@@ -17219,7 +17228,7 @@ function afKill(t, by, quiet) {                          // quiet: a guest mirro
   AF.events.push({ k: 'kill', i: t.idx, by: by ? by.idx : -1 });
   if (!quiet) afLogLine((by ? by.name + ' fells ' : '') + t.name, t.teamDef.col);
   if (!quiet) afCrowdReact(by === AF.me || t === AF.me);
-  if (t === AF.me) { afBanner('YOU FELL', 'watch the rest of the fight', 2.2); try { document.exitPointerLock && document.exitPointerLock(); } catch (e) {} }
+  if (t === AF.me) { afBanner('YOU FELL', 'watch the rest of the fight', 2.2); setTimeout(() => { if (AF.on && AF.me === t && t.dead && !AF.over) afSpecPick(0); }, 2200); try { document.exitPointerLock && document.exitPointerLock(); } catch (e) {} }
 }
 function afStepDead(b, dt) {
   b.deadT += dt;
@@ -17299,7 +17308,7 @@ function afStepArrows(dt, sim) {
     let done = a.life <= 0 || a.g.position.y <= gy;
     if (sim && !done) for (const o of AF.bodies) {
       if (o.dead || o.team === a.team) continue;
-      const dx = o.x - a.g.position.x, dz = o.z - a.g.position.z;
+      const [px, pz] = afHitPoint(o, a.g.position.x, a.g.position.z), dx = px - a.g.position.x, dz = pz - a.g.position.z;
       if (dx * dx + dz * dz < 1.1 && Math.abs(a.g.position.y - (gy + 1.1)) < 1.6) { afDamage(o, rand(AF_F.bow.dmg[0], AF_F.bow.dmg[1]) * (0.7 + 0.6 * a.k), AF.bodies[a.owner] || o, false, false, true); done = true; break; }
     }
     if (done) { scene.remove(a.g); try { disposeGroup(a.g); } catch (e) {} AF.arrows.splice(i, 1); }
@@ -17945,12 +17954,28 @@ function afCamera(dt) {
       camera.position.copy(tmpV2); camera.lookAt(me.x, hy + 0.2, me.z);
     } else { const la = 3 * AF.camLift; camera.position.lerp(tmpV, clamp(dt * 14, 0, 1)); camera.lookAt(me.x + Math.sin(cam.yaw) * la, hy + 0.9 * AF.camLift, me.z + Math.cos(cam.yaw) * la); } // lifted: look ahead over the fight, not down at your own helmet
     const sp = Math.hypot(me.vx, me.vz); AF.fov = lerp(AF.fov, CAM_BASE_FOV + clamp(sp / AF_F.move, 0, 1.2) * 5, clamp(dt * 4, 0, 1)); // a run widens the lens
-  } else {                                                  // spectating: orbit the pit (drag to turn, wheel to zoom)
-    const o = AF.orbit; if (!o.drag) o.theta += dt * 0.06;
-    const st = Math.sin(o.phi), orr = o.r * AF_F.radius / 34;
-    tmpV.set(orr * st * Math.sin(o.theta), 6 + orr * Math.cos(o.phi), orr * st * Math.cos(o.theta));
-    camera.position.lerp(tmpV, clamp(dt * 3, 0, 1)); camera.lookAt(0, 2, 0);
-    AF.fov = lerp(AF.fov, CAM_BASE_FOV, clamp(dt * 4, 0, 1));
+  } else {                                                  // SPECTATING: ride on any fighter's shoulder, or a free camera over the pit
+    const S = AF.spec, o = AF.orbit;
+    if (S.mode === 'follow' && S.target && S.target.dead) afSpecFree();   // the man you were watching fell: the free camera takes over where he stood
+    if (S.mode === 'follow' && S.target) {
+      const t = S.target, hy = afY(t.x, t.z) + 1.55;
+      if (performance.now() - (AF.lookAt || 0) > 2500) cam.yaw = angleLerp(cam.yaw, t.yaw, clamp(dt * 1.5, 0, 1));   // settles behind him unless you're looking round
+      const cp = Math.cos(cam.pitch); tmpV.set(t.x - Math.sin(cam.yaw) * cam.dist * cp, hy + cam.dist * Math.sin(cam.pitch) + 0.6, t.z - Math.cos(cam.yaw) * cam.dist * cp);
+      camera.position.lerp(tmpV, clamp(dt * 10, 0, 1)); camera.lookAt(t.x, hy + 0.2, t.z);
+      AF.fov = lerp(AF.fov, CAM_BASE_FOV + clamp(Math.hypot(t.vx, t.vz) / AF_F.move, 0, 1.2) * 5, clamp(dt * 4, 0, 1));
+    } else {
+      const K = AF.keys; let f = 0, sd = 0;                   // WASD / the stick glide the focus across the sand; drag turns, wheel or −/+ zooms
+      if (K.has('w')) f++; if (K.has('s')) f--; if (K.has('d')) sd++; if (K.has('a')) sd--;
+      if (typeof touchMove !== 'undefined' && touchMove.active) { f += touchMove.f; sd += touchMove.s; }
+      if (f || sd) { const sp = clamp(o.r * 0.45, 6, 40) * dt, fx = -Math.sin(o.theta), fz = -Math.cos(o.theta); S.touched = true;
+        const p = afClampPit(S.fx + (fx * f - fz * sd) * sp, S.fz + (fz * f + fx * sd) * sp, 1); S.fx = p.x; S.fz = p.z; }
+      if (!o.drag && !S.touched) o.theta += dt * 0.06;
+      const st = Math.sin(o.phi), orr = o.r * AF_F.radius / 34;
+      tmpV.set(S.fx + orr * st * Math.sin(o.theta), 2 + orr * Math.cos(o.phi), S.fz + orr * st * Math.cos(o.theta));
+      camera.position.lerp(tmpV, clamp(dt * 4, 0, 1)); camera.lookAt(S.fx, 1.6, S.fz);
+      AF.fov = lerp(AF.fov, CAM_BASE_FOV, clamp(dt * 4, 0, 1));
+    }
+    afSpecLabel();
   }
   if (trauma > 0) {                                         // the same shake, kick and FOV punch the field fights use
     trauma = Math.max(0, trauma - dt * 2.0);
@@ -17963,6 +17988,23 @@ function afCamera(dt) {
   const wantFov = AF.fov - fovPunch;
   if (Math.abs(camera.fov - wantFov) > 0.001) { camera.fov = wantFov; camera.updateProjectionMatrix(); }
   AF.hurt = Math.max(0, AF.hurt - dt * 1.6);
+}
+// the spectator's choices: the living, players first, in a ring; the free camera picks up where the last man stood
+function afSpecList() { return AF.bodies.filter(b => !b.dead).sort((a, b) => (a.kind === 'npc') - (b.kind === 'npc') || a.idx - b.idx); }
+function afSpecPick(dir) {
+  const S = AF.spec, L = afSpecList(); if (!L.length) { afSpecFree(); return; }
+  let i = L.indexOf(S.target); if (i < 0) { i = 0; if (AF.me) { let bd = 1e9; L.forEach((b, j) => { const d = Math.hypot(b.x - AF.me.x, b.z - AF.me.z) + (b.team === AF.me.team ? 0 : 30); if (d < bd) { bd = d; i = j; } }); } }   // first pick: the nearest fellow
+  else i = (i + dir + L.length) % L.length;
+  S.target = L[i]; S.mode = 'follow'; S.touched = true; if (dir === 0 || !AF.me) AF.cam.yaw = S.target.yaw; AF.cam.dist = clamp(AF.cam.dist, 3.5, 14); AF.cam.pitch = clamp(AF.cam.pitch, 0.1, 0.8);
+  afSpecLabel(true);
+}
+function afSpecFree() { const S = AF.spec; if (S.target) { S.fx = S.target.x; S.fz = S.target.z; } S.mode = 'orbit'; S.target = null; S.touched = true; AF.orbit.r = Math.min(AF.orbit.r, 22); afSpecLabel(true); }
+function afSpecZoom(k) { const S = AF.spec; if (S.mode === 'follow') AF.cam.dist = clamp(AF.cam.dist * k, 3.5, 14); else AF.orbit.r = clamp(AF.orbit.r * k, 5, 160); }
+function afSpecLabel(force) {
+  const el = document.getElementById('af-spec'); if (!el) return;
+  const show = AF.on && (!AF.me || AF.me.dead) && AF.phase !== 'countdown'; if (el.style.display !== (show ? 'flex' : 'none')) el.style.display = show ? 'flex' : 'none'; if (!show) return;
+  const S = AF.spec, txt = S.mode === 'follow' && S.target ? S.target.name + (S.target.kind === 'npc' ? ' · ' + (S.target.A ? S.target.A.label : 'npc') : '') : 'free camera';
+  const nm = document.getElementById('af-spec-name'); if (nm && (force || nm.textContent !== txt)) { nm.textContent = txt; nm.style.color = S.target ? S.target.teamDef.col : '#e8def8'; }
 }
 /* ---- POST: a small pipeline of our own (three core only): scene → bright pass → separable blur → composite.
    Bloom lifts the torches, sparks, blade trails and the sun; a vignette frames the pit; the edges flush red
@@ -18027,21 +18069,25 @@ function afInstallControls() {
     if (!AF.on) return;
     if (AF.me && !AF.me.dead) { if (!locked()) return; AF.lookAt = performance.now(); AF.cam.yaw -= (e.movementX || 0) * 0.0026; AF.cam.pitch = clamp(AF.cam.pitch + (e.movementY || 0) * 0.0022, -0.1, 1.1); return; }
     if (!o.drag) return;
-    o.theta -= (e.clientX - px) * 0.01; o.phi = clamp(o.phi - (e.clientY - py) * 0.01, 0.15, 1.45); px = e.clientX; py = e.clientY;
+    const S = AF.spec; S.touched = true;
+    if (S.mode === 'follow') { if (e.pointerType !== 'touch') { AF.lookAt = performance.now(); AF.cam.yaw -= (e.clientX - px) * 0.008; AF.cam.pitch = clamp(AF.cam.pitch + (e.clientY - py) * 0.006, -0.1, 1.1); } }   // (touch: the arena's own look handler turns the cam)
+    else { o.theta -= (e.clientX - px) * 0.01; o.phi = clamp(o.phi - (e.clientY - py) * 0.01, 0.15, 1.45); }
+    px = e.clientX; py = e.clientY;
   });
   window.addEventListener('pointerup', e => { o.drag = false; if (e.button === 2) AF.mouseRight = false; else if (e.button === 0) { if (AF.mouseDown) AF.locIn.atk++; AF.mouseDown = false; } });
   window.addEventListener('blur', () => { AF.mouseDown = false; AF.mouseRight = false; });
   canvas.addEventListener('wheel', e => {
     if (!AF.on) return; e.preventDefault();
     if (AF.me && !AF.me.dead) AF.cam.dist = clamp(AF.cam.dist * (1 + Math.sign(e.deltaY) * 0.1), 3.5, 14);
-    else o.r = clamp(o.r * (1 + Math.sign(e.deltaY) * 0.08), 20, 160);
+    else afSpecZoom(1 + Math.sign(e.deltaY) * 0.1);
   }, { passive: false });
   window.addEventListener('keydown', e => {
     if (!AF.on) return;
     const k = e.key.toLowerCase();
     if ('wasd'.includes(k) && k.length === 1) AF.keys.add(k);
     if (e.key === 'Shift') AF.keys.add('shift');
-    if (k === 'f' && !e.repeat) AF.locIn.swap++;             // sword <-> bow
+    if (k === 'f' && !e.repeat) { if (AF.me && !AF.me.dead) AF.locIn.swap++; else afSpecFree(); }   // sword <-> bow (dead: the free camera)
+    if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !e.repeat && (!AF.me || AF.me.dead)) afSpecPick(e.key === 'ArrowLeft' ? -1 : 1);
     if ((k === 'q' || k === 'e') && !e.repeat) { AF.locIn.rollDir = k === 'q' ? -1 : 1; AF.locIn.dodge++; }   // roll left / right
   });
   window.addEventListener('keyup', e => { const k = e.key.toLowerCase(); if ('wasd'.includes(k) && k.length === 1) AF.keys.delete(k); if (e.key === 'Shift') AF.keys.delete('shift'); });
@@ -18075,11 +18121,18 @@ function afHud() {
     const ban = document.createElement('div'); ban.id = 'af-banner';
     ban.style.cssText = 'position:fixed;left:50%;top:22%;transform:translateX(-50%);z-index:41;text-align:center;pointer-events:none;opacity:0;transition:opacity .25s';
     document.body.appendChild(ban);
+    const sp = document.createElement('div'); sp.id = 'af-spec';                     // the spectator bar: ◀ name ▶ · free · − +
+    sp.style.cssText = 'position:fixed;left:50%;bottom:78px;transform:translateX(-50%);z-index:42;display:none;gap:6px;align-items:center;background:rgba(16,14,24,.82);border:1px solid #3a3247;border-radius:10px;padding:6px 8px;font:13px system-ui;color:#e8def8';
+    const mk = (id, label, title) => '<button id="' + id + '" title="' + title + '" style="background:#2a2233;color:#f3ead8;border:1px solid #6b5e7a;border-radius:8px;padding:6px 10px;cursor:pointer;font-weight:700;touch-action:manipulation">' + label + '</button>';
+    sp.innerHTML = mk('af-spec-prev', '◀', 'previous fighter') + '<span id="af-spec-name" style="min-width:120px;text-align:center;font-weight:700"></span>' + mk('af-spec-next', '▶', 'next fighter') + mk('af-spec-free', 'Free', 'free camera — WASD / stick to glide') + mk('af-spec-out', '−', 'zoom out') + mk('af-spec-in', '+', 'zoom in');
+    document.body.appendChild(sp);
+    const on = (id, fn) => { const b = document.getElementById(id); b.addEventListener('pointerdown', e => { e.stopPropagation(); }); b.addEventListener('click', e => { e.stopPropagation(); fn(); }); };
+    on('af-spec-prev', () => afSpecPick(-1)); on('af-spec-next', () => afSpecPick(1)); on('af-spec-free', afSpecFree); on('af-spec-out', () => afSpecZoom(1.25)); on('af-spec-in', () => afSpecZoom(0.8));
     const lg = document.createElement('div'); lg.id = 'af-log';
     lg.style.cssText = 'position:fixed;right:12px;top:12px;z-index:40;font:12px system-ui;color:#e8def8;text-align:right;pointer-events:none;text-shadow:0 1px 3px #000';
     document.body.appendChild(lg);
   }
-  AF.hudEl = p; p.style.display = ''; document.getElementById('af-me').style.display = ''; document.getElementById('af-log').style.display = '';
+  AF.hudEl = p; p.style.display = ''; document.getElementById('af-me').style.display = ''; document.getElementById('af-log').style.display = ''; afSpecLabel(true);
   afUpdateHud();
 }
 function afUpdateHud() {
@@ -18098,8 +18151,8 @@ function afUpdateHud() {
       const hp = clamp(b.hp / b.maxHp, 0, 1);
       me.innerHTML = '<div style="display:flex;justify-content:space-between;gap:12px"><b style="color:' + b.teamDef.col + '">' + b.name + '</b><span style="color:#c9bfda">' + b.kills + ' kill' + (b.kills === 1 ? '' : 's') + '</span></div>' +
         '<div style="height:8px;margin:5px 0 4px;border-radius:4px;background:#2a2438;overflow:hidden"><div style="height:100%;width:' + Math.round(hp * 100) + '%;background:' + (hp > 0.35 ? '#8fd08f' : '#ff6a5a') + '"></div></div>' +
-        '<div style="font-size:11px;color:#9a90ab">' + (b.dead ? 'you fell — drag to look around' : b.mounted ? (TOUCH ? 'stick: left/right turns the horse, up/down the pace · drag right side to aim the rider · hold ATK, release to strike · SWAP sword/bow' : 'A/D turn the horse · W/S pace · mouse aims the rider · hold click, release to strike · F sword/bow' + (document.pointerLockElement === canvas ? '' : ' · <b style="color:#ffe089">click to aim</b>')) : TOUCH ? 'stick move · drag right side aim · hold ATK to load, release to swing · SWAP sword/bow · BLOCK · ◀ ROLL ▶' : 'WASD move · mouse aim · hold click to load, release to ' + (b.weapon === 'bow' ? 'loose' : 'strike') + ' · F ' + (b.weapon === 'bow' ? 'sword' : 'bow') + ' · Shift / right-click block · Q / E roll' + (document.pointerLockElement === canvas ? '' : ' · <b style="color:#ffe089">click to aim</b>')) + '</div>';
-    } else me.innerHTML = '<span style="color:#9a90ab">spectating</span>';
+        '<div style="font-size:11px;color:#9a90ab">' + (b.dead ? (TOUCH ? '◀ ▶ follow another fighter · FREE roams (stick glides, drag looks) · − + zoom' : '◀ ▶ (arrows) follow another fighter · F free camera (WASD glides, drag turns) · wheel zooms') : b.mounted ? (TOUCH ? 'stick: left/right turns the horse, up/down the pace · drag right side to aim the rider · hold ATK, release to strike · SWAP sword/bow' : 'A/D turn the horse · W/S pace · mouse aims the rider · hold click, release to strike · F sword/bow' + (document.pointerLockElement === canvas ? '' : ' · <b style="color:#ffe089">click to aim</b>')) : TOUCH ? 'stick move · drag right side aim · hold ATK to load, release to swing · SWAP sword/bow · BLOCK · ◀ ROLL ▶' : 'WASD move · mouse aim · hold click to load, release to ' + (b.weapon === 'bow' ? 'loose' : 'strike') + ' · F ' + (b.weapon === 'bow' ? 'sword' : 'bow') + ' · Shift / right-click block · Q / E roll' + (document.pointerLockElement === canvas ? '' : ' · <b style="color:#ffe089">click to aim</b>')) + '</div>';
+    } else me.innerHTML = '<span style="color:#9a90ab">spectating · ◀ ▶ follow a fighter · Free roams · − + zoom</span>';
   }
 }
 function afChargeMeter() {                                  // the load in your hand: fills gold while you hold, turns red past the heavy line
@@ -18231,6 +18284,7 @@ function afBoot(spec) {
   const I = AF.locIn; I.atk = I.heavy = I.dodge = 0; I.block = false; AF.keys.clear();
   if (AF.me) { AF.cam.yaw = AF.me.yaw; AF.cam.pitch = 0.3; AF.me.seenAtk = AF.me.seenHeavy = AF.me.seenDodge = 0; }
   AF.phase = 'countdown'; AF.countdown = AF_F.countdown; AF.t = 0; AF.over = false; AF.winner = -1; AF.standings = null; AF.events = []; AF._hc = 0; AF.last = 0; AF.hitstop = 0; AF.assignT = 0; trauma = 0; camKick.set(0, 0, 0); fovPunch = 0;
+  AF.spec = { mode: 'orbit', target: null, fx: 0, fz: 0, touched: false };
   AF.orbit.theta = AF.me ? AF.me.yaw + Math.PI : 0.4; AF.roar = 0; AF.waveT = 0; AF.nextWave = 22 + Math.random() * 10;
   AF.teams = null; if (AF.role !== 'guest') afPlanTeams();   // the captains draw up their lines (the sim runs here)
   afHud();

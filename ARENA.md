@@ -327,6 +327,24 @@ Over the net the host is the authority: snapshots carry a horse row per horse
 it, so even the guest's own body is thrown or seated on the host's word; `hhit` and `horse`
 events carry the sparks, the banner and the log line.
 
+**Hitting a horse**: a mounted man is checked against the nearest point of the *horse* (a
+2.6-pace body along its facing, `afHitPoint`), so a cut at the head or the rump connects as well
+as one at the saddle; arrows use the same test. A horse at speed still rides a foot man down
+before he can swing — catch it standing, or cut as it passes.
+
+**The bow is hold-and-release only.** A tap never looses an arrow, and a draw let go inside
+0.12 s is lowered without a shot. Taps never queue a follow-up on a bow (a tap in the bow's
+follow-through used to queue the *sword* combo, so an archer swung his bow like a blade), and
+`afStartAttack` on a bow looses instead of swinging.
+
+**Spectating** (`AF.spec`): when your fighter falls, or you have no fighter, a bar appears —
+◀ name ▶ · Free · − +. ◀ ▶ (or the arrow keys) put the camera on any living fighter's
+shoulder, players first; it settles behind him unless you drag to look round; wheel or − +
+zooms in to 3.5 paces. On death the camera picks the nearest fellow after the banner. *Free*
+(or F) is a free camera that starts where the last fighter stood: WASD or the stick glide it
+across the sand, drag turns it, and it zooms right down to the ground. The watched fighter
+falling hands you the free camera where he fell.
+
 **Horsemen** (`afRide`): a rider steers, he does not strafe — the stick's forward component is the
 throttle along the facing, momentum is dragged onto the facing (hooves grip), and the yaw rate collapses
 as speed grows (a galloping horse carves a wide arc, `MOUNT`). Top speed is 1.9× a man's, the reach is

@@ -345,6 +345,14 @@ zooms in to 3.5 paces. On death the camera picks the nearest fellow after the ba
 across the sand, drag turns it, and it zooms right down to the ground. The watched fighter
 falling hands you the free camera where he fell.
 
+**Being ridden down takes a good hit.** A horse floors a man on foot only near the gallop (speed
+above 70% of its top) *and* square on (within 0.75 paces of its line — its own chest width). A
+cantering horse, or a clip off the shoulder at speed, only shoves: a flinch, a step sideways,
+3–8 damage, and he keeps his feet. (A walk past the line used to floor everyone in reach.)
+
+**The character look** is documented in `CHARACTERS.md`: the brass Vale crescent on every helm, the
+lit visor, brass trim, the Vale mark on tabard, cape and shield, the big left shoulder.
+
 **Horsemen** (`afRide`): a rider steers, he does not strafe — the stick's forward component is the
 throttle along the facing, momentum is dragged onto the facing (hooves grip), and the yaw rate collapses
 as speed grows (a galloping horse carves a wide arc, `MOUNT`). Top speed is 1.9× a man's, the reach is

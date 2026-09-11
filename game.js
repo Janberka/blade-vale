@@ -484,6 +484,30 @@ const torches = [];
 // opts.variant: an A/B tag (e.g. 'after') the object editor's before/after duo passes through so a
 // design edit can be gated to ONLY the "after" figure while the "before" stays the frozen baseline.
 // Inert in the live game (never passed there) — see the OBJECT EDITOR duo build.
+/* ---- THE BLADE VALE LOOK — the signature every fighter carries, whatever the faction:
+     · the VALE CRESCENT: a brass crescent-blade fin on the helm (the silhouette you recognise across the pit)
+     · the LIT VISOR: the T-slit glows in the wearer's colour
+     · BRASS everywhere: pauldron rims, a helm band, the belt buckle, the faulds hem — one trim colour for all;
+       team colour lives on cloth only
+     · the VALE MARK: a V for the vale with a sword rising through it, on the tabard, the cape hem and the shield
+     · ONE BIG SHOULDER: the left pauldron oversized, the sword arm's trim (asymmetry reads even in a crowd)
+   See CHARACTERS.md. ---- */
+const VALE_BRASS = 0xc9a24a;
+let _valeSigilTex = null;
+function valeSigil() {
+  if (_valeSigilTex) return _valeSigilTex;
+  const c = document.createElement('canvas'); c.width = c.height = 128; const x = c.getContext('2d');
+  x.clearRect(0, 0, 128, 128); x.strokeStyle = '#c9a24a'; x.fillStyle = '#c9a24a'; x.lineCap = 'round'; x.lineJoin = 'round';
+  x.lineWidth = 13; x.beginPath(); x.moveTo(22, 34); x.lineTo(64, 104); x.lineTo(106, 34); x.stroke();      // the V of the vale
+  x.lineWidth = 9; x.beginPath(); x.moveTo(64, 118); x.lineTo(64, 16); x.stroke();                        // the blade rising through it
+  x.beginPath(); x.moveTo(44, 48); x.lineTo(84, 48); x.stroke();                                          // its crossguard
+  x.beginPath(); x.moveTo(64, 4); x.lineTo(55, 22); x.lineTo(73, 22); x.closePath(); x.fill();            // the point
+  const t = new THREE.CanvasTexture(c); t.anisotropy = 4; _valeSigilTex = t; return t;
+}
+function sigilDecal(size) {                                 // a flat emblem laid on a surface (unlit, never tinted by hit-flashes)
+  const m = new THREE.MeshBasicMaterial({ map: valeSigil(), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }); m.userData.noTint = true;
+  return new THREE.Mesh(new THREE.PlaneGeometry(size, size), m);
+}
 function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
   const g = new THREE.Group();
   const variant = opts.variant || null; // null in the live game & the "before" figure; 'after' on soldier 2
@@ -496,6 +520,7 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
   // armor steel: the faction accent lightened toward silver so plates read as metal
   const plateCol = new THREE.Color(palette.accent).lerp(new THREE.Color(0xc8ccd4), 0.35);
   const plate = mat(plateCol.getHex(), { metal: 1, shared: false });
+  const brass = mat(VALE_BRASS, { metal: 1, shared: false });   // the trim every fighter wears
 
   // Proportions target a ~6.5-heads-tall figure (real humans are ~7.5; a touch heroic
   // reads better in low poly). Total height stays ~3.4 units so projectile aim heights
@@ -530,6 +555,8 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
   const pelvis = new THREE.Mesh(cachedGeo('faulds', () =>
     new THREE.CylinderGeometry(0.33, 0.46, 0.5, 7)), cloth);
   pelvis.position.y = 1.56; pelvis.scale.z = 0.88; g.add(pelvis);
+  const hem = new THREE.Mesh(cachedGeo('fauldsHem', () => new THREE.CylinderGeometry(0.465, 0.475, 0.05, 7, 1, true)), brass);   // brass hem on the skirt
+  hem.position.y = 1.56 - 0.24; hem.scale.z = 0.88; g.add(hem);
 
   // --- Upper body (pivots at the waist for lean / twist) ---
   const upperBody = new THREE.Group(); upperBody.position.y = 1.86; g.add(upperBody);
@@ -544,6 +571,7 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
   // belt squares off the waist between breastplate and faulds
   const belt = boxMesh(0.72, 0.16, 0.52, accent);
   belt.position.y = 0.02; upperBody.add(belt);
+  const buckle = boxMesh(0.14, 0.11, 0.05, brass); buckle.position.set(0, 0.02, 0.28); upperBody.add(buckle);
 
   // Neck + head — the head hides inside the great helm; it stays as the horn anchor
   const neck = softCapsule(0.09, 0.14, skin, 6); neck.position.y = 0.94; upperBody.add(neck);
@@ -556,10 +584,18 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
   ], 7)), plate);
   helm.position.y = 0.98; upperBody.add(helm);
   // raised crest ridge along the crown
-  const crest = boxMesh(0.055, 0.14, 0.4, plate);
-  crest.position.y = 1.5; upperBody.add(crest);
+  // THE VALE CRESCENT: a brass crescent-blade fin rising from the crown, swept back — the silhouette of the game
+  const crest = new THREE.Mesh(cachedGeo('valeCrest', () => {
+    const sh = new THREE.Shape(), R0 = 0.34, a0 = 0.25, a1 = Math.PI - 0.25;
+    sh.moveTo(R0 * Math.cos(a0), R0 * Math.sin(a0)); sh.absarc(0, 0, R0, a0, a1, false);
+    sh.lineTo(0.3 * Math.cos(a1), 0.09 + 0.3 * Math.sin(a1)); sh.absarc(0, 0.09, 0.3, a1, a0, true); sh.closePath();
+    const geo = new THREE.ExtrudeGeometry(sh, { depth: 0.05, bevelEnabled: false }); geo.translate(0, 0, -0.025); geo.rotateY(Math.PI / 2); return geo;
+  }), brass);
+  crest.position.set(0, 1.46, -0.03); crest.rotation.x = -0.18; upperBody.add(crest);
+  const band = new THREE.Mesh(cachedGeo('helmBand', () => new THREE.CylinderGeometry(0.285, 0.29, 0.06, 7, 1, true)), brass);   // a brass band at the brow
+  band.position.y = 1.29; upperBody.add(band);
   // dark T-visor: eye slit + breath slit
-  const slitM = mat(0x14161c, {});
+  const slitM = mat(0x14161c, { shared: false, emissive: palette.cloth, emissiveI: 0.9 });   // THE LIT VISOR: the slits glow in the wearer's colour
   const eyeSlit = boxMesh(0.3, 0.05, 0.06, slitM);
   eyeSlit.position.set(0, 1.26, 0.235); upperBody.add(eyeSlit);
   const noseSlit = boxMesh(0.05, 0.16, 0.06, slitM);
@@ -570,11 +606,13 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
   let headPivot = null, cape = null;
   if (opts.hero) {
     headPivot = new THREE.Group(); headPivot.position.y = 0.98; upperBody.add(headPivot);
-    for (const m of [head, helm, crest, eyeSlit, noseSlit]) { upperBody.remove(m); m.position.y -= 0.98; headPivot.add(m); }
+    for (const m of [head, helm, crest, band, eyeSlit, noseSlit]) { upperBody.remove(m); m.position.y -= 0.98; headPivot.add(m); }
     const plume = softCapsule(0.07, 0.42, mat(opts.plume != null ? opts.plume : palette.cloth, { shared: false }), 6);
     plume.position.set(0, 0.62, -0.14); plume.rotation.x = 0.6; headPivot.add(plume);
     const tabard = boxMesh(0.42, 0.5, 0.05, cloth); tabard.position.set(0, 0.42, 0.36); upperBody.add(tabard);
     const trim = boxMesh(0.44, 0.06, 0.06, accent); trim.position.set(0, 0.16, 0.37); upperBody.add(trim);
+    const mark = sigilDecal(0.3); mark.position.set(0, 0.46, 0.39); upperBody.add(mark);                  // THE VALE MARK on the chest
+    const scab = boxMesh(0.07, 0.95, 0.13, mat(0x2a1c12, { shared: false })); scab.position.set(-0.14, 0.5, -0.24); scab.rotation.z = 0.32; upperBody.add(scab);   // a back scabbard
     cape = new THREE.Group(); cape.position.set(0, 0.84, -0.3); cape.rotation.x = 0.12; upperBody.add(cape); // +x swings the hem BACK (away from +Z, the facing)
     // the cape is a CHAIN of hinged panels (cape.userData.segs); the arena runs a spring sim on the hinges so it hangs, flares and ripples
     const segs = [], NSEG = 5, segH = 1.3 / NSEG; let parent = cape;
@@ -584,6 +622,7 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
       segs.push(sg); parent = sg;
     }
     cape.userData.segs = segs;
+    const capeMark = sigilDecal(0.34); capeMark.position.set(0, -segH / 2, -0.024); capeMark.rotation.y = Math.PI; segs[NSEG - 1].add(capeMark);   // …and on the cape's hem
   }
 
   // --- Arms: shoulder pivot → upper arm → elbow pivot → forearm → hand ---
@@ -596,6 +635,8 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
     // the tapered upper arm below carries the deltoid mass the plate used to fake.
     const pad = sphereMesh(0.17, plate, 7, 4);
     pad.position.set(0.05 * side, 0.09, 0); pad.scale.set(1.28, 0.68, 0.95);
+    if (side === 1) { pad.scale.multiplyScalar(1.22); pad.userData.big = true; }   // ONE BIG SHOULDER: the shield side
+    const rim = sphereMesh(0.17, brass, 7, 4); rim.position.y = -0.05; rim.scale.set(1.12, 0.3, 1.1); pad.add(rim);   // a brass rim under every pauldron
     shoulder.add(pad);
     // deltoid taper — thick at the shoulder, narrowing to the elbow — so the arm fills out under the plate
     const upper = new THREE.Mesh(cachedGeo('upperArm', () =>
@@ -670,6 +711,7 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
     // across its back (shape x along the arm → rotation.z), its top toward the outer edge (local −x = world up when the
     // arm is across the chest) and the point down; the fist sits at the shield's inner edge, the elbow near the outer
     sh.rotation.z = Math.PI / 2; sh.position.set(0, -0.10, 0.13);
+    const shMark = sigilDecal(0.42); shMark.position.set(0, -0.06, 0.065); sh.add(shMark);   // THE VALE MARK on the face
     sh.userData.fixedGrip = true; // (kept: the wrist channel must never touch it)
     armL.elbow.add(sh); casters.push(sh); return sh;
   };
@@ -16931,7 +16973,7 @@ function afDressGear(parts, gear, pal) {
       parts.torso.material = mat(clothC, { shared: false }); pads.forEach(p => { p.visible = false; });
       const dark = new THREE.Color(clothC).multiplyScalar(0.62).getHex(); for (const y of [0.22, 0.4, 0.58]) { const q = bit(ub, boxMesh(0.9, 0.025, 0.7, mat(dark, { shared: false }))); q.position.y = y; }
     } else {
-      parts.torso.material = mat(ar.torso, { metal: ar.metal, shared: false }); pads.forEach(p => { p.visible = true; p.material = mat(ar.pad, { metal: ar.metal, shared: false }); p.scale.set(ar.gorget ? 1.6 : 1.28, ar.gorget ? 0.9 : 0.68, ar.gorget ? 1.2 : 0.95); });
+      parts.torso.material = mat(ar.torso, { metal: ar.metal, shared: false }); pads.forEach(p => { p.visible = true; p.material = mat(ar.pad, { metal: ar.metal, shared: false }); p.scale.set(ar.gorget ? 1.6 : 1.28, ar.gorget ? 0.9 : 0.68, ar.gorget ? 1.2 : 0.95); if (p.userData.big) p.scale.multiplyScalar(1.22); });
       const M = (c, metal) => mat(c, { metal: metal == null ? ar.metal : metal, shared: false });
       if (ar.straps) {                                       // a baldric across the chest and a row of studs
         const st = bit(ub, boxMesh(0.14, 0.95, 0.06, M(0x3a2414, 0))); st.position.set(0, 0.42, 0.34); st.rotation.z = 0.55;
@@ -17260,14 +17302,22 @@ function afRide(b, dt, I, mm, canMove, sim) {
   b.moving = sp > 0.4;
   // the hooves keep time with the ground: stride rate follows speed (a ~4-unit stride), so a gallop is a blur, not a jog
   if (b.moving) { b.gait = GAIT.run; b.phase += dt * (3 + 2.4 * sp); walkLegs(b.parts, b.phase, 0.6); } else restLegs(b.parts, dt, true);
-  if (sim && sp01 > 0.45) {                                // RIDDEN DOWN: a horse at speed goes THROUGH men on foot
+  if (sim && sp01 > 0.3) {                                 // RIDDEN DOWN: a horse at speed goes THROUGH men on foot
     const reach = 1.6 + 0.8 * sp01 + 0.4 * b.gallop;
     for (const o of AF.bodies) {
       if (o.dead || o === b || o.mounted || o.trampleT > 0) continue;
-      const dx = o.x - b.x, dz = o.z - b.z, dd = Math.hypot(dx, dz); if (dd > reach || (dx * fx + dz * fz) / (dd || 1) < 0.1) continue;
+      const dx = o.x - b.x, dz = o.z - b.z, dd = Math.hypot(dx, dz), square = (dx * fx + dz * fz) / (dd || 1); if (dd > reach || square < 0.1 || Math.abs(dx * fz - dz * fx) > 1.6) continue;   // (past 1.6 off the line the horse misses him)
       const side = (dx * fz - dz * fx) >= 0 ? 1 : -1, rgx = fz * side, rgz = -fx * side;   // which side of the horse's line he's on — he goes that way
       o.trampleT = 1.2;
       if (o.team === b.team) { o.vx += rgx * 6; o.vz += rgz * 6; continue; }            // a friend is shouldered aside, not ridden down
+      // a GOOD HIT puts a man on the ground: near the gallop AND square on. A cantering horse, or a glancing brush at
+      // speed, only shoves him — he staggers a step and keeps his feet (a walk past the line used to floor everyone)
+      const hard = sp01 > 0.7 && Math.abs(dx * fz - dz * fx) < 0.75;   // (square on = within the horse's own chest width of its line; a clip off the shoulder is a shove)
+      if (!hard) {
+        afDamage(o, 3 + 5 * sp01, b, false, false, false, 0.3);
+        if (!o.dead) { o.flinch = Math.max(o.flinch, 0.28); o.vx += rgx * (4 + 3 * sp01) + fx * 2; o.vz += rgz * (4 + 3 * sp01) + fz * 2; afPopup(o.group.position, 'shoved', '#d8c8a8'); }
+        b.vx *= 0.96; b.vz *= 0.96; continue;
+      }
       const braced = o.arch === 'guardsman' && o.blocking && ((b.x - o.x) * Math.sin(o.yaw) + (b.z - o.z) * Math.cos(o.yaw)) / (dd || 1) > 0.3;
       if (braced) {                                          // a braced shield is the one thing that stops a horse
         b.vx *= 0.45; b.vz *= 0.45; b.gallop = 0; o.vx += fx * 5; o.vz += fz * 5;

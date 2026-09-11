@@ -221,12 +221,34 @@ skirmishes into one continuous front:
   current engagement radius falls back toward his team's centre instead of soloing across the pit
   after one distant straggler — the mechanism that keeps a big battle as ONE fight. Riders get a
   longer leash (cavalry should range) but the same rule.
-- **A live, clamped flanking mark** for riders (`T.wp`, tracked every captain tick via `afClampPit`):
-  it used to be a single point frozen the moment the advance began, using that instant's enemy
-  position — by the time cavalry arrived, the enemy (and often the mark itself) had moved on, or the
-  point sat outside the ring entirely, so a horse could end up standing alone at the wall. The mark
-  now tracks the live enemy centre and is clamped inside the ring; if cavalry still can't reach it
-  within `wpTimeout` (6s) the charge is ordered anyway rather than waiting on an unreachable spot.
+- **The squadron** (`afFlankPoint`, `afSquadronMarks`): riders flank to a mark 22 paces off the
+  enemy's end of the point where the lines will meet (62% of the way from our centre to theirs),
+  clamped inside the ring. That point hardly moves. A mark that followed the marching enemy centre
+  kept every horse turning to catch up. The mark moves only if the point shifts more than 5
+  paces.
+
+  Each rider gets his own place in a line abreast (two ranks past eight, 3.4 paces apart) facing
+  the enemy. Many riders were once sent to one single spot. They fought over it, spun there, and
+  the "all arrived" check never passed. A rider is `formed` within 2.5 paces and only rides again
+  once his place is more than 7 away, so he never fidgets.
+
+  The squadron goes in when the lines meet and 60% of it is formed up, after 6 s of waiting, or
+  after 16 s on the flank in any case. An army whose infantry is less than 1.5× its riders doesn't
+  flank at all; its horse is the army and charges straight in. Before this, an all-cavalry fight
+  deadlocked with both squadrons waiting for infantry that didn't exist.
+- **Cavalry is a cycle** (`b.cav`), not a dogfight:
+  1. *charge*: full tilt at the mark with a little lead.
+  2. *out*: ride through and past, holding the line of the charge and cutting at whoever is in
+     reach, until nothing is within 6 paces.
+  3. *wheel*: one direction round, easing to a canter for the turn; a galloping horse turns at
+     ~0.55 rad/s, a 27-pace circle that ends in the wall.
+  4. Then charge again.
+
+  A rider always drives along his facing and steers with the reins, so he never brakes to
+  pivot. A target that slips inside the turning circle (more than 1.2 rad off, within 9 paces)
+  sends him out and round, instead of circling a man he can never reach. This was the "squadron
+  spinning together" behaviour. In 40–100-a-side battles, the share of riders spinning slowly on
+  the spot fell from ~80% on the flank and ~18% in the charge to 3–8%.
 - **The lines meet on foot**: only infantry touching infantry releases the charge — a rider's first
   blow (ours or theirs) used to release the whole army from 150 units out, so the cavalry charged
   alone and was spent before the foot arrived. Cavalry now waits on its flanking mark and goes in
@@ -267,7 +289,7 @@ facing. NPCs roll away from the side the danger comes from. The side rides the s
 throttle along the facing, momentum is dragged onto the facing (hooves grip), and the yaw rate collapses
 as speed grows (a galloping horse carves a wide arc, `MOUNT`). Top speed is 1.9× a man's, the reach is
 longer from the saddle, a blow at full tilt lands harder, and a horse at speed **tramples** foot
-soldiers in its path. NPC riders charge, strike in passing, ride through and wheel for another pass;
+soldiers in its path. NPC riders charge, strike in passing, ride through and wheel for another pass (the cycle above);
 foot soldiers roll clear of a charge. A rider's dodge is a spur.
 
 **Auto-turn** (`afAutoTurn`): after a swing or a roll, if a foe is at your elbow but not in front of

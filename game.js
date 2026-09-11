@@ -17198,6 +17198,21 @@ function afPlanTeams() {
     if (npcs.length >= 3) afOrderLog(T, 'form');
   }
 }
+// the SQUADRON: each rider his own place in a line abreast (two ranks past eight) at the flanking mark, facing the
+// enemy's centre — so twenty horses form up side by side instead of all fighting for one spot and spinning on it
+function afFlankPoint(T, mc, fc) {                          // 22 paces off the enemy's end of the meeting point, on the chosen side
+  const fb = Math.atan2(fc.x - mc.x, fc.z - mc.z), px = -Math.cos(fb), pz = Math.sin(fb), cx = lerp(mc.x, fc.x, 0.62), cz = lerp(mc.z, fc.z, 0.62);
+  return afClampPit(cx + px * 22 * T.riderSide, cz + pz * 22 * T.riderSide, 6);
+}
+function afSquadronMarks(T, mine, fc) {
+  const rs = mine.filter(b => b.mounted && b.ctrl === 'ai'); if (!rs.length || !T.wp) return;
+  const fyaw = Math.atan2(fc.x - T.wp.x, fc.z - T.wp.z), fx = Math.sin(fyaw), fz = Math.cos(fyaw), rx = -fz, rz = fx;
+  const perRank = rs.length > 8 ? Math.ceil(rs.length / 2) : rs.length;
+  rs.sort((a, b) => a.idx - b.idx).forEach((b, i) => {
+    const rk = Math.floor(i / perRank), n = Math.min(perRank, rs.length - rk * perRank), off = (i % perRank - (n - 1) / 2) * 3.4;
+    b.flankMark = afClampPit(T.wp.x + rx * off - fx * rk * 4.2, T.wp.z + rz * off - fz * rk * 4.2, 5); b.flankFace = fyaw;
+  });
+}
 function afFormationSlot(T, b) {
   const fwx = Math.sin(T.face), fwz = Math.cos(T.face), rgx = -Math.cos(T.face), rgz = Math.sin(T.face), sl = b.slot || { right: 0, back: 0 };
   return { x: T.anchor.x + rgx * sl.right - fwx * sl.back, z: T.anchor.z + rgz * sl.right - fwz * sl.back };
@@ -17218,15 +17233,18 @@ function afCaptainThink(T, dt) {
   T.center = mc; T.enemyCenter = fc;                        // the living centroids: an isolated man heads for the ENEMY's, never his own (that made a pile)
   T.engageR = clamp(spread * 1.8 + 14, AF_TACT.engageMin, AF_TACT.engageMax);
   T.regroupSpread = clamp(Math.sqrt(Math.max(1, mine.length)) * 3.4, 12, 34);
-  if (T.riderOrder === 'flank') {                             // track the flanking mark live: the enemy line has moved since the order was given
-    const fb = Math.atan2(fc.x - mc.x, fc.z - mc.z), px = -Math.cos(fb), pz = Math.sin(fb);
-    T.wp = afClampPit(fc.x + px * 22 * T.riderSide, fc.z + pz * 22 * T.riderSide, 6);
+  if (T.riderOrder === 'flank' && (T.flankT = (T.flankT || 0) + 0.4) > 16) { T.riderOrder = 'charge'; for (const b of mine) if (b.mounted) { b.cav = 'charge'; b.formed = false; } }   // nobody waits on a flank forever
+  if (T.riderOrder === 'flank') {                             // the flanking mark: out to the side of where the LINES WILL MEET (that point hardly moves;
+    const wp = afFlankPoint(T, mc, fc);                       // the enemy's centre marches, and a mark riding along with it had the squadron turning all the while)
+    if (!T.wp || Math.hypot(wp.x - T.wp.x, wp.z - T.wp.z) > 5) { T.wp = wp; afSquadronMarks(T, mine, fc); }
   }
   switch (T.phase) {
     case 'form':
       T.face = angleLerp(T.face, bearing, 0.5);
       if (T.since >= AF_TACT.formSecs || contact) { T.phase = 'advance'; T.order = 'advance'; T.since = 0; afOrderLog(T, 'advance');
-        if (mine.some(b => b.mounted && b.ctrl === 'ai')) { const px = -Math.cos(bearing), pz = Math.sin(bearing); T.riderSide = Math.random() < 0.5 ? 1 : -1; T.wp = afClampPit(fc.x + px * 22 * T.riderSide, fc.z + pz * 22 * T.riderSide, 6); T.riderOrder = 'flank'; afOrderLog(T, 'flank'); } }
+        const nR = mine.filter(b => b.mounted && b.ctrl === 'ai').length, nFoot = mine.length - mine.filter(b => b.mounted).length;
+        if (nR && nFoot < nR * 1.5) { T.riderOrder = 'charge'; }   // no infantry worth the name to pin the enemy: the horse IS the army — straight in, no flanking to wait on
+        else if (nR) { T.riderSide = Math.random() < 0.5 ? 1 : -1; T.wp = afFlankPoint(T, mc, fc); T.riderOrder = 'flank'; T.flankWait = 0; T.flankT = 0; afSquadronMarks(T, mine, fc); afOrderLog(T, 'flank'); } }
       break;
     case 'advance': {
       T.face = angleLerp(T.face, bearing, 0.6);
@@ -17235,7 +17253,11 @@ function afCaptainThink(T, dt) {
       if (gap < AF_TACT.contact || contact) { T.phase = 'charge'; T.order = 'charge'; T.since = 0; afOrderLog(T, 'charge'); }
       break; }
     case 'charge':
-      if (T.riderOrder === 'flank' && T.wp) { const rs = mine.filter(b => b.mounted); if (!rs.length || rs.every(b => Math.hypot(b.x - T.wp.x, b.z - T.wp.z) < 6) || T.since > AF_TACT.wpTimeout) T.riderOrder = 'charge'; }
+      if (T.riderOrder === 'flank' && T.wp) {                // the lines have met: the squadron goes in once most of it is formed up (or the waiting's gone on long enough)
+        const rs = mine.filter(b => b.mounted && b.ctrl === 'ai'), there = rs.filter(b => b.flankMark && Math.hypot(b.x - b.flankMark.x, b.z - b.flankMark.z) < 5).length;
+        T.flankWait = (T.flankWait || 0) + 0.4;
+        if (!rs.length || there >= rs.length * 0.6 || T.flankWait > AF_TACT.wpTimeout) { T.riderOrder = 'charge'; for (const b of rs) { b.cav = 'charge'; b.formed = false; } }
+      }
       if (ratio < AF_TACT.rallyRatio && mine.length >= 3 && !T.rallied) { T.rallied = true; T.phase = 'fallback'; T.order = 'fallback'; T.riderOrder = 'fallback'; T.since = 0; const ux = (fc.x - mc.x) / (gap || 1), uz = (fc.z - mc.z) / (gap || 1); T.anchor = afClampPit(mc.x - ux * 12, mc.z - uz * 12, 8); T.face = Math.atan2(ux, uz); afOrderLog(T, 'fallback'); } // a FIGHTING withdrawal — a dozen paces back to re-form, not an 80-pace walk to the wall with backs turned (that was a massacre at legion scale)
       else if (T.since > AF_TACT.regroupAfter && spread > T.regroupSpread && ratio < AF_TACT.pursueRatio && mine.length >= 3 && !contact) { T.phase = 'form'; T.order = 'hold'; T.since = 0; T.anchor = { x: mc.x, z: mc.z }; T.face = bearing; afOrderLog(T, 'regroup'); }
       else if (ratio > AF_TACT.pursueRatio && !T.pursuing) { T.pursuing = true; afOrderLog(T, 'pursue'); }
@@ -17318,8 +17340,12 @@ function afThink(b, dt) {
   const ord = T ? (b.mounted ? T.riderOrder : T.order) : 'charge';
   if (ord !== 'charge' && !busy) {
     if (ord === 'flank' && T.wp) {
-      const wx = T.wp.x - b.x, wz = T.wp.z - b.z, wd = Math.hypot(wx, wz) || 1e-4;
-      if (wd > 4) { I.yaw = Math.atan2(wx, wz); I.mx = wx / wd; I.mz = wz / wd; return; }
+      const mk = b.flankMark || T.wp, wx = mk.x - b.x, wz = mk.z - b.z, wd = Math.hypot(wx, wz) || 1e-4;
+      if (d > 8) {                                           // (a foe riding at the squadron is met, not watched)
+        if (wd < 2.5) b.formed = true; else if (wd > 7) b.formed = false;   // formed up, he stays put until his place has really moved (no fidgeting)
+        if (!b.formed) { I.yaw = Math.atan2(wx, wz); const thr = clamp(wd / 8, 0.25, 1); I.mx = wx / wd * thr; I.mz = wz / wd * thr; return; }
+        I.yaw = b.flankFace != null ? b.flankFace : Math.atan2(dx, dz); b.cav = 'charge'; return;   // stand, face the enemy, wait for the word
+      }
     } else {
       const slot = afFormationSlot(T, b), slx = slot.x - b.x, slz = slot.z - b.z, sd = Math.hypot(slx, slz);
       const reach = F.reach + (b.reachBonus || 0) + (b.mounted ? F.horseReach : 0);
@@ -17347,14 +17373,38 @@ function afThink(b, dt) {
     if (b.weapon === 'bow' && d < 4.2) I.swap++;
     else if (b.weapon === 'sword' && d > 11 && b.hp > b.maxHp * 0.3) I.swap++;
   }
-  if (b.mounted) {                                          // a rider charges, strikes in passing, rides through and wheels for another pass
-    const reach = F.reach + F.horseReach;
-    if (b.passT > 0) { b.passT -= dt; I.yaw = b.wheelYaw != null ? b.wheelYaw : b.yaw; I.mx = Math.sin(I.yaw); I.mz = Math.cos(I.yaw); if (d <= reach && !busy && b.cd <= 0) { afAiSwing(b, false); b.cd = 0.45; } if (b.passT <= 0) b.wheelYaw = null; return; }
-    if (b.sp01 < 0.3 && d < 5 && !busy && T && T.enemyCenter && Math.random() < dt * 1.2) { // bogged down in the press: wheel OUT, get the horse moving, come again
-      b.wheelYaw = Math.atan2(b.x - T.enemyCenter.x, b.z - T.enemyCenter.z) + (Math.random() - 0.5) * 0.8; b.passT = 1.6; return;
+  if (b.mounted) {
+    // CAVALRY IS A CYCLE, not a dogfight: CHARGE straight at the mark, strike in passing, ride OUT through and past
+    // the press until the ground is clear, WHEEL round in a wide arc, and charge again. (Steering at a man inside the
+    // horse's turning circle is what spun whole squadrons on the spot: a horse can't pivot on a target at its flank.)
+    const reach = F.reach + F.horseReach, R0 = AF_F.radius;
+    const foeNear = r => { for (const o of AF.bodies) if (!o.dead && o.team !== b.team && Math.abs(o.x - b.x) < r && Math.abs(o.z - b.z) < r && Math.hypot(o.x - b.x, o.z - b.z) < r) return o; return null; };
+    const strikeInPassing = () => { if (busy || b.cd > 0) return; const fx = Math.sin(b.yaw), fz = Math.cos(b.yaw);
+      for (const o of AF.bodies) { if (o.dead || o.team === b.team) continue; const ox = o.x - b.x, oz = o.z - b.z, od = Math.hypot(ox, oz); if (od < reach && (ox * fx + oz * fz) / (od || 1) > 0.2) { afAiSwing(b, false); b.cd = 0.4 + Math.random() * 0.3; return; } } };
+    const nearWall = Math.hypot(b.x, b.z) > R0 - 7;
+    if (b.cav === 'out') {                                   // through and past: hold the line of the charge, cutting at whoever's in reach
+      b.outT -= dt; I.yaw = b.outYaw; I.mx = Math.sin(b.yaw) + sx * 0.4; I.mz = Math.cos(b.yaw) + sz * 0.4; strikeInPassing();   // (heels in along the facing: the reins do the turning, the horse never brakes to pivot)
+      if (nearWall) { b.cav = 'wheel'; b.wheelDir = null; }
+      else if (b.outT <= 0 && (!foeNear(6) || b.outT < -1.5)) { b.cav = 'wheel'; b.wheelDir = null; }
+      return;
     }
-    I.yaw = Math.atan2(dx, dz); const thr = d > 5 ? 1 : 0.7; I.mx = Math.sin(I.yaw) * thr + sx * 0.3; I.mz = Math.cos(I.yaw) * thr + sz * 0.3;
-    if (d <= reach * 1.1 && !busy && b.cd <= 0) { afAiSwing(b, b.sp01 < 0.4 && Math.random() < b.heavyBias); b.cd = 0.5 + Math.random() * 0.4; if (b.sp01 > 0.45) b.passT = 0.9 + Math.random() * 0.5; }
+    if (b.cav === 'wheel') {                                 // a wide turn back onto the enemy, one way round, at speed
+      const want = Math.atan2(dx, dz), err = angleDelta(b.yaw, want);
+      if (b.wheelDir == null) b.wheelDir = nearWall ? (angleDelta(b.yaw, Math.atan2(-b.x, -b.z)) < 0 ? -1 : 1) : (err < 0 ? -1 : 1);   // (off a wall: turn toward the middle)
+      if (Math.abs(err) < 0.3 || (d > 14 && Math.abs(err) < 0.7)) { b.cav = 'charge'; }
+      else { const thr = Math.abs(err) > 0.8 ? 0.6 : 1;   // ease to a canter for the turn (a galloping horse carves a 27-pace circle — into the wall), open up once round
+        I.yaw = b.yaw - b.wheelDir * Math.min(Math.abs(err), 1.1); I.mx = Math.sin(b.yaw) * thr + sx * 0.3; I.mz = Math.cos(b.yaw) * thr + sz * 0.3; strikeInPassing(); return; }
+    }
+    // CHARGE: full tilt at the mark, a little lead on a moving one
+    const lead = clamp(d / 12, 0, 0.6), ax = t.x + (t.vx || 0) * lead - b.x, az = t.z + (t.vz || 0) * lead - b.z;
+    I.yaw = Math.atan2(ax, az); I.mx = Math.sin(b.yaw) + sx * 0.3; I.mz = Math.cos(b.yaw) + sz * 0.3;
+    const off = Math.abs(angleDelta(b.yaw, Math.atan2(dx, dz)));
+    if (d <= reach * 1.1 && !busy && b.cd <= 0) { afAiSwing(b, b.sp01 < 0.4 && Math.random() < b.heavyBias); b.cd = 0.5 + Math.random() * 0.4; }
+    if ((d < 2.6 || (off > 1.2 && d < 9)) && b.cav !== 'out') {   // on him (or he's slipped to my flank, inside the turn): ride THROUGH, don't pivot
+      b.cav = 'out'; b.outYaw = b.yaw + (Math.random() - 0.5) * 0.3; b.outT = 0.6 + Math.random() * 0.5;
+    } else if (b.sp01 < 0.25 && foeNear(4) && Math.random() < dt * 1.5) {   // bogged in the press: break out away from their mass, then come again
+      b.cav = 'out'; b.outYaw = T && T.enemyCenter ? Math.atan2(b.x - T.enemyCenter.x, b.z - T.enemyCenter.z) + (Math.random() - 0.5) * 0.6 : b.yaw; b.outT = 1.3;
+    } else b.cav = 'charge';
     return;
   }
   if (b.weapon === 'bow') {                                  // archers keep their distance, loose, and drift sideways between shots

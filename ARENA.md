@@ -419,6 +419,16 @@ lends plain gear (iron sword, hunting bow, courser) and pays nothing.
   the saddle" when a horse is owned. **Tap any card to try it on** (`AF.tryItem`): the figure
   wears it, nothing is bought, and the strip shows the price with a Buy (or the lock reason) and
   "What I own" to take it off. Trying a bow draws it; trying a horse seats him.
+* **Armor, bows and horses are built too.** The padded jack is quilted in darker rows; leather
+  adds a baldric and studs; brigandine a rivet grid over red cloth with dark sleeves; mail a coif
+  and mail sleeves; plate a gorget, arm plates and tassets; the champion's plate gold pauldron
+  rims, gorget and helm crest; **Dragon plate** (Legend, 7000 g, sword skill 5: +110 health, +30
+  poise, −8% speed) black steel with red trim, spiked pauldrons and crest. Bows: the longbow and
+  warbow take a leather grip wrap, the warbow gold tips, the **Horn recurve** (Champion, 3500 g,
+  bow skill 4, ×1.4) pale horn with turned-back tips. Horses: the nag is dull-coated with a
+  drooping, thin neck; the destrier wears a caparison in the team cloth; the warhorse a caparison,
+  a steel chamfron and crinet plates on the neck. NPCs roll these by XP like everything else
+  (brigandine or plate at 60–82, dragon plate for some 95+, recurves for 90+ archers).
 * **Swords are built, not recoloured** (`AF_LOOK.sword`, `afBuildSword`): each item is a
   silhouette — straight, a curve of stacked slabs (falchion, scimitar, Black Night), a zigzag
   flamberge (Serpent flamberge, Ember blade), a thin cup-hilted rapier (Needle), a broad

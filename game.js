@@ -16865,8 +16865,8 @@ function afNpcGear(entry, xp, r) {
   const pick = a => a[Math.floor(r() * a.length)], A = AF_ARCH[entry.arch] || AF_ARCH.swordsman, g = {};
   g.sword = xp < 25 ? pick(['wood_sword', 'iron_sword']) : xp < 45 ? pick(['iron_sword', 'falchion']) : xp < 60 ? pick(['steel_sword', 'cleaver', 'rapier']) : xp < 82 ? pick(['vale_blade', 'scimitar', 'flamberge']) : xp < 95 ? pick(['doomsword', 'master_sword']) : pick(['master_sword', 'sun_blade', 'ember_blade', 'frost_fang', 'black_night']);
   if (A.weapon === 'longsword' && xp >= 45) g.sword = xp < 82 ? 'cleaver' : 'doomsword';     // a brute swings something broad
-  if (xp >= 20) g.armor = xp < 40 ? (r() < 0.6 ? 'leather' : undefined) : xp < 60 ? 'mail' : xp < 82 ? 'plate' : 'champion_plate';
-  if (A.weapon === 'bow') g.bow = xp < 40 ? 'hunting_bow' : xp < 70 ? 'longbow' : 'warbow';
+  if (xp >= 20) g.armor = xp < 40 ? (r() < 0.6 ? 'leather' : undefined) : xp < 60 ? 'mail' : xp < 82 ? (r() < 0.4 ? 'brigandine' : 'plate') : xp < 95 ? 'champion_plate' : (r() < 0.35 ? 'dragon_plate' : 'champion_plate');
+  if (A.weapon === 'bow') g.bow = xp < 40 ? 'hunting_bow' : xp < 70 ? 'longbow' : xp < 90 ? 'warbow' : 'recurve';
   if (A.weapon === 'horse') g.horse = xp < 35 ? 'nag' : xp < 65 ? 'courser' : xp < 85 ? 'destrier' : 'warhorse';
   for (const k in g) if (!g[k]) delete g[k]; return g;
 }
@@ -16875,7 +16875,14 @@ function afSendGear() { const L = AF.lobby; if (!L || L.role !== 'guest' || !win
 // the champion's gold-trimmed harness recolour the breastplate and pauldrons (plate adds a gorget); swords change
 // blade colour and length (a unique's tint wins); bows grow and darken; horses come in sizes.
 const AF_LOOK = {
-  armor: { none: null, leather: { torso: 0x6b4a2a, pad: 0x5a3d22, metal: 0 }, mail: { torso: 0x7a808a, pad: 0x6e747e, metal: 1 }, plate: { torso: 0xc8ccd4, pad: 0xc8ccd4, metal: 1, gorget: true }, champion_plate: { torso: 0xd6ccb0, pad: 0xd9b24a, metal: 1, gorget: true, gold: true } },
+  // armor is BUILT too (afDressGear): each spec names its torso/pauldron look and the extra pieces that make it read
+  armor: { none: null,
+    leather:        { torso: 0x6b4a2a, pad: 0x5a3d22, metal: 0, straps: true },
+    brigandine:     { torso: 0x8a2a2a, pad: 0x3a3a44, metal: 0, rivets: true, sleeves: 0x3a3a44 },
+    mail:           { torso: 0x7a808a, pad: 0x6e747e, metal: 1, sleeves: 0x7a808a, coif: true },
+    plate:          { torso: 0xc8ccd4, pad: 0xc8ccd4, metal: 1, gorget: true, tassets: 0xc8ccd4, sleeves: 0xb8bcc4 },
+    champion_plate: { torso: 0xd6ccb0, pad: 0xd9b24a, metal: 1, gorget: true, gold: true, tassets: 0xd6ccb0, sleeves: 0xd6ccb0, rim: 0xd9b24a, crest: 0xd9b24a },
+    dragon_plate:   { torso: 0x1c1a22, pad: 0x1c1a22, metal: 1, gorget: true, tassets: 0x1c1a22, sleeves: 0x2a2630, rim: 0xa02020, spikes: 0xa02020, crest: 0xa02020, trim: 0xa02020 } },
   // swords are BUILT per item (afBuildSword): style = the silhouette, len × the standard 1.35 blade, w = the flat's width
   sword: {
     wood_sword:   { style: 'straight', blade: 0x8a6a3a, metal: 0, len: 0.9, w: 0.18, grip: 0x5a3d22, guard: 0x6b4a2a, pommel: 0x6b4a2a },
@@ -16894,23 +16901,57 @@ const AF_LOOK = {
     frost_fang:   { style: 'serrated', blade: 0xd8f2ff, len: 1.1,  w: 0.2, glow: 0x4ab8ff, guard: 0x9ad0ff },
     black_night:  { style: 'curved',   blade: 0x16141c, len: 1.15, w: 0.22, glow: 0x5a2aa0, guard: 0x5a1a1a, pommel: 0x5a1a1a },
   },
-  bow: { hunting_bow: { scale: 1, wood: 0x6b4a2e }, longbow: { scale: 1.15, wood: 0x4e3620 }, warbow: { scale: 1.3, wood: 0x2e2116 } },
-  horse: { nag: { scale: 0.9 }, courser: { scale: 1 }, destrier: { scale: 1.08 }, warhorse: { scale: 1.14 } },
+  bow: { hunting_bow: { scale: 1, wood: 0x6b4a2e }, longbow: { scale: 1.15, wood: 0x4e3620, wrap: true }, warbow: { scale: 1.3, wood: 0x2e2116, wrap: true, tips: 0xd9b24a }, recurve: { scale: 1.1, wood: 0xe8dcc0, wrap: true, tips: 0x2a1a12, horn: true } },
+  horse: { nag: { scale: 0.9, coat: 0x8a7a66, droop: 0.28, thin: true }, courser: { scale: 1 }, destrier: { scale: 1.08, coat: 0x3e3630, caparison: true }, warhorse: { scale: 1.14, coat: 0x1e1a18, caparison: true, chamfron: true, crinet: true } },
 };
 function afDressGear(parts, gear, pal) {
   if (!parts || !window.ARENA_CAT) return; const I = ARENA_CAT.ARENA_ITEMS; gear = gear || {};
-  const ar = AF_LOOK.armor[gear.armor || 'none'];
+  // every dressing pass starts clean: the pieces the last pass hung on the rig come off
+  for (const m of parts.gearBits || []) { if (m.parent) m.parent.remove(m); try { disposeGroup(m); } catch (e) {} } parts.gearBits = [];
+  const bit = (parent, mesh) => { parent.add(mesh); parts.gearBits.push(mesh); return mesh; };
+  const ar = AF_LOOK.armor[gear.armor || 'none'], ub = parts.upperBody;
   const pads = []; for (const sh of [parts.shoulderL, parts.shoulderR]) if (sh) { const pad = sh.children.find(c => c.isMesh); if (pad) pads.push(pad); }
-  if (parts.torso) {
-    if (!ar) { parts.torso.material = mat(pal ? pal.cloth : 0x4a4a52, { shared: false }); pads.forEach(p => { p.visible = false; }); }
-    else { parts.torso.material = mat(ar.torso, { metal: ar.metal, shared: false }); pads.forEach(p => { p.visible = true; p.material = mat(ar.pad, { metal: ar.metal, shared: false }); p.scale.set(ar.gorget ? 1.6 : 1.28, ar.gorget ? 0.9 : 0.68, ar.gorget ? 1.2 : 0.95); }); }
-    if (ar && ar.gorget && !parts.gorget) { const gt = new THREE.Mesh(cachedGeo('gorget', () => new THREE.CylinderGeometry(0.3, 0.44, 0.22, 7)), mat(ar.gold ? 0xd9b24a : ar.torso, { metal: 1, shared: false })); gt.position.y = 0.84; parts.upperBody.add(gt); parts.gorget = gt; }
-    if (parts.gorget) { parts.gorget.visible = !!(ar && ar.gorget); if (ar && ar.gorget) parts.gorget.material = mat(ar.gold ? 0xd9b24a : ar.torso, { metal: 1, shared: false }); }
+  if (parts.torso && ub) {
+    const clothC = pal ? pal.cloth : 0x4a4a52;
+    if (!ar) {                                               // the padded jack: team cloth, quilted in darker rows, no pauldrons
+      parts.torso.material = mat(clothC, { shared: false }); pads.forEach(p => { p.visible = false; });
+      const dark = new THREE.Color(clothC).multiplyScalar(0.62).getHex(); for (const y of [0.22, 0.4, 0.58]) { const q = bit(ub, boxMesh(0.9, 0.025, 0.7, mat(dark, { shared: false }))); q.position.y = y; }
+    } else {
+      parts.torso.material = mat(ar.torso, { metal: ar.metal, shared: false }); pads.forEach(p => { p.visible = true; p.material = mat(ar.pad, { metal: ar.metal, shared: false }); p.scale.set(ar.gorget ? 1.6 : 1.28, ar.gorget ? 0.9 : 0.68, ar.gorget ? 1.2 : 0.95); });
+      const M = (c, metal) => mat(c, { metal: metal == null ? ar.metal : metal, shared: false });
+      if (ar.straps) {                                       // a baldric across the chest and a row of studs
+        const st = bit(ub, boxMesh(0.14, 0.95, 0.06, M(0x3a2414, 0))); st.position.set(0, 0.42, 0.34); st.rotation.z = 0.55;
+        for (let i = 0; i < 5; i++) { const s = bit(ub, sphereMesh(0.03, M(0x8a8a90, 1), 5, 4)); s.position.set(-0.26 + 0.13 * i, 0.68 - 0.13 * i, 0.36); } }
+      if (ar.rivets) for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) { const s = bit(ub, sphereMesh(0.028, M(0xc8c0a0, 1), 5, 4)); s.position.set(-0.3 + 0.2 * c, 0.2 + 0.16 * r, 0.36 - 0.03 * r); }
+      if (ar.sleeves) for (const sh of [parts.shoulderL, parts.shoulderR]) if (sh) { const sl = bit(sh, new THREE.Mesh(cachedGeo('sleeve', () => new THREE.CylinderGeometry(0.215, 0.13, 0.4, 7)), M(ar.sleeves))); sl.position.y = -0.26; }
+      if (ar.coif) { const cf = bit(ub, new THREE.Mesh(cachedGeo('coif', () => new THREE.CylinderGeometry(0.3, 0.36, 0.16, 7)), M(ar.torso))); cf.position.y = 0.88; }
+      if (ar.tassets) for (const sd of [-1, 1]) { const t = bit(ub, boxMesh(0.34, 0.3, 0.18, M(ar.tassets))); t.position.set(0.24 * sd, -0.14, 0.22); t.rotation.x = 0.25; t.rotation.z = -0.15 * sd; }
+      if (ar.rim) pads.forEach(p => { const r = bit(p.parent, sphereMesh(0.185, M(ar.rim, 1), 7, 4)); r.position.copy(p.position); r.position.y -= 0.02; r.scale.set(1.75, 0.3, 1.32); });
+      if (ar.spikes) pads.forEach(p => { const sp = bit(p.parent, new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.28, 5), M(ar.spikes, 1))); sp.position.copy(p.position); sp.position.y += 0.16; });
+      if (ar.trim) { const tb = bit(ub, boxMesh(0.74, 0.05, 0.54, M(ar.trim, 1))); tb.position.y = 0.05; }
+      if (ar.crest) { const hp = parts.headPivot; const cr = bit(hp || ub, boxMesh(0.07, 0.2, 0.46, M(ar.crest, 1))); cr.position.set(0, (hp ? 0.62 : 1.6), 0.02); }
+      if (ar.gorget && !parts.gorget) { const gt = new THREE.Mesh(cachedGeo('gorget', () => new THREE.CylinderGeometry(0.3, 0.44, 0.22, 7)), M(ar.gold ? 0xd9b24a : ar.torso, 1)); gt.position.y = 0.84; ub.add(gt); parts.gorget = gt; }
+    }
+    if (parts.gorget) { parts.gorget.visible = !!(ar && ar.gorget); if (ar && ar.gorget) parts.gorget.material = mat(ar.gold ? 0xd9b24a : ar.rim || ar.torso, { metal: 1, shared: false }); }
+  }
+  const hs = gear.horse && AF_LOOK.horse[gear.horse], H = parts.mount && parts.mount.userData.rig;
+  if (H && hs) {                                             // the horse: coat, a nag's droop and thin neck, cloth barding, a steel chamfron and crinet
+    const coatM = H.body.children[0] && H.body.children[0].material; if (hs.coat && coatM && coatM.color) coatM.color.setHex(hs.coat);
+    H.neckBase = 0.78 - (hs.droop || 0); if (hs.thin) H.neck.scale.set(0.85, 1, 0.85);
+    const clothM = mat(pal ? pal.cloth : 0x8a2a2a, { shared: false }), steelM = mat(0xc8ccd4, { metal: 1, shared: false });
+    if (hs.caparison) { const cp = bit(H.body, boxMesh(1.22, 0.7, 2.3, clothM)); cp.position.set(0, -0.28, -0.05); const hem = bit(H.body, boxMesh(1.26, 0.08, 2.34, mat(pal ? pal.accent : 0xd9b24a, { shared: false }))); hem.position.set(0, -0.6, -0.05); }
+    if (hs.chamfron) { const ch = bit(H.head, boxMesh(0.24, 0.1, 0.46, steelM)); ch.position.set(0, 0.14, 0.08); const sp = bit(H.head, new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.16, 5), steelM)); sp.position.set(0, 0.22, 0.02); }
+    if (hs.crinet) for (let i = 0; i < 3; i++) { const pl = bit(H.neck, boxMesh(0.3, 0.12, 0.2, steelM)); pl.position.set(0, 0.16 + i * 0.16, -0.16 + i * 0.02); }
   }
   const sw = AF_LOOK.sword[gear.sword] || AF_LOOK.sword.iron_sword, trim = gear.trim && I[gear.trim];
   if (parts.sword) afBuildSword(parts.sword, sw, trim ? trim.blade : null);
   const bw = gear.bow && AF_LOOK.bow[gear.bow];
-  if (parts.bow && bw) { parts.bow.scale.setScalar(bw.scale); parts.bow.traverse(c => { if (c.isMesh && c.geometry.type === 'TorusGeometry') c.material = mat(bw.wood, { smooth: true, shared: false }); }); }
+  if (parts.bow && bw) {                                     // the bow: wood, size, a leather wrap at the grip, tips of gold or horn
+    parts.bow.scale.setScalar(bw.scale); let arc = null; parts.bow.traverse(c => { if (c.isMesh && c.geometry.type === 'TorusGeometry') { arc = c; c.material = mat(bw.wood, { smooth: true, shared: false }); } });
+    if (arc) { const R0 = 0.85, a = Math.PI * 0.78, tipM = mat(bw.tips || bw.wood, { metal: !!bw.tips, shared: false, smooth: true });
+      if (bw.wrap) { const wr = bit(arc, new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.26, 6), mat(0x3a2414, { smooth: true, shared: false }))); wr.position.set(R0 * Math.cos(a / 2), R0 * Math.sin(a / 2), 0); wr.rotation.z = a / 2 - Math.PI / 2; }   // (the torus arc runs 0..a; its middle is the grip)
+      if (bw.tips) for (const ang of [0, a]) { const tp = bit(arc, new THREE.Mesh(new THREE.ConeGeometry(0.06, bw.horn ? 0.3 : 0.18, 5), tipM)); tp.position.set(R0 * Math.cos(ang), R0 * Math.sin(ang), 0); tp.rotation.z = ang - Math.PI / 2 + (bw.horn ? (ang ? 0.9 : -0.9) : 0); } }
+  }
 }
 // BUILD A SWORD in the hand: the group (its grip at the hand, blade up +y, the FLAT across x — the guard pose points local
 // z at the ground, so a flat or a curve across z would be seen edge-on) is emptied and refilled

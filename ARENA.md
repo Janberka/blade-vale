@@ -116,6 +116,26 @@ renders to a target, a bright pass + separable blur at quarter resolution makes 
 torches, sparks, blade trails and the sun, and a composite adds a vignette, a touch of contrast and
 saturation, and a red flush at the edges when you are hit (pulsing when you are near death).
 
+**The entrance** (`afIntroStart` / `afIntroStep` / `afIntroCamera`, phase `intro` before `countdown`): a
+procedural cinematic staged after the Zucchabar scene in *Gladiator*, about 20 s for two teams. Every team has a
+**gate and a tunnel** in the ring wall behind its muster point (`afBuildGates`: pillars, a lintel, two plank doors on
+hinge pivots, a roofed corridor out through a gap in the stands with a black mouth at the far end, torches on its
+walls, sun through the door slats while it is shut and a wash of light when it opens). The **stars** of each team
+(`afPickStars`: the two highest-XP fighters, a player only if nobody outranks them; one star below three a side)
+take the front rank's middle — they swap muster points with whoever held them — and the team waits in the tunnel
+as a column three abreast (riders one to a rank, at the back); a roster longer than the tunnel comes up out of the
+dark. The cut: the pens (over the helmets at the shut gate, with a caption naming the team and its stars) → the
+gates swing open to a horn, a creak and the roar, low from the sand → the stars' walk-outs in **slow motion**
+(`AF.timeScale` 0.35; a low lens ahead of each man tracking back through the doorway) → the column pouring out of
+my tunnel → a crane up over the whole pit → over my star's shoulder at the enemy line. Meanwhile the columns march
+in (`afIntroBody`: down the tunnel, then each man to his own muster point; a star raises his blade on arrival),
+and at the end everyone snaps to his point under a blink of black, the gates close behind them and the countdown
+sweep takes over. Camera sides, star order and beats are dealt from the seed, so every client sees the same film;
+nothing is simulated in the phase (no `afTick`), so the net cannot drift, and a guest still watching when the host's
+first `fight` snapshot arrives is snapped forward. Skip with Space / Enter / Esc or the button; `?nointro` in the
+URL (or `BV.arena({ intro: false })`) turns it off. Test hooks: `BV.arenaIntro()` reads it, `BV.arenaIntro(n)` jumps
+to shot n, `BV.arenaIntro({ advance: secs })` steps it, `BV.arenaIntro('skip')`.
+
 **Camera**: during the countdown the camera sweeps from high over the pit down onto your shoulder,
 the lens widens slightly on a run, and the field-fight shake / kick / FOV punch land on your hits.
 Strikes use an ease-out-back so the blade whips past the mark and settles; every hit puts a white

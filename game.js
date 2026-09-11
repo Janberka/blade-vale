@@ -508,6 +508,89 @@ function sigilDecal(size) {                                 // a flat emblem lai
   const m = new THREE.MeshBasicMaterial({ map: valeSigil(), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }); m.userData.noTint = true;
   return new THREE.Mesh(new THREE.PlaneGeometry(size, size), m);
 }
+
+// ---------- Looks: redress the knight after the reference figures ----------
+// Coordinates are upperBody-local (head pieces are re-parented under headPivot on hero rigs, hence hy).
+function dressLook(look, c) {
+  const { upperBody: ub, palette: pal, skin, cloth, plate, brass, slitM } = c;
+  const H = c.headPivot || ub, hy = c.headPivot ? -0.98 : 0;
+  const headAdd = (m, x, y, z) => { m.position.set(x, y + hy, z); H.add(m); return m; };
+  const leather = mat(0x5a3d26, { shared: false }), darkLeather = mat(0x3a2818, { shared: false });
+  const shadow = mat(0x0e0f14, { shared: false });                                  // the face stays in the helm's shadow — no faces
+  const ring = (r0, r1, h, seg = 7) => new THREE.CylinderGeometry(r0, r1, h, seg, 1, true);
+  const lathe = (key, pts, seg = 8) => cachedGeo(key, () => new THREE.LatheGeometry(pts.map(([x, y]) => new THREE.Vector2(x, y)), seg));
+  const strips = (parent, n, r, y, h, m, w = 0.11, rz = 1, a0 = 0) => {                  // pteruges: a curtain of hanging strips
+    for (let k = 0; k < n; k++) { const a = a0 + (k / n) * Math.PI * 2; const st = boxMesh(w, h, 0.03, m); st.position.set(Math.sin(a) * r, y, Math.cos(a) * r * rz); st.rotation.y = a; parent.add(st); }
+  };
+  const litEyes = () => { for (const sd of [-1, 1]) headAdd(boxMesh(0.08, 0.05, 0.05, slitM), 0.09 * sd, 1.25, 0.25); c.eyeSlit.visible = false; c.noseSlit.visible = false; c.head.material = shadow; };
+  const hidePlume = () => { if (c.headPivot) for (const m of c.headPivot.children) if (m.geometry && m.geometry.type === 'LatheGeometry' && m !== c.helm && m.material.color && m.position.z < -0.1) m.visible = false; };
+
+  if (look === 'sallet') {
+    // THE SALLET KNIGHT: a rounded skull with a swept tail, a bevor under a single lit slit, layered pauldrons,
+    // fauld lames over a dark skirt, couters, gauntlets, pointed sabatons and a dark mantle at the neck.
+    c.helm.geometry = lathe('salletHelm', [[0.3, 0], [0.335, 0.12], [0.335, 0.36], [0.29, 0.52], [0.2, 0.64], [0.08, 0.72], [0, 0.74]]);
+    const tail = headAdd(boxMesh(0.5, 0.06, 0.42, plate), 0, 1.1, -0.3); tail.rotation.x = -0.5;              // the tail sweeps down the neck
+    const bevor = headAdd(boxMesh(0.54, 0.3, 0.28, plate), 0, 1.07, 0.19); bevor.rotation.x = 0.12;         // the chin plate
+    c.eyeSlit.scale.set(1.1, 0.7, 1); c.eyeSlit.position.y = 1.27 + hy; c.noseSlit.visible = false; c.brow.position.y = 1.4 + hy;
+    c.crest.position.y = 1.62 + hy; c.band.visible = false;
+    const mantle = new THREE.Mesh(cachedGeo('mantle', () => ring(0.22, 0.52, 0.26)), mat(0x2a2226, { shared: false })); mantle.position.set(0, 0.86, -0.04); ub.add(mantle);
+    const keel = boxMesh(0.05, 0.6, 0.06, plate); keel.position.set(0, 0.44, 0.35); keel.rotation.x = -0.1; ub.add(keel);   // the breastplate's centre ridge
+    for (const [i, [r0, r1, y]] of [[0.4, 0.44, 1.52], [0.44, 0.48, 1.4], [0.48, 0.52, 1.28]].entries()) {                  // fauld lames
+      const l = new THREE.Mesh(cachedGeo('fauldLame' + i, () => ring(r0, r1, 0.11)), plate); l.position.y = y; l.scale.z = 0.88; c.g.add(l); }
+    c.pelvis.material = mat(0x3b2d26, { shared: false }); c.hem.visible = false;
+    for (const A of c.arms) {
+      const sd = A.side;
+      for (const [i, w] of [0.42, 0.38].entries()) { const lame = boxMesh(w, 0.05, 0.34 - i * 0.02, plate); lame.position.set(0.07 * sd, -0.05 - i * 0.11, 0); lame.rotation.z = -0.35 * sd; A.shoulder.add(lame); }
+      const bes = new THREE.Mesh(cachedGeo('besagew', () => new THREE.CylinderGeometry(0.1, 0.1, 0.03, 8)), plate); bes.rotation.x = Math.PI / 2; bes.position.set(-0.1 * sd, -0.1, 0.2); A.shoulder.add(bes);
+      const couter = sphereMesh(0.13, plate, 6, 4); couter.scale.set(1, 1.1, 1); A.elbow.add(couter);
+      const wing = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.16, 5), plate); wing.position.x = 0.15 * sd; wing.rotation.z = -sd * Math.PI / 2; A.elbow.add(wing);
+      const gauntlet = boxMesh(0.24, 0.2, 0.26, plate); gauntlet.position.set(0, -0.01, 0.02); A.hand.add(gauntlet);
+      const cuff = new THREE.Mesh(cachedGeo('cuff', () => new THREE.CylinderGeometry(0.13, 0.17, 0.14, 6)), plate); cuff.position.y = 0.12; A.hand.add(cuff);
+    }
+    for (const L of c.legs) { const pt = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.22, 5), plate); pt.position.set(0, -0.82, 0.5); pt.rotation.x = Math.PI / 2; L.knee.add(pt); }   // pointed sabatons
+  } else if (look === 'legion') {
+    // THE LEGION CENTURION: a galea bowl with cheek guards and a neck guard, a transverse brush, a muscled cuirass,
+    // pteruges at the hips and shoulders, bare arms in bracers, bare thighs over greaves, a cape in the team colour.
+    c.helm.visible = false; c.band.visible = false; c.brow.visible = false; hidePlume(); litEyes();
+    const bowl = headAdd(new THREE.Mesh(lathe('galea', [[0.3, 0], [0.335, 0.1], [0.315, 0.3], [0.22, 0.44], [0.1, 0.52], [0, 0.54]]), plate), 0, 1.18, 0);
+    headAdd(boxMesh(0.58, 0.08, 0.1, brass), 0, 1.2, 0.27);                                                     // the brow reinforce
+    const guard = headAdd(boxMesh(0.62, 0.05, 0.36, plate), 0, 1.12, -0.3); guard.rotation.x = -0.65;         // the neck guard
+    for (const sd of [-1, 1]) headAdd(boxMesh(0.05, 0.34, 0.24, plate), 0.3 * sd, 1.03, 0.08);                 // cheek guards
+    const brush = headAdd(new THREE.Mesh(cachedGeo('brush', () => new THREE.CylinderGeometry(0.14, 0.14, 0.76, 12)), cloth), 0, 1.82, -0.03); brush.rotation.z = Math.PI / 2; brush.scale.z = 0.5;   // the transverse crest: a thin rounded fan across the helm
+    headAdd(boxMesh(0.76, 0.05, 0.14, brass), 0, 1.7, -0.03);
+    c.crest.scale.setScalar(0.65); c.crest.position.set(0, 1.6 + hy, 0.2); c.crest.rotation.x = -0.6;         // the Vale crescent rides the front as a fin
+    for (const sd of [-1, 1]) { const pec = sphereMesh(0.17, plate, 6, 4); pec.scale.set(1.25, 0.75, 0.55); pec.position.set(0.19 * sd, 0.62, 0.34); ub.add(pec);
+      for (const [i, y] of [0.42, 0.3, 0.18].entries()) { const ab = boxMesh(0.14, 0.09, 0.06, plate); ab.position.set(0.09 * sd, y, 0.34 - i * 0.03); ub.add(ab); } }
+    const chestBand = new THREE.Mesh(cachedGeo('chestBand', () => ring(0.405, 0.405, 0.05)), brass); chestBand.position.y = 0.7; chestBand.scale.set(1.4, 1, 0.94); ub.add(chestBand);
+    c.belt.material = leather; for (let i = 0; i < 4; i++) { const pl = boxMesh(0.11, 0.12, 0.03, brass); pl.position.set(-0.27 + 0.18 * i, 0.02, 0.28); ub.add(pl); }
+    for (const A of c.arms) { A.pad.scale.set(0.95, 0.6, 0.85); A.upper.material = skin; A.fore.material = leather;
+      for (let k = 0; k < 5; k++) { const a = -Math.PI * 0.5 + k * Math.PI / 4 - Math.PI / 2 * (A.side - 1) * 0; const st = boxMesh(0.1, 0.32, 0.03, darkLeather); st.position.set(Math.sin(a + Math.PI / 2 * A.side) * 0.24 * A.side, -0.22, Math.cos(a + Math.PI / 2 * A.side) * 0.24); st.rotation.y = a + Math.PI / 2 * A.side; A.shoulder.add(st); } }
+    c.pelvis.material = cloth; c.hem.visible = false; strips(c.g, 12, 0.5, 1.26, 0.46, darkLeather, 0.11, 0.88);
+    for (let k = 0; k < 12; k++) { const a = (k / 12) * Math.PI * 2; const stud = sphereMesh(0.035, brass, 5, 4); stud.position.set(Math.sin(a) * 0.51, 1.47, Math.cos(a) * 0.45); c.g.add(stud); }
+    for (const L of c.legs) { L.thigh.material = skin; L.cop.visible = false; L.foot.material = leather; }
+  } else if (look === 'hoplite') {
+    // THE PAINTED HOPLITE: a domed helm painted in the team colour with brass rim, nasal and cheek guards, a painted
+    // cuirass with brass bands and the Vale mark, gold pteruges, bare arms and legs, a long gold cape.
+    const painted = mat(pal.cloth, { metal: 1, shared: false }), gold = mat(0xd9b24a, { shared: false });
+    c.helm.visible = false; c.brow.visible = false; hidePlume(); litEyes();
+    headAdd(new THREE.Mesh(lathe('hopliteHelm', [[0.31, 0], [0.345, 0.12], [0.325, 0.34], [0.24, 0.5], [0.1, 0.58], [0, 0.6]]), painted), 0, 1.14, 0);
+    c.band.position.y = 1.16 + hy; c.band.scale.set(1.2, 1, 1.2);                                               // the brass rim
+    headAdd(boxMesh(0.06, 0.3, 0.05, brass), 0, 1.1, 0.31);                                                      // the nasal
+    for (const sd of [-1, 1]) { headAdd(boxMesh(0.05, 0.3, 0.22, painted), 0.3 * sd, 1.02, 0.1); headAdd(boxMesh(0.06, 0.05, 0.24, brass), 0.3 * sd, 0.88, 0.1); }
+    c.torso.material = painted;
+    const cb = new THREE.Mesh(cachedGeo('chestBand', () => ring(0.405, 0.405, 0.05)), brass); cb.position.y = 0.7; cb.scale.set(1.4, 1, 0.94); ub.add(cb);
+    const wb = new THREE.Mesh(cachedGeo('waistBand', () => ring(0.3, 0.3, 0.05)), brass); wb.position.y = 0.1; wb.scale.set(1.4, 1, 0.94); ub.add(wb);
+    for (const sd of [-1, 1]) { const strap = boxMesh(0.16, 0.05, 0.5, brass); strap.position.set(0.22 * sd, 0.8, 0.08); ub.add(strap); }
+    if (c.hero) for (const m of ub.children) if (m.geometry && m.geometry.type === 'BoxGeometry' && Math.abs(m.position.z - 0.36) < 0.02 && m.position.y > 0.1) m.visible = false;   // no tabard over a painted cuirass
+    const mark = sigilDecal(0.3); mark.position.set(0, 0.5, 0.41); ub.add(mark);                                 // THE VALE MARK straight on the cuirass
+    for (const A of c.arms) { A.pad.material = painted; A.pad.scale.set(0.95, 0.6, 0.85); A.upper.material = skin; A.fore.material = leather;
+      for (let k = 0; k < 5; k++) { const a = -Math.PI * 0.5 + k * Math.PI / 4; const st = boxMesh(0.1, 0.3, 0.03, gold); st.position.set(Math.sin(a + Math.PI / 2 * A.side) * 0.24 * A.side, -0.22, Math.cos(a + Math.PI / 2 * A.side) * 0.24); st.rotation.y = a + Math.PI / 2 * A.side; A.shoulder.add(st); } }
+    c.pelvis.material = gold; c.hem.visible = false; strips(c.g, 12, 0.5, 1.26, 0.46, gold, 0.11, 0.88);
+    for (const L of c.legs) { L.thigh.material = skin; L.cop.visible = false; L.shin.material = leather; L.foot.material = leather;
+      const top = new THREE.Mesh(cachedGeo('bootTop', () => ring(0.19, 0.19, 0.05)), brass); top.position.y = -0.06; top.scale.set(1.3, 1, 1.3); L.knee.add(top); }
+    if (c.headPivot) for (const seg of (ub.children.find(m => m.userData && m.userData.segs) || {}).userData?.segs || []) for (const m of seg.children) if (m.isMesh && m.material === cloth) m.material = gold;   // the long gold cape
+  }
+}
 function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
   const g = new THREE.Group();
   const variant = opts.variant || null; // null in the live game & the "before" figure; 'after' on soldier 2
@@ -546,7 +629,7 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
     const foot = sphereMesh(0.2, plate, 7, 5);
     foot.position.set(0, -0.76, 0.12); foot.scale.set(1.15, 0.6, 1.6); knee.add(foot);
     g.add(hip);
-    return { hip, knee };
+    return { hip, knee, thigh, cop, shin, foot };
   }
   // facing +Z, the anatomical RIGHT side is -X (forward × up); sides were mirrored before
   const legL = makeLeg(1), legR = makeLeg(-1);
@@ -654,7 +737,7 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
     const hand = new THREE.Group(); hand.position.y = -0.44; elbow.add(hand);
     const fist = sphereMesh(0.16, skin, 7, 5); hand.add(fist);   // big fists
     upperBody.add(shoulder);
-    return { shoulder, elbow, hand };
+    return { shoulder, elbow, hand, pad, rim, upper, fore, fist, side };
   }
   const armL = makeArm(1);
   const armR = makeArm(-1); // sword arm on the true anatomical right
@@ -737,6 +820,14 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
   }
   const sword = held;
 
+  // THE LOOKS (opts.look): the same rig redressed after the reference figures — a sallet knight, a legion
+  // centurion, a painted hoplite. Every one keeps the five signatures (CHARACTERS.md); 'knight' is the base.
+  if (opts.look && opts.look !== 'knight') dressLook(opts.look, {
+    g, upperBody, headPivot, palette, skin, cloth, accent, plate, brass, slitM, casters,
+    head, neck, helm, brow, crest, band, eyeSlit, noseSlit, torso, belt, buckle, pelvis, hem,
+    legs: [legL, legR], arms: [armL, armR], hero: !!opts.hero,
+  });
+
   // shadow budget: only big silhouette parts cast, characters never receive —
   // PCF blur erases sub-0.2-unit features, so the ground shadow looks identical
   // while the shadow pass shrinks ~4x and character fragments skip PCF sampling
@@ -757,6 +848,58 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
   };
 }
 const SWORD_BASE_X = 1.4;
+
+// ---------- Real-mesh fighters: a sculpted figure skinned onto the procedural rig's pivots ----------
+// The figure (assets/rigs/<name>/: decimated glTF + rig.json joint spec) is normalised to height 1 facing +Z,
+// skinned with two bones per vertex (real-skin.js) and bound to the SAME pivot groups the animator drives —
+// so every move, swing, block and death the plastic knight has, the real one has too.
+const REAL_RIGS = new Map();
+async function loadRealRig(name) {
+  if (REAL_RIGS.has(name)) return REAL_RIGS.get(name);
+  const base = 'assets/rigs/' + name + '/';
+  const spec = await (await fetch(base + 'rig.json')).json();
+  const g = await (await fetch(base + 'scene.gltf')).json();
+  const bin = await (await fetch(base + g.buffers[0].uri)).arrayBuffer();
+  const CT = { 5121: Uint8Array, 5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array }, NC = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 };
+  const acc = i => { const a = g.accessors[i], bv = g.bufferViews[a.bufferView], T = CT[a.componentType], n = NC[a.type]; return new T(bin, (bv.byteOffset || 0) + (a.byteOffset || 0), a.count * n); };
+  const prim = g.meshes[0].primitives[0];
+  const N = RealSkin.normalise(acc(prim.attributes.POSITION), spec.yaw), idx = RealSkin.cut(N, acc(prim.indices), spec.cut), sk = RealSkin.weights(N, spec);
+  const S = spec.height || 3.3, pos = new Float32Array(N.length); for (let i = 0; i < N.length; i++) pos[i] = N[i] * S;
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(acc(prim.attributes.TEXCOORD_0), 2));
+  geo.setAttribute('skinIndex', new THREE.BufferAttribute(sk.idx, 4));
+  geo.setAttribute('skinWeight', new THREE.BufferAttribute(sk.w, 4));
+  geo.setIndex(new THREE.BufferAttribute(idx, 1)); geo.computeVertexNormals();
+  const tex = new THREE.TextureLoader().load(base + g.images[0].uri); tex.encoding = THREE.sRGBEncoding; tex.flipY = false; tex.anisotropy = 4;
+  const entry = { geo, tex, spec }; REAL_RIGS.set(name, entry); return entry;
+}
+// Swap a built rig's plastic body for the real figure. Keeps the held sword/bow (the figure has no weapon of its own).
+function wearRealRig(h, name) {
+  const R = REAL_RIGS.get(name); if (!R || !h || !h.parts) return false;
+  const P = h.parts, g = h.group, S = R.spec.height || 3.3, J = R.spec.joints;
+  const v = k => new THREE.Vector3().fromArray(J[k]).multiplyScalar(S), d = (a, b) => v(a).sub(v(b));
+  const keep = new Set(); for (const k of ['sword', 'bow']) if (P[k]) P[k].traverse(o => keep.add(o));
+  g.traverse(o => { if (o.isMesh && !keep.has(o)) o.visible = false; });
+  if (P.shield) P.shield.visible = false;
+  P.hipL.position.copy(v('hipL')); P.kneeL.position.copy(d('kneeL', 'hipL'));
+  P.hipR.position.copy(v('hipR')); P.kneeR.position.copy(d('kneeR', 'hipR'));
+  P.upperBody.position.copy(v('waist'));
+  let headBone = P.headPivot; if (!headBone) { headBone = new THREE.Group(); P.upperBody.add(headBone); } headBone.position.copy(d('neck', 'waist'));
+  const handOf = side => P['elbow' + side].children.find(c => c.type === 'Group');
+  for (const side of ['L', 'R']) { P['shoulder' + side].position.copy(d('shoulder' + side, 'waist')); P['elbow' + side].position.copy(d('elbow' + side, 'shoulder' + side)); const hand = handOf(side); if (hand) hand.position.copy(d('wrist' + side, 'elbow' + side)); }
+  const bones = [g, P.upperBody, headBone, P.hipL, P.kneeL, P.hipR, P.kneeR, P.shoulderL, P.elbowL, handOf('L'), P.shoulderR, P.elbowR, handOf('R')];   // RealSkin.BONES order
+  g.updateMatrixWorld(true);
+  const m = new THREE.MeshPhongMaterial({ map: R.tex, shininess: 14, specular: 0x2a2a2a });
+  const sm = new THREE.SkinnedMesh(R.geo, m); sm.frustumCulled = false; sm.castShadow = true; g.add(sm); sm.bind(new THREE.Skeleton(bones));
+  P.realMesh = sm; g.userData.real = name; return true;
+}
+BV.realRig = { load: loadRealRig, wear: wearRealRig, loaded: () => [...REAL_RIGS.keys()] };
+// the demo switch: ?real (or localStorage bv-real) dresses arena teams in the real figures — AZURE knights, CRIMSON centurions
+const REAL_ON = /[?&]real\b/.test(location.search) || (() => { try { return localStorage.getItem('bv-real') === '1'; } catch (e) { return false; } })();
+const REAL_TEAM = ['knight', 'centurion', 'knight', 'centurion', 'knight', 'centurion'];
+if (REAL_ON) Promise.all(['knight', 'centurion'].map(loadRealRig)).then(() => { BV.realReady = true; console.log('[real] rigs ready'); }, e => console.error('[real] load failed', e));
+
 
 // ---------- Cavalry builder ----------
 // A horseman = the REAL humanoid rig (so every pose/swing works unchanged) seated astride a
@@ -16485,12 +16628,14 @@ const AF_ARCH = {
   archer:    { label: 'archer',    weapon: 'bow',   hp: 90,  poise: 40, move: 1.05, dmg: 1.0,  scale: 0.98, heavyBias: 0.1,  block: 0.2,  dodge: 0.4,  circ: 0.5,  reach: 0,   shield: true,  bow: true  },
   rider:     { label: 'rider',     weapon: 'horse', hp: 150, poise: 80, move: 1.0,  dmg: 1.0,  scale: 1.0,  heavyBias: 0.2,  block: 0.2,  dodge: 0.1,  circ: 0.3,  reach: 0,   shield: true,  bow: true  },
 };
-// a village skirmish is mostly plain swordsmen; a legion fields ranks of archers and wings of horse —
-// the mix below slides from one to the other as the roster grows (k: 0 at a handful a side, 1 by ~40)
+// a village skirmish is mostly swords with a few bows behind them; a legion fields deep ranks of archers and
+// wings of horse — the mix below slides from one to the other as the roster grows (k: 0 at a handful a side,
+// 1 by ~40). Archers are a QUARTER of a small host and nearly a third of a big one: a rank of bowmen standing
+// off behind the line is what the user wants to SEE, and one archer in eight was invisible in the press.
 function afArchWeights(per) {
   const k = clamp((per - 3) / 40, 0, 1);
-  return [['swordsman', lerp(30, 19, k)], ['brute', lerp(15, 13, k)], ['duelist', lerp(15, 9, k)],
-          ['guardsman', lerp(15, 15, k)], ['archer', lerp(15, 22, k)], ['rider', lerp(10, 22, k)]];
+  return [['swordsman', lerp(24, 15, k)], ['brute', lerp(13, 11, k)], ['duelist', lerp(13, 8, k)],
+          ['guardsman', lerp(14, 14, k)], ['archer', lerp(26, 32, k)], ['rider', lerp(10, 20, k)]];
 }
 function afRollArch(r, allowRider, per) {
   const table = afArchWeights(per || 8); let tot = 0; for (const [k, w] of table) if (k !== 'rider' || allowRider) tot += w;
@@ -16553,7 +16698,7 @@ function afHillY(x, z) {                                    // the mounds' heigh
 }
 function afHillK(x, z) { let k = 0; for (const H of AF.terr.hills) { const dx = x - H.x, dz = z - H.z, u = (dx * H.c + dz * H.s) / H.rx, v = (-dx * H.s + dz * H.c) / H.rz, q = u * u + v * v; if (q < 1) k = Math.max(k, 1 - q); } return k; }   // 0..1: how far up a hill (for the ground's colour)
 function afMusterZones() {                                  // where nothing may stand: each team's muster block (as afPlanTeams and the intro lay it) and its gate corridor
-  const per = AF.cfg.per, files = clamp(Math.round(Math.sqrt(per * 2.3)), 4, 26), halfW = (Math.min(files, per) - 1) / 2 * 2.3 + 3.5 + 4, depth = Math.ceil(per / files) * 2.6 + 8;
+  const per = AF.cfg.per, files = clamp(Math.round(Math.sqrt(per * 2.3)), 4, 26), halfW = (Math.min(files, per) - 1) / 2 * 2.3 + 3.5 + 4, depth = Math.ceil(per / files) * 2.6 + AF_TACT.bowGap + 10;   // (+ the archers' block behind the swords)
   const zones = [];
   for (let t = 0; t < AF.cfg.teams; t++) { const sp = afSpawn(t, AF.cfg.teams), F = afGateFrame(t); zones.push({ x: sp.cx, z: sp.cz, r: Math.max(halfW, depth * 0.6), gx: F.gx, gz: F.gz, half: Math.max(AF_INTRO.gateW / 2 + 3, halfW * 0.6) }); }
   return zones;
@@ -17084,8 +17229,8 @@ function afIntroLens(I, rnd) {
     return shot(dur, ts, (q, dt) => { const f = fwd(b), ah = lerp(5.2, 4.5, q), px = b.x + f.fx * ah + f.rx * side, pz = b.z + f.fz * ah + f.rz * side;
       afIntroCam(px, gy(px, pz) + (b.mounted ? 2.6 : 1.5), pz, b.x, gy(b.x, b.z) + (b.mounted ? 3.1 : AF_INTRO.chest + 0.2), b.z, 42, dt * 10); }, null, starCap(b)); };
   // the STAR in profile: a dolly beside him, level with his chest
-  L.profile = (b, dur, ts) => { const side = sideOf(), dist = b.mounted ? 6.5 : 5.2;
-    return shot(dur, ts, (q, dt) => { const f = fwd(b), ah = lerp(3.8, 1.2, q), px = b.x + f.fx * ah + f.rx * side * dist, pz = b.z + f.fz * ah + f.rz * side * dist;
+  L.profile = (b, dur, ts) => { const side = sideOf(), dist = b.mounted ? 5.5 : 4.2;   // (inside the swing of the open door, past its tip)
+    return shot(dur, ts, (q, dt) => { const f = fwd(b), ah = lerp(4.6, 2.2, q), px = b.x + f.fx * ah + f.rx * side * dist, pz = b.z + f.fz * ah + f.rz * side * dist;
       afIntroCam(px, gy(px, pz) + (b.mounted ? 2.4 : 1.8), pz, b.x, gy(b.x, b.z) + (b.mounted ? 2.8 : AF_INTRO.chest), b.z, 38, dt * 10); }, null, starCap(b)); };
   // BACKLIT: the sun behind him, low and wide, the lens looking up into the light
   L.backlit = (b, dur, ts) => { const sx = sun.position.x, sz = sun.position.z, sl = Math.hypot(sx, sz) || 1, hx = sx / sl, hz = sz / sl, side = sideOf() * 1.2;
@@ -17339,6 +17484,7 @@ function afMakeBody(entry, idx, r) {
   const rigOpts = { hero: entry.kind !== 'npc' || !big, both: A.bow, plume: G && G.plume != null ? G.plume : AF_TEAM_HEX[entry.t] }; // a hundred capes would melt a phone: only the humans dress up in a big fight
   const hsz = G.horse && AF_LOOK.horse[gear.horse] ? AF_LOOK.horse[gear.horse].scale : 1;   // a nag is small, a warhorse big
   const h = mounted ? buildCavalry(td.pal, A.scale * hsz, 'sword', rigOpts) : buildHumanoid(td.pal, A.scale, A.bow ? weapon : weapon, rigOpts); const group = h.group || h;
+  if (REAL_ON && !mounted && BV.realReady) wearRealRig(h, REAL_TEAM[entry.t % REAL_TEAM.length] || 'knight');   // the real-figure demo
   if (h.parts.shield) { h.parts.shield.visible = A.shield && weapon !== 'bow'; if (A.bigShield) h.parts.shield.scale.set(1.3, 1.3, 1.3); }
   group.rotation.order = 'YXZ';                              // yaw first, then a body-local tilt/roll (somersaults, crumples)
   const sp = afSpawn(entry.t, AF.cfg.teams), rgx = -Math.cos(sp.yaw), rgz = Math.sin(sp.yaw), so = afSlotOffset(entry.s, AF.cfg.per), off = so.right, back = so.back * (mounted ? 1.3 : 1);
@@ -17794,9 +17940,10 @@ function afDrive(b, dt, sim) {
   if (b.trampleT > 0) b.trampleT -= dt;
   if (!b.mounted) b.yaw = angleLerp(b.yaw, I.yaw, clamp(dt * (human ? 14 : 9), 0, 1));
   else {
-    const maxYaw = lerp(MOUNT.turnStand, MOUNT.turnFull, b.sp01) * (1 - 0.35 * (b.gallop || 0)) * dt;
+    const bog = 1 / (1 + 0.6 * afBog(b));                  // (hemmed in by men, the horse can't wheel either)
+    const maxYaw = lerp(MOUNT.turnStand, MOUNT.turnFull, b.sp01) * (1 - 0.35 * (b.gallop || 0)) * bog * dt;
     if (I.steer != null) {                                   // a player: the reins turn the horse (a touch nimbler than the herd's — ~1 rad/s at the gallop), the aim is the rider's
-      b.yaw -= clamp(I.steer, -1, 1) * lerp(2.4, MOUNT.turnFull * 1.6, b.sp01) * (1 - 0.25 * (b.gallop || 0)) * dt;
+      b.yaw -= clamp(I.steer, -1, 1) * lerp(2.4, MOUNT.turnFull * 1.6, b.sp01) * (1 - 0.25 * (b.gallop || 0)) * bog * dt;
       if (!b.atk) b.aimYaw = I.yaw;
     }
     else b.yaw += clamp(angleDelta(b.yaw, I.yaw), -maxYaw, maxYaw);
@@ -17899,37 +18046,43 @@ function afCape(b, p, dt, fwd, sp) {
 }
 // RIDING: the stick's forward component is the throttle along the facing; momentum is dragged onto the facing
 // (hooves grip, no strafing); the gait clock runs on the horse; at speed the horse TRAMPLES foot soldiers it runs into.
+// BOGGED: a slow horse in a press is held by the men around it — the count of bodies leaning on it (afShove) times how
+// slow it is. Each one costs the horse throttle, drag and the turn; three men and a walking horse is stuck fast until
+// the rider cuts his way clear or the men are pushed off. At the canter the press hardly counts (that's a charge).
+function afBog(b) { return (b.press || 0) * clamp((0.8 - (b.sp01 || 0)) / 0.45, 0, 1); }
 function afRide(b, dt, I, mm, canMove, sim) {
   const F = AF_F, base = F.move * F.horseSpeed * (b.moveMul || 1) * (b.horseMul || 1), sp = Math.hypot(b.vx, b.vz), sp01 = clamp(sp / base, 0, 1);
+  const bog = afBog(b);
+  if (bog > 0) { const drag = Math.pow(0.15, dt * bog); b.vx *= drag; b.vz *= drag; }   // (each man on it takes ~85% of its way per second)
   if (sim && sp > 0.4) b.rideT = (b.rideT || 0) + dt;      // (the riding skill: time in the saddle at a walk or better)
   const fx = Math.sin(b.yaw), fz = Math.cos(b.yaw);
   const thr = I.thr != null ? clamp(I.thr, -0.45, 1) : mm > 1e-3 ? clamp((I.mx * fx + I.mz * fz) / Math.max(mm, 1e-3) * Math.min(1, mm), -0.45, 1) : 0;
   // THE GALLOP: hold the horse at the top of its canter and it finds another gear — a surge to half again the
   // speed. It builds over about a second, and bleeds away when you ease off, load a swing, or haul the head round.
-  if (thr > 0.7 && sp > base * 0.85 && canMove && !b.charge) b.gallop = Math.min(1, (b.gallop || 0) + dt / 1.1);
+  if (thr > 0.7 && sp > base * 0.85 && canMove && !b.charge && bog < 0.3) b.gallop = Math.min(1, (b.gallop || 0) + dt / 1.1);
   else b.gallop = Math.max(0, (b.gallop || 0) - dt * (thr < 0.3 ? 1.6 : 0.6));
   if (b === AF.me) { if (b.gallop > 0.98 && !b._galloped) { b._galloped = true; addShake(0.07); afPopup(b.group.position, 'GALLOP', '#ffe089'); } else if (b.gallop < 0.5) b._galloped = false; }
   const top = base * (1 + 0.5 * b.gallop);
   b.sp01 = sp01; b.parts.mount.userData.rig.speed01 = clamp(sp / (base * 1.3), 0, 1);   // canter reads as a canter, full gait only at the gallop
-  if (Math.abs(thr) > 0.05 && canMove) afMove(b, fx, fz, top * thr * (b.blocking || b.charge ? 0.55 : 1), dt);
+  if (Math.abs(thr) > 0.05 && canMove) afMove(b, fx, fz, top * thr * (b.blocking || b.charge ? 0.55 : 1) / (1 + 1.5 * bog), dt);   // (heels in a press barely move it)
   if (sp > 0.05) { const fwd = b.vx * fx + b.vz * fz, keep = Math.max(fwd, sp * 0.25), gk = clamp(dt * MOUNT.grip, 0, 1); b.vx = lerp(b.vx, fx * keep, gk); b.vz = lerp(b.vz, fz * keep, gk); }
   b.moving = sp > 0.4;
   // the hooves keep time with the ground: stride rate follows speed (a ~4-unit stride), so a gallop is a blur, not a jog
   if (b.moving) { b.gait = GAIT.run; b.phase += dt * (3 + 2.4 * sp); walkLegs(b.parts, b.phase, 0.6); } else restLegs(b.parts, dt, true);
-  if (sim && sp01 > 0.3) {                                 // RIDDEN DOWN: a horse at speed goes THROUGH men on foot
-    const reach = 1.6 + 0.8 * sp01 + 0.4 * b.gallop;
+  if (sim && sp01 > 0.45) {                                // RIDDEN DOWN: a horse at speed goes THROUGH men on foot (a walking one is just a big body — the press holds it)
+    const reach = 1.6 + 0.8 * sp01 + 0.4 * b.gallop, q = clamp((sp01 - 0.45) / 0.35, 0, 1);   // q: how much of a canter this is — the shove scales with it
     for (const o of AF.bodies) {
       if (o.dead || o === b || o.mounted || o.trampleT > 0) continue;
       const dx = o.x - b.x, dz = o.z - b.z, dd = Math.hypot(dx, dz), square = (dx * fx + dz * fz) / (dd || 1); if (dd > reach || square < 0.1 || Math.abs(dx * fz - dz * fx) > 1.6) continue;   // (past 1.6 off the line the horse misses him)
       const side = (dx * fz - dz * fx) >= 0 ? 1 : -1, rgx = fz * side, rgz = -fx * side;   // which side of the horse's line he's on — he goes that way
       o.trampleT = 1.2;
-      if (o.team === b.team) { o.vx += rgx * 6; o.vz += rgz * 6; continue; }            // a friend is shouldered aside, not ridden down
-      // a GOOD HIT puts a man on the ground: near the gallop AND square on. A cantering horse, or a glancing brush at
-      // speed, only shoves him — he staggers a step and keeps his feet (a walk past the line used to floor everyone)
-      const hard = sp01 > 0.7 && Math.abs(dx * fz - dz * fx) < 0.75;   // (square on = within the horse's own chest width of its line; a clip off the shoulder is a shove)
+      if (o.team === b.team) { o.vx += rgx * 6 * q; o.vz += rgz * 6 * q; continue; }    // a friend is shouldered aside, not ridden down
+      // a GOOD HIT puts a man on the ground: a FULL canter or the gallop AND square on. A trotting horse, or a glancing
+      // brush at speed, only shoves him — he staggers a step and keeps his feet (a walk past the line used to floor everyone)
+      const hard = sp01 > 0.8 && Math.abs(dx * fz - dz * fx) < 0.75;   // (square on = within the horse's own chest width of its line; a clip off the shoulder is a shove)
       if (!hard) {
-        afDamage(o, 3 + 5 * sp01, b, false, false, false, 0.3);
-        if (!o.dead) { o.flinch = Math.max(o.flinch, 0.28); o.vx += rgx * (4 + 3 * sp01) + fx * 2; o.vz += rgz * (4 + 3 * sp01) + fz * 2; afPopup(o.group.position, 'shoved', '#d8c8a8'); }
+        afDamage(o, 2 + 6 * q, b, false, false, false, 0.15 * q);
+        if (!o.dead) { if (q > 0.3) o.flinch = Math.max(o.flinch, 0.28); o.vx += rgx * (2 + 5 * q) + fx * (1 + q); o.vz += rgz * (2 + 5 * q) + fz * (1 + q); afPopup(o.group.position, 'shoved', '#d8c8a8'); }
         b.vx *= 0.96; b.vz *= 0.96; continue;
       }
       const braced = o.arch === 'guardsman' && o.blocking && ((b.x - o.x) * Math.sin(o.yaw) + (b.z - o.z) * Math.cos(o.yaw)) / (dd || 1) > 0.3;
@@ -18165,7 +18318,8 @@ function afStepArrows(dt, sim) {
    archers a rank behind, riders on the wing), then issues ORDERS through the fight: form up, advance as a line
    at a walk, release the charge at contact, send the riders wide to flank, regroup when the line has scattered,
    and fall back to a wall when losing badly. Humans are never commanded, but see their captain's order. ---- */
-const AF_TACT = { formSecs: 1.6, walk: 0.62, contact: 10, regroupAfter: 8, rallyRatio: 0.45, rallySecs: 3.5, pursueRatio: 1.7, engageMin: 16, engageMax: 60, riderEngageMul: 1.7, wpTimeout: 6 };
+const AF_TACT = { formSecs: 1.6, walk: 0.62, contact: 10, regroupAfter: 8, rallyRatio: 0.45, rallySecs: 3.5, pursueRatio: 1.7, engageMin: 16, engageMax: 60, riderEngageMul: 1.7, wpTimeout: 6,
+  bowGap: 6, bowNear: 11, bowFar: 22, bowShot: 28, bowRoom: 5.5 };   // archers: the gap behind the swords at muster; give ground inside bowNear, close beyond bowFar, loose out to bowShot, and keep bowRoom of clear sand from their own swordsmen
 function afClampPit(x, z, margin) { const d = Math.hypot(x, z); const max = AF_F.radius - margin; if (d > max && d > 1e-4) { const k = max / d; x *= k; z *= k; } return AF.terr && AF.terr.rocks.length ? afFreePoint(x, z, 1.2) : { x, z }; }
 function afPlanTeams() {
   AF.teams = [];
@@ -18186,8 +18340,10 @@ function afPlanTeams() {
       const rk = Math.floor(i / files), nFiles = Math.min(files, ordered.length - rk * files);
       b.slot = { right: (i % files - (nFiles - 1) / 2) * 2.3, back: rk * 2.6 };
     });
-    const rw = Math.max(1, Math.ceil(rear.length / Math.max(1, Math.ceil(rear.length / 8))));
-    rear.forEach((b, i) => { b.slot = { right: ((i % rw) - (Math.min(rw, rear.length) - 1) / 2) * 2.4, back: 3 + Math.floor(i / rw) * 2.4 }; });
+    // the ARCHERS: their own block a clear gap behind the last rank of swords (AF_TACT.bowGap), so the bowmen are
+    // a visibly separate line that looses over the melee, not a fourth rank swallowed by it the moment it closes
+    const rw = Math.max(1, Math.ceil(rear.length / Math.max(1, Math.ceil(rear.length / 8)))), meleeDepth = ordered.length ? Math.ceil(ordered.length / files) * 2.6 : 0;
+    rear.forEach((b, i) => { b.slot = { right: ((i % rw) - (Math.min(rw, rear.length) - 1) / 2) * 2.4, back: meleeDepth + AF_TACT.bowGap + Math.floor(i / rw) * 2.4 }; });
     const halfW = (Math.min(files, ordered.length) - 1) / 2 * 2.3 + 3.5;
     riders.forEach((b, i) => { b.slot = { right: (i % 2 ? -1 : 1) * (halfW + Math.floor(i / 2) * 2.6), back: 1.5 }; });
     const archers = rear.length, total = npcs.length;
@@ -18318,11 +18474,22 @@ function afSepFrom(b, R) {                                  // soft spacing from
 // an NPC's swing is a HOLD like anyone's: a tap for a light, a long visible load for a heavy (so you can read it and roll)
 // an archer giving ground backs away from EVERY foe near him (weighted by closeness) and leans toward his own side —
 // straight away from his target used to walk him into the next team in a free-for-all
-function afArcherRetreat(b, T) {
-  let rx = 0, rz = 0;
-  for (const o of AF.bodies) { if (o.dead || o.team === b.team) continue; const ox = b.x - o.x, oz = b.z - o.z, d2 = ox * ox + oz * oz; if (d2 > 100 || d2 < 1e-4) continue; const d = Math.sqrt(d2), w = 1 / Math.max(1, d); rx += ox / d * w; rz += oz / d * w; }
-  if (T && T.center) { const cx = T.center.x - b.x, cz = T.center.z - b.z, cd = Math.hypot(cx, cz); if (cd > 3) { rx += cx / cd * 0.35; rz += cz / cd * 0.35; } }
+function afArcherRetreat(b, T) {                            // give ground: away from every foe within bowNear+3, and away from the ENEMY's mass (toward our own
+  let rx = 0, rz = 0; const R2 = (AF_TACT.bowNear + 3) ** 2;   // centre was wrong once the lines had met — it walked the bowmen straight into their own melee)
+  for (const o of AF.bodies) { if (o.dead || o.team === b.team) continue; const ox = b.x - o.x, oz = b.z - o.z, d2 = ox * ox + oz * oz; if (d2 > R2 || d2 < 1e-4) continue; const d = Math.sqrt(d2), w = 1 / Math.max(1, d); rx += ox / d * w; rz += oz / d * w; }
+  if (T && T.enemyCenter) { const cx = b.x - T.enemyCenter.x, cz = b.z - T.enemyCenter.z, cd = Math.hypot(cx, cz); if (cd > 1) { rx += cx / cd * 0.5; rz += cz / cd * 0.5; } }
+  else if (T && T.center) { const cx = T.center.x - b.x, cz = T.center.z - b.z, cd = Math.hypot(cx, cz); if (cd > 3) { rx += cx / cd * 0.35; rz += cz / cd * 0.35; } }
   const m = Math.hypot(rx, rz) || 1; return [rx / m * 0.8, rz / m * 0.8];
+}
+// ROOM: an archer keeps bowRoom of clear sand between himself and his own swordsmen (and riders), so the bows stay a
+// line of their own behind the fight instead of being drawn into the scrum by the separation nudges alone
+function afArcherRoom(b) {
+  let sx = 0, sz = 0; const R = AF_TACT.bowRoom, g = AF._grid;
+  const one = o => { if (o === b || o.dead || o.team !== b.team || (o.weapon === 'bow' && !o.mounted)) return; const dx = b.x - o.x, dz = b.z - o.z, d2 = dx * dx + dz * dz; if (d2 > R * R || d2 < 1e-4) return; const d = Math.sqrt(d2), w = (1 - d / R) * 0.9; sx += dx / d * w; sz += dz / d * w; };
+  if (!g) { for (const o of AF.bodies) one(o); }
+  else { const rad = Math.max(1, Math.ceil(R / _AF_CELL)), gx = b._gx != null ? b._gx : Math.floor(b.x / _AF_CELL), gz = b._gz != null ? b._gz : Math.floor(b.z / _AF_CELL);
+    for (let ox = -rad; ox <= rad; ox++) for (let oz = -rad; oz <= rad; oz++) { const arr = g.get((gx + ox) + ':' + (gz + oz)); if (arr) for (const o of arr) one(o); } }
+  const m = Math.hypot(sx, sz); if (m > 1) { sx /= m; sz /= m; } return [sx, sz];
 }
 function afAiSwing(b, heavy) { b.aiHoldT = heavy ? AF_F.chargeMax + 0.05 : 0.06; b.guardUp = Math.random() < 0.15 + b.skill * 0.85; } // (guardUp: does he raise the guard again between blows?)
 function afThink(b, dt) {
@@ -18345,7 +18512,8 @@ function afThink(b, dt) {
   // reaches him (the battle editor's leash rule); riders ride to their flanking mark; a fallback is a guarded walk home
   const T = AF.teams && AF.teams[b.team];
   const ord = T ? (b.mounted ? T.riderOrder : T.order) : 'charge';
-  if (ord !== 'charge' && !busy) {
+  const bow = b.weapon === 'bow' && !b.mounted;
+  if (ord !== 'charge' && !busy && !(bow && d < AF_TACT.bowNear)) {   // (an archer with a foe inside bowNear leaves his place and gives ground — below)
     if (ord === 'flank' && T.wp) {
       const mk = b.flankMark || T.wp, wx = mk.x - b.x, wz = mk.z - b.z, wd = Math.hypot(wx, wz) || 1e-4;
       if (d > 8) {                                           // (a foe riding at the squadron is met, not watched)
@@ -18357,11 +18525,11 @@ function afThink(b, dt) {
       const slot = afFormationSlot(T, b), slx = slot.x - b.x, slz = slot.z - b.z, sd = Math.hypot(slx, slz);
       const reach = F.reach + (b.reachBonus || 0) + (b.mounted ? F.horseReach : 0);
       const inFace = d <= reach * 1.25, pressing = d < 4 && ord === 'advance';
-      if (ord === 'fallback') { if (sd > 1) { I.mx = slx / sd + sx; I.mz = slz / sd + sz; } I.yaw = d < 9 ? Math.atan2(dx, dz) : T.face; I.block = d < 4.5 && b.weapon !== 'bow'; if (b.weapon === 'bow' && d > 6 && d < 22 && b.shotCd <= 0) { b.aiHoldT = 0.45; b.shotCd = 1.9 + Math.random(); } b.shotCd -= dt; return; }
+      if (ord === 'fallback') { if (sd > 1) { I.mx = slx / sd + sx; I.mz = slz / sd + sz; } I.yaw = d < 9 ? Math.atan2(dx, dz) : T.face; I.block = d < 4.5 && b.weapon !== 'bow'; if (b.weapon === 'bow' && d > 6 && d < AF_TACT.bowShot && b.shotCd <= 0) { b.aiHoldT = 0.45; b.shotCd = 1.9 + Math.random(); } b.shotCd -= dt; return; }
       if (!inFace && !pressing) {
         if (sd > 0.5) { const pace = ord === 'advance' ? AF_TACT.walk + 0.15 : 1; I.mx = slx / sd * pace + sx * 0.5; I.mz = slz / sd * pace + sz * 0.5; }
         I.yaw = d < 12 ? Math.atan2(dx, dz) : T.face;
-        if (b.weapon === 'bow') { b.shotCd -= dt; if (d > 6 && d < 22 && b.shotCd <= 0 && !busy) { b.aiHoldT = 0.35 + b.skill * 0.4; b.shotCd = 1.7 + Math.random() * 1.2; } }
+        if (b.weapon === 'bow') { b.shotCd -= dt; if (d > 6 && d < AF_TACT.bowShot && b.shotCd <= 0 && !busy) { b.aiHoldT = 0.35 + b.skill * 0.4; b.shotCd = 1.7 + Math.random() * 1.2; } }
         return;
       }
     }
@@ -18417,10 +18585,10 @@ function afThink(b, dt) {
   }
   if (b.weapon === 'bow') {                                  // archers keep their distance, loose, and drift sideways between shots
     b.shotCd -= dt;
-    const canShoot = b.shotCd <= 0 && !busy;
-    if (d < 7) { const [rx, rz] = afArcherRetreat(b, T); I.mx = rx + sx * 0.5; I.mz = rz + sz * 0.5; if (canShoot && d > 3) { b.aiHoldT = 0.3; b.shotCd = 1.1 + Math.random() * 0.8; } } // give ground — but a swordsman who keeps coming gets shot in the face
-    else if (d > 14) { I.mx = ux + sx; I.mz = uz + sz; if (canShoot && d < 22) { b.aiHoldT = 0.35 + b.skill * 0.4; b.shotCd = 1.7 + Math.random() * 1.2 * (1.3 - b.skill * 0.5); } } // close to a decisive range, loosing on the way
-    else { I.mx = tx * 0.25 + sx; I.mz = tz * 0.25 + sz; if (canShoot) { b.aiHoldT = 0.35 + b.skill * 0.4; b.shotCd = 1.7 + Math.random() * 1.2 * (1.3 - b.skill * 0.5); } } // a longer draw for the better archer
+    const canShoot = b.shotCd <= 0 && !busy, TT = AF_TACT, [wx, wz] = afArcherRoom(b);   // (room: away from his own swordsmen — a bowman in the press is neither seen nor useful)
+    if (d < TT.bowNear) { const [rx, rz] = afArcherRetreat(b, T); I.mx = rx + sx * 0.5 + wx; I.mz = rz + sz * 0.5 + wz; if (canShoot && d > 3) { b.aiHoldT = 0.3; b.shotCd = 1.1 + Math.random() * 0.8; } } // give ground — but a swordsman who keeps coming gets shot in the face
+    else if (d > TT.bowFar) { I.mx = ux * 0.8 + sx + wx; I.mz = uz * 0.8 + sz + wz; if (canShoot && d < TT.bowShot) { b.aiHoldT = 0.35 + b.skill * 0.4; b.shotCd = 1.7 + Math.random() * 1.2 * (1.3 - b.skill * 0.5); } } // close to a decisive range, loosing on the way
+    else { I.mx = tx * 0.25 + sx + wx; I.mz = tz * 0.25 + sz + wz; if (canShoot) { b.aiHoldT = 0.35 + b.skill * 0.4; b.shotCd = 1.7 + Math.random() * 1.2 * (1.3 - b.skill * 0.5); } } // a longer draw for the better archer
     return;
   }
   // hurt and pressed: back off toward the team, guard up, and let the poise come back
@@ -18541,22 +18709,31 @@ function afTick(dt) {
 // nobody overlaps — they shove (heavier when it's you, so you can wade through a press)
 function afSeparate() {
   const g = AF._grid;
-  if (!g) { const L = AF.bodies; for (let i = 0; i < L.length; i++) { const b = L[i]; if (b.dead) continue; for (let j = i + 1; j < L.length; j++) { const o = L[j]; if (o.dead) continue;
-    const R = 1.1 + (b.mounted ? 0.7 : 0) + (o.mounted ? 0.7 : 0), R2 = R * R; const dx = o.x - b.x, dz = o.z - b.z, d2 = dx * dx + dz * dz; if (d2 >= R2 || d2 < 1e-6) continue;
-    const d = Math.sqrt(d2), ov = R - d, nx = dx / d, nz = dz / d, wb = b.mounted && b.sp01 > 0.45 ? 20 : b.ctrl === 'ai' ? 1 : 2, wo = o.mounted && o.sp01 > 0.45 ? 20 : o.ctrl === 'ai' ? 1 : 2, tot = wb + wo;
-    b.x -= nx * ov * (wo / tot); b.z -= nz * ov * (wo / tot); o.x += nx * ov * (wb / tot); o.z += nz * ov * (wb / tot); } } return; }
+  for (const b of AF.bodies) b.press = 0;                   // (how many men are pressing on a horse this tick — afRide bogs it down)
+  if (!g) { const L = AF.bodies; for (let i = 0; i < L.length; i++) { const b = L[i]; if (b.dead) continue; for (let j = i + 1; j < L.length; j++) { const o = L[j]; if (!o.dead) afShove(b, o); } } return; }
   for (const b of AF.bodies) {
     if (b.dead) continue;
     for (let ox = -1; ox <= 1; ox++) for (let oz = -1; oz <= 1; oz++) {
       const arr = g.get((b._gx + ox) + ':' + (b._gz + oz)); if (!arr) continue;
-      for (const o of arr) {
-        if (o.idx <= b.idx) continue;                        // handle each pair once
-        const R = 1.1 + (b.mounted ? 0.7 : 0) + (o.mounted ? 0.7 : 0), R2 = R * R;
-        const dx = o.x - b.x, dz = o.z - b.z, d2 = dx * dx + dz * dz; if (d2 >= R2 || d2 < 1e-6) continue;
-        const d = Math.sqrt(d2), ov = R - d, nx = dx / d, nz = dz / d, wb = b.mounted && b.sp01 > 0.45 ? 20 : b.ctrl === 'ai' ? 1 : 2, wo = o.mounted && o.sp01 > 0.45 ? 20 : o.ctrl === 'ai' ? 1 : 2, tot = wb + wo;
-        b.x -= nx * ov * (wo / tot); b.z -= nz * ov * (wo / tot); o.x += nx * ov * (wb / tot); o.z += nz * ov * (wb / tot);
-      }
+      for (const o of arr) if (o.idx > b.idx) afShove(b, o);   // handle each pair once
     }
+  }
+}
+// a horse's weight in a shove is its SPEED: at the canter it is a battering ram nobody holds, at a walk it is one more
+// body in the press — men hold it, and every man it leans on takes the way off it (a horse can't push through a
+// crowd on momentum it doesn't have; before this its velocity stayed at the canter while the crowd held it still,
+// so a horse creeping into a line still "trampled" everyone it brushed)
+function afHorseWeight(b) { return b.mounted ? 1.6 + 18.4 * clamp((b.sp01 - 0.45) / 0.35, 0, 1) : b.ctrl === 'ai' ? 1 : 2; }
+function afShove(b, o) {
+  const R = 1.1 + (b.mounted ? 0.7 : 0) + (o.mounted ? 0.7 : 0), R2 = R * R;
+  const dx = o.x - b.x, dz = o.z - b.z, d2 = dx * dx + dz * dz; if (d2 >= R2 || d2 < 1e-6) return;
+  const d = Math.sqrt(d2), ov = R - d, nx = dx / d, nz = dz / d, wb = afHorseWeight(b), wo = afHorseWeight(o), tot = wb + wo;
+  b.x -= nx * ov * (wo / tot); b.z -= nz * ov * (wo / tot); o.x += nx * ov * (wb / tot); o.z += nz * ov * (wb / tot);
+  if (b.mounted !== o.mounted) {                              // horse against a man on foot: the man bleeds the horse's speed into him
+    const h = b.mounted ? b : o, m = b.mounted ? o : b, hx = b.mounted ? nx : -nx, hz = b.mounted ? nz : -nz;   // (hx,hz): from the horse toward the man
+    const slow = clamp((0.8 - h.sp01) / 0.4, 0, 1), into = h.vx * hx + h.vz * hz;
+    if (into > 0) { const k = 0.08 + 0.92 * slow; h.vx -= hx * into * k; h.vz -= hz * into * k; }   // a charge loses a little to each man; a walk loses all of it
+    h.press += m.team === h.team ? 0.5 : 1;
   }
 }
 function afStandings() {
@@ -19664,6 +19841,7 @@ function afTitlePresence() {
 BV.arena = (cfg) => { afOpenLobby('host'); if (cfg && cfg.intro != null) AF.introOff = !cfg.intro; if (cfg && cfg.film) AF.introFilm = cfg.film; if (cfg && AF.lobby) { if (cfg.teams) AF.lobby.teams = clamp(cfg.teams, AF_LIM.teamsMin, AF_LIM.teamsMax); if (cfg.per) AF.lobby.per = clamp(cfg.per, AF_LIM.perMin, AF_LIM.perMax); if (cfg.xp) AF.lobby.xp = cfg.xp; afResize(AF.lobby);
   if (cfg.npcXp) AF.lobby.npcXp = cfg.npcXp; if (cfg.arch) AF.lobby.npcArch = AF.lobby.npcArch.map(row => row.map(() => cfg.arch)); afLobbyRender(); if (cfg.start) afStartFight(); } return BV.arenaStatus(); }; // (npcXp / arch: test overrides)
 BV.arenaStart = () => { afStartFight(); return BV.arenaStatus(); };
+BV.arenaFrame = (now) => { if (AF.on) afFrame(now, true); return AF.phase; };   // test: render one arena frame at this clock (no rAF) — for recording the entrance
 BV.arenaHorseHit = (id, amt) => { const h = AF.horses[id]; if (h) afDamageHorse(h, amt, AF.bodies.find(b => !b.dead && (!h.rider || b.team !== h.rider.team)) || AF.bodies[0], false); return BV.arenaHorses(); };   // test: wound a horse
 BV.arenaKill = (idx) => { const b = AF.bodies[idx]; if (b && !b.dead) afKill(b, null); return BV.arenaStatus(); };   // test: fell a man
 BV.previewPose = (name) => { const P = AF.preview; if (P && P.anim) { setPose(P.anim, name, 0.01); updateAnimator(P.anim, 1); } return !!P; };   // test: pose the market figure
@@ -19681,6 +19859,22 @@ BV.arenaStatus = () => ({ on: AF.on, role: AF.role, phase: AF.phase, t: +AF.t.to
 BV.arenaIntro = (cmd) => { if (cmd === 'skip') afIntroSkip(); else if (typeof cmd === 'number' && AF.intro) { const I = AF.intro, n = clamp(cmd, 0, I.shots.length - 1); for (let k = I.i + 1; k < n; k++) if (I.shots[k].onStart) I.shots[k].onStart(); I.i = n; afIntroApplyShot(); } /* (a jump still fires the beats it skips over) */ else if (cmd && cmd.advance && AF.intro) { for (let t = 0; t < cmd.advance && AF.intro; t += 1 / 60) { afIntroStep(1 / 60); if (AF.intro) afIntroCamera(1 / 60); } } const I = AF.intro; return I ? { film: I.film, shot: I.i, of: I.shots.length, t: +I.t.toFixed(1), shotT: +I.shotT.toFixed(2), ts: AF.timeScale, released: I.released, cap: I.cap, stars: I.stars.map(a => a.map(b => b.name + ':' + b.xp)), gates: AF.gates.map(g => +g.open.toFixed(2)), march: AF.bodies.map(b => b.intro ? b.intro.phase[0] : '-').join('') } : { shot: -1, phase: AF.phase }; };   // test: the entrance (skip / jump to a shot / read it)
 BV.arenaStep = (steps = 60, dt = 1 / 60) => { if (AF.phase === 'intro') afIntroEnd(); if (AF.phase === 'countdown') { AF.phase = 'fight'; AF.countdown = 0; } for (let i = 0; i < steps; i++) afTick(dt); return BV.arenaStatus(); };
 BV.arenaInput = (patch) => { Object.assign(AF.locIn, patch || {}); return { ...AF.locIn }; };
+
+// BV.lineup(looks, teamIdx): stand one hero rig per look in a row in front of the camera (a showcase; BV.lineup() again clears)
+BV.lineup = (looks, teamIdx = 0, gap = 3.2) => {
+  if (BV._lineup) { scene.remove(BV._lineup); BV._lineup = null; if (!looks) return null; }
+  looks = looks || ['knight', 'sallet', 'legion', 'hoplite'];
+  const pal = (AF_TEAMS[teamIdx] && AF_TEAMS[teamIdx].pal) || AF_TEAMS[0].pal;
+  const grp = new THREE.Group(); const fwd = new THREE.Vector3(); camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
+  const right = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0)); const base = camera.position.clone().add(fwd.clone().multiplyScalar(11)); base.y = 0;
+  looks.forEach((look, i) => { const h = buildHumanoid(pal, 1, 'sword', { hero: true, look }); const p = base.clone().add(right.clone().multiplyScalar((i - (looks.length - 1) / 2) * gap));
+    h.group.position.copy(p); h.group.rotation.y = Math.atan2(camera.position.x - p.x, camera.position.z - p.z); h.group.userData.look = look; grp.add(h.group); });
+  scene.add(grp); BV._lineup = grp; BV.lineupSnap(); return grp;
+};
+BV.lineupSnap = () => {                                     // drop every figure of the lineup onto whatever ground is under it
+  const grp = BV._lineup; if (!grp) return; const rc = new THREE.Raycaster(); const others = scene.children.filter(o => o !== grp);
+  for (const c of grp.children) { rc.set(new THREE.Vector3(c.position.x, 40, c.position.z), new THREE.Vector3(0, -1, 0)); const hit = rc.intersectObjects(others, true).find(h => h.object.isMesh && !h.object.isSprite); if (hit) c.position.y = hit.point.y; }
+};
 BV.arenaShot = (w = 1280, h = 720) => {              // headless: render one frame at a fixed size (a hidden tab has none) and hand back a JPEG data URL
   const sz = renderer.getSize(new THREE.Vector2()), pr = renderer.getPixelRatio();
   renderer.setPixelRatio(1); renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();

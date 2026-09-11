@@ -16898,7 +16898,8 @@ function afDressGear(parts, gear, pal) {
   const bw = gear.bow && AF_LOOK.bow[gear.bow];
   if (parts.bow && bw) { parts.bow.scale.setScalar(bw.scale); parts.bow.traverse(c => { if (c.isMesh && c.geometry.type === 'TorusGeometry') c.material = mat(bw.wood, { smooth: true, shared: false }); }); }
 }
-// BUILD A SWORD in the hand: the group (its grip at the hand, blade up +y, the flat across z) is emptied and refilled
+// BUILD A SWORD in the hand: the group (its grip at the hand, blade up +y, the FLAT across x — the guard pose points local
+// z at the ground, so a flat or a curve across z would be seen edge-on) is emptied and refilled
 // from the spec — a plain straight blade, a curve of stacked slabs, a wavy flamberge, a thin rapier with a cup, a
 // broad cleaver, a greatsword with a fuller, a serrated edge; gold hilts and glowing steel for the rare ones.
 function afBuildSword(g, sw, tint) {
@@ -16915,23 +16916,23 @@ function afBuildSword(g, sw, tint) {
     if (sw.style === 'curved') { for (const sd of [-1, 1]) { const q = sphereMesh(0.05, hiltM, 6, 4); q.position.set(0.19 * sd, y0 + 0.02, 0.03); g.add(q); } } }
   const addTip = (y, rot) => { const tip = new THREE.Mesh(new THREE.ConeGeometry(w * 0.55, 0.2 + w * 0.5, 4), bladeM); tip.position.y = y; tip.rotation.y = Math.PI / 4; if (rot) tip.rotation.x = rot; tip.castShadow = true; g.add(tip); return tip; };
   if (sw.style === 'straight' || sw.style === 'great' || sw.style === 'serrated') {
-    const blade = boxMesh(t, len, w, bladeM); blade.position.y = y0 + len / 2 + 0.02; blade.castShadow = true; g.add(blade); addTip(y0 + len + 0.13 + w * 0.2);
-    if (sw.fuller) { const f = boxMesh(t * 1.2, len * 0.8, w * 0.22, mat(0x2a2a30, { shared: false })); f.position.y = y0 + len * 0.45; g.add(f); }
-    if (sw.style === 'serrated') for (let i = 0; i < 7; i++) { const th = new THREE.Mesh(new THREE.ConeGeometry(0.075, 0.2, 3), bladeM); th.position.set(0, y0 + 0.18 + i * (len - 0.3) / 6, w / 2 + 0.08); th.rotation.x = Math.PI / 2; g.add(th); }
-  } else if (sw.style === 'curved' || sw.style === 'wavy') {           // slabs stacked along a bend (or a zigzag), the flat growing toward the tip
-    const wavy = sw.style === 'wavy', N = wavy ? 9 : 7, seg = len / N; let y = y0 + 0.02, ang = 0, z = 0;
+    const blade = boxMesh(w, len, t, bladeM); blade.position.y = y0 + len / 2 + 0.02; blade.castShadow = true; g.add(blade); addTip(y0 + len + 0.13 + w * 0.2);
+    if (sw.fuller) { const f = boxMesh(w * 0.22, len * 0.8, t * 1.2, mat(0x2a2a30, { shared: false })); f.position.y = y0 + len * 0.45; g.add(f); }
+    if (sw.style === 'serrated') for (let i = 0; i < 7; i++) { const th = new THREE.Mesh(new THREE.ConeGeometry(0.075, 0.2, 3), bladeM); th.position.set(w / 2 + 0.08, y0 + 0.18 + i * (len - 0.3) / 6, 0); th.rotation.z = -Math.PI / 2; g.add(th); }
+  } else if (sw.style === 'curved' || sw.style === 'wavy') {           // slabs stacked along a bend (or a zigzag) across x, the flat growing toward the tip
+    const wavy = sw.style === 'wavy', N = wavy ? 9 : 7, seg = len / N; let y = y0 + 0.02, ang = 0, x = 0;
     for (let i = 0; i < N; i++) { const ww = wavy ? w * (1 - 0.3 * i / N) : w * (0.6 + 0.6 * i / N);
       ang = wavy ? (i % 2 ? -0.38 : 0.38) : ang + 0.12;      // a flamberge zigzags slab by slab; a scimitar keeps bending one way
-      const slab = boxMesh(t, seg * 1.15, ww, bladeM); slab.position.set(0, y + seg / 2 * Math.cos(ang), z + seg / 2 * Math.sin(ang) + (wavy ? 0 : ww * 0.2)); slab.rotation.x = ang; slab.castShadow = i < 3; g.add(slab);   // (+x rotation tips +y toward +z: slab and step agree)
-      y += seg * Math.cos(ang); z += wavy ? 0 : seg * Math.sin(ang); }
-    const tip = addTip(0, ang); tip.position.set(0, y + 0.12 * Math.cos(ang), z + 0.12 * Math.sin(ang) + (sw.style === 'curved' ? w * 0.2 : 0));
+      const slab = boxMesh(ww, seg * 1.15, t, bladeM); slab.position.set(x + seg / 2 * Math.sin(ang) + (wavy ? 0 : ww * 0.2), y + seg / 2 * Math.cos(ang), 0); slab.rotation.z = -ang; slab.castShadow = i < 3; g.add(slab);   // (−z rotation tips +y toward +x: slab and step agree)
+      y += seg * Math.cos(ang); x += wavy ? 0 : seg * Math.sin(ang); }
+    const tip = addTip(0, 0); tip.rotation.z = -ang; tip.position.set(x + 0.12 * Math.sin(ang) + (sw.style === 'curved' ? w * 0.2 : 0), y + 0.12 * Math.cos(ang), 0);
   } else if (sw.style === 'thin') {
     const blade = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.045, len, 6), bladeM); blade.position.y = y0 + len / 2 + 0.02; blade.castShadow = true; g.add(blade);
     const tip = new THREE.Mesh(new THREE.ConeGeometry(0.03, 0.14, 6), bladeM); tip.position.y = y0 + len + 0.09; g.add(tip);
   } else if (sw.style === 'cleaver') {                                   // a broad slab with a squared, upswept end
-    const blade = boxMesh(t, len, w, bladeM); blade.position.set(0, y0 + len / 2 + 0.02, w * 0.15); blade.castShadow = true; g.add(blade);
-    const nose = boxMesh(t, 0.34, w * 1.1, bladeM); nose.position.set(0, y0 + len + 0.12, w * 0.42); nose.rotation.x = -0.5; g.add(nose);
-    const hole = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, t * 1.3, 8), mat(0x1a1214, { shared: false })); hole.rotation.z = Math.PI / 2; hole.position.set(0, y0 + len - 0.1, w * 0.45); g.add(hole);
+    const blade = boxMesh(w, len, t, bladeM); blade.position.set(w * 0.15, y0 + len / 2 + 0.02, 0); blade.castShadow = true; g.add(blade);
+    const nose = boxMesh(w * 1.1, 0.34, t, bladeM); nose.position.set(w * 0.42, y0 + len + 0.12, 0); nose.rotation.z = 0.5; g.add(nose);
+    const hole = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, t * 1.3, 8), mat(0x1a1214, { shared: false })); hole.rotation.x = Math.PI / 2; hole.position.set(w * 0.45, y0 + len - 0.1, 0); g.add(hole);
   }
   g.scale.set(1, 1, 1);
 }

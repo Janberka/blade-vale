@@ -953,6 +953,10 @@ const POSES = {
   // archery: bow arm (left) extended at the target, string hand drawn to the cheek
   aimBow:     { shRx: -1.35, shRz:  0.30, elR: -2.20, shLx: -1.50, shLz:  0.10, elL: -0.12, leanX: 0,     twistY:  0.70, wristX: 0 },
   looseBow:   { shRx: -1.25, shRz:  0.60, elR: -0.50, shLx: -1.50, shLz:  0.10, elL: -0.12, leanX: 0.04,  twistY:  0.60, wristX: 0 },
+  // the RALLY (arena entrance): the blade thrust straight up to the men, a pump of it, and a point at the enemy line
+  rally:      { shRx: -2.95, shRz:  0.30, elR: -0.15, shLx: -0.25, shLz: -0.40, elL: -0.55, leanX: -0.06, twistY:  0.10, wristX: 0.20 },
+  rallyPump:  { shRx: -2.30, shRz:  0.30, elR: -0.95, shLx: -0.25, shLz: -0.40, elL: -0.55, leanX:  0.10, twistY:  0.10, wristX: 0.20 },
+  point:      { shRx: -1.50, shRz:  0.12, elR: -0.10, shLx: -0.20, shLz: -0.35, elL: -0.60, leanX:  0.12, twistY: -0.25, wristX: 0.35 },
 };
 
 // Attack moves: which guards to snap between. Combos cycle through them.
@@ -16517,7 +16521,7 @@ const AF = {
   inputs: new Map(), snapAcc: 0, inAcc: 0, lastSnap: 0, installed: false, log: [], torches: [], motes: null, hurt: 0, fov: CAM_BASE_FOV,
   sky: null, stars: null, rain: null, sunSpr: null, crowd: [], roar: 0, waveT: 0, waveAng: 0, nextWave: 0,
   lobby: null, online: [], whoTimer: null, invite: null, pendingRoom: null,
-  intro: null, timeScale: 1, gates: [], gateLights: [], introOff: /[?&]nointro/.test(location.search),   // the entrance cinematic (afIntroStart); ?nointro skips it
+  intro: null, timeScale: 1, gates: [], gateLights: [], introOff: /[?&]nointro/.test(location.search), introFilm: (location.search.match(/[?&]film=(\w+)/) || [])[1] || null,   // the entrance cinematic (afIntroStart); ?nointro skips it
 };
 BV.AF = AF;
 
@@ -16636,7 +16640,7 @@ function afSteerRocks(b) {                                  // an NPC's input, b
 }
 function afBuildRocks() {                                   // the boulders themselves: faceted lumps, each its own jittered icosahedron, seated into the ground
   const g = new THREE.Group(), T = AF.terr, jr = _mulberry32(AF.seed ^ 0x1b873593);
-  const grey = new THREE.Color(0x8a8378), warm = new THREE.Color(0x9c8e78), cool = new THREE.Color(0x767a80), lit = new THREE.Color(0xa9a396), moss = new THREE.Color(0x5f6d3d), foot = new THREE.Color(0x5e564b), c = new THREE.Color();
+  const grey = new THREE.Color(0x776f64), warm = new THREE.Color(0x877a66), cool = new THREE.Color(0x66696f), lit = new THREE.Color(0x938b7e), moss = new THREE.Color(0x56643a), foot = new THREE.Color(0x4f4840), c = new THREE.Color();   // (a shade under the wall's stone: the sun and the tone map lift them)
   const rm = new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: true, shininess: 4, specular: 0x111111 });
   for (const K of T.rocks) {
     const geo = new THREE.IcosahedronGeometry(1, K.r > 1.4 ? 2 : 1), p = geo.attributes.position, col = new Float32Array(p.count * 3), base = grey.clone().lerp(K.tone < 0.5 ? warm : cool, Math.abs(K.tone - 0.5) * 1.6);
@@ -16645,9 +16649,9 @@ function afBuildRocks() {                                   // the boulders them
       let x = p.getX(i), y = p.getY(i), z = p.getZ(i);
       const j = 0.78 + jr() * 0.4; x *= j; y *= j; z *= j;   // knock the sphere about so no two stones agree
       if (tall) { x *= 0.7 + 0.3 * (1 - Math.abs(y)); z *= 0.7 + 0.3 * (1 - Math.abs(y)); }   // a standing stone tapers
-      p.setXYZ(i, x * K.sx * K.r, (y * 0.5 + 0.5) * K.h + (y < 0 ? y * 0.35 : 0), z * K.sz * K.r);   // the bottom is sunk, the top stands K.h over the ground
+      p.setXYZ(i, x * K.sx * K.r, y >= 0 ? y * K.h : y * 0.3 * K.h, z * K.sz * K.r);   // the equator sits AT the ground (so the stone is its full width where you meet it), the lower half is buried
       const up = y, k01 = clamp(up * 0.5 + 0.5, 0, 1);
-      c.copy(base).lerp(lit, k01 * k01 * 0.6).lerp(moss, clamp(0.35 - k01, 0, 1) * (AF.cfg.weather === 'rain' ? 1.2 : 0.7)).lerp(foot, clamp(-up, 0, 1) * 0.5);
+      c.copy(base).lerp(lit, k01 * k01 * 0.45).lerp(moss, clamp(0.35 - k01, 0, 1) * (AF.cfg.weather === 'rain' ? 1.2 : 0.7)).lerp(foot, clamp(-up, 0, 1) * 0.5);
       col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
     }
     geo.setAttribute('color', new THREE.BufferAttribute(col, 3)); geo.computeVertexNormals();
@@ -16955,12 +16959,35 @@ function afPickStars() {                                     // per team: the hi
   }
   return out;
 }
+/* THE FILMS — six ways to bring an army into the pit. One is dealt from the seed per fight (never the one this
+   device saw last), each a director function that lays routes for the men (afIntroRoute) and a shot list from the
+   shared lens kit (afIntroLens). All of them share the set: the pens, the gates, the stars, the columns. */
+const AF_FILMS = {
+  pen:      { title: 'THE PEN',      weight: 3, ok: () => true },
+  champion: { title: 'THE CHAMPION', weight: 3, ok: () => AF.cfg.per >= 2 },
+  legion:   { title: 'THE LEGION',   weight: () => AF.cfg.per >= 12 ? 4 : AF.cfg.per >= 5 ? 2 : 0.5, ok: () => AF.cfg.per >= 3 },
+  captains: { title: 'THE CAPTAINS', weight: 3, ok: () => AF.cfg.per >= 2 && AF_F.radius <= 52 },
+  riders:   { title: 'THE RIDERS',   weight: 4, ok: () => AF.bodies.some(b => b.mounted) },
+  duel:     { title: 'THE DUEL',     weight: 6, ok: () => AF.cfg.per <= 2 && AF.cfg.teams === 2 && AF_F.radius <= 52 },
+};
+function afPickFilm(rnd) {
+  let last = null; try { last = localStorage.getItem('bv-intro-last'); } catch (e) {}
+  const pool = Object.keys(AF_FILMS).filter(k => AF_FILMS[k].ok());
+  let pick = pool.filter(k => k !== last); if (!pick.length) pick = pool;
+  const w = k => typeof AF_FILMS[k].weight === 'function' ? AF_FILMS[k].weight() : AF_FILMS[k].weight;
+  let tot = 0; for (const k of pick) tot += w(k); let x = rnd() * tot, film = pick[pick.length - 1];
+  for (const k of pick) { x -= w(k); if (x <= 0) { film = k; break; } }
+  if (AF.introFilm && AF_FILMS[AF.introFilm]) film = AF.introFilm;   // (test override)
+  try { localStorage.setItem('bv-intro-last', film); } catch (e) {}
+  return film;
+}
 function afIntroStart() {
   const rnd = _mulberry32(AF.seed ^ 0x9e3779b9), myT = AF.me ? AF.me.team : 0, order = [myT]; for (let t = 0; t < AF.cfg.teams; t++) if (t !== myT) order.push(t);
-  const I = AF.intro = { t: 0, shots: [], i: 0, shotT: 0, cut: true, released: false, stars: afPickStars(), order, frames: [], drumT: 0.4, cap: null, done: false };
+  const I = AF.intro = { t: 0, shots: [], i: 0, shotT: 0, cut: true, stars: afPickStars(), order, myT, foeT: order[1], frames: [], drumT: 0.4, drums: true, cap: null, release: [], film: null };
   AF.timeScale = 1; AF.fov = CAM_BASE_FOV;
-  for (let t = 0; t < AF.cfg.teams; t++) I.frames.push(afGateFrame(t));
+  for (let t = 0; t < AF.cfg.teams; t++) { I.frames.push(afGateFrame(t)); I.release.push(1e9); }
   const seatKey = b => { const so = afSlotOffset(AF.roster[b.idx].s, AF.cfg.per); return so.back * 100 + Math.abs(so.right); };
+  I.film = afPickFilm(rnd); const ridersFirst = I.film === 'riders';
   for (let t = 0; t < AF.cfg.teams; t++) {                  // the stars take the front rank's middle: swap muster points with whoever held them
     const F = I.frames[t], members = AF.bodies.filter(b => b.team === t), keys = new Map(members.map(b => [b, seatKey(b)])), claimed = new Set();
     for (const s of I.stars[t]) {
@@ -16971,7 +16998,8 @@ function afIntroStart() {
     for (const b of members) b.home = { x: b.x, z: b.z, yaw: b.yaw };
     // the COLUMN in the tunnel: stars first, then the front ranks, riders at the back; three abreast, one rider to a rank
     const rest = members.filter(b => !claimed.has(b)).sort((a, b) => (a.mounted - b.mounted) || keys.get(a) - keys.get(b));
-    const col = [...I.stars[t], ...rest]; let depth = 2.2, k = 0, rowStart = 0;
+    const col = ridersFirst ? [...members.filter(b => b.mounted).sort((a, b) => (claimed.has(b) - claimed.has(a)) || keys.get(a) - keys.get(b)), ...I.stars[t].filter(b => !b.mounted), ...rest.filter(b => !b.mounted)] : [...I.stars[t], ...rest];
+    let depth = 2.2, k = 0;
     const rows = [];
     while (k < col.length) {
       const b = col[k];
@@ -16980,58 +17008,229 @@ function afIntroStart() {
       rows.push({ depth, list: row }); depth += AF_INTRO.rank;
     }
     F.colDepth = rows.length ? rows[rows.length - 1].depth : 2.2;
+    F.exit = { x: F.gx - F.ux * 4.2, z: F.gz - F.uz * 4.2 };   // where the tunnel lets out onto the sand
     rows.forEach((row, ri) => row.list.forEach((b, fi) => {
       const s = (fi - (row.list.length - 1) / 2) * AF_INTRO.file, ahead = ri ? (rows[ri - 1].list[Math.min(fi, rows[ri - 1].list.length - 1)]) : null;
-      b.intro = { phase: 'wait', star: claimed.has(b), ahead, spd: claimed.has(b) ? AF_INTRO.starWalk : AF_INTRO.walk, salute: 0, side: s };
+      b.intro = { phase: 'wait', star: claimed.has(b), ahead, spd: claimed.has(b) ? AF_INTRO.starWalk : AF_INTRO.walk, salute: 0, side: s, route: null, i: 0, pauseT: 0, release: null, rally: null, rallyPick: (rnd() * 3) | 0, penRallyAt: null };
       b.x = F.gx + F.ux * row.depth + F.wx * s; b.z = F.gz + F.uz * row.depth + F.wz * s; b.yaw = F.face; b.lookYaw = F.face; b.vx = b.vz = 0; b.moving = false;
       if (b.mounted && b.horse) { b.horse.x = b.x; b.horse.z = b.z; b.horse.yaw = b.yaw; }
       b.group.visible = row.depth < AF_INTRO.tunnel - 1.2; b.tx = b.x; b.tz = b.z; b.tyaw = b.yaw;
       setPose(b.anim, 'relax', 0.01); afCommit(b, 0.016);
     }));
   }
-  // ---- the CUT: shots in order; ts = the sim's clock against the camera's (slow motion) ----
-  const many = AF.cfg.teams > 2, myStars = I.stars[myT], foeT = order[1], foeStars = foeT != null ? I.stars[foeT] : [];
-  const sideOf = () => (rnd() < 0.5 ? -1 : 1);
-  const shot = (dur, ts, cam, onStart, cap) => I.shots.push({ dur, ts, cam, onStart, cap });
-  // the PENS: over the shoulders of the waiting men at the shut gate, sun through the slats
-  for (const t of order) {
-    const F = I.frames[t], side = sideOf(), n = AF.bodies.filter(b => b.team === t).length, st = I.stars[t];
-    shot(many ? 1.7 : 2.3, 1, (k) => {
-      const d0 = Math.min(F.colDepth + 4.2, AF_INTRO.tunnel - 1.6), d = lerp(d0, d0 - 0.8, k), s = side * 1.4, px = F.gx + F.ux * d + F.wx * s, pz = F.gz + F.uz * d + F.wz * s;
-      afIntroCam(px, afY(px, pz) + 4.4, pz, F.gx - F.ux * 0.5, afY(F.gx, F.gz) + 2.3, F.gz - F.uz * 0.5, 52, 0);
-    }, null, '<b style="color:' + AF_TEAMS[t].col + '">' + AF_TEAMS[t].name + '</b> · ' + n + (n === 1 ? ' fighter' : ' fighters') + (st.length ? '<div style="opacity:.85;font-size:.8em;margin-top:2px">★ ' + st.map(b => b.name + ' · ' + b.xp + 'xp').join(' &nbsp;·&nbsp; ★ ') + '</div>' : ''));
-  }
-  // the GATES open: low on the sand beside my team's doorway, then the other gate across the pit
-  { const F = I.frames[myT], side = sideOf();
-    shot(1.9, 1, (k) => { const s = side * lerp(5.2, 4.2, k), px = F.gx - F.ux * 7.5 + F.wx * s, pz = F.gz - F.uz * 7.5 + F.wz * s; afIntroCam(px, afY(px, pz) + 0.7, pz, F.gx + F.ux * 0.6, afY(F.gx, F.gz) + 3.2, F.gz + F.uz * 0.6, 58, 0); },
-      () => { for (const G of AF.gates) { G.want = 1; afGateCreak(G); } afHorn(); afCrowdReact(true); AF.waveT = 3.4; AF.waveAng = F.a - 0.6; }, null); }
-  if (foeT != null) { const F = I.frames[foeT], side = sideOf();
-    shot(1.2, 1, (k) => { const s = side * lerp(4.6, 5.2, k), px = F.gx - F.ux * 8.5 + F.wx * s, pz = F.gz - F.uz * 8.5 + F.wz * s; afIntroCam(px, afY(px, pz) + 0.65, pz, F.gx + F.ux * 0.4, afY(F.gx, F.gz) + 3.0, F.gz + F.uz * 0.4, 56, 0); }, null, null); }
-  // the STARS walk out, slow: a low lens ahead of each man, tracking back through the doorway into the light
-  const seq = []; for (let k = 0; k < 2; k++) { if (myStars[k]) seq.push(myStars[k]); if (foeStars[k]) seq.push(foeStars[k]); }
-  if (many) for (const t of order.slice(2)) if (I.stars[t][0]) seq.push(I.stars[t][0]);
-  seq.forEach((b, k) => { const side = sideOf() * lerp(1.1, 1.5, rnd()), dur = k < 2 ? 2.2 : 1.5;
-    shot(dur, AF_INTRO.slow, (q, dt) => { const fx = Math.sin(b.yaw), fz = Math.cos(b.yaw), rx = -Math.cos(b.yaw), rz = Math.sin(b.yaw), ah = lerp(5.2, 4.5, q);
-      const px = b.x + fx * ah + rx * side, pz = b.z + fz * ah + rz * side, gy = afY(b.x, b.z);
-      afIntroCam(px, afY(px, pz) + (b.mounted ? 2.6 : 1.5), pz, b.x, gy + (b.mounted ? 3.1 : AF_INTRO.chest + 0.2), b.z, 42, dt * 10); }, null,
-      '<span style="color:' + b.teamDef.col + '">★ ' + b.name + '</span> · ' + b.xp + 'xp ' + (b.kind === 'npc' ? afXpRank(b.xp) : (b.rank || 'player')) + (b.arch && b.arch !== 'swordsman' ? ' · ' + b.A.label : '')); });
-  // the COLUMN: from inside my team's tunnel, the men pouring out through the doorway
-  { const F = I.frames[myT], side = sideOf();
-    shot(1.4, 1, (k) => { const d = lerp(9.5, 8.6, k), s = side * 0.8, px = F.gx + F.ux * d + F.wx * s, pz = F.gz + F.uz * d + F.wz * s; afIntroCam(px, afY(px, pz) + 4.5, pz, F.gx - F.ux * 8, afY(F.gx, F.gz) + 1.6, F.gz - F.uz * 8, 54, 0); }, null, null); }
-  // the CRANE: up from behind my gate over the whole pit as the armies take the sand
-  { const F = I.frames[myT], R = AF_F.radius;
-    shot(3.2, 1, (k) => { const e = k * k * (3 - 2 * k), d = lerp(2.5, R * 0.42, e), h = lerp(AF_INTRO.gateH + 3.5, R * 0.78 + 8, e), px = F.gx + F.ux * d, pz = F.gz + F.uz * d;
-      afIntroCam(px, Math.max(afY(px, pz) + 2, h), pz, lerp(F.gx * 0.5, 0, e), 2.5, lerp(F.gz * 0.5, 0, e), 55, 0); },
-      () => { afCrowdReact(false); AF.roar = 2.4; afBanner(AF.cfg.teams + ' TEAMS · ' + AF.cfg.per + ' EACH', AF.me ? 'you fight for ' + AF.me.teamDef.name + ' — steel yourself' : '', 2.6); }, null); }
-  // the FACE-OFF: over my star's shoulder at the enemy line, slow
-  { const A = myStars[0] || AF.me || AF.bodies[0], foe = () => { let best = null, bd = 1e9; for (const b of AF.bodies) { if (b.team === A.team) continue; const d = Math.hypot(b.x - A.x, b.z - A.z) - (b.intro && b.intro.star ? 6 : 0); if (d < bd) { bd = d; best = b; } } return best; };
-    shot(2.0, 0.5, (k, dt) => { const B = foe(); if (!B) return; const dx = B.x - A.x, dz = B.z - A.z, d = Math.hypot(dx, dz) || 1, fx = dx / d, fz = dz / d, rx = -fz, rz = fx;
-      const px = A.x - fx * 3.8 + rx * lerp(1.5, 1.8, k), pz = A.z - fz * 3.8 + rz * lerp(1.5, 1.8, k);
-      afIntroCam(px, afY(px, pz) + 3.9, pz, B.x, afY(B.x, B.z) + AF_INTRO.chest, B.z, 36, dt * 8); }, null, null); }
+  for (const b of AF.bodies) afIntroRoute(b, []);          // the plain route: out of the tunnel, then to his muster point
+  for (let t = 0; t < AF.cfg.teams; t++) I.stars[t].forEach((b, k) => { if (!b.mounted) b.intro.penRallyAt = 0.3 + k * 1.6 + rnd() * 0.5; });   // the stars work the ranks up while they wait
+  const L = afIntroLens(I, rnd);
+  (AF_FILM_DIRECTORS[I.film] || AF_FILM_DIRECTORS.pen)(I, L, rnd);
+  if (I.shots.length) { const s0 = I.shots[0]; s0.cap = '<div style="font-size:.68em;letter-spacing:5px;opacity:.7;margin-bottom:6px">' + AF_FILMS[I.film].title + '</div>' + (s0.cap || ''); }
   afIntroUi(true); afIntroApplyShot();
   const fade = document.getElementById('af-intro-fade'); if (fade) { fade.style.transition = 'none'; fade.style.opacity = '1'; requestAnimationFrame(() => { fade.style.transition = 'opacity .9s'; fade.style.opacity = '0'; }); }
   afDrum(0.5);
+  try { console.log('[arena] intro film', I.film); } catch (e) {}
 }
+// the STARS rally their men: in the pen they turn to the ranks with the blade up and pump it; on taking their place
+// they raise it to the crowd, or point it across the sand at the enemy. Dealt per star from the seed.
+const AF_RALLIES = {
+  pen: [
+    [{ pose: 'rally', dur: 0.7, face: 'men' }, { pose: 'rallyPump', dur: 0.28, face: 'men' }, { pose: 'rally', dur: 0.4, face: 'men' }, { pose: 'rallyPump', dur: 0.28, face: 'men' }, { pose: 'rally', dur: 0.6, face: 'men' }, { pose: 'relax', dur: 0.6, face: 'gate' }],
+    [{ pose: 'rally', dur: 1.1, face: 'gate' }, { pose: 'rallyPump', dur: 0.3, face: 'gate' }, { pose: 'rally', dur: 0.7, face: 'gate' }, { pose: 'relax', dur: 0.5, face: 'gate' }],
+    [{ pose: 'point', dur: 1.2, face: 'gate' }, { pose: 'rally', dur: 0.8, face: 'men' }, { pose: 'relax', dur: 0.5, face: 'gate' }],
+  ],
+  arrive: [
+    [{ pose: 'rally', dur: 0.8, face: 'foe' }, { pose: 'rallyPump', dur: 0.25, face: 'foe' }, { pose: 'rally', dur: 0.35, face: 'foe' }, { pose: 'rallyPump', dur: 0.25, face: 'foe' }, { pose: 'rally', dur: 0.6, face: 'foe' }, { pose: 'guard', dur: 0.4, face: 'foe' }],
+    [{ pose: 'rally', dur: 0.7, face: 'men' }, { pose: 'rallyPump', dur: 0.3, face: 'men' }, { pose: 'rally', dur: 0.6, face: 'men' }, { pose: 'point', dur: 1.2, face: 'foe' }, { pose: 'guard', dur: 0.4, face: 'foe' }],
+    [{ pose: 'point', dur: 1.4, face: 'foe' }, { pose: 'rally', dur: 0.9, face: 'foe' }, { pose: 'guard', dur: 0.4, face: 'foe' }],
+  ],
+  meet: [
+    [{ pose: 'point', dur: 1.6, face: 'foe' }, { pose: 'guard', dur: 0.4, face: 'foe' }],
+    [{ pose: 'rally', dur: 0.8, face: 'men' }, { pose: 'rallyPump', dur: 0.3, face: 'men' }, { pose: 'rally', dur: 0.5, face: 'men' }, { pose: 'guard', dur: 0.4, face: 'foe' }],
+  ],
+};
+function afRally(b, kind) { const set = AF_RALLIES[kind], S = b.intro; if (!set || !S) return; S.rally = { steps: set[(S.rallyPick + (kind === 'pen' ? 0 : 1)) % set.length], i: 0, t: 0 }; if (kind !== 'pen') AF.roar = Math.max(AF.roar, 1.1); }
+function afRallyYaw(b, face) {                             // 'men': back at his own ranks · 'foe' / 'gate': across the pit
+  if (face === 'men') { const F = AF.intro.frames[b.team]; return AF.intro && b.intro.phase === 'wait' ? F.face + Math.PI : Math.atan2(F.ux, F.uz); }
+  return b.intro.phase === 'wait' ? AF.intro.frames[b.team].face : Math.atan2(-b.x, -b.z);
+}
+// a man's route through the entrance: the tunnel mouth, any waypoints the film adds, then his muster point
+// waypoint: { x, z, spd, gait: 'walk'|'run'|'canter', pause (s), face: () => yaw while paused, tol }
+function afIntroRoute(b, mid) {
+  const I = AF.intro, F = I.frames[b.team], S = b.intro, spd = S.spd;
+  S.route = [{ x: F.exit.x, z: F.exit.z, spd, tol: 1.2 }, ...mid, { x: b.home.x, z: b.home.z, spd: spd * 1.15, tol: 0.35 }]; S.i = 0; S.pauseT = 0;
+}
+function afIntroOpen(I, teams, delay) {                     // the gates of these teams swing open; their men are released a beat later
+  for (const t of teams) { const G = AF.gates[t]; if (G && !G.want) { G.want = 1; afGateCreak(G); } I.release[t] = Math.min(I.release[t], I.t + (delay == null ? 0.9 : delay)); }
+}
+// THE LENS KIT: every camera the films use, each a shot factory — (k: 0..1 through the shot, dt: real seconds)
+function afIntroLens(I, rnd) {
+  const sideOf = () => (rnd() < 0.5 ? -1 : 1), R = () => AF_F.radius, gy = (x, z) => afY(x, z);
+  const shot = (dur, ts, cam, onStart, cap) => { const s = { dur, ts, cam, onStart, cap }; I.shots.push(s); return s; };
+  const starCap = b => '<span style="color:' + b.teamDef.col + '">★ ' + b.name + '</span> · ' + b.xp + 'xp ' + (b.kind === 'npc' ? afXpRank(b.xp) : (b.rank || 'player')) + (b.arch && b.arch !== 'swordsman' ? ' · ' + b.A.label : '');
+  const teamCap = t => { const n = AF.bodies.filter(b => b.team === t).length, st = I.stars[t]; return '<b style="color:' + AF_TEAMS[t].col + '">' + AF_TEAMS[t].name + '</b> · ' + n + (n === 1 ? ' fighter' : ' fighters') + (st.length ? '<div style="opacity:.85;font-size:.8em;margin-top:2px">★ ' + st.map(b => b.name + ' · ' + b.xp + 'xp').join(' &nbsp;·&nbsp; ★ ') + '</div>' : ''); };
+  const fwd = b => ({ fx: Math.sin(b.yaw), fz: Math.cos(b.yaw), rx: -Math.cos(b.yaw), rz: Math.sin(b.yaw) });
+  const L = { shot, starCap, teamCap, sideOf };
+  // the PEN: above and behind the column in the tunnel, over the helmets at the shut gate
+  L.pen = (t, dur) => { const F = I.frames[t], side = sideOf();
+    return shot(dur, 1, (k) => { const d0 = Math.min(F.colDepth + 4.2, AF_INTRO.tunnel - 1.6), d = lerp(d0, d0 - 0.8, k), s = side * 1.4, px = F.gx + F.ux * d + F.wx * s, pz = F.gz + F.uz * d + F.wz * s;
+      afIntroCam(px, gy(px, pz) + 4.4, pz, F.gx - F.ux * 0.5, gy(F.gx, F.gz) + 2.3, F.gz - F.uz * 0.5, 52, 0); }, null, teamCap(t)); };
+  // the PEN, tight: low in the tunnel ahead of the front rank, looking up at the star through the slat-light
+  L.penStar = (b, dur) => { const F = I.frames[b.team], side = sideOf() * 1.4;
+    return shot(dur, 1, (k) => { const d = lerp(1.7, 2.0, k), px = b.x - F.ux * d + F.wx * side, pz = b.z - F.uz * d + F.wz * side;
+      afIntroCam(px, gy(px, pz) + 1.0, pz, b.x, gy(b.x, b.z) + AF_INTRO.chest + 0.8, b.z, 62, 0); }, null, starCap(b)); };
+  // the GATE from the sand: low beside the doorway, the doors and the men behind them
+  L.gateLow = (t, dur, onStart) => { const F = I.frames[t], side = sideOf();
+    return shot(dur, 1, (k) => { const s = side * lerp(5.2, 4.2, k), px = F.gx - F.ux * 7.5 + F.wx * s, pz = F.gz - F.uz * 7.5 + F.wz * s; afIntroCam(px, gy(px, pz) + 0.7, pz, F.gx + F.ux * 0.6, gy(F.gx, F.gz) + 3.2, F.gz + F.uz * 0.6, 58, 0); }, onStart, null); };
+  // the STAR walks out: a low lens ahead of him, tracking back
+  L.star = (b, dur, ts) => { const side = sideOf() * lerp(1.1, 1.5, rnd());
+    return shot(dur, ts, (q, dt) => { const f = fwd(b), ah = lerp(5.2, 4.5, q), px = b.x + f.fx * ah + f.rx * side, pz = b.z + f.fz * ah + f.rz * side;
+      afIntroCam(px, gy(px, pz) + (b.mounted ? 2.6 : 1.5), pz, b.x, gy(b.x, b.z) + (b.mounted ? 3.1 : AF_INTRO.chest + 0.2), b.z, 42, dt * 10); }, null, starCap(b)); };
+  // the STAR in profile: a dolly beside him, level with his chest
+  L.profile = (b, dur, ts) => { const side = sideOf(), dist = b.mounted ? 6.5 : 5.2;
+    return shot(dur, ts, (q, dt) => { const f = fwd(b), ah = lerp(3.8, 1.2, q), px = b.x + f.fx * ah + f.rx * side * dist, pz = b.z + f.fz * ah + f.rz * side * dist;
+      afIntroCam(px, gy(px, pz) + (b.mounted ? 2.4 : 1.8), pz, b.x, gy(b.x, b.z) + (b.mounted ? 2.8 : AF_INTRO.chest), b.z, 38, dt * 10); }, null, starCap(b)); };
+  // BACKLIT: the sun behind him, low and wide, the lens looking up into the light
+  L.backlit = (b, dur, ts) => { const sx = sun.position.x, sz = sun.position.z, sl = Math.hypot(sx, sz) || 1, hx = sx / sl, hz = sz / sl, side = sideOf() * 1.2;
+    return shot(dur, ts, (q, dt) => { const px = b.x - hx * lerp(5.5, 4.8, q) + hz * side, pz = b.z - hz * lerp(5.5, 4.8, q) - hx * side;
+      afIntroCam(px, gy(px, pz) + 0.6, pz, b.x, gy(b.x, b.z) + 3.6, b.z, 60, dt * 9); }, null, starCap(b)); };
+  // ALONGSIDE at speed: a rider's tracking shot
+  L.ride = (b, dur, ts) => { const side = sideOf();
+    return shot(dur, ts, (q, dt) => { const f = fwd(b), px = b.x + f.fx * 1.5 + f.rx * side * 6.5, pz = b.z + f.fz * 1.5 + f.rz * side * 6.5;
+      afIntroCam(px, gy(px, pz) + 2.2, pz, b.x, gy(b.x, b.z) + 2.6, b.z, 46, dt * 8); }, null, starCap(b)); };
+  // BEHIND: over his shoulder at whatever is ahead of him
+  L.behind = (b, dur, ts, look) => { const side = sideOf() * 1.6;
+    return shot(dur, ts, (q, dt) => { const f = fwd(b), px = b.x - f.fx * 3.8 + f.rx * side, pz = b.z - f.fz * 3.8 + f.rz * side, lk = look ? look() : { x: b.x + f.fx * 20, z: b.z + f.fz * 20 };
+      afIntroCam(px, gy(px, pz) + 3.9, pz, lk.x, gy(lk.x, lk.z) + AF_INTRO.chest, lk.z, 40, dt * 8); }, null, null); };
+  // the COLUMN: high in the tunnel over the helmets, looking out at the men pouring through the doorway
+  L.column = (t, dur) => { const F = I.frames[t], side = sideOf();
+    return shot(dur, 1, (k) => { const d = lerp(9.5, 8.6, k), s = side * 0.8, px = F.gx + F.ux * d + F.wx * s, pz = F.gz + F.uz * d + F.wz * s; afIntroCam(px, gy(px, pz) + 4.5, pz, F.gx - F.ux * 8, gy(F.gx, F.gz) + 1.6, F.gz - F.uz * 8, 54, 0); }, null, null); };
+  // the DOLLY along a line of marching men: level with them, sliding sideways as they come on
+  L.dolly = (t, dur, ts) => { const F = I.frames[t], side = sideOf();
+    return shot(dur, ts, (k, dt) => { const d = -lerp(9, 14, k), s = side * lerp(9, -2, k), px = F.gx + F.ux * d + F.wx * s, pz = F.gz + F.uz * d + F.wz * s;
+      afIntroCam(px, gy(px, pz) + 1.6, pz, F.gx - F.ux * (d < -11 ? 8 : 6), gy(F.gx, F.gz) + AF_INTRO.chest, F.gz - F.uz * 6, 44, 0); }, null, null); };
+  // the LINE comes on: low ahead of a team's front rank, retreating before it
+  L.front = (t, dur, ts) => { const F = I.frames[t], side = sideOf() * 1.5;
+    return shot(dur, ts, (k, dt) => { const lead = I.stars[t][0] || AF.bodies.find(b => b.team === t); if (!lead) return; const f = fwd(lead), ah = lerp(7, 6.2, k), px = lead.x + f.fx * ah + f.rx * side, pz = lead.z + f.fz * ah + f.rz * side;
+      afIntroCam(px, gy(px, pz) + 1.0, pz, lead.x - f.rx * side * 0.4, gy(lead.x, lead.z) + AF_INTRO.chest, lead.z - f.rz * side * 0.4, 50, dt * 9); }, null, null); };
+  // from the STANDS: a spectator's seat at this bearing, the crowd's heads in the foreground
+  L.stands = (ang, dur, look, onStart) => { const r0 = R() + 4.2 + 2 * 2.6 + 0.8, drift = sideOf() * 0.18;
+    return shot(dur, 1, (k) => { const a = ang + drift * k, px = Math.cos(a) * r0, pz = Math.sin(a) * r0, lk = look(k);
+      afIntroCam(px, gy(px, pz) + 1.1 + 2 * 1.35 + 2.3, pz, lk.x, lk.y, lk.z, lk.fov || 50, 0); }, onStart, null); };
+  // the CRANE: up from behind a gate over the whole pit
+  L.crane = (t, dur, onStart) => { const F = I.frames[t];
+    return shot(dur, 1, (k) => { const e = k * k * (3 - 2 * k), Rr = R(), d = lerp(2.5, Rr * 0.42, e), h = lerp(AF_INTRO.gateH + 3.5, Rr * 0.78 + 8, e), px = F.gx + F.ux * d, pz = F.gz + F.uz * d;
+      afIntroCam(px, Math.max(gy(px, pz) + 2, h), pz, lerp(F.gx * 0.5, 0, e), 2.5, lerp(F.gz * 0.5, 0, e), 55, 0); }, onStart, null); };
+  // the AERIAL: high over the pit, descending and turning
+  L.aerial = (dur, onStart) => { const a0 = rnd() * TAU, dir = sideOf();
+    return shot(dur, 1, (k) => { const e = k * k * (3 - 2 * k), Rr = R(), a = a0 + dir * e * 0.9, r = lerp(Rr * 1.5, Rr * 0.9, e), h = lerp(Rr * 1.6 + 20, Rr * 0.7 + 8, e);
+      afIntroCam(Math.cos(a) * r, h, Math.sin(a) * r, 0, 1, 0, 50, 0); }, onStart, null); };
+  // TOP-DOWN over a team's block as it forms up
+  L.top = (t, dur) => { const F = I.frames[t], h = clamp(R() * 0.7, 26, 60), c = { x: 0, z: 0 };   // over the team's living centre as the block forms
+    return shot(dur, 1, (k, dt) => { let x = 0, z = 0, n = 0; for (const b of AF.bodies) if (b.team === t && b.group.visible) { x += b.x; z += b.z; n++; } if (n) { x /= n; z /= n; }
+      if (I.cut) { c.x = x; c.z = z; } else { c.x = lerp(c.x, x, clamp(dt * 3, 0, 1)); c.z = lerp(c.z, z, clamp(dt * 3, 0, 1)); }
+      afIntroCam(c.x + F.wx * 2 - F.ux * 3, h, c.z + F.wz * 2 - F.uz * 3, c.x, 0, c.z, 48, 0); }, null, null); };
+  // the ORBIT: a slow circle round a point (the meeting in the middle)
+  L.orbit = (ctr, r, h, dur, ts, fov) => { const a0 = rnd() * TAU, dir = sideOf(), sweep = 1.7;
+    return shot(dur, ts, (k) => { const c = ctr(), a = a0 + dir * k * sweep; afIntroCam(c.x + Math.cos(a) * r, gy(c.x, c.z) + h, c.z + Math.sin(a) * r, c.x, gy(c.x, c.z) + AF_INTRO.chest, c.z, fov || 40, 0); }, null, null); };
+  // the FACE-OFF: over my star's shoulder at the nearest enemy (a star, if one is near)
+  L.faceoff = (A, dur, ts) => { const foe = () => { let best = null, bd = 1e9; for (const b of AF.bodies) { if (b.team === A.team) continue; const d = Math.hypot(b.x - A.x, b.z - A.z) - (b.intro && b.intro.star ? 6 : 0); if (d < bd) { bd = d; best = b; } } return best; };
+    return shot(dur, ts, (k, dt) => { const B = foe(); if (!B) return; const dx = B.x - A.x, dz = B.z - A.z, d = Math.hypot(dx, dz) || 1, fx = dx / d, fz = dz / d, rx = -fz, rz = fx;
+      const px = A.x - fx * 3.8 + rx * lerp(1.5, 1.8, k), pz = A.z - fz * 3.8 + rz * lerp(1.5, 1.8, k);
+      afIntroCam(px, gy(px, pz) + 3.9, pz, B.x, gy(B.x, B.z) + AF_INTRO.chest, B.z, 36, dt * 8); }, null, null); };
+  L.banner = () => { afCrowdReact(false); AF.roar = 2.4; afBanner(AF.cfg.teams + ' TEAMS · ' + AF.cfg.per + ' EACH', AF.me ? 'you fight for ' + AF.me.teamDef.name + ' — steel yourself' : '', 2.6); };
+  L.roar = (big, ang) => { afCrowdReact(big); if (ang != null) { AF.waveT = 3.4; AF.waveAng = ang - 0.6; } };
+  return L;
+}
+const AF_FILM_DIRECTORS = {
+  // THE PEN — the original cut: every pen, the gates, the stars in slow motion, the column, the crane, the face-off
+  pen(I, L) {
+    const many = AF.cfg.teams > 2, my = I.stars[I.myT], foe = I.foeT != null ? I.stars[I.foeT] : [];
+    for (const t of I.order) L.pen(t, many ? 1.7 : 2.3);
+    L.gateLow(I.myT, 1.9, () => { afIntroOpen(I, I.order); afHorn(); L.roar(true, I.frames[I.myT].a); });
+    if (I.foeT != null) L.gateLow(I.foeT, 1.2);
+    const seq = []; for (let k = 0; k < 2; k++) { if (my[k]) seq.push(my[k]); if (foe[k]) seq.push(foe[k]); }
+    if (many) for (const t of I.order.slice(2)) if (I.stars[t][0]) seq.push(I.stars[t][0]);
+    seq.forEach((b, k) => L.star(b, k < 2 ? 2.2 : 1.5, AF_INTRO.slow));
+    L.column(I.myT, 1.4);
+    L.crane(I.myT, 3.2, L.banner);
+    L.faceoff(my[0] || AF.me || AF.bodies[0], 2.0, 0.5);
+  },
+  // THE CHAMPION — the best fighter in the pit comes out alone, and only then the rest
+  champion(I, L) {
+    const C = AF.bodies.slice().sort((a, b) => (b.xp || 0) - (a.xp || 0) || (a.kind === 'npc') - (b.kind === 'npc') || a.idx - b.idx)[0], ct = C.team;
+    const other = I.order.filter(t => t !== ct), mine = ct === I.myT ? (I.stars[I.foeT] || [])[0] : I.stars[I.myT][0], FC = I.frames[ct];
+    for (const b of AF.bodies) if (b.team === ct) b.intro.release = 1e9;   // his team waits on him, and he waits on the gate
+    C.intro.spd = AF_INTRO.starWalk * 0.9;
+    L.stands(FC.a + L.sideOf() * 0.95, 2.0, (k) => ({ x: FC.gx * lerp(0.75, 0.6, k), y: 3, z: FC.gz * lerp(0.75, 0.6, k), fov: 44 }));
+    L.penStar(C, 1.8);
+    L.gateLow(ct, 2.0, () => { afIntroOpen(I, [ct], 1e9); C.intro.release = I.t + 0.2; afHorn(); L.roar(true, FC.a); });
+    L.profile(C, 2.4, 0.3);
+    const sl = Math.hypot(sun.position.x, sun.position.z) || 1, sunBehind = (sun.position.x / sl) * FC.ux + (sun.position.z / sl) * FC.uz;
+    if (sunBehind > 0.3 && AF.cfg.time !== 'night') L.backlit(C, 1.8, 0.5); else L.star(C, 1.8, 0.45);
+    const rest = I.order.filter(t => t !== ct);
+    L.column(I.myT === ct ? (I.foeT != null ? I.foeT : ct) : I.myT, 1.5).onStart = () => { afIntroOpen(I, rest, 0.4); for (const b of AF.bodies) if (b.team === ct && b !== C) b.intro.release = I.t + 0.4; L.roar(false); };
+    if (mine) L.star(mine, 1.8, AF_INTRO.slow);
+    L.crane(I.myT, 2.8, L.banner);
+    L.faceoff(I.stars[I.myT][0] || AF.me || AF.bodies[0], 2.0, 0.5);
+  },
+  // THE LEGION — drums, an aerial, every gate at once, the columns as a marching mass, the blocks from above
+  legion(I, L) {
+    const my = I.stars[I.myT][0] || AF.bodies[0], F = I.frames[I.myT];
+    I.drums = 'heavy';
+    L.aerial(2.6);
+    const mid = F.a + L.sideOf() * Math.PI / 2;
+    L.stands(mid, 1.8, (k) => ({ x: F.gx * 0.7, y: 3, z: F.gz * 0.7, fov: 44 }), () => { afIntroOpen(I, I.order, 0.6); afHorn(); setTimeout(afHorn, 350); L.roar(true, mid); });
+    L.dolly(I.myT, 2.4, 0.6);
+    if (I.foeT != null) L.front(I.foeT, 2.0, 0.5);
+    L.top(I.myT, 2.4);
+    L.behind(my, 1.6, 1);
+    L.crane(I.myT, 2.6, L.banner);
+    L.faceoff(my, 2.0, 0.5);
+  },
+  // THE CAPTAINS — the two stars walk out alone to meet in the middle; the armies come on behind them
+  captains(I, L) {
+    const A = I.stars[I.myT][0], B = I.foeT != null ? I.stars[I.foeT][0] : null, leads = [A, B].filter(Boolean);
+    const spot = b => { const F = I.frames[b.team], d = AF.cfg.teams === 2 ? 2.8 : 3.4; return { x: -F.ux * d, z: -F.uz * d }; };
+    for (const b of AF.bodies) b.intro.release = 1e9;
+    for (const b of leads) { const s = spot(b); b.intro.spd = 7.0; afIntroRoute(b, [{ x: s.x, z: s.z, spd: 7.0, gait: 'run', tol: 0.5, pause: 1e9, face: () => Math.atan2(-b.x, -b.z) }]); }
+    L.pen(I.myT, 1.6);
+    L.gateLow(I.myT, 1.4, () => { afIntroOpen(I, I.order, 1e9); for (const b of leads) b.intro.release = I.t + 0.2; afHorn(); L.roar(false, I.frames[I.myT].a); });
+    L.stands(I.frames[I.myT].a + L.sideOf() * Math.PI / 2, 2.4, (k) => ({ x: A.x * (1 - k * 0.5), y: 2, z: A.z * (1 - k * 0.5), fov: 40 }));
+    L.star(A, 1.4, 0.5);
+    if (B) L.star(B, 1.2, 0.5);
+    L.orbit(() => ({ x: leads.reduce((a, b) => a + b.x, 0) / leads.length, z: leads.reduce((a, b) => a + b.z, 0) / leads.length }), 8.5, 2.4, 3.2, 0.7, 38).onStart = () => { for (const b of AF.bodies) if (!leads.includes(b)) b.intro.release = I.t + 0.3; L.roar(true); };
+    L.crane(I.myT, 2.6, L.banner);
+    L.faceoff(A, 2.0, 0.5);
+  },
+  // THE RIDERS — the horse comes out first and takes a lap along the wall before the foot
+  riders(I, L) {
+    const riders = AF.bodies.filter(b => b.mounted), byTeam = t => riders.filter(b => b.team === t), lead = byTeam(I.myT)[0] || riders[0], lt = lead.team, FL = I.frames[lt];
+    for (const b of AF.bodies) b.intro.release = 1e9;
+    const way = L.sideOf();
+    for (const b of riders) {                                // the lap: a sweep of the ring at a canter (every squadron the same way round), then home
+      const F = I.frames[b.team], r = AF_F.radius - 8, n = 6, arc = 3.4, pts = [];
+      for (let k = 1; k <= n; k++) { const a = F.a + way * (k / n) * arc; pts.push({ x: Math.cos(a) * r, z: Math.sin(a) * r, spd: 9.5, gait: 'canter', tol: 3.5 }); }
+      afIntroRoute(b, pts);
+    }
+    L.gateLow(lt, 1.8, () => { afIntroOpen(I, I.order, 1e9); for (const b of riders) b.intro.release = I.t + 0.3; afHorn(); L.roar(true, FL.a); afDrum(0.6); });
+    L.ride(lead, 2.6, 0.55);
+    L.stands(FL.a + 1.2, 1.8, (k) => ({ x: lead.x, y: 2, z: lead.z, fov: 40 }));
+    L.column(I.myT, 1.5).onStart = () => { for (const b of AF.bodies) if (!b.mounted) b.intro.release = I.t + 0.2; L.roar(false); };
+    const st = I.stars[I.myT].find(b => !b.mounted) || I.stars[I.myT][0]; if (st) L.star(st, 2.0, AF_INTRO.slow);
+    L.crane(I.myT, 2.8, L.banner);
+    L.faceoff(I.stars[I.myT][0] || AF.me || AF.bodies[0], 2.0, 0.5);
+  },
+  // THE DUEL — two men, two gates, cuts between them as they walk to the middle and take each other's measure
+  duel(I, L) {
+    const A = I.stars[I.myT][0], B = I.stars[I.foeT][0], spot = b => { const F = I.frames[b.team]; return { x: -F.ux * 3.0, z: -F.uz * 3.0 }; };
+    for (const b of [A, B]) { const s = spot(b); b.intro.spd = 6.6; afIntroRoute(b, [{ x: s.x, z: s.z, spd: 6.6, gait: 'run', tol: 0.5, pause: 1e9, face: () => Math.atan2(-b.x, -b.z) }]); }
+    L.penStar(A, 1.5); L.penStar(B, 1.5);
+    L.gateLow(I.myT, 1.3, () => { afIntroOpen(I, I.order, 0.4); afHorn(); L.roar(false, I.frames[I.myT].a); });
+    L.gateLow(I.foeT, 1.1);
+    L.star(A, 2.0, AF_INTRO.slow); L.star(B, 1.8, AF_INTRO.slow);
+    L.stands(I.frames[I.myT].a + L.sideOf() * Math.PI / 2, 3.0, (k) => ({ x: 0, y: 2, z: 0, fov: 42 }));
+    L.orbit(() => ({ x: (A.x + B.x) / 2, z: (A.z + B.z) / 2 }), 8, 2.2, 2.8, 0.6, 38).onStart = () => { L.roar(true); L.banner(); };
+    L.faceoff(A, 2.0, 0.5);
+  },
+};
 function afIntroCam(px, py, pz, lx, ly, lz, fov, smooth) {
   const I = AF.intro; tmpV.set(px, py, pz);
   if (I.cut || !smooth) camera.position.copy(tmpV); else camera.position.lerp(tmpV, clamp(smooth, 0, 1));
@@ -17047,39 +17246,44 @@ function afIntroStep(dt) {
   const I = AF.intro; if (!I) return;
   const sdt = dt * (AF.timeScale || 1);
   I.t += dt; I.shotT += dt;
-  if (!I.released && (I.drumT -= dt) <= 0) { I.drumT = 0.95; afDrum(0.42); }
+  if (I.drums && (I.drumT -= dt) <= 0) { I.drumT = I.drums === 'heavy' ? 0.6 : 0.95; afDrum(I.drums === 'heavy' ? 0.55 : 0.42); if (AF.gates.some(G => G.want)) I.drums = false; }
   afStepGates(sdt);
-  if (!I.released) { for (const G of AF.gates) if (G.open > 0.5) I.released = true; }
-  for (const b of AF.bodies) afIntroBody(b, sdt);
+  for (const b of AF.bodies) { const S = b.intro; if (S && S.penRallyAt != null && S.phase === 'wait' && !S.rally && I.t >= S.penRallyAt) { S.penRallyAt = null; afRally(b, 'pen'); } afIntroBody(b, sdt); }
   if (I.shotT >= I.shots[I.i].dur) { I.i++; if (I.i >= I.shots.length) { afIntroEnd(); return; } afIntroApplyShot(); }
 }
 function afIntroBody(b, sdt) {
   const I = AF.intro, S = b.intro; if (!S) return;
-  const F = I.frames[b.team]; let moving = false, spd = S.spd;
-  if (I.released && S.phase !== 'done') {
-    if (S.phase === 'wait') S.phase = 'tunnel';
-    let tx, tz;
-    if (S.phase === 'tunnel') { tx = b.x - F.ux * 10; tz = b.z - F.uz * 10; if (Math.hypot(b.x, b.z) < F.R - 3.6) S.phase = 'field'; }
-    if (S.phase === 'field') { tx = b.home.x; tz = b.home.z; spd *= 1.15; }
-    const dx = tx - b.x, dz = tz - b.z, d = Math.hypot(dx, dz);
-    let hold = false;                                        // keep a pace behind the man ahead in the column
-    if (S.phase === 'tunnel' && S.ahead && S.ahead.intro && S.ahead.intro.phase !== 'done') { if (Math.hypot(S.ahead.x - b.x, S.ahead.z - b.z) < (b.mounted || S.ahead.mounted ? 3.6 : 2.2)) hold = true; }
-    if (S.phase === 'field' && d < 0.35) { b.x = b.home.x; b.z = b.home.z; S.phase = 'done'; if (S.star) S.salute = 1.3; }
-    else if (!hold && d > 1e-3) {
+  const F = I.frames[b.team]; let moving = false, gait = 'walk', spd = S.spd;
+  if (S.phase === 'wait' && I.t >= (S.release != null ? S.release : I.release[b.team])) S.phase = 'go';
+  if (S.phase === 'go') {
+    const wp = S.route[S.i], dx = wp.x - b.x, dz = wp.z - b.z, d = Math.hypot(dx, dz); spd = wp.spd || S.spd; gait = wp.gait || 'walk';
+    let hold = false;                                        // in the tunnel, keep a pace behind the man ahead in the column
+    if (S.i === 0 && S.ahead && S.ahead.intro && S.ahead.intro.phase !== 'done' && Math.hypot(S.ahead.x - b.x, S.ahead.z - b.z) < (b.mounted || S.ahead.mounted ? 3.6 : 2.2)) hold = true;
+    if (S.pauseT > 0) { S.pauseT -= sdt; if (wp.face) b.yaw = angleLerp(b.yaw, wp.face(), clamp(sdt * 5, 0, 1)); if (S.pauseT <= 0) S.i++; }
+    else if (d < (wp.tol || 0.4)) {
+      if (S.i === S.route.length - 1) { b.x = b.home.x; b.z = b.home.z; S.phase = 'done'; if (S.star && !b.mounted) afRally(b, 'arrive'); }
+      else if (wp.pause) { S.pauseT = wp.pause; if (S.star && !b.mounted && wp.pause > 5) afRally(b, 'meet'); } else S.i++;
+    } else if (!hold) {
       const step = Math.min(d, spd * sdt); b.x += dx / d * step; b.z += dz / d * step;
-      b.yaw = angleLerp(b.yaw, Math.atan2(dx, dz), clamp(sdt * 6, 0, 1)); b.vx = dx / d * spd * 1.15; b.vz = dz / d * spd * 1.15; moving = true;
+      b.yaw = angleLerp(b.yaw, Math.atan2(dx, dz), clamp(sdt * (gait === 'canter' ? 3.5 : 6), 0, 1)); b.vx = dx / d * spd * 1.15; b.vz = dz / d * spd * 1.15; moving = true;
     }
   }
-  if (S.phase === 'done') { b.yaw = angleLerp(b.yaw, b.home.yaw, clamp(sdt * 5, 0, 1)); b.lookYaw = b.home.yaw; }
-  else b.lookYaw = moving ? Math.atan2(-b.x, -b.z) : b.yaw; // marching men look across the pit at the enemy's gate
+  if (S.rally && !moving) {                                // the rally: pose by pose, turned to whoever it's for
+    const Rl = S.rally, st = Rl.steps[Rl.i]; Rl.t += sdt;
+    if (st.face) b.yaw = angleLerp(b.yaw, afRallyYaw(b, st.face), clamp(sdt * 5, 0, 1));
+    b.lookYaw = b.yaw;
+    if (Rl.t >= st.dur) { Rl.t = 0; Rl.i++; if (Rl.i >= Rl.steps.length) S.rally = null; }
+  } else if (S.phase === 'done') { b.yaw = angleLerp(b.yaw, b.home.yaw, clamp(sdt * 5, 0, 1)); b.lookYaw = b.home.yaw; }
+  else b.lookYaw = moving && gait !== 'canter' ? Math.atan2(-b.x, -b.z) : b.yaw;   // marching men look across the pit at the enemy's gate
   if (moving) {
-    b.moving = true; b.gait = GAIT.walk;
-    if (b.mounted) { b.parts.mount.userData.rig.speed01 = 0.12; b.phase += sdt * 3.4; } else b.phase += sdt * GAIT.walk.tempo * clamp(spd / AF_F.move, 0.35, 1) * 1.1;
-    walkLegs(b.parts, b.phase, GAIT.walk.leg); setPose(b.anim, 'relax', 0.3);
+    b.moving = true; b.gait = gait === 'canter' || gait === 'run' ? GAIT.run : GAIT.walk;
+    if (b.mounted) { b.parts.mount.userData.rig.speed01 = gait === 'canter' ? 0.75 : 0.12; b.phase += sdt * (gait === 'canter' ? 3 + 2.4 * spd / 4 : 3.4); }
+    else b.phase += sdt * b.gait.tempo * clamp(spd / AF_F.move, 0.35, 1) * 1.1;
+    walkLegs(b.parts, b.phase, b.gait.leg); setPose(b.anim, 'relax', 0.3);
   } else {
-    b.moving = false; b.vx = b.vz = 0; restLegs(b.parts, sdt, S.phase === 'done');
-    if (S.salute > 0) { S.salute -= sdt; setPose(b.anim, 'windupOver', 0.35); }   // the star raises his blade to the crowd
-    else setPose(b.anim, S.phase === 'done' && b.weapon !== 'bow' ? 'guard' : 'relax', 0.4);
+    b.moving = false; b.vx = b.vz = 0; restLegs(b.parts, sdt, S.phase === 'done' || S.pauseT > 0);
+    if (S.rally) setPose(b.anim, S.rally.steps[S.rally.i].pose, 0.2);
+    else setPose(b.anim, (S.phase === 'done' || S.pauseT > 0) && b.weapon !== 'bow' ? 'guard' : 'relax', 0.4);
   }
   if (b.mounted && b.horse) { b.horse.x = b.x; b.horse.z = b.z; b.horse.yaw = b.yaw; }
   b.group.visible = Math.hypot(b.x, b.z) < F.R + AF_INTRO.tunnel - 1.2;
@@ -17090,7 +17294,7 @@ function afIntroEnd() {
   for (const b of AF.bodies) {                             // everyone to his muster point (the cut hides the jump)
     if (b.home) { b.x = b.home.x; b.z = b.home.z; b.yaw = b.home.yaw; b.lookYaw = b.yaw; b.inp.yaw = b.yaw; b.tx = b.x; b.tz = b.z; b.tyaw = b.yaw; }
     b.vx = b.vz = 0; b.moving = false; b.group.visible = true; b.intro = null;
-    if (b.mounted && b.horse) { b.horse.x = b.x; b.horse.z = b.z; b.horse.yaw = b.yaw; }
+    if (b.mounted && b.horse) { b.horse.x = b.x; b.horse.z = b.z; b.horse.yaw = b.yaw; if (b.parts.mount) b.parts.mount.userData.rig.speed01 = 0; }
     afCommit(b, 0.016);
   }
   for (const G of AF.gates || []) { G.want = 0; G.light.intensity = 0; }
@@ -17484,7 +17688,7 @@ function afIntegrate(b, dt) {                              // friction + slope +
     if (sp > 0.5) { const rise = afHillY(b.x + b.vx / sp * 1.2, b.z + b.vz / sp * 1.2) - afHillY(b.x, b.z), g = clamp(1 - clamp(rise / 1.2, -0.2, 0.7) * 4 * dt, 0, 1.2); b.vx *= g; b.vz *= g; }
   }
   b.x += b.vx * dt; b.z += b.vz * dt;
-  if (AF.terr.rocks.length) afRockPush(b, b.mounted ? 1.0 : 0.55);
+  if (AF.terr.rocks.length) afRockPush(b, b.mounted || b.rig ? 1.0 : 0.55);   // (b.rig: a loose horse)
   const d = Math.hypot(b.x, b.z), R = AF_F.radius - 0.9;
   if (d > R) { const nx = b.x / d, nz = b.z / d, out = b.vx * nx + b.vz * nz; if (out > 0) { b.vx -= nx * out; b.vz -= nz * out; } b.x = nx * R; b.z = nz * R; }
 }
@@ -19457,7 +19661,7 @@ function afTitlePresence() {
     if (pend && pend.room) afJoin(pend.room, pend.host);
   });
 }
-BV.arena = (cfg) => { afOpenLobby('host'); if (cfg && cfg.intro != null) AF.introOff = !cfg.intro; if (cfg && AF.lobby) { if (cfg.teams) AF.lobby.teams = clamp(cfg.teams, AF_LIM.teamsMin, AF_LIM.teamsMax); if (cfg.per) AF.lobby.per = clamp(cfg.per, AF_LIM.perMin, AF_LIM.perMax); if (cfg.xp) AF.lobby.xp = cfg.xp; afResize(AF.lobby);
+BV.arena = (cfg) => { afOpenLobby('host'); if (cfg && cfg.intro != null) AF.introOff = !cfg.intro; if (cfg && cfg.film) AF.introFilm = cfg.film; if (cfg && AF.lobby) { if (cfg.teams) AF.lobby.teams = clamp(cfg.teams, AF_LIM.teamsMin, AF_LIM.teamsMax); if (cfg.per) AF.lobby.per = clamp(cfg.per, AF_LIM.perMin, AF_LIM.perMax); if (cfg.xp) AF.lobby.xp = cfg.xp; afResize(AF.lobby);
   if (cfg.npcXp) AF.lobby.npcXp = cfg.npcXp; if (cfg.arch) AF.lobby.npcArch = AF.lobby.npcArch.map(row => row.map(() => cfg.arch)); afLobbyRender(); if (cfg.start) afStartFight(); } return BV.arenaStatus(); }; // (npcXp / arch: test overrides)
 BV.arenaStart = () => { afStartFight(); return BV.arenaStatus(); };
 BV.arenaHorseHit = (id, amt) => { const h = AF.horses[id]; if (h) afDamageHorse(h, amt, AF.bodies.find(b => !b.dead && (!h.rider || b.team !== h.rider.team)) || AF.bodies[0], false); return BV.arenaHorses(); };   // test: wound a horse
@@ -19474,7 +19678,7 @@ BV.arenaNet = () => ({ id: window.coop && window.coop.id, room: window.coop && w
 BV.arenaStatus = () => ({ on: AF.on, role: AF.role, phase: AF.phase, t: +AF.t.toFixed(1), teams: AF.cfg.teams, per: AF.cfg.per, seed: AF.seed, over: AF.over, winner: AF.winner,
   bodies: AF.bodies.map(b => ({ i: b.idx, name: b.name, team: b.team, kind: b.kind, ctrl: b.ctrl, weapon: b.weapon, hp: Math.round(b.hp), dead: b.dead, kills: b.kills, x: +b.x.toFixed(1), z: +b.z.toFixed(1), state: afStateCode(b) })),
   me: AF.me ? AF.me.idx : null, lobby: AF.lobby ? { role: AF.lobby.role, teams: AF.lobby.teams, per: AF.lobby.per, seats: AF.lobby.slots.map(r => r.map(s => s ? s.name : null)) } : null, online: AF.online.map(p => p.name) });
-BV.arenaIntro = (cmd) => { if (cmd === 'skip') afIntroSkip(); else if (typeof cmd === 'number' && AF.intro) { AF.intro.i = clamp(cmd, 0, AF.intro.shots.length - 1); afIntroApplyShot(); } else if (cmd && cmd.advance && AF.intro) { for (let t = 0; t < cmd.advance && AF.intro; t += 1 / 60) { afIntroStep(1 / 60); afIntroCamera(1 / 60); } } const I = AF.intro; return I ? { shot: I.i, of: I.shots.length, t: +I.t.toFixed(1), shotT: +I.shotT.toFixed(2), ts: AF.timeScale, released: I.released, cap: I.cap, stars: I.stars.map(a => a.map(b => b.name + ':' + b.xp)), gates: AF.gates.map(g => +g.open.toFixed(2)), march: AF.bodies.map(b => b.intro ? b.intro.phase[0] : '-').join('') } : { shot: -1, phase: AF.phase }; };   // test: the entrance (skip / jump to a shot / read it)
+BV.arenaIntro = (cmd) => { if (cmd === 'skip') afIntroSkip(); else if (typeof cmd === 'number' && AF.intro) { const I = AF.intro, n = clamp(cmd, 0, I.shots.length - 1); for (let k = I.i + 1; k < n; k++) if (I.shots[k].onStart) I.shots[k].onStart(); I.i = n; afIntroApplyShot(); } /* (a jump still fires the beats it skips over) */ else if (cmd && cmd.advance && AF.intro) { for (let t = 0; t < cmd.advance && AF.intro; t += 1 / 60) { afIntroStep(1 / 60); if (AF.intro) afIntroCamera(1 / 60); } } const I = AF.intro; return I ? { film: I.film, shot: I.i, of: I.shots.length, t: +I.t.toFixed(1), shotT: +I.shotT.toFixed(2), ts: AF.timeScale, released: I.released, cap: I.cap, stars: I.stars.map(a => a.map(b => b.name + ':' + b.xp)), gates: AF.gates.map(g => +g.open.toFixed(2)), march: AF.bodies.map(b => b.intro ? b.intro.phase[0] : '-').join('') } : { shot: -1, phase: AF.phase }; };   // test: the entrance (skip / jump to a shot / read it)
 BV.arenaStep = (steps = 60, dt = 1 / 60) => { if (AF.phase === 'intro') afIntroEnd(); if (AF.phase === 'countdown') { AF.phase = 'fight'; AF.countdown = 0; } for (let i = 0; i < steps; i++) afTick(dt); return BV.arenaStatus(); };
 BV.arenaInput = (patch) => { Object.assign(AF.locIn, patch || {}); return { ...AF.locIn }; };
 BV.arenaShot = (w = 1280, h = 720) => {              // headless: render one frame at a fixed size (a hidden tab has none) and hand back a JPEG data URL

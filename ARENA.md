@@ -14,7 +14,7 @@ Companion docs: `BATTLES.md` (the army-scale battle system this reuses primitive
 
 1. Sign in (or not — without an account you can still fight NPCs, you just can't invite anyone).
 2. Title screen → **⚔ Arena Fights**.
-3. In the lobby: **Teams** (2–6), **Fighters per team** (1–200; « » step by ten), what **you ride in with** (sword, bow, or a horse — everyone carries sword and bow), the **Pit** (cosy / wide / vast / colossal — it keeps growing past colossal to fit a legion-sized roster), **Hour** (day / dusk / night) and **Sky** (clear / rain).
+3. In the lobby: **Teams** (2–6), **Fighters per team** (1–200; « » step by ten), what **you ride in with** (sword, bow, or a horse — everyone carries sword and bow), the **Pit** (cosy / wide / vast / colossal — it keeps growing past colossal to fit a legion-sized roster), **Hour** (day / dusk / night), **Sky** (clear / rain) and the **Ground** (sand / hills / rocks / broken — the terrain of the pit).
    The team cards show every seat: you, invited players who accepted, and *fighter of the vale*
    (an NPC) for each empty seat.
 4. **Players online** lists everyone connected to the war-net right now. **Invite** sends them
@@ -130,7 +130,19 @@ gates swing open to a horn, a creak and the roar, low from the sand → the star
 my tunnel → a crane up over the whole pit → over my star's shoulder at the enemy line. Meanwhile the columns march
 in (`afIntroBody`: down the tunnel, then each man to his own muster point; a star raises his blade on arrival),
 and at the end everyone snaps to his point under a blink of black, the gates close behind them and the countdown
-sweep takes over. Camera sides, star order and beats are dealt from the seed, so every client sees the same film;
+sweep takes over. **Six films** (`AF_FILMS` / `AF_FILM_DIRECTORS`), one dealt per fight from the seed and never the
+one this device saw last (`localStorage['bv-intro-last']`): *the pen* (the cut above), *the champion* (the best fighter
+in the whole match comes out alone — a seat in the stands, a low tunnel shot, his profile and a backlit walk into the
+sun — before the rest), *the legion* (drums, an aerial, every gate at once, a dolly along the column, the enemy's front
+rank coming on, the blocks from above; weighted toward big rosters), *the captains* (the two stars stride out alone to
+meet in the middle while the camera circles them, then the armies flood in), *the riders* (the horse leads out and laps
+the ring at a canter, tracked alongside; only when someone fields cavalry) and *the duel* (two lone fighters, cut
+against each other, running to meet in the middle; one or two a side). Every film is built from the same lens kit
+(`afIntroLens`: pen, gate, star, profile, backlit, ride, behind, column, dolly, front, stands, crane, aerial, top,
+orbit, face-off) and the same route system (`afIntroRoute`: waypoints with speed, gait, a pause and a facing). The
+**stars rally** their men (`AF_RALLIES`, poses `rally` / `rallyPump` / `point`): in the pen they turn to the ranks with
+the blade up and pump it, and on taking their place they raise it to the crowd or point it across the sand — three
+routines each, dealt per star. `?film=champion` (or `BV.arena({ film })`) forces one. Camera sides, star order and beats are dealt from the seed, so every client sees the same film;
 nothing is simulated in the phase (no `afTick`), so the net cannot drift, and a guest still watching when the host's
 first `fight` snapshot arrives is snapped forward. Skip with Space / Enter / Esc or the button; `?nointro` in the
 URL (or `BV.arena({ intro: false })`) turns it off. Test hooks: `BV.arenaIntro()` reads it, `BV.arenaIntro(n)` jumps
@@ -398,6 +410,21 @@ ripples as it settles.
 client builds the same): dusk drops the sun to the rim in orange and lights every torch; night is
 lit by the torches under a starfield; rain overcasts the sky, closes the fog, wets the sand (specular
 floor) and falls as streaks around the camera (`afApplyTime`, `afStepWeather`).
+
+**The ground** (lobby: *Ground* sand / hills / rocks / broken — the host picks, every client deals the
+same pit from the seed; `afGenTerrain`): **hills** are smooth mounds and long low ridges the ground
+mesh rises over — a run uphill drags and a slope gives a little downhill (`afIntegrate`), arrows fall
+short of a crest, an archer on one shoots over his own line, and the camera never sinks into a hill
+behind you (`afCamAboveGround`). **Rocks** are boulders, outcrops (a big stone with fallen ones about
+it) and standing crags twice a man's height: collision circles that fighters, horses and arrows
+respect (`afRockPush`, `afRockAt`) and that the NPCs steer round instead of pushing against
+(`afSteerRocks` / `afAvoidRocks`; a formation slot or flank mark that lands on a stone is moved to
+its edge, `afFreePoint`). **Broken** deals both plus *tors* — knolls crowned with rock and ridges
+with a spine of stones along the crest. Nothing is placed on a team's muster ground or in the
+corridor its column marches down from the gate (`afMusterZones`). The stones are each their own
+jittered icosahedron with vertex colours (lit crown, mossy foot, scree round the base,
+`afBuildRocks`); the ground colours dry scrub up the slopes and bare stone on a crest, and takes a
+finer mesh when there are hills.
 
 **The crowd** (`afStepCrowd`): the spectators shuffle in their seats, leap and **roar** when someone
 falls (louder for your kills and your death — the roar is synthesised, a swell of band-passed noise,

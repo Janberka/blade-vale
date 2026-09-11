@@ -152,6 +152,55 @@ strikes). *Guardsman*: a heavy shield and a thick hide — keeps his guard up be
 after a lock, and edges toward fellow guardsmen to form a **wall**. *Archer* and *rider* as above. The
 host's lobby pre-rolls the mix seat by seat and shows it to everyone; name tags carry the archetype.
 
+**NPC XP** (0–100, `b.xp`, `b.skill = xp/100`). The archetype is a fighter's body; XP is his head.
+The brain as first tuned plays at about **90**. XP sets:
+
+* **How early he sees a swing.** Under 45 he never reads a raised arm, only the moving blade. His
+  reaction lag runs from 0.42 s at XP 0 to 0.05 s at 100.
+* **How often he guards or rolls.** The archetype's odds are scaled by ×0.15 at XP 0 up to ×1.15
+  at 100. A green fighter also drops his guard too soon.
+* **Whether he spots an opening.** Stagger, flinch, a blade lock or a follow-through: he takes one
+  15% of the time at XP 0, rising to 100%, and he is slower to react.
+* **The breath between blows.** About 1.3 s for a recruit, down to about 0.2 s for a champion.
+* **Skill habits.** How much he circles, whether he cracks a raised guard, whether a duelist
+  feints, whether a guardsman re-raises his shield, and whether he retreats when hurt.
+* **Archers.** Aim scatter shrinks and target lead grows with XP.
+* **Damage.** A mild factor from ×0.85 to ×1.05.
+
+The lobby's **Foes** row picks the band:
+
+| Band | XP range |
+|---|---|
+| Green | 8–45 |
+| Mixed (default) | 30% recruits 10–35, 35% soldiers 35–60, 22% veterans 60–82, 13% champions 82–98 |
+| Veteran | 60–97 |
+
+XP is dealt with the archetype as matched pairs, so every team fields the same army in a different
+seat order. Seats show "51xp soldier", and name tags show "Lorne · 82xp".
+
+**Fair to the player.** Against a player who holds to load and releases, like a phone player
+(`__xptest.js`), 1v1 results are:
+
+| Foe XP | Player wins |
+|---|---|
+| 15 | 10/10 |
+| 35 | 10/10 |
+| 55 | 7/10 |
+| 75 | 6/10 |
+| 90 | 2/10 |
+| 100 | 0/10 |
+
+These rules make that possible:
+
+* **An NPC's pause between blows starts when his swing ends.** The end of a swing used to reset it
+  to 0.04 s, which made a machine-gun of jabs.
+* **Heavy armour.** A blow loaded past the heavy windup rides through a light hit; you take the
+  wound, but your swing still lands.
+* **A player is the hero.** Players get ×1.6 poise (four jabs to stagger, not three) and a 0.78 s
+  stagger instead of 1.2 s.
+* **One blade at a time.** Only one NPC under XP 60 actively presses a player; the others circle
+  and wait for an opening.
+
 **Organised armies, not a mob** — the fixes below turn a 50-a-side clash from three accidental
 skirmishes into one continuous front:
 - **A real block, not one giant thread** (`afPlanTeams`): the front line used to be a SINGLE rank —
@@ -289,6 +338,8 @@ BV.arenaStatus()                              // phase, roster, every body's hp/
 BV.arenaStep(steps, dt)                       // headless sim ticks (no render)
 BV.arenaPump(frames, dt)                      // whole frames incl. network + camera, without rAF
 BV.arenaInput({ atk: n })                     // poke the local input record
+BV.arena({ xp: 'green', npcXp, arch })       // test overrides: XP band, per-seat XP, one archetype for all
+BV.arenaAutoMe(xp)                            // hand my fighter to the brain (pure NPC battles)
 BV.arenaInvite(name) / BV.arenaAccept()       // send / accept a challenge without the UI
 BV.arenaNet()                                 // socket id, room, lobby seats, roster peers, go-acks
 coop._drop()                                  // kill the socket as a phone would (it reconnects and resumes)

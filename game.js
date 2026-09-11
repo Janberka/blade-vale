@@ -16435,6 +16435,17 @@ function afRollArch(r, allowRider, per) {
   const table = afArchWeights(per || 8); let tot = 0; for (const [k, w] of table) if (k !== 'rider' || allowRider) tot += w;
   let x = r() * tot; for (const [k, w] of table) { if (k === 'rider' && !allowRider) continue; x -= w; if (x <= 0) return k; } return 'swordsman';
 }
+// NPC XP (0–100): how good a fighter's HEAD is — his body is his archetype. XP sets how fast he reads a swing
+// (a green man only sees the blade once it's moving, and late), how often he guards or rolls, whether he spots and
+// takes an opening, how busy his sword arm is, how cleanly archers aim. The brain as first tuned is about a 90.
+// The lobby deals XP per seat like the archetypes: every team gets the same spread, shuffled.
+const AF_XP_BANDS = {
+  green:   [[1, 8, 45]],
+  mixed:   [[0.30, 10, 35], [0.65, 35, 60], [0.87, 60, 82], [1, 82, 98]],   // mostly recruits and soldiers, a few veterans, the odd champion
+  veteran: [[1, 60, 97]],
+};
+function afXpAt(q, band) { const B = AF_XP_BANDS[band] || AF_XP_BANDS.mixed; let lo = 0; for (const [hi, a, b] of B) { if (q <= hi) return Math.round(lerp(a, b, (q - lo) / ((hi - lo) || 1))); lo = hi; } return B[B.length - 1][2]; }
+function afXpRank(xp) { return xp >= 82 ? 'champion' : xp >= 60 ? 'veteran' : xp >= 35 ? 'soldier' : 'recruit'; }
 const AF_PITS = { cosy: 34, wide: 50, vast: 68, colossal: 100 }; // the ring's radius by lobby choice (radius is set per boot; a big roster grows it)
 function afPitFor(pit, per) { const need = 26 + per * 0.9; let best = pit; for (const k of ['cosy', 'wide', 'vast', 'colossal']) { if (AF_PITS[k] >= Math.max(need, AF_PITS[pit] || 0)) { best = k; break; } best = k; } return AF_PITS[best] >= need ? best : Math.ceil(need / 10) * 10; } // a legion-sized roster (200 a side) outgrows every named tier — it just gets a bigger number                          // hold the attack to load it: a full hold (chargeMax s) is a heavy; past heavyAt it cracks guards
 const AF_TEAM_HEX = AF_TEAMS.map(t => parseInt(t.col.slice(1), 16));
@@ -16665,20 +16676,22 @@ function afMakeBody(entry, idx, r) {
   if (h.parts.shield) { h.parts.shield.visible = A.shield && weapon !== 'bow'; if (A.bigShield) h.parts.shield.scale.set(1.3, 1.3, 1.3); }
   group.rotation.order = 'YXZ';                              // yaw first, then a body-local tilt/roll (somersaults, crumples)
   const sp = afSpawn(entry.t, AF.cfg.teams), rgx = -Math.cos(sp.yaw), rgz = Math.sin(sp.yaw), so = afSlotOffset(entry.s, AF.cfg.per), off = so.right, back = so.back * (mounted ? 1.3 : 1);
-  const b = { id: idx, idx, team: entry.t, teamDef: td, name: entry.name, kind: entry.kind, peer: entry.peer || null, weapon,
+  const xp = entry.kind === 'npc' ? (entry.xp != null ? clamp(entry.xp | 0, 0, 100) : 60) : 75;   // (a player's body only thinks for itself if they leave)
+  const b = { id: idx, idx, team: entry.t, teamDef: td, name: entry.name, kind: entry.kind, peer: entry.peer || null, weapon, xp,
     ctrl: entry.kind === 'npc' ? 'ai' : 'input', inp: afFreshInput(),
     group, parts: h.parts, anim: makeAnimator(h.parts),
     x: sp.cx + rgx * off - Math.sin(sp.yaw) * back, z: sp.cz + rgz * off - Math.cos(sp.yaw) * back, yaw: sp.yaw, phase: r() * TAU, tiltX: 0,
     hp: A.hp, maxHp: A.hp, state: 'idle', atk: null, combo: 0, comboT: 0, blocking: false,
     dodgeT: 0, dodgeCd: 0, ddx: 0, ddz: 0, iframes: 0, flinch: 0, stagger: 0, dead: false, deadT: 0, tinted: false, kills: 0,
-    vx: 0, vz: 0, poise: A.poise, maxPoise: A.poise, queued: false, cd: 0, waiting: false, slotAngle: 0, retreatT: 0, bob: 0,
+    // (a PLAYER is the hero: ×1.6 poise, so four jabs break it, not three)
+    vx: 0, vz: 0, poise: A.poise * (entry.kind !== 'npc' ? 1.6 : 1), maxPoise: A.poise * (entry.kind !== 'npc' ? 1.6 : 1), queued: false, cd: 0, waiting: false, slotAngle: 0, retreatT: 0, bob: 0,
     gait: null, hitT: 0, hitSide: 0, lookYaw: 0, headYaw: 0, capeX: 0.12, phase0: r() * TAU, roll: 0, lastStep: 0, flashT: 0, sway: r() * TAU, clashT: 0, clashAtk: false, clashDx: 0, clashDz: 0,
     charge: null, chargeMove: 0, prevHold: false, releaseNow: false, aiHoldT: 0, prefBow: weapon === 'bow', swapT: 0, seenSwap: 0,
     mounted, trampleT: 0, passT: 0, sp01: 0,
-    arch: archKey, A, moveMul: A.move, dmgMul: A.dmg, reachBonus: A.reach, noShield: !A.shield, feint: 0,
+    arch: archKey, A, moveMul: A.move, dmgMul: A.dmg * (entry.kind === 'npc' ? lerp(0.85, 1.05, xp / 100) : 1), reachBonus: A.reach, noShield: !A.shield, feint: 0,
     seenAtk: 0, seenHeavy: 0, seenDodge: 0,
     // NPC brain traits (seeded so a replay of the same seed fields the same temperaments)
-    skill: 0.35 + r() * 0.5, heavyBias: A.heavyBias * (0.7 + r() * 0.6), target: null, aiT: r() * 0.3, strafe: r() < 0.5 ? -1 : 1, strafeT: 0.5 + r(), swingT: 0.4 + r() * 0.5, holdBlock: 0, reactedTo: null, shotCd: 1 + r(),
+    skill: (r(), xp / 100), heavyBias: A.heavyBias * (0.7 + r() * 0.6), target: null, aiT: r() * 0.3, strafe: r() < 0.5 ? -1 : 1, strafeT: 0.5 + r(), swingT: 0.4 + r() * 0.5, holdBlock: 0, reactedTo: null, shotCd: 1 + r(),
     // guest-side interpolation targets
     tx: 0, tz: 0, tyaw: 0, tstate: 0, tmove: 0, rollT: 0, remoteSeen: false,
   };
@@ -16687,7 +16700,7 @@ function afMakeBody(entry, idx, r) {
   scene.add(group); group.userData.afBody = b;
   // floating name + health bar (a separate un-rotated tag so the bar can face the camera)
   const tag = new THREE.Group();
-  const tagText = entry.kind === 'npc' && archKey !== 'swordsman' ? entry.name + ' · ' + A.label : entry.name;
+  const tagText = entry.kind === 'npc' ? entry.name + (archKey !== 'swordsman' ? ' · ' + A.label : '') + ' · ' + xp + 'xp' : entry.name;
   const nm = makeNameSprite(tagText); nm.scale.set(Math.min(3.6, 1.1 + tagText.length * 0.16), 0.36, 1); nm.position.y = 0.34; tag.add(nm);
   const bar = makeHealthBar(parseInt(td.col.slice(1), 16)); bar.visible = true; bar.scale.setScalar(0.6); tag.add(bar);
   b.tag = tag; b.bar = bar; scene.add(tag);
@@ -16769,7 +16782,7 @@ function afCommit(b, dt) {
 function afDrive(b, dt, sim) {
   const I = b.inp, F = AF_F, human = b.ctrl !== 'ai';
   if (b.dodgeCd > 0) b.dodgeCd -= dt;
-  if (b.cd > 0) b.cd -= dt;
+  if (b.cd > 0 && (human || (!b.atk && !b.charge && !(b.aiHoldT > 0)))) b.cd -= dt;   // an NPC's pause between blows starts once the blow is DONE (it used to run out mid-swing: jab, jab, jab)
   if (b.comboT > 0) { b.comboT -= dt; if (b.comboT <= 0) b.combo = 0; }
   if (b.iframes > 0) b.iframes -= dt;
   if (b.stagger <= 0 && b.poise < b.maxPoise) b.poise = Math.min(b.maxPoise, b.poise + F.poiseRegen * dt); // poise recovers off the pressure
@@ -16792,7 +16805,7 @@ function afDrive(b, dt, sim) {
   if (b.tinted) { setTint(b.parts, null); b.tinted = false; }
   if (b.clashT > 0) {                                        // blades locked: hold the pose, then shove apart (the attacker further, and open)
     b.clashT -= dt; b.vx *= 0.4; b.vz *= 0.4; b.blocking = !b.clashAtk; restLegs(b.parts, dt, true);
-    if (b.clashT <= 0) { const k = b.clashAtk ? 5.5 : 2.5; b.vx += b.clashDx * k; b.vz += b.clashDz * k; b.cd = b.clashAtk ? 0.35 : 0.05; b.anim.ease = null; setPose(b.anim, b.clashAtk ? 'hurt' : 'block', 0.12); if (b.clashAtk) b.flinch = 0.16; }
+    if (b.clashT <= 0) { const k = b.clashAtk ? 5.5 : 2.5; b.vx += b.clashDx * k; b.vz += b.clashDz * k; b.cd = Math.max(human ? 0 : b.cd, b.clashAtk ? 0.35 : 0.05); b.anim.ease = null; setPose(b.anim, b.clashAtk ? 'hurt' : 'block', 0.12); if (b.clashAtk) b.flinch = 0.16; }
     afIntegrate(b, dt); afCommit(b, dt); return;
   }
   if (b.dodgeT > 0) {                                        // mid-roll: i-frames, a burst of sideways speed, tucked into a ball and rolling over the shoulder
@@ -16865,7 +16878,8 @@ function afDrive(b, dt, sim) {
     }
     const total = a.wind + a.strike + a.rec;
     if (a.hit && b.queued && a.t >= a.wind + a.strike + a.rec * 0.45) { b.queued = false; afStartAttack(b, false); } // chain from the follow-through
-    else if (a.t >= total) { b.atk = null; b.queued = false; b.cd = 0.04; b.anim.ease = null; setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.3); if (b === AF.me) afAutoTurn(b); }
+    else if (a.t >= total) { b.atk = null; b.queued = false; b.cd = human ? 0.04 : Math.max(b.cd, 0.04);   // (an NPC keeps the pause his brain chose)
+       b.anim.ease = null; setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.3); if (b === AF.me) afAutoTurn(b); }
     else if (a.hit && a.t > a.wind + a.strike + a.rec * 0.5 && !a.bow) { b.anim.ease = null; setPose(b.anim, 'guard', 0.3); }
     b.blocking = false;
   } else b.blocking = !!I.block;
@@ -17017,12 +17031,17 @@ function afDamage(t, amt, from, heavy, exec, arrow, k) {   // heavy: cracks guar
     }
     afSparks(tmpV, 0xffdf6b, 6);
   } else {
-    t.atk = null; t.charge = null; t.queued = false; t.blocking = false;
-    const k = lerp(AF_F.knock, AF_F.heavyKnock, weight); t.vx -= ax / ad * k; t.vz -= az / ad * k; // an impulse, not a teleport
+    // HEAVY ARMOUR: a blow loaded past the heavy windup (or already swinging heavy) rides through a light hit — he takes
+    // the wound but his swing still comes. Without it a held attack could never trade with a jab: every hit reset the load.
+    const armoured = !heavy && !exec && weight < 0.5 && ((t.charge && t.charge.heavyPose) || (t.atk && t.atk.heavy && !t.atk.hit));
+    if (!armoured) { t.atk = null; t.charge = null; t.queued = false; }
+    t.blocking = false;
+    const k = lerp(AF_F.knock, AF_F.heavyKnock, weight) * (armoured ? 0.3 : 1); t.vx -= ax / ad * k; t.vz -= az / ad * k; // an impulse, not a teleport
     if (t.stagger <= 0) {                                    // poise: chip it and he flinches; break it and he reels wide open
-      t.poise -= arrow ? AF_F.lightPoise * 0.4 : lerp(AF_F.lightPoise, AF_F.heavyPoise, weight);
-      if (t.poise <= 0) { t.poise = t.maxPoise; t.stagger = AF_F.staggerDur; afPopup(pos, 'STAGGERED', '#ffb347'); }
-      else t.flinch = Math.max(t.flinch, AF_F.flinch);
+      t.poise -= arrow ? AF_F.lightPoise * 0.4 : lerp(AF_F.lightPoise, AF_F.heavyPoise, weight) * (armoured ? 0.5 : 1);
+      if (t.poise <= 0) { t.poise = t.maxPoise; t.stagger = AF_F.staggerDur * (t.kind !== 'npc' ? 0.65 : 1); t.atk = null; t.charge = null; t.queued = false; afPopup(pos, 'STAGGERED', '#ffb347'); }
+      else if (!armoured) t.flinch = Math.max(t.flinch, AF_F.flinch);
+      else afPopup(pos, 'armour', '#d8c8a8');
     }
     afSparks(tmpV, exec ? 0xff3b2b : 0xff5a3c, exec ? 14 : arrow ? 3 : 8); try { SFX.hit(pos, heavy); } catch (e) {}
     t.hitT = 0.25; t.hitSide = Math.sign(ax * Math.cos(t.yaw) - az * Math.sin(t.yaw)) || 1;   // thrown back and away from the blow
@@ -17103,7 +17122,11 @@ function afShoot(b, k) {                                    // a longer draw fli
   const fdx = Math.sin(b.yaw), fdz = Math.cos(b.yaw), w = k || 0;
   let best = null, bd = AF_F.bow.range;                      // aim assist: the nearest foe inside a frontal cone
   for (const o of AF.bodies) { if (o.dead || o.team === b.team) continue; const dx = o.x - b.x, dz = o.z - b.z, dd = Math.hypot(dx, dz); if (dd < bd && (dx * fdx + dz * fdz) / (dd || 1) > 0.86) { bd = dd; best = o; } }
-  const tx = best ? best.x : b.x + fdx * 30, tz = best ? best.z : b.z + fdz * 30;
+  let tx = best ? best.x : b.x + fdx * 30, tz = best ? best.z : b.z + fdz * 30;
+  if (best && b.ctrl === 'ai') {                             // NPC aim by XP: lead a moving mark, and a shaky hand scatters the shot
+    const sk = b.skill, fly = bd / (AF_F.bow.speed * (0.8 + w * 0.4)), err = (1 - sk) * (0.5 + bd * 0.09), ea = Math.random() * TAU, er = err * Math.sqrt(Math.random());
+    tx += (best.vx || 0) * fly * sk + Math.cos(ea) * er; tz += (best.vz || 0) * fly * sk + Math.sin(ea) * er;
+  }
   afSpawnArrow(b.team, b.idx, b.x, afY(b.x, b.z) + 1.6, b.z, tx, afY(tx, tz) + 1.1, tz, true, w);
 }
 function afSpawnArrow(team, owner, sx, sy, sz, tx, ty, tz, announce, k) {
@@ -17236,7 +17259,8 @@ function afAssignTargets() {
     let bestFree = null, bdFree = Infinity, bestAny = null, bdAny = Infinity;
     for (const o of live) { if (o.team === f.team) continue; const d = adj(f, o);
       if (d < bdAny) { bdAny = d; bestAny = o; }
-      if ((counts.get(o) || 0) < 2 && d < bdFree) { bdFree = d; bestFree = o; } }
+      const cap = o.ctrl === 'input' && f.skill < 0.6 ? 1 : 2;   // a PLAYER faces one blade at a time — only veterans press him in pairs; the rest circle and wait for an opening
+      if ((counts.get(o) || 0) < cap && d < bdFree) { bdFree = d; bestFree = o; } }
     if (f.weapon === 'bow') { f.target = bestAny; f.waiting = false; continue; }   // archers never crowd a duel
     if (bestFree) { f.target = bestFree; f.waiting = false; counts.set(bestFree, (counts.get(bestFree) || 0) + 1); }
     else { f.target = bestAny; f.waiting = true; }
@@ -17279,7 +17303,7 @@ function afArcherRetreat(b, T) {
   if (T && T.center) { const cx = T.center.x - b.x, cz = T.center.z - b.z, cd = Math.hypot(cx, cz); if (cd > 3) { rx += cx / cd * 0.35; rz += cz / cd * 0.35; } }
   const m = Math.hypot(rx, rz) || 1; return [rx / m * 0.8, rz / m * 0.8];
 }
-function afAiSwing(b, heavy) { b.aiHoldT = heavy ? AF_F.chargeMax + 0.05 : 0.06; }
+function afAiSwing(b, heavy) { b.aiHoldT = heavy ? AF_F.chargeMax + 0.05 : 0.06; b.guardUp = Math.random() < 0.15 + b.skill * 0.85; } // (guardUp: does he raise the guard again between blows?)
 function afThink(b, dt) {
   const I = b.inp, F = AF_F; I.mx = 0; I.mz = 0; I.block = false;
   if (b.aiHoldT > 0) { b.aiHoldT -= dt; I.hold = true; } else I.hold = false;
@@ -17343,16 +17367,19 @@ function afThink(b, dt) {
   }
   // hurt and pressed: back off toward the team, guard up, and let the poise come back
   if (b.retreatT > 0) { b.retreatT -= dt; I.mx = -ux * 0.9 + sx; I.mz = -uz * 0.9 + sz; I.block = d < 4; return; }
-  if (b.hp < b.maxHp * 0.3 && b.stagger <= 0 && b.arch !== 'brute') { let near = 0; for (const o of AF.bodies) if (!o.dead && o.team !== b.team && Math.hypot(o.x - b.x, o.z - b.z) < 6) near++; if (near >= 2 && Math.random() < dt * 0.9) { b.retreatT = 1.4; return; } }
+  if (b.hp < b.maxHp * 0.3 && b.stagger <= 0 && b.arch !== 'brute' && b.skill > 0.4) { let near = 0; for (const o of AF.bodies) if (!o.dead && o.team !== b.team && Math.hypot(o.x - b.x, o.z - b.z) < 6) near++; if (near >= 2 && Math.random() < dt * 0.9) { b.retreatT = 1.4; return; } }
   // a swing is coming at me: a skilled fighter blocks it or rolls out of it (once per swing)
   const facingMe = ((b.x - t.x) * Math.sin(t.yaw) + (b.z - t.z) * Math.cos(t.yaw)) / d;
-  if (t.mounted && !b.mounted && t.sp01 > 0.5 && d < 7 && facingMe > 0.6 && b.reactedTo !== t && Math.random() < b.skill * 0.9) { b.reactedTo = t; I.dodge++; I.mx = tx; I.mz = tz; return; } // a charge is coming: roll out of its line
-  const incoming = t.charge || (t.atk && !t.atk.hit && !t.atk.bow ? t.atk : null);    // a raised arm, loading — or the swing itself
-  if (incoming && d < 3.8 && facingMe > 0.3 && b.reactedTo !== incoming) {
+  if (t.mounted && !b.mounted && t.sp01 > 0.5 && d < 7 && facingMe > 0.6 && b.reactedTo !== t && Math.random() < b.skill * b.skill * 0.9) { b.reactedTo = t; I.dodge++; I.mx = tx; I.mz = tz; return; } // a charge is coming: roll out of its line
+  // XP decides how early he SEES it: a green man never reads a raised arm, only the blade once it moves — and late
+  const sk01 = b.skill, swing = t.atk && !t.atk.hit && !t.atk.bow ? t.atk : null;
+  const incoming = swing || (sk01 >= 0.45 ? t.charge : null);                      // a raised arm, loading — or the swing itself
+  if (incoming !== b.seenInc) { b.seenInc = incoming; b.seenIncT = 0; } else if (incoming) b.seenIncT += dt;
+  if (incoming && d < 3.8 && facingMe > 0.3 && b.reactedTo !== incoming && b.seenIncT >= lerp(0.42, 0.05, sk01)) {
     b.reactedTo = incoming;
-    const r = Math.random(), A = b.A || AF_ARCH.swordsman, sk = 0.7 + b.skill * 0.6;
+    const r = Math.random(), A = b.A || AF_ARCH.swordsman, sk = lerp(0.15, 1.15, sk01);
     if (t.charge && t.charge.heavyPose || (t.atk && t.atk.heavy)) { if (r < (A.dodge * 1.3 + A.block * 0.2) * sk) I.dodge++; }   // a loaded blow: roll (a guardsman may still trust the shield)
-    else if (r < A.block * sk) b.holdBlock = (t.atk ? t.atk.wind : Math.max(0.1, F.chargeMax - t.charge.t)) + 0.25;   // guard up until the blow should land (a quick light often beats the reaction)
+    else if (r < A.block * sk) b.holdBlock = ((t.atk ? t.atk.wind : Math.max(0.1, F.chargeMax - t.charge.t)) + 0.25) * (sk01 < 0.5 ? 0.45 + Math.random() * 0.8 : 1);   // guard up until the blow should land (a green man drops it too soon)
     else if (r < (A.block + A.dodge) * sk) I.dodge++;
   }
   if (b.holdBlock > 0) { b.holdBlock -= dt; I.block = true; }
@@ -17360,13 +17387,18 @@ function afThink(b, dt) {
   if (A.wall) {                                            // the SHIELD WALL: a guardsman edges toward the nearest fellow guardsman and holds his guard between swings
     let mate = null, md = 1e9; for (const o of AF.bodies) { if (o === b || o.dead || o.team !== b.team || !(o.A && o.A.wall)) continue; const dd = Math.hypot(o.x - b.x, o.z - b.z); if (dd < md) { md = dd; mate = o; } }
     if (mate && md > 3.2) { I.mx += (mate.x - b.x) / md * 0.35; I.mz += (mate.z - b.z) / md * 0.35; }
-    if (d < 3.4 && b.cd > 0 && !b.atk && !b.charge) I.block = true;
+    if (d < 3.4 && b.cd > 0 && !b.atk && !b.charge && b.guardUp) I.block = true;
   }
   if (b.feint) {                                           // the DUELIST's feint: load, cancel into a guard to bait the roll, then the real blow
     if (b.feint === 1 && b.charge && b.charge.t > 0.22) { b.holdBlock = 0.12; b.feint = 2; }
     else if (b.feint === 2 && b.holdBlock <= 0) { b.feint = 0; afAiSwing(b, false); b.cd = 0.5; }
   }
-  const reach = F.reach + (b.reachBonus || 0), open = t.stagger > 0 || (t.atk && t.atk.hit) || t.flinch > 0 || (t.clashT > 0 && t.clashAtk);   // reeling, staggered, locked on my guard, or in his follow-through: punish
+  const reach = F.reach + (b.reachBonus || 0);
+  let open = t.stagger > 0 || (t.atk && t.atk.hit) || t.flinch > 0 || (t.clashT > 0 && t.clashAtk);   // reeling, staggered, locked on my guard, or in his follow-through: punish
+  if (open) {                                                // …if he SPOTS it: a green man misses most openings, and is slow on the ones he sees
+    if (!b.openSeen) { b.openSeen = true; b.openT = 0; b.openTake = Math.random() < lerp(0.15, 1, sk01); } else b.openT += dt;
+    open = b.openTake && b.openT >= lerp(0.35, 0.04, sk01);
+  } else b.openSeen = false;
   if (b.waiting) {                                           // FLANK: orbit to the rear slot; commit only from behind
     const radius = 3.4, fromT = Math.atan2(b.x - t.x, b.z - t.z), err = angleDelta(fromT, b.slotAngle);
     const tang = (Math.sign(err) || 1) * clamp(Math.abs(err) * 1.6, 0, 1), rad = -clamp(d - radius, -1.2, 1.2);
@@ -17376,7 +17408,7 @@ function afThink(b, dt) {
     return;
   }
   if (d > reach * 0.9) {                                     // close in — a charge when far, a wary circling approach near contact
-    const circ = d < 4.5 ? A.circ : 0.12, pace = d > 7 ? 1 : 0.85;
+    const circ = d < 4.5 ? A.circ * lerp(0.3, 1, sk01) : 0.12, pace = d > 7 ? 1 : 0.85;   // a recruit walks straight onto the blade
     I.mx = (ux + tx * circ) * pace + sx * 1.2; I.mz = (uz + tz * circ) * pace + sz * 1.2;
     if (open && d <= reach * 1.3 && b.cd <= 0 && !busy) { afAiSwing(b, false); b.cd = 0.4; }   // he's open and a lunge covers the gap
     return;
@@ -17385,13 +17417,13 @@ function afThink(b, dt) {
   if (open && b.cd <= 0) { afAiSwing(b, false); b.cd = 0.35 + Math.random() * 0.3; return; }   // punish the follow-through
   if (b.cd <= 0) {
     const guarded = t.blocking && facingMe > 0.15;
-    if (guarded) { if (Math.random() < 0.55 + b.skill * 0.3) afAiSwing(b, true); else { I.mx = tx * 0.9 + sx; I.mz = tz * 0.9 + sz; b.cd = 0.25; return; } } // crack it or go around it
-    else if (A.feint && Math.random() < A.feint && !b.feint) { b.feint = 1; b.aiHoldT = 0.6; }               // the duelist sells a swing he won't throw
+    if (guarded && Math.random() < 0.2 + sk01 * 0.8) { if (Math.random() < 0.55 + b.skill * 0.3) afAiSwing(b, true); else { I.mx = tx * 0.9 + sx; I.mz = tz * 0.9 + sz; b.cd = 0.25; return; } } // crack it or go around it (a recruit just swings into the shield)
+    else if (A.feint && sk01 > 0.5 && Math.random() < A.feint && !b.feint) { b.feint = 1; b.aiHoldT = 0.6; }  // the duelist sells a swing he won't throw (it takes some years to learn)
     else afAiSwing(b, Math.random() < b.heavyBias);
-    b.cd = (0.3 + Math.random() * 0.45) * (1.3 - b.skill * 0.5);
+    b.cd = lerp(1.1, 0.05, sk01) + Math.random() * lerp(0.7, 0.25, sk01);   // the breath between blows: a green arm dithers (~1.3 s), a champion's barely stops
   } else {                                                   // between blows: keep the blade's length, slide sideways
     const back = d < reach * 0.6 ? -0.5 : 0;
-    I.mx = tx * 0.4 * (0.5 + A.circ) + ux * back + sx; I.mz = tz * 0.4 * (0.5 + A.circ) + uz * back + sz;
+    const cm = lerp(0.3, 1, sk01); I.mx = tx * 0.4 * (0.5 + A.circ) * cm + ux * back + sx; I.mz = tz * 0.4 * (0.5 + A.circ) * cm + uz * back + sz;
   }
 }
 
@@ -18053,7 +18085,7 @@ function afNetGaveUp() {
   else if (AF.lobby && AF.lobby.role === 'guest') { afLobbyMsg('The war-net dropped — the host\'s lobby is gone. Ask for a new challenge.'); afOpenLobby('host'); }
 }
 function afNewLobby(role) {
-  const L = { role, teams: 2, per: 3, weapon: 'sword', time: 'day', weather: 'clear', pit: 'wide', slots: [], invites: new Map(), host: afSession() || 'You', room: null };
+  const L = { role, teams: 2, per: 3, weapon: 'sword', time: 'day', weather: 'clear', pit: 'wide', xp: 'mixed', slots: [], invites: new Map(), host: afSession() || 'You', room: null };
   afResize(L); return L;
 }
 function afResize(L) {
@@ -18079,10 +18111,16 @@ function afRollNpcMix(L) {                                 // who the fighters o
   const table = afArchWeights(L.per).filter(([k]) => k !== 'rider' || L.per >= 2), tot = table.reduce((a, [, w]) => a + w, 0);
   const shares = table.map(([k, w]) => ({ k, n: Math.floor(w / tot * L.per), rem: (w / tot * L.per) % 1 }));
   let left = L.per - shares.reduce((a, x) => a + x.n, 0); shares.slice().sort((a, b) => b.rem - a.rem).forEach(x => { if (left > 0) { x.n++; left--; } });
-  L.npcArch = []; for (let t = 0; t < L.teams; t++) {
-    const row = []; for (const x of shares) for (let i = 0; i < x.n; i++) row.push(x.k);
-    for (let i = row.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); const tmp = row[i]; row[i] = row[j]; row[j] = tmp; }
-    L.npcArch.push(row);
+  // …and XP with it: one list of (archetype, XP) pairs — the XP spread stratified over the band, paired at random
+  // once — and every team gets exactly those pairs, shuffled into its seats. Both sides field the same army.
+  const rx = _mulberry32((L.mixSeed ^ 0x5bd1e995 ^ (L.per * 131)) >>> 0), xs = [];
+  for (let i = 0; i < L.per; i++) xs.push(afXpAt((i + rx()) / L.per, L.xp));
+  for (let i = xs.length - 1; i > 0; i--) { const j = Math.floor(rx() * (i + 1)); const tmp = xs[i]; xs[i] = xs[j]; xs[j] = tmp; }
+  const pairs = []; { let i = 0; for (const x of shares) for (let n = 0; n < x.n; n++) { pairs.push([x.k, xs[i]]); i++; } }
+  L.npcArch = []; L.npcXp = [];
+  for (let t = 0; t < L.teams; t++) {
+    const row = pairs.slice(); for (let i = row.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); const tmp = row[i]; row[i] = row[j]; row[j] = tmp; }
+    L.npcArch.push(row.map(p => p[0])); L.npcXp.push(row.map(p => p[1]));
   }
 }
 function afSeat(peer, name) { const L = AF.lobby; if (afFindSeat(peer)) return; afPlace(L, { kind: 'player', name: String(name || 'Ally').slice(0, 24), peer, weapon: 'sword' }); L.invites.set(name, 'joined'); }
@@ -18114,11 +18152,11 @@ function afOpenLobby(role, beacon) {
 function afLobbyBroadcast() {
   const L = AF.lobby; if (!L || L.role !== 'host' || !window.coop || !window.coop.connected) return;
   window.coop.updateBeacon({ arena: true, host: L.host, teams: L.teams, per: L.per });
-  window.coop.send({ k: 'lobby', teams: L.teams, per: L.per, time: L.time, weather: L.weather, pit: L.pit, npcArch: L.npcArch, host: L.host, slots: L.slots.map(row => row.map(s => s ? { kind: s.kind, name: s.name, peer: s.peer, weapon: s.weapon, away: !!(L.away && L.away.has(s.peer)) } : null)) });
+  window.coop.send({ k: 'lobby', teams: L.teams, per: L.per, time: L.time, weather: L.weather, pit: L.pit, xp: L.xp, npcArch: L.npcArch, npcXp: L.npcXp, host: L.host, slots: L.slots.map(row => row.map(s => s ? { kind: s.kind, name: s.name, peer: s.peer, weapon: s.weapon, away: !!(L.away && L.away.has(s.peer)) } : null)) });
 }
 function afLobbyApply(d) {                                   // guest: mirror the host's lobby
   const L = AF.lobby; if (!L || L.role !== 'guest') return;
-  L.teams = d.teams; L.per = d.per; L.host = d.host || L.host; L.slots = d.slots; L.time = d.time || 'day'; L.weather = d.weather || 'clear'; L.pit = d.pit || 'wide'; if (d.npcArch) L.npcArch = d.npcArch;
+  L.teams = d.teams; L.per = d.per; L.host = d.host || L.host; L.slots = d.slots; L.time = d.time || 'day'; L.weather = d.weather || 'clear'; L.pit = d.pit || 'wide'; if (d.npcArch) L.npcArch = d.npcArch; if (d.npcXp) L.npcXp = d.npcXp; L.xp = d.xp || 'mixed';
   const me = afFindSeat(window.coop.id); if (me) L.weapon = me.weapon || 'sword';
   afLobbyRender();
 }
@@ -18131,6 +18169,7 @@ function afLobbyRender() {
   for (const pt of ['cosy', 'wide', 'vast', 'colossal']) { const el = document.getElementById('al-pit-' + pt); if (el) { el.classList.toggle('on', L.pit === pt); el.disabled = !host; } }
   for (const tm of ['day', 'dusk', 'night']) { const el = document.getElementById('al-time-' + tm); if (el) { el.classList.toggle('on', L.time === tm); el.disabled = !host; } }
   for (const wx of ['clear', 'rain']) { const el = document.getElementById('al-wx-' + wx); if (el) { el.classList.toggle('on', L.weather === wx); el.disabled = !host; } }
+  for (const xb of ['green', 'mixed', 'veteran']) { const el = document.getElementById('al-xp-' + xb); if (el) { el.classList.toggle('on', L.xp === xb); el.disabled = !host; } }
   const sub = document.getElementById('al-sub'); if (sub) sub.textContent = host ? 'Choose the teams, invite players who are online, and every empty place is taken by a fighter of the vale.' : L.host + ' set the teams — pick a side, pick a weapon, and wait for the bell.';
   const me = host ? afHostSeat() : afFindSeat(window.coop && window.coop.id);
   const grid = document.getElementById('al-teams');
@@ -18138,7 +18177,8 @@ function afLobbyRender() {
     const td = AF_TEAMS[t], free = row.indexOf(null) >= 0, mine = !!me && row.indexOf(me) >= 0;
     return '<div class="al-team" style="--tc:' + td.col + '"><div class="al-tname"><span>' + td.name + '</span>' + (!host && free && !mine ? '<button data-team="' + t + '">join</button>' : '') + '</div>' +
       (L.per > 8 ? row.filter(Boolean) : row).map(s => s ? '<div class="al-slot ' + (s === me ? 'you' : 'player') + '"><span>' + (s === me ? 'You' : s.name) + (s.away || (L.away && L.away.has(s.peer)) ? ' <i style="opacity:.6">· reconnecting…</i>' : '') + '</span><span class="al-tag">' + (s.weapon === 'bow' ? '🏹' : s.weapon === 'horse' ? '🐎' : '🗡') + (s.kind === 'host' && s !== me ? ' host' : '') + '</span></div>'
-                        : null).map((html, i) => html != null ? html : '<div class="al-slot npc"><span>' + ((L.npcArch && L.npcArch[t] && L.npcArch[t][i]) || 'swordsman') + ' of the vale</span><span class="al-tag">npc</span></div>').join('') +
+                        : null).map((html, i) => { if (html != null) return html; const xp = L.npcXp && L.npcXp[t] ? L.npcXp[t][i] : null;
+                          return '<div class="al-slot npc"><span>' + ((L.npcArch && L.npcArch[t] && L.npcArch[t][i]) || 'swordsman') + ' of the vale</span><span class="al-tag">' + (xp != null ? xp + 'xp ' + afXpRank(xp) : 'npc') + '</span></div>'; }).join('') +
       (L.per > 8 ? '<div class="al-slot npc"><span>' + afMixSummary(L, t) + '</span><span class="al-tag">npc</span></div>' : '') + '</div>';
   }).join('');
   for (const btn of grid.querySelectorAll('button[data-team]')) btn.onclick = () => { if (window.coop) window.coop.send({ k: 'team', t: parseInt(btn.getAttribute('data-team'), 10) }); };
@@ -18167,7 +18207,8 @@ function afMixSummary(L, t) {                              // "12 swordsmen, 4 b
   const counts = {}; const row = L.slots[t] || [];
   row.forEach((s, i) => { if (s) return; const k = (L.npcArch && L.npcArch[t] && L.npcArch[t][i]) || 'swordsman'; counts[k] = (counts[k] || 0) + 1; });
   const plural = { swordsman: 'swordsmen', brute: 'brutes', duelist: 'duelists', guardsman: 'guardsmen', archer: 'archers', rider: 'riders' };
-  return Object.keys(counts).map(k => counts[k] + ' ' + (counts[k] === 1 ? k : plural[k])).join(', ') || 'no NPCs';
+  let xs = 0, xn = 0; row.forEach((s, i) => { if (!s && L.npcXp && L.npcXp[t] && L.npcXp[t][i] != null) { xs += L.npcXp[t][i]; xn++; } });
+  return (Object.keys(counts).map(k => counts[k] + ' ' + (counts[k] === 1 ? k : plural[k])).join(', ') || 'no NPCs') + (xn ? ' · avg ' + Math.round(xs / xn) + 'xp' : '');
 }
 function afInvite(name) {
   name = String(name || '').trim(); const L = AF.lobby; if (!name || !L || L.role !== 'host') return;
@@ -18212,7 +18253,7 @@ function afStartFight() {
     if (seat) { roster.push({ t, s, name: seat.name, kind: seat.kind, peer: seat.peer, weapon: seat.weapon || 'sword' }); used.add(seat.name); continue; }
     let nm; do { nm = pick(GIVEN_NAMES) + (r() < 0.35 ? ' ' + pick(BYNAMES) : ''); } while (used.has(nm)); used.add(nm);
     const arch = (L.npcArch && L.npcArch[t] && L.npcArch[t][s]) || 'swordsman';
-    roster.push({ t, s, name: nm, kind: 'npc', peer: null, arch, weapon: AF_ARCH[arch].weapon === 'bow' ? 'bow' : AF_ARCH[arch].weapon === 'horse' ? 'horse' : 'sword' });
+    roster.push({ t, s, name: nm, kind: 'npc', peer: null, arch, xp: (L.npcXp && L.npcXp[t] && L.npcXp[t][s] != null) ? L.npcXp[t][s] : 50, weapon: AF_ARCH[arch].weapon === 'bow' ? 'bow' : AF_ARCH[arch].weapon === 'horse' ? 'horse' : 'sword' });
   }
   for (const e of roster) if (e.kind === 'player' && L.away && L.away.has(e.peer)) e.away = true;   // (a seat whose phone is mid-reconnect)
   const humans = roster.filter(x => x.kind === 'player').length;
@@ -18237,6 +18278,7 @@ function afStartFight() {
   for (const pt of ['cosy', 'wide', 'vast', 'colossal']) { const el = g('al-pit-' + pt); if (el) el.onclick = () => setOpt('pit', pt); }
   for (const tm of ['day', 'dusk', 'night']) { const el = g('al-time-' + tm); if (el) el.onclick = () => setOpt('time', tm); }
   for (const wx of ['clear', 'rain']) { const el = g('al-wx-' + wx); if (el) el.onclick = () => setOpt('weather', wx); }
+  for (const xb of ['green', 'mixed', 'veteran']) { const el = g('al-xp-' + xb); if (el) el.onclick = () => { const L = AF.lobby; if (!L || L.role !== 'host') return; L.xp = xb; afRollNpcMix(L); afLobbyRender(); afLobbyBroadcast(); }; }
   g('al-inv-btn').onclick = () => { const i = g('al-inv-name'); afInvite(i.value); i.value = ''; };
   g('al-inv-name').addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') { afInvite(g('al-inv-name').value); g('al-inv-name').value = ''; } });
   g('al-start').onclick = () => { if (typeof requestFullscreenSafe === 'function' && TOUCH) requestFullscreenSafe(); SFX.init && SFX.init(); afStartFight(); };
@@ -18252,8 +18294,10 @@ function afTitlePresence() {
     if (pend && pend.room) afJoin(pend.room, pend.host);
   });
 }
-BV.arena = (cfg) => { afOpenLobby('host'); if (cfg && AF.lobby) { if (cfg.teams) AF.lobby.teams = clamp(cfg.teams, AF_LIM.teamsMin, AF_LIM.teamsMax); if (cfg.per) AF.lobby.per = clamp(cfg.per, AF_LIM.perMin, AF_LIM.perMax); afResize(AF.lobby); afLobbyRender(); if (cfg.start) afStartFight(); } return BV.arenaStatus(); };
+BV.arena = (cfg) => { afOpenLobby('host'); if (cfg && AF.lobby) { if (cfg.teams) AF.lobby.teams = clamp(cfg.teams, AF_LIM.teamsMin, AF_LIM.teamsMax); if (cfg.per) AF.lobby.per = clamp(cfg.per, AF_LIM.perMin, AF_LIM.perMax); if (cfg.xp) AF.lobby.xp = cfg.xp; afResize(AF.lobby);
+  if (cfg.npcXp) AF.lobby.npcXp = cfg.npcXp; if (cfg.arch) AF.lobby.npcArch = AF.lobby.npcArch.map(row => row.map(() => cfg.arch)); afLobbyRender(); if (cfg.start) afStartFight(); } return BV.arenaStatus(); }; // (npcXp / arch: test overrides)
 BV.arenaStart = () => { afStartFight(); return BV.arenaStatus(); };
+BV.arenaAutoMe = (xp) => { const b = AF.me; if (!b) return null; b.ctrl = 'ai'; b.inp = afFreshInput(); b.inp.yaw = b.yaw; if (xp != null) { b.xp = xp; b.skill = xp / 100; } AF.me = null; return b.idx; }; // test: hand my fighter to the brain
 BV.arenaInvite = (name) => { afInvite(name); return BV.arenaNet(); };
 BV.arenaAccept = () => { afAcceptInvite(); return BV.arenaNet(); };
 BV.arenaNet = () => ({ id: window.coop && window.coop.id, room: window.coop && window.coop.room, connected: !!(window.coop && window.coop.connected), on: AF.on, role: AF.role, seed: AF.seed, phase: AF.phase, me: AF.me ? AF.me.idx : null,

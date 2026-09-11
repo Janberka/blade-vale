@@ -429,6 +429,16 @@ lends plain gear (iron sword, hunting bow, courser) and pays nothing.
   drooping, thin neck; the destrier wears a caparison in the team cloth; the warhorse a caparison,
   a steel chamfron and crinet plates on the neck. NPCs roll these by XP like everything else
   (brigandine or plate at 60–82, dragon plate for some 95+, recurves for 90+ archers).
+* **The shield is strapped, not gripped**: it rides the left *elbow* group (`makeShield`), turned so
+  the forearm runs across its back with the point down, and whenever a shield shows the animator
+  twists the left elbow (`elbowL.rotation.z = −90°`) so the forearm lies across the chest — the
+  face to the foe, the fist at the shield's inner edge — while the pose's own elbow flex only
+  tilts it (level in guard, raised for a block). It used to hang off the fist by an imaginary
+  centre grip, face-up like a tray.
+* **The bow is built around the grip** (`makeBow`): the arc's middle sits at the hand, the string
+  joins the tips 0.6 behind (it used to run through the hand), and the group is turned so that in
+  the aim pose the limbs stand up and the belly faces the target. (Rotating the old, off-centre
+  bow put it over the archer's head.)
 * **The grip is real**: the sword is spun 90° about its blade (`rotation.y` in `makeSword` /
   `afBuildSword`) so the edge faces the foe and the crossguard stands vertical to the wrist — it
   used to sit flat like a display piece — and the bow is held edge-on to the target with the string

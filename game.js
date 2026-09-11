@@ -637,16 +637,22 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
     return g;
   }
   function makeBow() {
+    // built AROUND THE GRIP: the arc's middle sits at the hand, limbs along the pivot's ±X, belly toward +Y, the
+    // string joining the tips 0.6 behind. The group is then turned so that, in the aim pose, the limbs stand up
+    // (hand-local z ≈ world up) and the belly faces the target (hand-local (x−y)/√2 ≈ world forward): the bow is
+    // edge-on to the foe with the string toward the archer — never flat like a shield, never over the head.
     const b = new THREE.Group();
-    const arcLen = Math.PI * 0.78;
-    const arc = new THREE.Mesh(new THREE.TorusGeometry(0.85, 0.045, 6, 12, arcLen), mat(0x6b4a2e, { smooth: true }));
+    const arcLen = Math.PI * 0.78, R = 0.85;
+    const pivot = new THREE.Group(); pivot.position.y = -R; b.add(pivot);
+    const arc = new THREE.Mesh(new THREE.TorusGeometry(R, 0.045, 6, 12, arcLen), mat(0x6b4a2e, { smooth: true }));
     arc.castShadow = true;
-    arc.rotation.z = Math.PI / 2 - arcLen / 2;
-    b.add(arc);
-    const string = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 2 * 0.85 * Math.sin(arcLen / 2), 4), mat(0xddddcc, { smooth: true }));
-    string.position.x = 0.85 * Math.cos(arcLen / 2);
-    b.add(string);
-    b.rotation.set(Math.PI / 2, Math.PI / 2, 0);            // held edge-on to the target, the string toward the archer — not flat like a shield
+    arc.rotation.z = Math.PI / 2 - arcLen / 2;               // the arc centred on +Y: its middle at (0, R, 0) — the group's origin
+    pivot.add(arc);
+    const string = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 2 * R * Math.sin(arcLen / 2), 4), mat(0xddddcc, { smooth: true }));
+    string.rotation.z = Math.PI / 2; string.position.y = R * Math.cos(arcLen / 2);   // tip to tip
+    pivot.add(string);
+    const X = new THREE.Vector3(0, 0, 1), Y = new THREE.Vector3(0.7071, -0.7071, 0), Z = new THREE.Vector3(0.7071, 0.7071, 0);
+    b.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(X, Y, Z));
     b.userData.fixedGrip = true; // the wrist channel must not spin the bow
     armL.hand.add(b);
     return b;
@@ -660,9 +666,12 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
       s.lineTo(0, -0.5); s.lineTo(-0.3, 0.02); s.closePath();
       return new THREE.ExtrudeGeometry(s, { depth: 0.06, bevelEnabled: false });
     }), plate);
-    sh.position.set(0.08, -0.02, 0.12);
-    sh.userData.fixedGrip = true; // the wrist channel must not spin the shield
-    armL.hand.add(sh); casters.push(sh); return sh;
+    // STRAPPED TO THE FOREARM, not held by a centre grip: the shield rides the elbow group with the forearm running
+    // across its back (shape x along the arm → rotation.z), its top toward the outer edge (local −x = world up when the
+    // arm is across the chest) and the point down; the fist sits at the shield's inner edge, the elbow near the outer
+    sh.rotation.z = Math.PI / 2; sh.position.set(0, -0.10, 0.13);
+    sh.userData.fixedGrip = true; // (kept: the wrist channel must never touch it)
+    armL.elbow.add(sh); casters.push(sh); return sh;
   };
   if (opts.both) {                                            // the arena: bow AND sword-and-board, swapped in the hand mid-fight
     bow = makeBow(); held = makeSword(false); shield = makeShield();
@@ -934,6 +943,10 @@ function updateAnimator(anim, dt) {
   p.elbowR.rotation.x = c.elR;
   p.shoulderL.rotation.set(c.shLx, 0, -c.shLz);
   p.elbowL.rotation.x = c.elL;
+  // THE SHIELD ARM: with a shield showing, the left forearm lies ACROSS the chest (a twist at the elbow) so the strapped
+  // shield faces the foe with the fist at its inner edge; the pose's own elbow flex only tilts it — level in guard, raised for a block
+  if (p.shield && p.shield.visible) { p.elbowL.rotation.z = -Math.PI / 2; p.elbowL.rotation.x = lerp(0.5, 1.0, clamp((-c.elL - 0.8) / 0.65, 0, 1)); }
+  else p.elbowL.rotation.z = 0;
   p.upperBody.rotation.set(c.leanX, -c.twistY, 0);
   if (!p.sword.userData.fixedGrip) p.sword.rotation.x = SWORD_BASE_X + c.wristX;
 }
@@ -3333,7 +3346,7 @@ function setTint(parts, color) {
   // per-mesh storage poisons the restore value for every mesh after the first
   for (const k in parts) {
     const o = parts[k];
-    if (!o) continue; // some slots (e.g. bow on a swordsman) are null
+    if (!o || typeof o.traverse !== 'function') continue; // some slots (e.g. bow on a swordsman) are null; gearBits is a list, not an object
     o.traverse((c) => {
       if (c.isMesh && c.material && c.material.emissive && !c.material.userData.noTint) {
         const ud = c.material.userData;
@@ -18969,6 +18982,7 @@ BV.arena = (cfg) => { afOpenLobby('host'); if (cfg && AF.lobby) { if (cfg.teams)
 BV.arenaStart = () => { afStartFight(); return BV.arenaStatus(); };
 BV.arenaHorseHit = (id, amt) => { const h = AF.horses[id]; if (h) afDamageHorse(h, amt, AF.bodies.find(b => !b.dead && (!h.rider || b.team !== h.rider.team)) || AF.bodies[0], false); return BV.arenaHorses(); };   // test: wound a horse
 BV.arenaKill = (idx) => { const b = AF.bodies[idx]; if (b && !b.dead) afKill(b, null); return BV.arenaStatus(); };   // test: fell a man
+BV.previewPose = (name) => { const P = AF.preview; if (P && P.anim) { setPose(P.anim, name, 0.01); updateAnimator(P.anim, 1); } return !!P; };   // test: pose the market figure
 BV.arenaHorses = () => AF.horses.map(h => ({ id: h.id, hp: Math.round(h.hp), dead: h.dead, rider: h.rider ? h.rider.name : null, x: +h.x.toFixed(1), z: +h.z.toFixed(1), sp: +h.sp01.toFixed(2), pace: h.pace }));
 BV.arenaAutoMe = (xp) => { const b = AF.me; if (!b) return null; b.ctrl = 'ai'; b.inp = afFreshInput(); b.inp.yaw = b.yaw; if (xp != null) { b.xp = xp; b.skill = xp / 100; } AF.me = null; return b.idx; }; // test: hand my fighter to the brain
 BV.arenaInvite = (name) => { afInvite(name); return BV.arenaNet(); };

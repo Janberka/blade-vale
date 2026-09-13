@@ -1,0 +1,8 @@
+Model Information:
+* title:	Fantasy Knight
+* source:	https://sketchfab.com/3d-models/fantasy-knight-490d800024494d5580e999465b99801c
+* author:	illustros (https://sketchfab.com/illustros)
+
+Model License:
+* license type:	SKETCHFAB Standard (https://sketchfab.com/licenses)
+* requirements:	Under basic restrictions, use worldwide, on all types of media, commercially or not, and in all types of derivative works

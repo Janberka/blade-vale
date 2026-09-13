@@ -1,0 +1,39 @@
+{
+ "source": "Fantasy Warrior \u2014 Free Low-Poly 3D Model (USDZ from the user's Desktop, 2026-09-12)",
+ "height": 1.9,
+ "map": {
+  "upperBody": "n8",
+  "head": "n12",
+  "shoulderL": "n15",
+  "elbowL": "n16",
+  "handL": "n17",
+  "shoulderR": "n39",
+  "elbowR": "n40",
+  "handR": "n41",
+  "hipL": "n65",
+  "kneeL": "n66",
+  "hipR": "n70",
+  "kneeR": "n71"
+ },
+ "meshes": {
+  "sword": "FantasyWarrior_sword_6_characters_0",
+  "shield": "FantasyWarrior_shield_6_characters_0",
+  "cloak": "FantasyWarrior_cloak_6_characters_0",
+  "armor": "FantasyWarrior_armor_6_characters_0"
+ },
+ "swordHand": "n41",
+ "shieldArm": "n16",
+ "bowHand": "n17",
+ "cloakBones": [
+  "n62",
+  "n63",
+  "n64"
+ ],
+ "reparent": {},
+ "hipY": 0.972,
+ "straighten": {
+  "arms": 0.55,
+  "legs": 1.0
+ },
+ "plumeY": 0.35
+}

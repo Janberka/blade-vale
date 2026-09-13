@@ -1,0 +1,20 @@
+<!doctype html><meta charset=utf-8><title>ref models</title>
+<style>body{margin:0;background:#2a2d33}canvas{display:block}</style>
+<body></body>
+<script src="three.min.js"></script>
+<script src="mini-gltf.js"></script>
+<script>
+window.addEventListener('load',()=>{
+const W=innerWidth||800,H=innerHeight||600;
+const r=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});r.setSize(W,H);r.setPixelRatio(1);r.outputEncoding=THREE.sRGBEncoding;r.toneMapping=THREE.ACESFilmicToneMapping;document.body.appendChild(r.domElement);
+const s=new THREE.Scene();s.background=new THREE.Color(0x2a2d33);
+const c=new THREE.PerspectiveCamera(30,W/H,0.01,100);
+const q=new URLSearchParams(location.search);const az=(+q.get('az')||0)*Math.PI/180;const dist=+q.get('d')||3.4;const cy=q.get('cy')!=null?+q.get('cy'):0.9;const ly=q.get('ly')!=null?+q.get('ly'):0.5;
+c.position.set(Math.sin(az)*dist,cy,Math.cos(az)*dist);c.lookAt(0,ly,0);
+s.add(new THREE.HemisphereLight(0xffffff,0x334455,0.9));const d=new THREE.DirectionalLight(0xffffff,1.2);d.position.set(2,4,3);s.add(d);
+const names=(q.get('m')||'fantasy_knight,ancient_warrior,ancient_warrior__1_').split(',');let n=0;const gap=+q.get('gap')||0.75;
+names.forEach((nm,i)=>loadMiniGLTF(nm).then(o=>{const b=new THREE.Box3().setFromObject(o);const sz=b.getSize(new THREE.Vector3());o.scale.setScalar(1/sz.y);const b2=new THREE.Box3().setFromObject(o);const ctr=b2.getCenter(new THREE.Vector3());const off=(i-(names.length-1)/2)*gap;o.position.x+=off*Math.cos(az)-ctr.x;o.position.y-=b2.min.y;o.position.z+=-off*Math.sin(az)-ctr.z;s.add(o);if(++n===names.length){window.__ready=true;}}).catch(e=>console.error(nm,e)));
+(function loop(){requestAnimationFrame(loop);r.render(s,c);})();
+window.__render=()=>r.render(s,c);window.__fit=()=>{r.setSize(innerWidth,innerHeight);c.aspect=innerWidth/innerHeight;c.updateProjectionMatrix();};
+});
+</script>

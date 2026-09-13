@@ -1,0 +1,8 @@
+Model Information:
+* title:	Ancient Warrior
+* source:	https://sketchfab.com/3d-models/ancient-warrior-6e3400cfb84e437291627273a41a2b75
+* author:	illustros (https://sketchfab.com/illustros)
+
+Model License:
+* license type:	SKETCHFAB Standard (https://sketchfab.com/licenses)
+* requirements:	Under basic restrictions, use worldwide, on all types of media, commercially or not, and in all types of derivative works

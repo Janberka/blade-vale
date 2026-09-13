@@ -1,0 +1,29 @@
+<!doctype html><meta charset=utf-8><title>rig debug</title>
+<style>body{margin:0;background:#2a2d33}canvas{display:block}</style>
+<body></body>
+<script src="three.min.js"></script><script src="mini-gltf.js"></script><script src="skin.js"></script>
+<script>
+window.addEventListener('load',async()=>{
+const q=new URLSearchParams(location.search);const rig=q.get('rig')||'knight';const spec=await (await fetch('rigs/'+rig+'.json?'+Date.now())).json();
+const W=innerWidth||800,H=innerHeight||600;
+const r=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});r.setSize(W,H);r.setPixelRatio(1);document.body.appendChild(r.domElement);
+const s=new THREE.Scene();s.background=new THREE.Color(0x2a2d33);
+const c=new THREE.PerspectiveCamera(28,W/H,0.01,100);const az=(+q.get('az')||0)*Math.PI/180;const dist=+q.get('d')||3.2;const cy=q.get('cy')!=null?+q.get('cy'):0.55;
+c.position.set(Math.sin(az)*dist,cy,Math.cos(az)*dist);c.lookAt(0,0.5,0);
+s.add(new THREE.HemisphereLight(0xffffff,0x334455,1.0));const d=new THREE.DirectionalLight(0xffffff,0.8);d.position.set(2,4,3);s.add(d);
+const o=await loadMiniGLTF(spec.model);let mesh=null;o.traverse(m=>{if(m.isMesh)mesh=m;});
+// bake the node transform, normalise
+o.updateMatrixWorld(true);const geo=mesh.geometry.clone();geo.applyMatrix4(mesh.matrixWorld);
+const P=geo.attributes.position.array;const N=RealSkin.normalise(P,spec.yaw);const idx=RealSkin.cut(N,geo.index.array,spec.cut);
+const sk=RealSkin.weights(N,spec);
+const PAL=[0x888888,0xff4444,0xffaa00,0x44ff44,0x22aa22,0x4488ff,0x2244aa,0xff44ff,0xaa22aa,0xffffaa,0x44ffff,0x22aaaa,0xffddbb];
+const col=new Float32Array(N.length);for(let v=0;v<N.length/3;v++){const cA=new THREE.Color(PAL[sk.idx[v*4]]),cB=new THREE.Color(PAL[sk.idx[v*4+1]]);const wA=sk.w[v*4],wB=sk.w[v*4+1];col[v*3]=cA.r*wA+cB.r*wB;col[v*3+1]=cA.g*wA+cB.g*wB;col[v*3+2]=cA.b*wA+cB.b*wB;}
+const g2=new THREE.BufferGeometry();g2.setAttribute('position',new THREE.BufferAttribute(N,3));g2.setAttribute('color',new THREE.BufferAttribute(col,3));g2.setIndex(new THREE.BufferAttribute(idx,1));g2.computeVertexNormals();
+const tex=q.get('tex')==='1';const m2=new THREE.Mesh(g2,tex?mesh.material:new THREE.MeshLambertMaterial({vertexColors:true}));s.add(m2);
+// joints + bones
+const J=spec.joints;for(const [k,p] of Object.entries(J)){const sp=new THREE.Mesh(new THREE.SphereGeometry(0.012,8,6),new THREE.MeshBasicMaterial({color:0xffffff,depthTest:false}));sp.position.fromArray(p);sp.renderOrder=9;s.add(sp);}
+for(const b of RealSkin.bones(spec)){const lg=new THREE.BufferGeometry().setFromPoints([new THREE.Vector3().fromArray(b.head),new THREE.Vector3().fromArray(b.tail)]);const ln=new THREE.Line(lg,new THREE.LineBasicMaterial({color:0x000000,depthTest:false}));ln.renderOrder=9;s.add(ln);}
+window.__render=()=>r.render(s,c);window.__fit=()=>{r.setSize(innerWidth,innerHeight);c.aspect=innerWidth/innerHeight;c.updateProjectionMatrix();};window.__ready=true;
+(function loop(){requestAnimationFrame(loop);r.render(s,c);})();
+});
+</script>

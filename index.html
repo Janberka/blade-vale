@@ -250,6 +250,7 @@
   #shell-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 12px; height: 50px; padding: 0 12px; border-bottom: 1px solid #3a3247; background: rgba(0,0,0,.25); }
   #shell-back { flex: 0 0 auto; min-width: 88px; cursor: pointer; background: #2a2233; border: 1px solid #6b5e7a; color: #f3ead8; border-radius: 8px; padding: 7px 12px; font: 700 13px system-ui; touch-action: manipulation; }
   #shell-back:hover { background: #3a3047; }
+  .sfx-credit { margin-top: 14px; font-size: 10px; opacity: 0.45; line-height: 1.4; }
   #shell-title { flex: 1; min-width: 0; font-size: 15px; letter-spacing: 3px; text-transform: uppercase; color: #ffe089; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #shell-help { flex: 0 0 auto; width: 30px; height: 30px; padding: 0; border-radius: 50%; border: 1px solid #6b5e7a; background: rgba(16,14,24,.78); color: #e8def8; font: 700 14px/28px system-ui; text-align: center; cursor: pointer; touch-action: manipulation; }
   #shell-help:hover { background: #3a3047; }
@@ -741,6 +742,7 @@
     <div id="auth-note"><span class="arena-only">You can fight the vale's own men without an account. Sign in to invite friends, keep your career and buy gear.</span><span class="world-only">Sign in (or create an account) to enter. Your characters live on the map —
       <span class="desktop-keys">switch between them with <b>U</b> in game.</span><span class="touch-keys">tap <b>Chars</b> in game to switch between them.</span></span></div>
   </div>
+        <div class="sfx-credit">Crowd sounds by Gregor Quendel (CC-BY 4.0) · bow shot by dorkster, from sounds by qubodup (CC-BY-SA 3.0) · more in assets/sfx/CREDITS.md</div>
       </div>
       <!-- signed in: the menu -->
       <div class="page" id="page-home">
@@ -751,6 +753,7 @@
           <button class="btn world-only" id="home-world-btn">Enter the Vale</button>
         </div>
         <div id="home-foot">Signed in as <b id="home-name"></b> · <button id="home-logout">sign out</button></div>
+        <div class="sfx-credit">Crowd sounds by Gregor Quendel (CC-BY 4.0) · bow shot by dorkster, from sounds by qubodup (CC-BY-SA 3.0) · more in assets/sfx/CREDITS.md</div>
       </div>
       <!-- the career sheet (the name card under the figure opens it) -->
       <div class="page wide" id="page-career">

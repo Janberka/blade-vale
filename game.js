@@ -125,7 +125,8 @@ const FEEL = {
   finisherHpFrac: 0.2, finisherStop: 0.24,
 };
 const AUDIO = { master: 0.55, swingVol: 0.32, hitVol: 0.7, clangVol: 0.6, killVol: 0.95,
-                footVol: 0.18, bowVol: 0.5, maxDist: 30, maxVoices: 14 };
+                footVol: 0.18, bowVol: 0.5, maxDist: 30, maxVoices: 14,
+                arenaMaxDist: 60, sampleVol: 0.85, crowdVol: 0.32, pitCrowdVol: 0.16, cheerVol: 0.7 };
 
 // Directional camera kick + FOV punch — decay in updateCamera (real dt, so a kill
 // still snaps even while hit-stop crawls gameplay). Reset to base when settled.
@@ -147,29 +148,93 @@ let MODE_XFADE_SPEED = 1;
 function addKick(dir, amount) { camKick.addScaledVector(dir, amount); }
 function addFovPunch(amount) { fovPunch = Math.min(fovPunch + amount, 12); }
 
-// ---------- SFX: fully synthesized WebAudio (no asset files) ----------
-// One context + a shared noise buffer; every helper is a short procedural one-shot.
-// No-ops until init() runs on a user gesture (browsers require one) and no-ops
-// headlessly (ctx stays null) — so BV.advance draws no extra RNG and stays deterministic.
+// ---------- SFX: recorded samples (assets/sfx, see CREDITS.md) over a synthesized WebAudio fallback ----------
+// One context, a shared noise buffer and a bank of decoded samples. Each helper plays a random take of
+// its sample (pitch-jittered, panned toward where it happened); until the bank has loaded, or if a
+// file fails, it falls back to the old procedural one-shot. No-ops until init() runs on a user gesture
+// (browsers require one) and no-ops headlessly (ctx stays null). Take choice uses a private LCG, never
+// Math.random, so audio can't shift the game's RNG.
+const SFX_BANK = { swing: 10, clash: 10, flesh: 5, plate: 5, body: 5, ring: 5, step: 10, slice: 2, bow: 1,
+                   crowd_loop: 0, murmur_loop: 0, cheer_big: 0, cheer_small: 0, cheer_win: 0 };   // 0 = a single file with no number
+const SFX_LOOP_PAD = 0.5;   // the loops carry 0.5 s of wrapped audio at each end so the AAC encoder delay can't open a seam
 const SFX = {
   ctx: null, master: null, noise: null, muted: false, _voices: 0, _voiceFrame: -1,
+  bank: {}, _seed: 0x9e3779b9, _last: {}, _bed: null, _cheerAt: -9,
   init() {
     if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
     try {
       const ctx = new AC();
-      const master = ctx.createGain();
-      master.gain.value = AUDIO.master; master.connect(ctx.destination);
+      const master = ctx.createGain(), comp = ctx.createDynamicsCompressor();   // the compressor keeps a pile-up of clashes over the crowd from clipping
+      comp.threshold.value = -14; comp.knee.value = 10; comp.ratio.value = 4; comp.attack.value = 0.004; comp.release.value = 0.2;
+      master.gain.value = AUDIO.master; master.connect(comp); comp.connect(ctx.destination);
       const buf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate); // 1s white noise, reused
       const d = buf.getChannelData(0);
       for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
       this.ctx = ctx; this.master = master; this.noise = buf;
+      this._loadBank();
     } catch (e) { /* audio unavailable — stay silent, never throw into the game loop */ }
   },
-  // per-frame voice cap so a 40-fighter clash can't storm the mixer
+  _loadBank() {
+    const ctx = this.ctx;
+    const decode = (ab) => new Promise((res, rej) => { const p = ctx.decodeAudioData(ab, res, rej); if (p && p.then) p.then(res, rej); });   // (old Safari only has the callback form)
+    for (const [name, n] of Object.entries(SFX_BANK)) {
+      const files = n ? Array.from({ length: n }, (_, i) => name + (i + 1)) : [name];
+      Promise.all(files.map(f => fetch('assets/sfx/' + f + '.m4a').then(r => { if (!r.ok) throw new Error(f); return r.arrayBuffer(); }).then(decode).catch(() => null)))
+        .then(bufs => { bufs = bufs.filter(Boolean); if (bufs.length) this.bank[name] = bufs; });
+    }
+  },
+  _rand() { this._seed = (Math.imul(this._seed, 1664525) + 1013904223) >>> 0; return this._seed / 4294967296; },
+  _listener() { return AF.on ? camera.position : player.pos; },   // (in the arena the camera is the ears; player.pos is the overworld hero)
+  // a random take of bank[name] (never the same take twice running), gain g, pitch rate ± jitter, panned toward worldPos
+  _sample(name, g, worldPos, rate = 1, jitter = 0.06) {
+    const takes = this.bank[name]; if (!takes || g < 0.005) return false;
+    let k = Math.floor(this._rand() * takes.length);
+    if (takes.length > 1 && k === this._last[name]) k = (k + 1) % takes.length;
+    this._last[name] = k;
+    const ctx = this.ctx, t = ctx.currentTime, src = ctx.createBufferSource(), gain = ctx.createGain();
+    src.buffer = takes[k]; src.playbackRate.value = rate * (1 + (this._rand() * 2 - 1) * jitter);
+    gain.gain.value = g * AUDIO.sampleVol; src.connect(gain);
+    let out = gain;
+    if (worldPos && ctx.createStereoPanner) {
+      const pan = ctx.createStereoPanner(), e = camera.matrixWorld.elements;   // camera right = matrixWorld column 0
+      const dx = worldPos.x - camera.position.x, dz = worldPos.z - camera.position.z, dl = Math.hypot(dx, dz) || 1;
+      pan.pan.value = clamp((dx * e[0] + dz * e[2]) / dl, -1, 1) * 0.7; gain.connect(pan); out = pan;
+    }
+    out.connect(this.master); src.start(t);
+    return true;
+  },
+  // the crowd under the whole fight: one looping bed, faded toward vol (0 fades it out)
+  bed(name, vol) {
+    if (!this.ctx) return;
+    const want = this.muted ? 0 : vol, t = this.ctx.currentTime;
+    if (this._bed && this._bed.name !== name) { const old = this._bed; old.gain.gain.setTargetAtTime(0, t, 0.4); try { old.src.stop(t + 3); } catch (e) {} this._bed = null; }
+    if (!this._bed) {
+      if (want <= 0.001) return;
+      const takes = this.bank[name]; if (!takes) return;
+      const src = this.ctx.createBufferSource(), gain = this.ctx.createGain();
+      src.buffer = takes[0]; src.loop = true; src.loopStart = SFX_LOOP_PAD; src.loopEnd = takes[0].duration - SFX_LOOP_PAD;
+      gain.gain.value = 0; src.connect(gain); gain.connect(this.master); src.start(t, SFX_LOOP_PAD);
+      this._bed = { name, src, gain, vol: -1 };
+    }
+    if (Math.abs(this._bed.vol - want) > 0.004) { this._bed.gain.gain.setTargetAtTime(want, t, 0.35); this._bed.vol = want; }
+  },
+  // a crowd reaction on top of the bed; a small one never cuts into a cheer that is still rising
+  cheer(kind, vol) {
+    if (!this.ctx || this.muted) return false;
+    const name = kind === 'win' ? 'cheer_win' : kind === 'big' ? 'cheer_big' : 'cheer_small';
+    if (!this.bank[name]) return false;
+    const now = this.ctx.currentTime;
+    if (now - this._cheerAt < (kind === 'small' ? 2.5 : kind === 'big' ? 1.2 : 0)) return true;
+    this._cheerAt = now;
+    return this._sample(name, vol * AUDIO.cheerVol, null, 1, 0.04);
+  },
+  // voice cap per 1/30 s of audio clock so a 40-fighter clash can't storm the mixer (it used to key on frameNo,
+  // which the arena loop never advances — after the first 14 sounds a fight went silent)
   _budget() {
-    if (frameNo !== this._voiceFrame) { this._voiceFrame = frameNo; this._voices = 0; }
+    const w = Math.floor(this.ctx.currentTime * 30);
+    if (w !== this._voiceFrame) { this._voiceFrame = w; this._voices = 0; }
     if (this._voices >= AUDIO.maxVoices) return false;
     this._voices++; return true;
   },
@@ -177,7 +242,7 @@ const SFX = {
   _ready(vol, worldPos) {
     if (!this.ctx || this.muted) return 0;
     let g = vol;
-    if (worldPos) g *= clamp(1 - Math.hypot(worldPos.x - player.pos.x, worldPos.z - player.pos.z) / AUDIO.maxDist, 0, 1);
+    if (worldPos) { const L = this._listener(); const f = clamp(1 - Math.hypot(worldPos.x - L.x, worldPos.z - L.z) / (AF.on ? AUDIO.arenaMaxDist : AUDIO.maxDist), 0, 1); g *= f * f * 0.6 + f * 0.4; }   // (a bowl you can hear across; eased so the far side is faint, not gone)
     if (g < 0.01 || !this._budget()) return 0;
     return g;
   },
@@ -200,9 +265,10 @@ const SFX = {
     if (f1 !== f0) bq.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t + dur);
     s.connect(bq); this._env(bq, g, attack, dur); s.start(t); s.stop(t + dur + 0.02);
   },
-  swing(p) { const g = this._ready(AUDIO.swingVol, p); if (g) this._noise('bandpass', 1800, 500, 0.9, 0.008, 0.18, g); },
+  swing(p) { const g = this._ready(AUDIO.swingVol, p); if (!g) return; if (this._sample('swing', g * 1.6, p, 1, 0.08)) return; this._noise('bandpass', 1800, 500, 0.9, 0.008, 0.18, g); },
   clang(p, heavy) {
     const g = this._ready(AUDIO.clangVol * (heavy ? 1.3 : 1), p); if (!g) return;
+    if (this._sample('clash', g, p, heavy ? 0.84 : 1, 0.07)) { if (heavy) this._sample('ring', g * 0.55, p, 0.72, 0.05); return; }
     const b = heavy ? 520 : 700;
     this._tone('square', b, b * 0.96, 0.002, 0.22, g * 0.5);
     this._tone('triangle', b * 1.5, b * 1.4, 0.002, 0.18, g * 0.4, 8);
@@ -211,16 +277,18 @@ const SFX = {
   },
   hit(p, armored) {
     const g = this._ready(AUDIO.hitVol, p); if (!g) return;
+    if (this._sample('flesh', g * 0.9, p, armored ? 0.9 : 1.05, 0.07)) { if (armored) this._sample('plate', g * 0.5, p, 1, 0.08); else this._sample('slice', g * 0.35, p, 1.1, 0.1); return; }
     if (armored) { this._tone('triangle', 320, 150, 0.002, 0.12, g * 0.6); this._noise('bandpass', 2600, 900, 2, 0.001, 0.1, g * 0.5); }
     else { this._tone('sine', 180, 70, 0.003, 0.16, g * 0.9); this._noise('lowpass', 900, 300, 0.8, 0.001, 0.09, g * 0.5); }
   },
   kill(p) {
     const g = this._ready(AUDIO.killVol, p); if (!g) return;
+    if (this._sample('flesh', g * 0.8, p, 0.82, 0.05)) { this._sample('body', g * 0.9, p, 0.9, 0.06); return; }
     this._tone('sine', 150, 45, 0.004, 0.3, g);
     this._noise('lowpass', 1400, 200, 0.7, 0.001, 0.22, g * 0.7);
   },
-  foot(p) { const g = this._ready(AUDIO.footVol, p); if (g) this._noise('lowpass', 380, 120, 0.6, 0.001, 0.08, g); },
-  bow(p) { const g = this._ready(AUDIO.bowVol, p); if (!g) return; this._noise('bandpass', 2400, 700, 1.2, 0.001, 0.12, g * 0.6); this._tone('triangle', 600, 180, 0.002, 0.1, g * 0.4); },
+  foot(p) { const g = this._ready(AUDIO.footVol, p); if (!g) return; if (this._sample('step', g * 1.4, p, 1, 0.1)) return; this._noise('lowpass', 380, 120, 0.6, 0.001, 0.08, g); },
+  bow(p) { const g = this._ready(AUDIO.bowVol, p); if (!g) return; if (this._sample('bow', g * 1.2, p, 1, 0.08)) return; this._noise('bandpass', 2400, 700, 1.2, 0.001, 0.12, g * 0.6); this._tone('triangle', 600, 180, 0.002, 0.1, g * 0.4); },
 };
 
 // Geometry cache: identical shapes share one GPU buffer instead of allocating
@@ -12102,7 +12170,9 @@ BV.audio = {
   mute: () => { SFX.muted = true; }, unmute: () => { SFX.muted = false; },
   init: () => SFX.init(),
   play: (name, worldPos) => { SFX.init(); if (SFX[name]) SFX[name](worldPos); },
-  state: () => ({ ctx: !!SFX.ctx, running: SFX.ctx ? SFX.ctx.state : 'none', muted: SFX.muted, voices: SFX._voices, master: AUDIO.master }),
+  state: () => ({ ctx: !!SFX.ctx, running: SFX.ctx ? SFX.ctx.state : 'none', muted: SFX.muted, voices: SFX._voices, master: AUDIO.master,
+                 bank: Object.fromEntries(Object.entries(SFX.bank).map(([k, v]) => [k, v.length])), bed: SFX._bed ? SFX._bed.name + '@' + SFX._bed.vol.toFixed(2) : null }),
+  cheer: (kind = 'big') => { SFX.init(); return SFX.cheer(kind, 1); },
 };
 BV.feel = () => ({ trauma: +trauma.toFixed(3), hitstop: +hitstop.toFixed(3),
   camKick: +camKick.length().toFixed(3), fovPunch: +fovPunch.toFixed(3), fov: +camera.fov.toFixed(2),
@@ -17204,6 +17274,7 @@ function afStepCrowd(dt) {
 // the roar: a swell of band-passed noise (the synth has no samples) — bigger when it's your kill, or your fall
 function afRoar(vol) {
   const S = SFX; if (!S.ctx || S.muted) return;
+  if (S.cheer(vol >= 0.5 ? 'big' : 'small', vol / 0.55)) return;   // the recorded crowd; the filtered-noise swell below is the fallback
   try {
     const ctx = S.ctx, t = ctx.currentTime;
     for (const [f0, f1, q, g, d] of [[260, 420, 0.7, vol, 2.4], [700, 500, 0.6, vol * 0.5, 1.8]]) {
@@ -19718,6 +19789,7 @@ function afFinish(winner, standings) {
   if (AF.role === 'host') afSend({ k: 'over', winner, standings: AF.standings, star: AF.starName, ledger: afLedger() });
   if (AF.role !== 'guest') afReportResult(); else afAwaitReward();
   const mine = AF.me ? AF.me.team : -1;
+  try { SFX.cheer('win', 1); } catch (e) {}
   afBanner(winner < 0 ? 'DRAW' : winner === mine ? 'VICTORY' : AF_TEAMS[winner].name + ' WINS', winner === mine ? 'your team holds the pit' : winner < 0 ? 'the bell rang on a stalemate' : 'the pit belongs to them', 3.5);
   try { document.exitPointerLock && document.exitPointerLock(); } catch (e) {}
   afVictoryStart();                                          // the living freeze where they stand, the winners' blades go up (afVictoryBody)
@@ -19919,6 +19991,7 @@ function afFrame(now, noRaf) {
     afIntroStep(dt);
     if (AF.role === 'guest') afNetTick(dt);
   }
+  try { SFX.bed(AF.cfg.venue === 'pit' ? 'murmur_loop' : 'crowd_loop', (AF.cfg.venue === 'pit' ? AUDIO.pitCrowdVol : AUDIO.crowdVol) * (1 + clamp(AF.roar, 0, 2.6) * 0.25)); } catch (e) {}   // the house, always there under the steel
   if (AF.outro) afOutroStep(dt);                             // the end-game film (real time, whatever the hit-stop)
   if (AF.phase !== 'intro') afStepGates(dt);                 // (the gates swing shut behind the men during the countdown)
   updateSparks(gdt); updatePopups(gdt); updateArcs(dt); updateTrails(dt); afStepSplats(dt);

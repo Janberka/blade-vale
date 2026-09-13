@@ -41,7 +41,7 @@ function adminOk(req) {
 // databases, the training and tooling trees is never served. -----
 const STATIC_ROOT = path.resolve(__dirname, '..');
 const STATIC_DENY = /^\/(server|node_modules|\.git|train|tools|bot|perf|mocap|updates|admin\.html)(\/|$)|\.(db|sqlite3|db-wal|db-shm|log|md|py|swift|sh)$|\/\./;
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.gltf': 'model/gltf+json', '.bin': 'application/octet-stream', '.usdz': 'model/vnd.usdz+zip', '.wav': 'audio/wav', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.woff2': 'font/woff2', '.woff': 'font/woff', '.txt': 'text/plain; charset=utf-8', '.mov': 'video/quicktime', '.mp4': 'video/mp4' };
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.gltf': 'model/gltf+json', '.bin': 'application/octet-stream', '.usdz': 'model/vnd.usdz+zip', '.wav': 'audio/wav', '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4', '.ogg': 'audio/ogg', '.woff2': 'font/woff2', '.woff': 'font/woff', '.txt': 'text/plain; charset=utf-8', '.mov': 'video/quicktime', '.mp4': 'video/mp4' };
 function serveStatic(req, res, p) {
   if (req.method !== 'GET' && req.method !== 'HEAD') return false;
   let rel; try { rel = decodeURIComponent(p); } catch (e) { return false; }

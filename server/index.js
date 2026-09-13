@@ -17,6 +17,24 @@ const settlements = require('./settlements');
 const arena = require('./arena');       // the arena career: XP, gold, ranks, the marketplace
 const zlib = require('zlib');
 const fs = require('fs'), path = require('path');
+const crypto = require('crypto');
+
+// ----- the admin gate. reset-world DELETES the shared world and every character in it, and _advance
+// forces the tick — neither may ever be reachable from the internet. With BV_ADMIN_KEY set, a matching
+// X-Admin-Key is required. Without it, the call must come straight off the loopback: cloudflared and
+// every CDN connect from 127.0.0.1 themselves, so the socket address alone proves nothing — a request
+// carrying any forwarding header came through a proxy and is refused. -----
+function adminOk(req) {
+  const key = process.env.BV_ADMIN_KEY || '';
+  if (key) {
+    const got = Buffer.from(String(req.headers['x-admin-key'] || '')), want = Buffer.from(key);
+    return got.length === want.length && crypto.timingSafeEqual(got, want);
+  }
+  if (req.headers['cf-connecting-ip'] || req.headers['cf-ray'] || req.headers['x-forwarded-for'] ||
+      req.headers['x-real-ip'] || req.headers['forwarded']) return false;      // came through a proxy
+  const ip = (req.socket && req.socket.remoteAddress) || '';
+  return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+}
 
 // ----- the game itself, served from the repo: one port carries the page, the API and the /coop relay, so a single
 // tunnel (cloudflared / ngrok) in front of it puts the whole thing on the internet. Anything under the server, the
@@ -262,6 +280,7 @@ const server = http.createServer(async (req, res) => {
     // patrols included) rides on /api/v1/world?x=0&z=0&r=200 (unbounded box). Observing keeps the
     // shared world ticking, same as /world.
     if (req.method === 'GET' && p === '/api/v1/admin/overview') {
+      if (!adminOk(req)) return send(res, 404, { error: 'not found' });
       const wid = viewWorldId;
       if (req.headers['x-world'] === 'shared') { tick.advanceWorld(wid); tick.touchActive(wid); }
       const q = url.searchParams;
@@ -272,6 +291,7 @@ const server = http.createServer(async (req, res) => {
     // Everyone on `X-World: shared` lands in the new world on their next poll; the old world and all
     // its data (including player characters — a fresh start) are gone. Guarded by an explicit confirm.
     if (req.method === 'POST' && p === '/api/v1/admin/reset-world') {
+      if (!adminOk(req)) return send(res, 404, { error: 'not found' });
       const b = await readBody(req);
       if (!b || b.confirm !== 'RESET') return send(res, 400, { error: "pass { confirm: 'RESET' } to proceed" });
       const out = admin.resetWorld();
@@ -428,6 +448,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && p === '/api/v1/_advance') { // dev/test: force N world ticks immediately (X-World: shared targets the shared world)
+      if (!adminOk(req)) return send(res, 404, { error: 'not found' });
       const b = await readBody(req);
       return send(res, 200, { ok: true, advanced: tick.forceTicks(viewWorldId, Math.min(1000, (b.n | 0) || 50)) });
     }

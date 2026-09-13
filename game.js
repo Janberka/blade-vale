@@ -20257,7 +20257,10 @@ function afOnFightMsg(m) {
     let inp = AF.inputs.get(m.from);
     if (!inp) { inp = afFreshInput(); AF.inputs.set(m.from, inp); const b = AF.bodies.find(x => x.peer === m.from); if (b) b.inp = inp; }
     inp.mx = +d.mx || 0; inp.mz = +d.mz || 0; inp.yaw = +d.yaw || 0; inp.steer = d.st == null ? null : +d.st || 0; inp.thr = d.th == null ? null : +d.th || 0;
-    if (d.hy != null) { const hb = inp.body && inp.body.peer === m.from ? inp.body : (inp.body = AF.bodies.find(x => x.peer === m.from)); if (hb && hb.mounted && !hb.dead) hb.yaw = angleLerp(hb.yaw, +d.hy || 0, 0.7); } // a horse's heading is steered, not aimed: the rider's own screen owns it, or the two copies drift apart inp.atk = d.atk | 0; inp.heavy = d.heavy | 0; if ((d.dodge | 0) !== inp.dodge) inp.rollDir = d.roll == null ? null : +d.roll; inp.dodge = d.dodge | 0; inp.block = !!d.block; inp.hold = !!d.hold; inp.swap = d.swap | 0;
+    if (d.hy != null) { const hb = inp.body && inp.body.peer === m.from ? inp.body : (inp.body = AF.bodies.find(x => x.peer === m.from)); if (hb && hb.mounted && !hb.dead) hb.yaw = angleLerp(hb.yaw, +d.hy || 0, 0.7); } // a horse's heading is steered, not aimed: the rider's own screen owns it, or the two copies drift apart
+    // (2026-09-13: everything from here on sat behind that comment — the host never saw a guest's attack, block, roll,
+    // hold or swap; guests could walk and turn but none of their blows landed. Keep the buttons on their own line.)
+    inp.atk = d.atk | 0; inp.heavy = d.heavy | 0; if ((d.dodge | 0) !== inp.dodge) inp.rollDir = d.roll == null ? null : +d.roll; inp.dodge = d.dodge | 0; inp.block = !!d.block; inp.hold = !!d.hold; inp.swap = d.swap | 0;
   } else if (AF.role === 'guest') {
     if (d.k === 'snap') afApplySnap(d);
     else if (d.k === 'over' && !AF.over) { AF.starName = d.star || null; if (d.ledger) d.ledger.forEach((r, i) => { const b = AF.bodies[i]; if (b) { b.kills = r[0]; b.dmgDealt = r[1]; b.dmgTaken = r[2]; } }); afFinish(d.winner, d.standings); }

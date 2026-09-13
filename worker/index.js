@@ -310,6 +310,8 @@ async function api(request, env, url) {
 // Hibernation API so an idle lobby costs nothing. Per-socket state rides in the socket's attachment;
 // the rooms live in storage so a wake-up finds them; a 10 s alarm is the heartbeat.
 const GRACE_MS = 25000, BEAT_MS = 10000;
+const RELAY_SAVES = new Set(['hello', 'host', 'beacon', 'join', 'leave']);
+const RELAY_HINT = 'eeur', RELAY_NAME = 'lobby-' + RELAY_HINT;   // change the hint → a fresh object is created where the hint says (see /coop below)   // the message types that change rooms / nextId (hello: a resume adopts a seat)
 export class Relay {
   constructor(ctx, env) {
     this.ctx = ctx; this.env = env; this.rooms = {}; this.nextId = 1;
@@ -387,7 +389,10 @@ export class Relay {
         break;
       }
     }
-    await this.save();
+    // Persist only when the rooms changed. A fight relays 40 messages a second (the host's 20 Hz snapshots, each guest's
+    // 20 Hz inputs) and none of them touch the rooms — but saving after every one queued a durable write per message,
+    // and the output gate held every relayed snapshot behind it: that was the guests' lag on bladevale.com (2026-09-13).
+    if (RELAY_SAVES.has(m.t)) await this.save();
   }
   async webSocketClose(ws) { await this.gone(ws); }
   async webSocketError(ws) { await this.gone(ws); }
@@ -458,7 +463,11 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url), p = url.pathname;
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
-    if (p === '/coop') return env.RELAY.get(env.RELAY.idFromName('lobby')).fetch(request);
+    // The relay lives in ONE Durable Object, and every snapshot of every fight passes through it — so where it runs is
+    // the players' ping. The players are in Eastern Europe / the Middle East (2026-09-13), so the hint asks for `eeur`.
+    // A hint only counts when the object is CREATED: the original 'lobby' object was born wherever the first request
+    // came from, so the name changes with the hint (the rooms it held are transient — nothing to migrate).
+    if (p === '/coop') return env.RELAY.get(env.RELAY.idFromName(RELAY_NAME), { locationHint: RELAY_HINT }).fetch(request);
     if (p.startsWith('/api/')) { try { return await api(request, env, url); } catch (e) { return json(500, { error: String((e && e.message) || e) }); } }
     return env.ASSETS.fetch(request);
   },

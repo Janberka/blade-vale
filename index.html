@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="Blade Vale" />
 <link rel="manifest" href="manifest.webmanifest" />
-<title>Blade Vale — Low Poly Hack &amp; Slash</title>
+<title>Blade Vale — Arena Fights</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { width: 100%; height: 100%; overflow: hidden; background: #0b0e14; }
@@ -226,14 +226,101 @@
   }
   .btn:hover { background: rgba(255,180,80,.28); transform: translateY(-2px); box-shadow: 0 8px 24px rgba(255,150,60,.3); }
   .hidden { display: none !important; }
+  /* Arena-first: the open world is hidden until body.world (set by ?world / bv-world=1 in game.js). */
+  body:not(.world) .world-only { display: none !important; }
+  body.world .arena-only { display: none !important; }
 
   /* ===== Arena Fights: the lobby (teams × fighters, invites) and the challenge prompt ===== */
-  #start .start-btns { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; }
-  #arena-btn { border-color: #ff8a5b; color: #ffd0b8; background: rgba(255,120,80,.12); }
+  .start-btns { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; }
+  #arena-btn { border-color: #ff8a5b; color: #ffd0b8; background: rgba(255,120,80,.12); font-size: 20px; padding: 14px 44px; }
   #arena-btn:hover { background: rgba(255,120,80,.3); box-shadow: 0 8px 24px rgba(255,110,60,.3); }
-  #arena-lobby { gap: 12px; overflow-y: auto; justify-content: flex-start; padding-top: max(18px, 3vh); }
-  #arena-lobby h1 { font-size: 42px; letter-spacing: 4px; margin: 0; }
-  #arena-lobby .al-sub { font-size: 14px; opacity: .7; margin: -6px 0 2px; }
+  /* ===== THE SHELL: one layout for every screen outside the fight — the fighter left, the page right ===== */
+  #start { position: fixed; inset: 0; z-index: 50; display: flex; background: rgba(8,6,14,.95); color: #e9eef5; }
+  #shell-left { position: relative; display: flex; flex-direction: column; flex: 0 0 clamp(260px, 34vw, 420px); min-height: 0; border-right: 1px solid #3a3247; background: rgba(0,0,0,.25); }
+  body.touch #shell-left { flex-basis: clamp(220px, 40vw, 360px); }
+  #home-preview-slot { position: relative; flex: 1; min-height: 0; }
+  #home-char { cursor: pointer; padding: 10px 12px 12px; border-top: 1px solid #3a3247; background: rgba(8,6,14,.9); line-height: 1.4; }
+  #home-char:hover { background: rgba(255,211,77,.08); }
+  #home-char-name { font-size: 17px; font-weight: 700; color: #ffe089; letter-spacing: 1px; }
+  #home-char-sub { font-size: 12px; color: #ffe2a8; }
+  #home-char-sub b { color: #ffd34d; }
+  #home-char-more { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: #9fb2cc; margin-top: 3px; }
+  #home-char.on { background: rgba(255,211,77,.12); }
+  #shell-right { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  #shell-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 12px; height: 50px; padding: 0 12px; border-bottom: 1px solid #3a3247; background: rgba(0,0,0,.25); }
+  #shell-back { flex: 0 0 auto; min-width: 88px; cursor: pointer; background: #2a2233; border: 1px solid #6b5e7a; color: #f3ead8; border-radius: 8px; padding: 7px 12px; font: 700 13px system-ui; touch-action: manipulation; }
+  #shell-back:hover { background: #3a3047; }
+  #shell-title { flex: 1; min-width: 0; font-size: 15px; letter-spacing: 3px; text-transform: uppercase; color: #ffe089; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #shell-help { flex: 0 0 auto; width: 30px; height: 30px; padding: 0; border-radius: 50%; border: 1px solid #6b5e7a; background: rgba(16,14,24,.78); color: #e8def8; font: 700 14px/28px system-ui; text-align: center; cursor: pointer; touch-action: manipulation; }
+  #shell-help:hover { background: #3a3047; }
+  #shell-page { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 18px 20px 28px; }
+  .page { display: none; }
+  .page.on { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 14px; }
+  .page.wide.on { align-items: stretch; text-align: left; }
+  .page h1 { font-size: 48px; letter-spacing: 5px; text-transform: uppercase; margin: 0;
+    background: linear-gradient(180deg,#ffd98a,#ff7b4d); -webkit-background-clip: text; background-clip: text; color: transparent;
+    text-shadow: 0 6px 30px rgba(255,120,60,.35); }
+  .page p { font-size: 15px; opacity: .82; max-width: 540px; line-height: 1.6; margin: 0; }
+  .page .keys { font-size: 13px; opacity: .7; line-height: 1.8; }
+  .page .keys b { color: #ffcf5b; }
+  #start:not(.hidden) ~ #help-btn { display: none !important; }   /* the shell has its own ?; the fixed one is for the pit */
+  #home-stats { width: min(640px, 100%); text-align: left; font-size: 13px; line-height: 1.6; color: #e8def8; }
+  #home-stats h3 { margin: 12px 0 6px; color: #ffe2a8; letter-spacing: 1px; font-size: 13px; }
+  .career-card { padding: 8px 12px; border: 1px solid rgba(255,207,91,.3); border-radius: 10px; background: rgba(0,0,0,.3); }
+  .career-card b { color: #ffd34d; }
+  .career-bar { display: inline-block; vertical-align: middle; height: 5px; width: 90px; background: #2a2438; border-radius: 3px; overflow: hidden; }
+  .career-bar span { display: block; height: 100%; background: #ffd34d; }
+  .career-ach { display: flex; gap: 5px; flex-wrap: wrap; }
+  .career-ach span { font-size: 11px; padding: 3px 8px; border-radius: 12px; border: 1px solid #3a3247; opacity: .45; }
+  .career-ach span.got { border-color: #ffd34d; color: #ffe089; opacity: 1; }
+  #home-menu { display: flex; flex-direction: column; gap: 12px; width: min(360px, 90%); }
+  #home-menu .btn { width: 100%; font-size: 18px; padding: 14px 20px; margin: 0; }
+  #home-menu #home-arena-btn { border-color: #ff8a5b; color: #ffd0b8; background: rgba(255,120,80,.12); font-size: 20px; }
+  #home-menu #home-arena-btn:hover { background: rgba(255,120,80,.3); box-shadow: 0 8px 24px rgba(255,110,60,.3); }
+  #home-foot { font-size: 13px; color: #c8ffd6; }
+  #home-foot button { cursor: pointer; background: none; border: none; color: #9fb2cc; text-decoration: underline; font-size: 13px; }
+  /* the marketplace: tabs, and a picture card per ware (afThumb draws each from its own mesh) */
+  .mk-tabs { position: sticky; top: -18px; z-index: 2; display: flex; gap: 6px; flex-wrap: wrap; padding: 8px 0 10px; margin-top: -8px; background: rgba(8,6,14,.97); }
+  .mk-tabs button { cursor: pointer; padding: 8px 16px; border-radius: 8px; border: 1px solid rgba(255,207,91,.35); background: rgba(0,0,0,.3); color: #e9eef5; font: 700 13px system-ui; letter-spacing: 1px; text-transform: uppercase; touch-action: manipulation; }
+  .mk-tabs button.on { background: rgba(255,180,80,.32); border-color: #ffcf5b; color: #ffe2a8; }
+  .mk-head { font-size: 12px; color: #c9bfda; margin: 2px 0 10px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .mk-head b { color: #ffd34d; }
+  .mk-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(164px, 1fr)); gap: 10px; }
+  .mk-card { cursor: pointer; border: 1px solid #3a3247; border-radius: 12px; background: rgba(0,0,0,.3); padding: 8px 8px 10px; display: flex; flex-direction: column; gap: 4px; text-align: center; transition: border-color .12s, background .12s; }
+  .mk-card:hover { border-color: rgba(255,207,91,.6); }
+  .mk-card.owned { border-color: rgba(255,207,91,.5); }
+  .mk-card.worn { border-color: #ffd34d; }
+  .mk-card.on { border-color: #ffe089; background: rgba(255,211,77,.12); }
+  .mk-card.locked .mk-img { opacity: .8; }
+  .mk-img { height: 150px; display: flex; align-items: center; justify-content: center; border-radius: 9px; background: radial-gradient(ellipse at 50% 60%, rgba(255,211,77,.10), rgba(0,0,0,.25)); overflow: hidden; }
+  .mk-img img { width: 100%; height: 100%; object-fit: contain; }
+  .mk-img .mk-wait { font-size: 12px; opacity: .5; }
+  .mk-name { font-size: 13px; font-weight: 700; color: #f3ead8; margin-top: 3px; }
+  .mk-stat { font-size: 11px; color: #c9bfda; min-height: 14px; }
+  .mk-foot { display: flex; justify-content: center; align-items: center; gap: 8px; margin-top: 2px; font-size: 12px; color: #ffe089; min-height: 28px; }
+  .mk-lock { font-size: 11px; color: #ff9a9a; }
+  #page-help h4 { margin: 12px 0 3px; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: #c9bfda; }
+  #page-help .row { display: flex; gap: 12px; padding: 2px 0; font-size: 13px; }
+  #page-help .row b { flex: 0 0 168px; color: #ffcf5b; }
+  #page-help .desktop-keys, #page-help .touch-keys { max-width: 640px; }
+  @media (max-width: 600px) {                      /* a phone upright: the figure above, the page under it */
+    #start { flex-direction: column; }
+    #shell-left, body.touch #shell-left { flex: 0 0 36vh; border-right: 0; border-bottom: 1px solid #3a3247; }
+    #page-help .row { flex-direction: column; gap: 0; } #page-help .row b { flex: none; }
+  }
+  @media (max-height: 560px) {                     /* a phone sideways: the bar and the title give the fold back */
+    #shell-bar { height: 40px; }
+    #shell-page { padding: 10px 14px 18px; }
+    .page.on { gap: 8px; }
+    .page h1 { display: none; }                  /* the bar already names the page */
+    #page-title p { display: none; }
+    #home-menu { gap: 7px; }
+    #home-menu .btn { font-size: 15px; padding: 9px 14px; }
+    #home-menu #home-arena-btn { font-size: 16px; }
+    #home-char { padding: 6px 10px 8px; }
+    #home-char-name { font-size: 14px; }
+  }
+  #page-lobby .al-sub { font-size: 14px; opacity: .7; margin: -2px 0 2px; }
   .al-cfg { display: flex; gap: 22px; flex-wrap: wrap; justify-content: center; align-items: center;
     padding: 10px 18px; border: 1px solid rgba(255,207,91,.3); border-radius: 10px; background: rgba(0,0,0,.28); pointer-events: auto; }
   .al-cfg .wp-row { margin: 0; gap: 8px; }
@@ -268,12 +355,7 @@
   .al-cfg .al-wpn button.locked { opacity: .35; cursor: not-allowed; }
   .al-btns { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; }
   .al-btns .btn { font-size: 16px; padding: 10px 28px; }
-  #al-back { border-color: #9fb2cc; color: #c8d4e6; background: rgba(120,140,170,.12); }
-  #touch.arenamode #tb-heavy, #touch.arenamode #tb-dodge { display: none; }
-  #tb-roll-l, #tb-roll-r { display: none; width: 66px; height: 54px; bottom: 150px; border-radius: 16px; font-size: 12px; border-color: rgba(120,210,255,.6); color: #cfeaff; }
-  #touch.arenamode #tb-roll-l, #touch.arenamode #tb-roll-r { display: flex; }
-  #tb-roll-l { right: 100px; }
-  #tb-roll-r { right: 22px; }   /* the pit: one attack button — hold to load, release to swing; SWAP changes sword <-> bow */
+  #touch.arenamode #tb-heavy, #touch.arenamode #tb-dodge { display: none; }   /* the pit: one attack button — hold to load, release to swing; the roll is on the stick (double-tap, push); SWAP changes sword <-> bow (archers only) */
   #arena-invite { position: fixed; top: 18px; left: 50%; transform: translateX(-50%); z-index: 70; pointer-events: auto;
     background: rgba(16,12,24,.96); border: 1px solid #ff8a5b; border-radius: 12px; padding: 12px 18px; color: #f3ead8;
     box-shadow: 0 10px 40px rgba(0,0,0,.6); display: flex; gap: 14px; align-items: center; font-size: 14px; max-width: 92vw; }
@@ -317,11 +399,8 @@
     }
     .overlay h1 { font-size: 32px; letter-spacing: 3px; }
     .overlay p { font-size: 14px; line-height: 1.45; max-width: 620px; }
-    #start p { display: none; }                    /* flavour text — costs a third of the fold */
-    #start h1 { order: 1; margin-bottom: 2px; }
-    #start #auth-box { order: 2; margin-top: 0; padding: 12px 14px; }
-    #start #start-btn { order: 3; margin-top: 0; padding: 12px 34px; font-size: 17px; }
-    #start .keys { order: 4; font-size: 12px; line-height: 1.55; opacity: .6; }
+    #page-title #auth-box { margin-top: 0; padding: 12px 14px; }
+    #page-title .start-btns .btn { padding: 12px 34px; font-size: 17px; }
     #auth-box input { padding: 9px 12px; }
     .auth-btn { padding: 10px 12px; }
     #auth-note { margin-top: 7px; line-height: 1.4; }
@@ -331,8 +410,8 @@
      so the title, both fields, and the buttons still land above the fold. */
   @media (max-height: 400px) {
     .overlay h1 { font-size: 26px; letter-spacing: 2px; }
-    #start #auth-box { padding: 10px 12px; }
-    #start #auth-note { display: none; }
+    #page-title #auth-box { padding: 10px 12px; }
+    #page-title #auth-note { display: none; }
     #auth-form { gap: 8px; }
   }
   /* Touch: 16px inputs (anything smaller and mobile Safari fights the viewport lock on focus)
@@ -445,12 +524,18 @@
   /* ===== Mobile touch controls ===== */
   #game { touch-action: none; }                       /* play area never scrolls/zooms */
   body.touch #controls-hint { display: none; }        /* keyboard hint is noise on a phone */
+  /* ===== The key map: controls live behind one small ? (top-right), nowhere else on screen ===== */
+  #help-btn { position: fixed; right: 10px; top: 10px; z-index: 45; width: 26px; height: 26px; padding: 0; border-radius: 50%;
+    border: 1px solid #6b5e7a; background: rgba(16,14,24,.78); color: #e8def8; font: 700 14px/24px system-ui; text-align: center;
+    cursor: pointer; opacity: .7; pointer-events: auto; touch-action: manipulation; }
+  #help-btn:hover { opacity: 1; }
   body.touch .desktop-keys { display: none; }
   .touch-keys { display: none; }
   body.touch .touch-keys { display: block; }
   /* ...but the touch/desktop swap inside a sentence has to stay inline */
   #auth-note .touch-keys { display: none; }
   body.touch #auth-note .touch-keys { display: inline; }
+  body.world #auth-note .world-only { display: inline !important; }
   #touch { position: fixed; inset: 0; z-index: 7; pointer-events: none; }
   #touch.hidden { display: none; }
   #touch * { touch-action: none; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
@@ -592,8 +677,6 @@
     <button id="tb-heavy"  class="tbtn">HVY</button>
     <button id="tb-block"  class="tbtn">BLOCK</button>
     <button id="tb-dodge"  class="tbtn">DODGE</button>
-    <button id="tb-roll-l" class="tbtn">◀ ROLL</button>
-    <button id="tb-roll-r" class="tbtn">ROLL ▶</button>
     <button id="tb-weapon" class="tbtn">SWAP</button>
   </div>
   <div id="tmap">
@@ -606,18 +689,44 @@
   </div>
 </div>
 
-<div id="start" class="overlay">
-  <h1>Blade Vale</h1>
-  <p>Roam the vale with your warband. Enemy bands wander the map — pick your fights, flee the ones you can't win, and clash in pitched battles where reinforcements march in wave after wave. Win, recruit, and march on.</p>
-  <div class="keys desktop-keys">
+<!-- ===== THE SHELL: one layout for every screen outside the fight — your fighter on the left, the page on the
+     right, Back always in the same place, and ? a page like any other (afShellPage in game.js). ===== -->
+<div id="start">
+  <div id="shell-left">
+    <div id="home-preview-slot"></div>
+    <div id="home-char" title="Your career and record">
+      <div id="home-char-name"></div>
+      <div id="home-char-sub"></div>
+      <div id="home-char-more">▸ career &amp; stats</div>
+    </div>
+  </div>
+  <div id="shell-right">
+    <div id="shell-bar">
+      <button id="shell-back">← Back</button>
+      <div id="shell-title">Blade Vale</div>
+      <button id="shell-help" title="Controls (?)">?</button>
+    </div>
+    <div id="shell-page">
+      <!-- the guest title: the pitch, the way in, the sign-in card -->
+      <div class="page" id="page-title">
+        <h1>Blade Vale</h1>
+        <!-- Arena-first (2026-09-12): the title screen sells the pit. The open world is still in the
+             build but hidden — add ?world to the URL (or localStorage bv-world=1) to get "Enter the Vale" back. -->
+        <p class="arena-only">Pick your teams, call your friends, and fight in the pit. Every empty seat is taken by a fighter of the vale — sword, bow, or horse. Last team standing wins.</p>
+        <p class="world-only">Roam the vale with your warband. Enemy bands wander the map — pick your fights, flee the ones you can't win, and clash in pitched battles where reinforcements march in wave after wave. Win, recruit, and march on.</p>
+  <div class="keys desktop-keys world-only">
     <div><b>WASD</b> — Move &nbsp;&nbsp; <b>Mouse</b> — Aim &nbsp;&nbsp; <b>Left-Click</b> — Attack / shoot &nbsp;&nbsp; <b>F</b> — Swap sword ↔ bow</div>
     <div><b>Hold Shift</b> — Block &nbsp;&nbsp; <b>Hold C</b> — Crouch (duck arrows, sneak) &nbsp;&nbsp; <b>Space</b> — Dodge-roll &nbsp;&nbsp; <b>Esc</b> — Release mouse</div>
   </div>
-  <div class="keys touch-keys">
+  <div class="keys touch-keys world-only">
     <div><b>Left thumb</b> — Move / roam &nbsp;&nbsp; <b>Drag right side</b> — Look around</div>
     <div><b>ATK</b> attack · <b>HVY</b> heavy · hold <b>BLOCK</b> · <b>DODGE</b> roll · <b>SWAP</b> sword↔bow · <b>CMD</b> command squads</div>
     <div style="opacity:.8">Map: roam into a band to parley, a clash to join, a stronghold to siege · <b>Rally</b> = call to arms</div>
   </div>
+        <div class="start-btns">
+          <button class="btn" id="arena-btn" title="Pick teams, invite players, fill the rest with NPCs, and fight in the pit">⚔ Enter the Arena</button>
+          <button class="btn hidden world-only" id="start-btn">Enter the Vale</button>
+        </div>
   <div id="auth-box">
     <div id="auth-form">
       <input id="auth-user" placeholder="username" maxlength="24" autocomplete="username">
@@ -629,27 +738,37 @@
     </div>
     <div id="auth-who" class="hidden">Signed in as <b id="auth-name"></b> · <button id="auth-logout">sign out</button></div>
     <div id="auth-msg"></div>
-    <div id="auth-note">Sign in (or create an account) to enter. Your characters live on the map —
-      <span class="desktop-keys">switch between them with <b>U</b> in game.</span><span class="touch-keys">tap <b>Chars</b> in game to switch between them.</span></div>
+    <div id="auth-note"><span class="arena-only">You can fight the vale's own men without an account. Sign in to invite friends, keep your career and buy gear.</span><span class="world-only">Sign in (or create an account) to enter. Your characters live on the map —
+      <span class="desktop-keys">switch between them with <b>U</b> in game.</span><span class="touch-keys">tap <b>Chars</b> in game to switch between them.</span></span></div>
   </div>
-  <div class="start-btns">
-    <button class="btn hidden" id="start-btn">Enter the Vale</button>
-    <button class="btn" id="arena-btn" title="Pick teams, invite players, fill the rest with NPCs, and fight in the pit">⚔ Arena Fights</button>
-  </div>
-</div>
-
-<!-- ===== Arena Fights lobby: how many teams, how many fighters each, who is in them ===== -->
-<div id="arena-lobby" class="overlay hidden">
-  <h1>Arena Fights</h1>
+      </div>
+      <!-- signed in: the menu -->
+      <div class="page" id="page-home">
+        <h1>Blade Vale</h1>
+        <div id="home-menu">
+          <button class="btn" id="home-arena-btn">⚔ Enter the Arena</button>
+          <button class="btn" id="home-market-btn">🏪 Marketplace</button>
+          <button class="btn world-only" id="home-world-btn">Enter the Vale</button>
+        </div>
+        <div id="home-foot">Signed in as <b id="home-name"></b> · <button id="home-logout">sign out</button></div>
+      </div>
+      <!-- the career sheet (the name card under the figure opens it) -->
+      <div class="page wide" id="page-career">
+        <div id="home-stats"><div id="home-stats-body"></div></div>
+      </div>
+      <!-- Arena Fights: how many teams, how many fighters each, who is in them -->
+<div class="page" id="page-lobby">
   <div class="al-sub" id="al-sub">Choose the teams, invite players who are online, and every empty place is taken by a fighter of the vale.</div>
-  <div id="al-career" class="hidden"><span id="al-career-txt"></span><button id="al-market">🏪 Marketplace &amp; Career</button></div>
+  <div id="al-career" class="hidden"><span id="al-career-txt"></span><button id="al-market">🏪 Marketplace</button></div>
   <div class="al-cfg" id="al-cfg">
-    <div class="wp-row"><span>Teams</span><button id="al-teams-minus">−</button><b id="al-teams-n">2</b><button id="al-teams-plus">+</button></div>
-    <div class="wp-row"><span>Fighters per team</span><button id="al-per-minus10">«</button><button id="al-per-minus">−</button><b id="al-per-n">3</b><button id="al-per-plus">+</button><button id="al-per-plus10">»</button></div>
+    <div class="wp-row" id="al-row-venue"><span>Venue</span><div class="al-wpn"><button id="al-venue-colosseum" class="on">🏛 Colosseum</button><button id="al-venue-pit">🕯 The Pits</button></div></div>
+    <div class="wp-row" id="al-row-teams"><span id="al-teams-lbl">Teams</span><button id="al-teams-minus">−</button><b id="al-teams-n">2</b><button id="al-teams-plus">+</button></div>
+    <div class="wp-row" id="al-row-per"><span>Fighters per team</span><button id="al-per-minus10">«</button><button id="al-per-minus">−</button><b id="al-per-n">3</b><button id="al-per-plus">+</button><button id="al-per-plus10">»</button></div>
     <div class="wp-row"><span>You ride in with</span><div class="al-wpn"><button id="al-wpn-sword" class="on">🗡 Sword</button><button id="al-wpn-bow">🏹 Bow</button><button id="al-wpn-horse">🐎 Horse</button></div></div>
-    <div class="wp-row"><span>Pit</span><div class="al-wpn"><button id="al-pit-cosy">Cosy</button><button id="al-pit-wide" class="on">Wide</button><button id="al-pit-vast">Vast</button><button id="al-pit-colossal">Colossal</button></div></div>
-    <div class="wp-row"><span>Hour</span><div class="al-wpn"><button id="al-time-day" class="on">☀ Day</button><button id="al-time-dusk">🌇 Dusk</button><button id="al-time-night">🌙 Night</button></div></div>
-    <div class="wp-row"><span>Sky</span><div class="al-wpn"><button id="al-wx-clear" class="on">Clear</button><button id="al-wx-rain">🌧 Rain</button></div></div>
+    <div class="wp-row" id="al-row-pit"><span>Pit</span><div class="al-wpn"><button id="al-pit-cosy">Cosy</button><button id="al-pit-wide" class="on">Wide</button><button id="al-pit-vast">Vast</button><button id="al-pit-colossal">Colossal</button></div></div>
+    <div class="wp-row" id="al-row-time"><span>Hour</span><div class="al-wpn"><button id="al-time-day" class="on">☀ Day</button><button id="al-time-dusk">🌇 Dusk</button><button id="al-time-night">🌙 Night</button></div></div>
+    <div class="wp-row" id="al-row-wx"><span>Sky</span><div class="al-wpn"><button id="al-wx-clear" class="on">Clear</button><button id="al-wx-rain">🌧 Rain</button></div></div>
+    <div class="wp-row" id="al-row-ground"><span>Ground</span><div class="al-wpn"><button id="al-gr-sand">Sand</button><button id="al-gr-hills">⛰ Hills</button><button id="al-gr-rocks">🪨 Rocks</button><button id="al-gr-broken" class="on">Broken</button></div></div>
     <div class="wp-row"><span>Foes</span><div class="al-wpn"><button id="al-xp-green">🐣 Green</button><button id="al-xp-mixed" class="on">⚔ Mixed</button><button id="al-xp-veteran">💀 Veteran</button></div></div>
   </div>
   <div id="al-teams"></div>
@@ -661,7 +780,55 @@
   <div id="al-msg"></div>
   <div class="al-btns">
     <button class="btn" id="al-start">Start Fight</button>
-    <button class="btn" id="al-back">Back</button>
+  </div>
+</div>
+      <!-- the marketplace (afMarketRender fills it) -->
+      <div class="page wide" id="page-market"><div id="af-market"></div></div>
+      <!-- the key map -->
+      <div class="page wide" id="page-help">
+    <div class="desktop-keys">
+      <h4>On foot</h4>
+      <div class="row"><b>WASD</b><span>Move</span></div>
+      <div class="row"><b>Mouse</b><span>Aim — click the sand to take the mouse, Esc gives it back</span></div>
+      <div class="row"><b>Hold / release Left-Click</b><span>Load and swing — a tap is light, a full hold is heavy</span></div>
+      <div class="row"><b>Shift / Right-Click</b><span>Block (hold)</span></div>
+      <div class="row"><b>Space</b><span>Roll the way you move — Q / E sideways</span></div>
+      <div class="row"><b>F</b><span>Swap sword ↔ bow (archers)</span></div>
+      <h4>On horseback</h4>
+      <div class="row"><b>A / D</b><span>Turn the horse</span></div>
+      <div class="row"><b>W / S</b><span>Pace</span></div>
+      <div class="row"><b>Mouse</b><span>Aims the rider — hold click, release to strike or loose</span></div>
+      <h4>Camera &amp; score</h4>
+      <div class="row"><b>Wheel</b><span>Zoom</span></div>
+      <div class="row"><b>[ / ]</b><span>Lens (field of view)</span></div>
+      <div class="row"><b>Tab</b><span>Open / close the score sheet (lens slider inside)</span></div>
+      <h4>Fallen</h4>
+      <div class="row"><b>← / →</b><span>Follow another fighter</span></div>
+      <div class="row"><b>F</b><span>Free camera — WASD glides it</span></div>
+      <div class="row"><b>Skip / Leave</b><span>You need not watch the rest</span></div>
+    </div>
+    <div class="touch-keys">
+      <h4>On foot</h4>
+      <div class="row"><b>Left thumb</b><span>Move (a stick appears where you touch)</span></div>
+      <div class="row"><b>Double-tap the stick, push</b><span>Roll that way</span></div>
+      <div class="row"><b>Drag the right side</b><span>Aim</span></div>
+      <div class="row"><b>Hold ATK, drag, release</b><span>Load, aim and swing — a tap is light, a long hold is heavy</span></div>
+      <div class="row"><b>Hold BLOCK</b><span>Block (drag to turn while guarding)</span></div>
+      <div class="row"><b>SWAP</b><span>Sword ↔ bow (archers)</span></div>
+      <h4>On horseback</h4>
+      <div class="row"><b>Stick left / right</b><span>Turn the horse</span></div>
+      <div class="row"><b>Stick up / down</b><span>Pace</span></div>
+      <div class="row"><b>Drag the right side</b><span>Aims the rider</span></div>
+      <h4>Camera &amp; score</h4>
+      <div class="row"><b>Pinch</b><span>Zoom (two fingers on the right side)</span></div>
+      <div class="row"><b>Tap the score card</b><span>Open / close the score sheet — the lens slider is inside</span></div>
+      <h4>Fallen</h4>
+      <div class="row"><b>◀ ▶</b><span>Follow another fighter</span></div>
+      <div class="row"><b>FREE</b><span>Free camera — the stick glides it, pinch or − + zooms</span></div>
+      <div class="row"><b>Skip / Leave</b><span>You need not watch the rest</span></div>
+    </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -759,14 +926,16 @@
   <button class="btn" id="town-close">Leave</button>
 </div>
 
+<button id="help-btn" title="Controls (?)">?</button>
 <script src="vendor/three.min.js?v=r128"></script>
 <script src="sim/world-sim.js?v=7"></script>
 <script src="sim/terra.js?v=2"></script>
 <script src="sim/settle.js?v=1"></script>
 <script src="sim/battle.js?v=1"></script>
-<script src="client-net.js?v=8"></script>
+<script src="client-net.js?v=9"></script>
 <script src="arena-items.js?v=3"></script>
-<script src="net-battle.js?v=4"></script>
-<script src="game.js?v=113"></script>
+<script src="net-battle.js?v=5"></script>
+<script src="real-skin.js?v=1"></script>
+<script src="game.js?v=116"></script>
 </body>
 </html>

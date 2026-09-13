@@ -1,7 +1,7 @@
 {
   "name": "Blade Vale",
   "short_name": "Blade Vale",
-  "description": "Low Poly Hack & Slash",
+  "description": "Arena Fights — team sword-and-bow brawls in the pit",
   "display": "fullscreen",
   "display_override": ["fullscreen", "standalone"],
   "orientation": "landscape",

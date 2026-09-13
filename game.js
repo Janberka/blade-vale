@@ -20,6 +20,8 @@ let qualityTier = (() => {
   const lowMem = navigator.deviceMemory && navigator.deviceMemory <= 4;
   return (mobile || lowMem) ? 'low' : 'high';
 })();
+// physically based fighters (steel/brass/cloth): an experiment, opt-in with ?pbr (or bv-pbr=1)
+const PBR_ON = /[?&]pbr\b/.test(location.search) || (() => { try { return localStorage.getItem('bv-pbr') === '1'; } catch (e) { return false; } })();   // experiment, off by default — see CHARACTER_EXPERIMENTS.md
 const TIERS = {
   low:    { pixelRatio: 1,   shadows: false, shadowSize: 0,    torchLights: 0,  aa: false },
   medium: { pixelRatio: 1.5, shadows: true,  shadowSize: 1024, torchLights: 4,  aa: true },
@@ -53,6 +55,25 @@ const sc = sun.shadow.camera;
 sc.near = 1; sc.far = 140; sc.left = -60; sc.right = 60; sc.top = 60; sc.bottom = -60;
 scene.add(sun);
 scene.add(new THREE.AmbientLight(0x404a5a, 0.4));
+
+// ---------- Environment: a prefiltered sky the steel reflects ----------
+let ENV_GEN = null, ENV_CUR = null;
+function makeEnvMap(zenHex, midHex, horHex, sunPos, sunHex) {
+  const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+  if (!ENV_GEN) ENV_GEN = new THREE.PMREMGenerator(renderer);
+  const es = new THREE.Scene(), R = 50, geo = new THREE.SphereGeometry(R, 32, 16), p = geo.attributes.position, col = new Float32Array(p.count * 3), c = new THREE.Color();
+  const zen = new THREE.Color(zenHex), mid = new THREE.Color(midHex), hor = new THREE.Color(horHex), gnd = new THREE.Color(horHex).multiplyScalar(0.55);
+  for (let i = 0; i < p.count; i++) { const t = p.getY(i) / R; if (t < 0) c.copy(gnd).lerp(hor, clamp(1 + t * 6, 0, 1)); else if (t < 0.18) c.copy(hor).lerp(mid, t / 0.18); else c.copy(mid).lerp(zen, clamp((t - 0.18) / 0.6, 0, 1)); col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b; }
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  es.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide })));
+  const hot = new THREE.Mesh(new THREE.SphereGeometry(3.5, 12, 8), new THREE.MeshBasicMaterial({ color: sunHex }));   // the sun: a hot spot for the plates to catch
+  hot.position.copy(sunPos).normalize().multiplyScalar(R * 0.9); es.add(hot);
+  const tex = ENV_GEN.fromScene(es, 0.03).texture; geo.dispose(); hot.geometry.dispose();
+  return tex;
+}
+function setEnvMap(tex) { if (ENV_CUR && ENV_CUR !== tex) { try { ENV_CUR.dispose(); } catch (e) {} } ENV_CUR = tex; scene.environment = PBR_ON ? tex : null; }
+const ENV_DEFAULT = PBR_ON ? makeEnvMap(0x3f78bd, 0x8fb6e0, 0xe9dfd0, sun.position, 0xfff0d0) : null;
+setEnvMap(ENV_DEFAULT);
 
 // ---------- Helpers ----------
 // The battleground GROWS as the war escalates: each wave widens the field.
@@ -216,15 +237,45 @@ function cachedGeo(key, make) {
 // Shared (cached) materials are reused across everyone and are tint-proof;
 // per-character tintable materials pass shared:false.
 const matCache = new Map();
+// ---------- Surfaces: generated textures + physically based materials for the fighters ----------
+// Steel, brass, cloth, skin and leather are MeshStandardMaterial with a small procedural map/roughness/bump set,
+// lit by scene.environment (a prefiltered sky, see makeEnvMap). Everything else in the world stays on the cheap
+// Phong path. bv-pbr=0 in localStorage falls back to Phong for the fighters too.
+let CHAR_TEX = null;
+function charTextures() {
+  if (CHAR_TEX) return CHAR_TEX;
+  const N = 512, mk = (draw, repeat = 1) => { const c = document.createElement('canvas'); c.width = c.height = N; const g = c.getContext('2d'); draw(g); const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(repeat, repeat); t.anisotropy = 4; return t; };
+  let seed = 1234; const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; }, noise = (g, base, amp, n = 6000, sz = 2) => { for (let i = 0; i < n; i++) { const v = base + (rnd() - 0.5) * 2 * amp; g.fillStyle = `rgb(${v | 0},${v | 0},${v | 0})`; g.fillRect(rnd() * N, rnd() * N, sz, sz); } };
+  const lines = (g, n, col, w, len, ang = 0, spread = 0.3) => { g.strokeStyle = col; g.lineWidth = w; for (let i = 0; i < n; i++) { const x = rnd() * N, y = rnd() * N, a = ang + (rnd() - 0.5) * spread, l = len * (0.4 + rnd()); g.beginPath(); g.moveTo(x, y); g.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l); g.stroke(); } };
+  const steel = mk(g => { g.fillStyle = '#e4e6e9'; g.fillRect(0, 0, N, N); noise(g, 214, 14, 9000, 3); g.globalAlpha = 0.18; lines(g, 260, '#9ea3aa', 1, 90, 0, 0.08); lines(g, 120, '#f4f5f7', 1, 70, 0, 0.08); g.globalAlpha = 0.5; lines(g, 60, '#7a7f86', 1, 40, 0, 6); g.globalAlpha = 0.12; for (let i = 0; i < 40; i++) { g.fillStyle = '#8a8f96'; g.beginPath(); g.arc(rnd() * N, rnd() * N, 10 + rnd() * 40, 0, 7); g.fill(); } g.globalAlpha = 1; });
+  const steelRough = mk(g => { g.fillStyle = '#7a7a7a'; g.fillRect(0, 0, N, N); noise(g, 120, 34, 9000, 3); g.globalAlpha = 0.5; lines(g, 260, '#8c8c8c', 1, 90, 0, 0.08); lines(g, 60, '#c8c8c8', 1.5, 40, 0, 6); g.globalAlpha = 0.25; for (let i = 0; i < 40; i++) { g.fillStyle = '#b0b0b0'; g.beginPath(); g.arc(rnd() * N, rnd() * N, 10 + rnd() * 40, 0, 7); g.fill(); } g.globalAlpha = 1; });
+  const brass = mk(g => { g.fillStyle = '#e6dcc4'; g.fillRect(0, 0, N, N); noise(g, 222, 16, 7000, 3); g.globalAlpha = 0.14; for (let i = 0; i < 60; i++) { g.fillStyle = '#7d8a6a'; g.beginPath(); g.arc(rnd() * N, rnd() * N, 6 + rnd() * 30, 0, 7); g.fill(); } g.globalAlpha = 0.35; lines(g, 80, '#6f6350', 1, 30, 0, 6); g.globalAlpha = 1; });
+  const brassRough = mk(g => { g.fillStyle = '#585858'; g.fillRect(0, 0, N, N); noise(g, 88, 26, 7000, 3); g.globalAlpha = 0.35; for (let i = 0; i < 60; i++) { g.fillStyle = '#b8b8b8'; g.beginPath(); g.arc(rnd() * N, rnd() * N, 6 + rnd() * 30, 0, 7); g.fill(); } g.globalAlpha = 1; });
+  const cloth = mk(g => { g.fillStyle = '#cfcfcf'; g.fillRect(0, 0, N, N); for (let y = 0; y < N; y += 3) { g.fillStyle = y % 6 ? '#c2c2c2' : '#d9d9d9'; g.fillRect(0, y, N, 1); } for (let x = 0; x < N; x += 3) { g.fillStyle = x % 6 ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.06)'; g.fillRect(x, 0, 1, N); } noise(g, 200, 22, 6000, 2); }, 3);
+  const leather = mk(g => { g.fillStyle = '#cdbfae'; g.fillRect(0, 0, N, N); noise(g, 190, 26, 12000, 3); g.globalAlpha = 0.35; lines(g, 400, '#8a7a66', 1, 14, 0, 6); g.globalAlpha = 1; }, 2);
+  CHAR_TEX = { steel, steelRough, brass, brassRough, cloth, leather };
+  return CHAR_TEX;
+}
+function pbrMat(color, kind, opts) {
+  const T = charTextures(), base = { color, emissive: opts.emissive ?? 0x000000, emissiveIntensity: opts.emissiveI ?? 1, flatShading: false };
+  switch (kind) {
+    case 'brass':   return new THREE.MeshStandardMaterial({ ...base, metalness: 1.0, roughness: 0.34, map: T.brass, roughnessMap: T.brassRough, envMapIntensity: 1.15 });
+    case 'cloth':   return new THREE.MeshStandardMaterial({ ...base, metalness: 0.0, roughness: 0.94, map: T.cloth, bumpMap: T.cloth, bumpScale: 0.004 });
+    case 'skin':    return new THREE.MeshStandardMaterial({ ...base, metalness: 0.0, roughness: 0.58 });
+    case 'leather': return new THREE.MeshStandardMaterial({ ...base, metalness: 0.0, roughness: 0.72, map: T.leather, bumpMap: T.leather, bumpScale: 0.012 });
+    default:        return new THREE.MeshStandardMaterial({ ...base, metalness: 0.86, roughness: 0.52, map: T.steel, roughnessMap: T.steelRough, bumpMap: T.steelRough, bumpScale: 0.008, envMapIntensity: 0.9 });   // steel
+  }
+}
 function mat(color, opts = {}) {
-  const make = () => new THREE.MeshPhongMaterial({
+  const kind = opts.pbr || (opts.metal ? ((color === 0xc9a24a || color === 0xd9b24a) ? 'brass' : 'steel') : null);   // (0xc9a24a = VALE_BRASS, declared later)
+  const make = () => (PBR_ON && kind) ? pbrMat(color, kind, opts) : new THREE.MeshPhongMaterial({
     color, flatShading: opts.smooth ? false : true,
     shininess: opts.metal ? 28 : 5,
     specular: opts.metal ? 0x555555 : 0x0a0a0a,
     emissive: opts.emissive ?? 0x000000, emissiveIntensity: opts.emissiveI ?? 1,
   });
   if (opts.shared === false) return make();
-  const key = color + '|' + (opts.smooth ? 1 : 0) + (opts.metal ? 'm' : '') +
+  const key = color + '|' + (opts.smooth ? 1 : 0) + (opts.metal ? 'm' : '') + (kind || '') +
               '|' + (opts.emissive ?? 0) + '|' + (opts.emissiveI ?? 1);
   let m = matCache.get(key);
   if (!m) {
@@ -515,11 +566,11 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
   const casters = []; // the few big parts that are worth a shadow-pass draw
   // per-character copies: these take hit-flash tints, so they can't be shared.
   // All FLAT shaded — the armor reads as angular plates, not balloons.
-  const skin = mat(palette.skin, { shared: false });
-  const cloth = mat(palette.cloth, { shared: false });
-  const accent = mat(palette.accent, { shared: false });
+  const skin = mat(palette.skin, { shared: false, pbr: 'skin' });
+  const cloth = mat(palette.cloth, { shared: false, pbr: 'cloth' });
+  const accent = mat(palette.accent, { shared: false, pbr: 'leather' });
   // armor steel: the faction accent lightened toward silver so plates read as metal
-  const plateCol = new THREE.Color(palette.accent).lerp(new THREE.Color(0xc8ccd4), 0.35);
+  const plateCol = new THREE.Color(palette.accent).lerp(new THREE.Color(0xc8ccd4), PBR_ON ? 0.84 : 0.35);   // steel stays steel: with real metal only a hint of the faction survives in the plate
   const plate = mat(plateCol.getHex(), { metal: 1, shared: false });
   const brass = mat(VALE_BRASS, { metal: 1, shared: false });   // the trim every fighter wears
 
@@ -611,12 +662,12 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
   if (opts.hero) {
     headPivot = new THREE.Group(); headPivot.position.y = 0.98; upperBody.add(headPivot);
     for (const m of [head, helm, brow, crest, band, eyeSlit, noseSlit]) { upperBody.remove(m); m.position.y -= 0.98; headPivot.add(m); }
-    const plume = softCapsule(0.07, 0.42, mat(opts.plume != null ? opts.plume : palette.cloth, { shared: false }), 6);
-    plume.position.set(0, 0.62, -0.14); plume.rotation.x = 0.6; headPivot.add(plume);
+    const plume = softCapsule(0.07, 0.42, mat(opts.plume != null ? opts.plume : palette.cloth, { shared: false, pbr: 'cloth' }), 6);
+    plume.position.set(0, 0.62, -0.14); plume.rotation.x = 0.6; plume.name = 'plume'; headPivot.add(plume);   // (named: the warrior figure keeps it — a bought plume shows on the model too)
     const tabard = boxMesh(0.42, 0.5, 0.05, cloth); tabard.position.set(0, 0.42, 0.36); upperBody.add(tabard);
     const trim = boxMesh(0.44, 0.06, 0.06, accent); trim.position.set(0, 0.16, 0.37); upperBody.add(trim);
     const mark = sigilDecal(0.3); mark.position.set(0, 0.46, 0.39); upperBody.add(mark);                  // THE VALE MARK on the chest
-    const scab = boxMesh(0.07, 0.95, 0.13, mat(0x2a1c12, { shared: false })); scab.position.set(-0.14, 0.5, -0.24); scab.rotation.z = 0.32; upperBody.add(scab);   // a back scabbard
+    const scab = boxMesh(0.07, 0.95, 0.13, mat(0x2a1c12, { shared: false, pbr: 'leather' })); scab.position.set(-0.14, 0.5, -0.24); scab.rotation.z = 0.32; upperBody.add(scab);   // a back scabbard
     cape = new THREE.Group(); cape.position.set(0, 0.84, -0.3); cape.rotation.x = 0.12; upperBody.add(cape); // +x swings the hem BACK (away from +Z, the facing)
     // the cape is a CHAIN of hinged panels (cape.userData.segs); the arena runs a spring sim on the hinges so it hangs, flares and ripples
     const segs = [], NSEG = 5, segH = 1.3 / NSEG; let parent = cape;
@@ -665,7 +716,7 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
   function makeSword(longer) {
     const bladeLen = 1.35 * (longer ? 1.45 : 1);
     const g = new THREE.Group();
-    const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.055, longer ? 0.46 : 0.34, 8), mat(0x241812, { smooth: true }));
+    const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.055, longer ? 0.46 : 0.34, 8), mat(0x241812, { smooth: true, pbr: 'leather' }));
     g.add(grip);
     const pommel = sphereMesh(0.07, mat(0x6a5630, { metal: 0.5, rough: 0.4, smooth: true }), 8, 6);
     pommel.position.y = longer ? -0.27 : -0.21; g.add(pommel);
@@ -738,6 +789,34 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
   }
   const sword = held;
 
+  // THE ARMOUR SET: on hero rigs the primitive plates give way to pieces cut from the scanned knight, hung on the
+  // very same pivots (see loadArmorSet). The signatures stay: crescent, brass band and rims, lit visor, sigil, big left shoulder.
+  const armorSet = opts.armor ? ARMOR_SETS.get(opts.armor) : null;   // (the cut-plate sets are opt-in only: they read as torn paper; the whole-figure fit in wearRealRig is the way)
+  if (armorSet && opts.hero) {
+    const am = new THREE.MeshStandardMaterial({ map: armorSet.tex, metalness: 0.18, roughness: 0.5, envMapIntensity: 0.55 });   // the scan's texture carries its own shading; a touch of metal for the sky to catch
+    const hang = (slot, parent, dy = 0) => { const geo = armorSet.geo[slot]; if (!geo) return null; const m = new THREE.Mesh(geo, am); m.position.y = dy; m.castShadow = true; parent.add(m); casters.push(m); return m; };
+    const H = headPivot || upperBody, hy = headPivot ? -0.98 : 0;
+    // the cloth under-body (hose, sleeves, skirt) stays on under the plates and fills the cut edges
+    hang('helm', H, hy); helm.visible = false; brow.visible = false; head.visible = false; neck.visible = false; band.visible = false;   // the sallet is closed: nothing of the head shows
+    eyeSlit.visible = false; noseSlit.visible = false;                                                                        // (the sallet has its own slit; the lit visor returns as a glow in a later pass)
+    hang('torso', upperBody);                                                                                                   // (the rig's steel breastplate stays on underneath: it is the back and the sides)
+    // only the big clean plates come from the scan (helm, pauldrons, breastplate, gauntlets, greaves); the rest of the body is
+    // the rig's own PBR cloth and steel — a dark gambeson under it all, steel faulds and cuisses over it
+    const gambeson = mat(0x3a332c, { shared: false, pbr: 'cloth' }); pelvis.material = gambeson; pelvis.scale.set(0.92, 1, 0.82); hem.visible = true;
+    for (const [i, [r0, r1, y]] of [[0.36, 0.4, 1.54], [0.4, 0.44, 1.43], [0.44, 0.48, 1.32]].entries()) {                       // fauld lames in real steel
+      const l = new THREE.Mesh(cachedGeo('fauldLame' + i, () => new THREE.CylinderGeometry(r0, r1, 0.12, 14, 1, true)), plate); l.position.y = y; l.scale.z = 0.86; g.add(l); }
+    for (const [A, side] of [[armL, 'L'], [armR, 'R']]) { hang('pauldron' + side, A.shoulder); A.pad.visible = false; A.upper.material = gambeson; A.upper.scale.set(0.82, 1, 0.82); hang('forearm' + side, A.elbow); A.fore.visible = false; A.fist.visible = false; }
+    for (const [L, side] of [[legL, 'L'], [legR, 'R']]) { L.thigh.material = gambeson; L.thigh.scale.set(1.2, 1, 1.2);
+      const cuisse = new THREE.Mesh(cachedGeo('cuisse', () => new THREE.CylinderGeometry(0.2, 0.17, 0.5, 14, 1, true, -Math.PI * 0.55, Math.PI * 1.1)), plate); cuisse.position.set(0, -0.3, 0.06); cuisse.scale.set(1.45, 1, 1.35); L.hip.add(cuisse);   // a steel cuisse over the front of the thigh
+      hang('shin' + side, L.knee); L.shin.visible = false; L.foot.visible = false; }                                              // (the knee cop stays: it covers the joint above the greave)
+    if (cape) { const dk = new THREE.Color(palette.cloth).lerp(new THREE.Color(0x1a1a1e), 0.45).getHex(); cape.traverse(m => { if (m.isMesh && m.material === cloth) m.material = mat(dk, { shared: false, pbr: 'cloth' }); }); cape.scale.set(0.85, 1, 1); }   // a darker, narrower cape behind real plate
+    // the breastplate is the real thing now: the tabard and its trim come off, THE VALE MARK goes straight on the plate
+    for (const m of upperBody.children) if (m.isMesh && m.geometry.type === 'BoxGeometry' && Math.abs(m.position.z - 0.36) < 0.02 && m.position.y > 0.1) m.visible = false;
+    for (const m of upperBody.children) if (m.isMesh && m.geometry.type === 'BoxGeometry' && Math.abs(m.position.z - 0.37) < 0.02 && m.position.y < 0.2) m.visible = false;
+    for (const m of upperBody.children) if (m.isMesh && m.geometry.type === 'PlaneGeometry') { m.position.set(0, 0.5, 0.47); m.scale.setScalar(0.8); }
+    g.userData.armorSet = armorSet.name;
+  }
+
   // shadow budget: only big silhouette parts cast, characters never receive —
   // PCF blur erases sub-0.2-unit features, so the ground shadow looks identical
   // while the shadow pass shrinks ~4x and character fragments skip PCF sampling
@@ -749,6 +828,7 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
   return {
     group: g,
     parts: {
+      armorSet: !!(armorSet && opts.hero),
       torso, head, upperBody, sword, bow, shield, headPivot, cape,
       shoulderL: armL.shoulder, elbowL: armL.elbow,
       shoulderR: armR.shoulder, elbowR: armR.elbow,
@@ -759,12 +839,40 @@ function buildHumanoid(palette, scale = 1, weapon = 'sword', opts = {}) {
 }
 const SWORD_BASE_X = 1.4;
 
+// ---------- Armour sets: rigid pieces cut from a scanned figure, one per rig pivot ----------
+// assets/armor/<set>/pieces.json+bin (made by the scratchpad's pieces.js): each slot's geometry is already in its
+// pivot's local frame, sized to the plate it replaces, so buildHumanoid just hangs them on the same joints.
+const ARMOR_SETS = new Map();
+async function loadArmorSet(name) {
+  if (ARMOR_SETS.has(name)) return ARMOR_SETS.get(name);
+  const base = 'assets/armor/' + name + '/', j = await (await fetch(base + 'pieces.json')).json(), bin = await (await fetch(base + 'pieces.bin')).arrayBuffer();
+  const geo = {};
+  for (const [slot, d] of Object.entries(j.slots)) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(bin, d.pos, d.n * 3), 3));
+    g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(bin, d.uv, d.n * 2), 2));
+    g.setIndex(new THREE.BufferAttribute(d.i32 ? new Uint32Array(bin, d.idx, d.ni) : new Uint16Array(bin, d.idx, d.ni), 1));
+    g.computeVertexNormals(); geo[slot] = g;
+  }
+  const tex = new THREE.TextureLoader().load(j.texture); tex.encoding = THREE.sRGBEncoding; tex.flipY = false; tex.anisotropy = 4;
+  const set = { name, geo, tex }; ARMOR_SETS.set(name, set); return set;
+}
+BV.armorSets = { load: loadArmorSet, loaded: () => [...ARMOR_SETS.keys()] };
+// (armour sets load on demand: BV.armorSets.load('plate'))
+
 // ---------- Real-mesh fighters: a sculpted figure skinned onto the procedural rig's pivots ----------
 // The figure (assets/rigs/<name>/: decimated glTF + rig.json joint spec) is normalised to height 1 facing +Z,
 // skinned with two bones per vertex (real-skin.js) and bound to the SAME pivot groups the animator drives —
 // so every move, swing, block and death the plastic knight has, the real one has too. The cape is bound to the
 // hinged cape chain, so the arena's cloth sim swings it; a 'tint' vertex flag marks the cloth that takes the team colour.
 const REAL_RIGS = new Map(), REAL_SPECS = new Map(), REAL_TEX = new Map();
+// the plastic rig's joints in height-1 units (buildHumanoid: hipY 1.52, knee -0.62, foot -0.76; upperBody 1.68, neck 0.94, headPivot 0.98;
+// shoulders (±0.55, 0.80), elbow -0.46, hand -0.44 — all over a 3.3 figure). The scan is warped so ITS joints land here.
+const RIG_FIT = (() => { const k = 1 / 3.3, J = {}; const set = (n, x, y, z = 0) => { J[n] = [x * k, y * k, z * k]; };
+  set('root', 0, 1.52); set('waist', 0, 1.68); set('neck', 0, 2.66); set('top', 0, 3.3);
+  for (const [sd, sg] of [['L', 1], ['R', -1]]) { set('hip' + sd, 0.245 * sg, 1.52); set('knee' + sd, 0.245 * sg, 0.90); set('ankle' + sd, 0.245 * sg, 0.14, 0.08);
+    set('shoulder' + sd, 0.55 * sg, 2.48); set('elbow' + sd, 0.55 * sg, 2.02); set('wrist' + sd, 0.55 * sg, 1.58); set('tip' + sd, 0.55 * sg, 1.40, 0.02); }
+  return { joints: J, capeTop: 2.58 * k, capeZ: -0.34 * k, capeRadial: 1.05 }; })();
 let REAL_SWORD = null;                                     // the knight's own sword, lifted off the figure, shared by everyone
 async function loadRealRig(name, variant) {
   const key = name + (variant ? ':' + variant : ''); if (REAL_RIGS.has(key)) return REAL_RIGS.get(key);
@@ -775,8 +883,8 @@ async function loadRealRig(name, variant) {
   const CT = { 5121: Uint8Array, 5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array }, NC = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 };
   const acc = i => { const a = g.accessors[i], bv = g.bufferViews[a.bufferView], T = CT[a.componentType], n = NC[a.type]; return new T(bin, (bv.byteOffset || 0) + (a.byteOffset || 0), a.count * n); };
   const prim = g.meshes[0].primitives[0], uv = acc(prim.attributes.TEXCOORD_0), idxRaw = acc(prim.indices);
-  const N = RealSkin.normalise(acc(prim.attributes.POSITION), spec.yaw), idx = RealSkin.cut(N, idxRaw, spec.cut), sk = RealSkin.weights(N, spec);
-  const S = spec.height || 3.3, pos = new Float32Array(N.length); for (let i = 0; i < N.length; i++) pos[i] = N[i] * S;
+  const N = RealSkin.normalise(acc(prim.attributes.POSITION), spec.yaw), idx = RealSkin.cut(N, idxRaw, spec.cut), sk = RealSkin.fitToRig(N, spec, RIG_FIT);
+  const S = 3.3, pos = new Float32Array(N.length); for (let i = 0; i < N.length; i++) pos[i] = sk.pos[i] * S;
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
@@ -797,7 +905,7 @@ async function loadRealRig(name, variant) {
   const entry = { geo, tex, spec, nBones: sk.nBones, CAPE0: sk.CAPE0 }; REAL_RIGS.set(key, entry); return entry;
 }
 function realMaterial(tex, teamHex) {                      // the figure's texture, with the flagged cloth dyed in the team colour
-  const m = new THREE.MeshPhongMaterial({ map: tex, shininess: 14, specular: 0x2a2a2a });
+  const m = new THREE.MeshPhongMaterial({ map: tex, shininess: 14, specular: 0x2a2a2a, skinning: true });   // r128: without `skinning` a SkinnedMesh renders frozen in its bind pose
   m.onBeforeCompile = sh => {
     sh.uniforms.uTeam = { value: new THREE.Color(teamHex == null ? 0x888888 : teamHex) };
     sh.vertexShader = sh.vertexShader.replace('#include <common>', 'attribute float tint; varying float vTint;\n#include <common>').replace('#include <begin_vertex>', '#include <begin_vertex>\nvTint = tint;');
@@ -811,35 +919,162 @@ function realMaterial(tex, teamHex) {                      // the figure's textu
 // Swap a built rig's plastic body for the real figure. Keeps the held sword/bow groups (the real sword mesh rides the sword group).
 function wearRealRig(h, name, o = {}) {
   const R = REAL_RIGS.get(name + (o.lo ? ':lo' : '')) || REAL_RIGS.get(name); if (!R || !h || !h.parts) return false;
-  const P = h.parts, g = h.group, S = R.spec.height || 3.3, J = R.spec.joints;
-  const v = k => new THREE.Vector3().fromArray(J[k]).multiplyScalar(S), d = (a, b) => v(a).sub(v(b));
-  const keep = new Set(); for (const k of ['sword', 'bow']) if (P[k]) P[k].traverse(x => keep.add(x));
-  g.traverse(x => { if (x.isMesh && !keep.has(x)) x.visible = false; });
-  if (P.shield && P.shield.parent) P.shield.parent.remove(P.shield);   // the figure's own arm shows; a plastic shield would float beside it
-  P.hipL.position.copy(v('hipL')); P.kneeL.position.copy(d('kneeL', 'hipL'));
-  P.hipR.position.copy(v('hipR')); P.kneeR.position.copy(d('kneeR', 'hipR'));
-  P.upperBody.position.copy(v('waist'));
-  let headBone = P.headPivot; if (!headBone) { headBone = new THREE.Group(); P.upperBody.add(headBone); } headBone.position.copy(d('neck', 'waist'));
+  const P = h.parts, g = h.group;
+  // the figure is already warped onto this rig's joints (RIG_FIT): pivots stay exactly where buildHumanoid put them —
+  // reach, swings, hit heights, the shield strap and the weapon swap are untouched. The plastic body is hidden; the held
+  // gear and THE VALE CRESCENT stay.
+  const keep = new Set(); for (const k of ['sword', 'bow', 'shield']) if (P[k]) P[k].traverse(x => keep.add(x));
+  g.traverse(x => { if (x.isMesh && !keep.has(x) && !(x.geometry && x.geometry.type === 'ExtrudeGeometry' && x.material && x.material.color && x.material.color.getHex() === VALE_BRASS)) x.visible = false; });
+  let headBone = P.headPivot; if (!headBone) { headBone = new THREE.Group(); headBone.position.y = 0.98; P.upperBody.add(headBone); }
   const handOf = side => P['elbow' + side].children.find(c => c.type === 'Group');
-  for (const side of ['L', 'R']) { P['shoulder' + side].position.copy(d('shoulder' + side, 'waist')); P['elbow' + side].position.copy(d('elbow' + side, 'shoulder' + side)); const hand = handOf(side); if (hand) hand.position.copy(d('wrist' + side, 'elbow' + side)); }
-  // the cape chain: hung at the back of the neck, links sized so the last one reaches the hem — the arena's spring sim swings it
-  const capeTop = R.spec.capeTop || 0.82, segH = capeTop / RealSkin.NCAPE * S; let capeBones = [];
-  if (P.cape && P.cape.userData.segs) { P.cape.position.set(J.neck[0] * S - v('waist').x, capeTop * S - v('waist').y, (R.spec.capeZ - 0.01) * S - v('waist').z); P.cape.rotation.set(0, 0, 0);
+  const segH = RIG_FIT.capeTop * 3.3 / RealSkin.NCAPE; let capeBones = [];
+  if (P.cape && P.cape.userData.segs) { P.cape.position.set(0, RIG_FIT.capeTop * 3.3 - 1.68, RIG_FIT.capeZ * 3.3); P.cape.rotation.set(0, 0, 0);
     P.cape.userData.segs.forEach((sg, i) => { sg.position.y = i ? -segH : 0; sg.rotation.set(0, 0, 0); }); capeBones = P.cape.userData.segs; }
-  while (capeBones.length < RealSkin.NCAPE) capeBones = capeBones.concat([P.upperBody]);   // no cape chain (plain rigs): the cape hangs stiff off the torso
+  while (capeBones.length < RealSkin.NCAPE) capeBones = capeBones.concat([P.upperBody]);
   const bones = [g, P.upperBody, headBone, P.hipL, P.kneeL, P.hipR, P.kneeR, P.shoulderL, P.elbowL, handOf('L'), P.shoulderR, P.elbowR, handOf('R')].concat(capeBones);   // RealSkin.BONES order + cape links
   g.updateMatrixWorld(true);
   const sm = new THREE.SkinnedMesh(R.geo, realMaterial(R.tex, o.team)); sm.frustumCulled = false; sm.castShadow = true; g.add(sm); sm.bind(new THREE.Skeleton(bones));
   P.realMesh = sm; g.userData.real = name;
-  if (P.sword && REAL_SWORD) { const sw = new THREE.Mesh(REAL_SWORD.geo, new THREE.MeshPhongMaterial({ map: REAL_SWORD.tex, shininess: 60, specular: 0x777777 })); sw.castShadow = true; sw.scale.setScalar(o.swordScale || 1);
+  if (P.sword && REAL_SWORD && o.realSword) { const sw = new THREE.Mesh(REAL_SWORD.geo, new THREE.MeshPhongMaterial({ map: REAL_SWORD.tex, shininess: 60, specular: 0x777777 })); sw.castShadow = true; sw.scale.setScalar(o.swordScale || 1);
     P.sword.userData.realSword = sw; for (const c of P.sword.children) c.visible = false; P.sword.add(sw); }
   return true;
 }
 BV.realRig = { load: loadRealRig, wear: wearRealRig, loaded: () => [...REAL_RIGS.keys()] };
+
+// ---------- Model rigs: a rigged low-poly figure driven by the plastic rig's pivots ----------
+// assets/rigs/<name>/scene.gltf is a skinned glTF (tools/realmesh/usd2gltf.swift). The figure's skeleton is built per
+// body; every frame the plastic pivots' rotations are copied onto the mapped bones (rig.json "map"), so the animator,
+// hit heights, weapon swap and gear code never notice — the figure's own weights do the bending.
+const MODEL_RIGS = new Map(), MODEL_LIVE = [];
+async function loadModelRig(name) {
+  if (MODEL_RIGS.has(name)) return MODEL_RIGS.get(name);
+  const base = 'assets/rigs/' + name + '/', spec = await (await fetch(base + 'rig.json')).json(), g = await (await fetch(base + 'scene.gltf')).json();
+  const bin = await (await fetch(base + g.buffers[0].uri)).arrayBuffer();
+  const CT = { 5121: Uint8Array, 5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array }, NC = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT4: 16 };
+  const acc = i => { const a = g.accessors[i], bv = g.bufferViews[a.bufferView], T = CT[a.componentType], n = NC[a.type]; return new T(bin, (bv.byteOffset || 0) + (a.byteOffset || 0), a.count * n); };
+  const tex = new THREE.TextureLoader().load(base + g.images[0].uri); tex.encoding = THREE.sRGBEncoding; tex.flipY = false;
+  const meshes = g.nodes.filter(n => n.mesh != null).map(n => { const p = g.meshes[n.mesh].primitives[0], geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(acc(p.attributes.POSITION), 3));
+    if (p.attributes.NORMAL != null) geo.setAttribute('normal', new THREE.BufferAttribute(acc(p.attributes.NORMAL), 3)); else geo.computeVertexNormals();
+    if (p.attributes.TEXCOORD_0 != null) geo.setAttribute('uv', new THREE.BufferAttribute(acc(p.attributes.TEXCOORD_0), 2));
+    geo.setAttribute('skinIndex', new THREE.BufferAttribute(acc(p.attributes.JOINTS_0), 4)); geo.setAttribute('skinWeight', new THREE.BufferAttribute(acc(p.attributes.WEIGHTS_0), 4));
+    geo.setIndex(new THREE.BufferAttribute(acc(p.indices), 1));
+    const sk = g.skins[n.skin]; return { name: n.name, geo, joints: sk.joints, ibm: acc(sk.inverseBindMatrices) }; });
+  const entry = { name, spec, g, meshes, tex }; MODEL_RIGS.set(name, entry); return entry;
+}
+// build a fresh skeleton + skinned meshes for one body
+function instanceModelRig(R) {
+  const g = R.g, nodes = g.nodes.map(n => { const b = new THREE.Bone(); b.name = n.name; if (n.matrix) { const m = new THREE.Matrix4().fromArray(n.matrix); m.decompose(b.position, b.quaternion, b.scale); } return b; });
+  const parent = new Array(nodes.length).fill(-1);
+  g.nodes.forEach((n, i) => (n.children || []).forEach(c => { parent[c] = i; nodes[i].add(nodes[c]); }));
+  const root = new THREE.Group(); g.nodes.forEach((n, i) => { if (parent[i] < 0 && n.mesh == null) root.add(nodes[i]); });
+  const byName = {}; nodes.forEach(b => { byName[b.name] = b; });
+  const mat = new THREE.MeshPhongMaterial({ map: R.tex, shininess: 6, specular: 0x111111, skinning: true });
+  const skinned = {};
+  for (const m of R.meshes) { const sm = new THREE.SkinnedMesh(m.geo, mat); sm.name = m.name; sm.frustumCulled = false; sm.castShadow = true; root.add(sm);
+    const bones = m.joints.map(j => nodes[j]), inv = []; for (let i = 0; i < bones.length; i++) inv.push(new THREE.Matrix4().fromArray(m.ibm, i * 16));
+    sm.bind(new THREE.Skeleton(bones, inv), new THREE.Matrix4()); skinned[m.name] = sm; }
+  const order = []; const dfs = i => { order.push(i); (g.nodes[i].children || []).forEach(dfs); }; g.nodes.forEach((n, i) => { if (parent[i] < 0) dfs(i); });   // parents before children (the file's root sits last)
+  // the REST pose is the bind pose (inverse of the inverse-bind matrices), not the file's node transforms — those hold the
+  // model's idle stance (knees bent, sword up), and the plastic pivots at zero must mean "standing straight"
+  const m0 = R.meshes[0], worldM = new Map(); m0.joints.forEach((j, k) => { worldM.set(j, new THREE.Matrix4().fromArray(m0.ibm, k * 16).invert()); });
+  const worldOf = new Map();
+  for (const i of order) { const wm = worldM.get(i); if (!wm) { const pw = parent[i] >= 0 && worldOf.get(parent[i]); worldOf.set(i, pw ? pw.clone().multiply(nodes[i].matrix) : nodes[i].matrix.clone()); continue; }
+    const pw = parent[i] >= 0 ? worldOf.get(parent[i]) : null; const local = pw ? pw.clone().invert().multiply(wm) : wm.clone(); local.decompose(nodes[i].position, nodes[i].quaternion, nodes[i].scale); nodes[i].updateMatrix(); worldOf.set(i, wm.clone()); }
+  root.updateMatrixWorld(true);
+  const restLocal = nodes.map(b => b.quaternion.clone()), restWorld = [];   // world = relative to the model root
+  // THE HANDS: an unmapped bone keeps the bind pose, and in the bind pose the fingers lie open — so a fist round a hilt
+  // showed splayed fingers. Every bone under a hand takes the file's own stance instead: the model was saved gripping.
+  for (const hn of [R.spec.swordHand, R.spec.bowHand]) { const hb = hn && byName[hn]; if (!hb) continue;
+    hb.traverse(b => { if (b === hb || !b.isBone) return; const i = nodes.indexOf(b), n = g.nodes[i]; if (!n) return;
+      if (n.matrix) { const q = new THREE.Quaternion(); new THREE.Matrix4().fromArray(n.matrix).decompose(new THREE.Vector3(), q, new THREE.Vector3()); restLocal[i].copy(q); }
+      else if (n.rotation) restLocal[i].fromArray(n.rotation); }); }
+  for (const i of order) restWorld[i] = parent[i] < 0 ? restLocal[i].clone() : restWorld[parent[i]].clone().multiply(restLocal[i]);
+  return { root, nodes, byName, parent, order, restLocal, restWorld, skinned, mat };
+}
+// a rigid prop of the figure (its sword, its shield — each weighted to one hand bone) as a plain geometry with that
+// hand at the origin and the bind-space orientation kept: the sword's blade runs +Z, the shield's face looks +X
+function modelPropGeo(R, key) {
+  R.props = R.props || {}; if (R.props[key] !== undefined) return R.props[key];
+  const name = (R.spec.meshes || {})[key], m = R.meshes.find(x => x.name === name); if (!m) return (R.props[key] = null);
+  const j = m.geo.getAttribute('skinIndex').getX(0), o = new THREE.Vector3().setFromMatrixPosition(new THREE.Matrix4().fromArray(m.ibm, j * 16).invert());
+  const geo = m.geo.clone(); geo.deleteAttribute('skinIndex'); geo.deleteAttribute('skinWeight'); geo.translate(-o.x, -o.y, -o.z); geo.computeBoundingBox();
+  return (R.props[key] = geo);
+}
+// dress a built plastic rig in the figure; the plastic body hides, the held gear stays and rides the figure's hands
+function wearModelRig(h, name, o = {}) {
+  const R = MODEL_RIGS.get(name); if (!R || !h || !h.parts) return false;
+  const P = h.parts, g = h.group, inst = instanceModelRig(R), S = R.spec.hipY ? 1.52 / R.spec.hipY : 3.3 / (R.spec.height || 1.9);   // scale so the figure's hips sit where the rig's do: same leg length, same stride
+  inst.root.scale.setScalar(S); g.add(inst.root);
+  const keep = new Set(); for (const k of ['sword', 'bow', 'shield']) if (P[k]) P[k].traverse(x => keep.add(x));
+  g.traverse(x => { if (x.isMesh && !keep.has(x) && !x.isSkinnedMesh && x.name !== 'plume') x.visible = false; });
+  // the pivot chains whose rotations drive each mapped bone (rotations relative to the rig root)
+  const handOf = side => P['elbow' + side].children.find(c => c.type === 'Group');
+  const chains = { upperBody: [P.upperBody], head: [P.upperBody, P.headPivot].filter(Boolean),
+    shoulderL: [P.upperBody, P.shoulderL], elbowL: [P.upperBody, P.shoulderL, P.elbowL], handL: [P.upperBody, P.shoulderL, P.elbowL, handOf('L')],
+    shoulderR: [P.upperBody, P.shoulderR], elbowR: [P.upperBody, P.shoulderR, P.elbowR], handR: [P.upperBody, P.shoulderR, P.elbowR, handOf('R')],
+    hipL: [P.hipL], kneeL: [P.hipL, P.kneeL], hipR: [P.hipR], kneeR: [P.hipR, P.kneeR] };
+  const segs = P.cape && P.cape.userData.segs; if (segs) { let ch = [P.upperBody, P.cape]; segs.forEach((sg, i) => { ch = ch.concat([sg]); chains['cape' + i] = ch.slice(); }); }
+  const drive = []; for (const [k, bname] of Object.entries(R.spec.map)) { const b = inst.byName[bname]; if (b && chains[k] && chains[k].every(Boolean)) drive.push({ key: k, bone: b, i: inst.nodes.indexOf(b), chain: chains[k], fix: null }); }
+  // the bind pose splays arms and legs (an A-pose); the rig's zero means "hanging straight down", so each limb gets a
+  // corrective turn that points its upper bone at the floor, applied to the whole limb chain
+  const worldPos = i => { const v = new THREE.Vector3(); inst.nodes[i].getWorldPosition(v); return inst.root.worldToLocal(v); };
+  for (const [top, kids] of [['shoulderL', ['elbowL', 'handL']], ['shoulderR', ['elbowR', 'handR']], ['hipL', ['kneeL']], ['hipR', ['kneeR']]]) {
+    const dTop = drive.find(d => d.key === top), dKid = drive.find(d => d.key === kids[0]); if (!dTop || !dKid) continue;
+    const dir = worldPos(dKid.i).sub(worldPos(dTop.i)).normalize(), full = new THREE.Quaternion().setFromUnitVectors(dir, new THREE.Vector3(0, -1, 0));
+    const limb = top.startsWith('hip') ? 'legs' : 'arms', amt = (R.spec.straighten && R.spec.straighten[limb]); const fix = new THREE.Quaternion().slerp(full, amt == null ? 1 : amt);   // arms keep a little of the model's open stance
+    for (const d of drive) if (d.key === top || kids.includes(d.key)) { d.fix = fix; d.full = full; d.limb = limb; } }
+  const armBase = (R.spec.straighten && R.spec.straighten.arms != null) ? R.spec.straighten.arms : 1;
+  // the figure's own sword and shield show; the plastic ones only keep their groups (hit logic, trails) on the figure's hands
+  const M = R.spec.meshes || {}, mSword = inst.skinned[M.sword], mShield = inst.skinned[M.shield];
+  // gear rides the figure's hand inside a HOLDER that undoes the figure's scale and turns the rig's hand frame onto the
+  // bone's — so the gear pass may scale/rebuild the sword, bow or shield as it likes and they stay the right size
+  const mount = (grp, boneName) => { if (!grp || !inst.byName[boneName]) return; const bone = inst.byName[boneName]; const holder = new THREE.Group(); holder.name = 'gearHolder';
+    holder.quaternion.copy(inst.restWorld[inst.nodes.indexOf(bone)]).invert(); holder.scale.setScalar(1 / S); bone.add(holder);
+    grp.parent && grp.parent.remove(grp); grp.position.set(0, 0, 0); holder.add(grp); };
+  if (P.sword) { mount(P.sword, R.spec.swordHand); P.sword.traverse(x => { if (x.isMesh) x.visible = false; }); }
+  if (P.bow) mount(P.bow, R.spec.bowHand || R.spec.swordHand);
+  if (P.shield) { mount(P.shield, R.spec.shieldArm); P.shield.visible = false; P.shield.userData.modelHidden = true; }   // the figure's own shield shows instead
+  { let plume = null; g.traverse(x => { if (x.name === 'plume') plume = x; });   // the plume rides the figure's head bone, on the helmet's crown (rig.json plumeY = crown height above the head bone, model units)
+    if (plume && R.spec.map.head && inst.byName[R.spec.map.head]) { mount(plume, R.spec.map.head); plume.position.set(0, (R.spec.plumeY != null ? R.spec.plumeY : 0.35) * S - 0.04, -0.1); plume.rotation.x = 0.6; } }
+  // team colour: the cloak is dyed outright, the shield's face is tinted — the steel stays steel
+  if (o.team != null) { const cloak = inst.skinned[M.cloak]; if (cloak) cloak.material = new THREE.MeshPhongMaterial({ color: o.team, shininess: 4, specular: 0x050505, skinning: true });
+    if (mShield) mShield.material = new THREE.MeshPhongMaterial({ map: R.tex, color: new THREE.Color(o.team).lerp(new THREE.Color(0xffffff), 0.35), shininess: 6, specular: 0x111111, skinning: true }); }
+  const live = { h, P, g, inst, drive, mSword, mShield, q: new THREE.Quaternion(), w: [], armBase, armAmt: armBase, body: null, bodyLooked: 0 };
+  MODEL_LIVE.push(live); P.modelRig = live; g.userData.model = name; return true;
+}
+// every render: copy the pivots onto the bones, top-down (unmapped bones keep their rest pose)
+const _tmpQ = new THREE.Quaternion();
+function syncModelRigs() {
+  for (let k = MODEL_LIVE.length - 1; k >= 0; k--) {
+    const L = MODEL_LIVE[k]; if (!L.g.parent) { MODEL_LIVE.splice(k, 1); continue; }
+    const { inst, drive } = L, target = new Map();
+    // blocking (the fighter plants and slows): the arms ease back to the model's own guard stance; moving again, they relax
+    if (!L.body && L.bodyLooked++ % 30 === 0 && AF.bodies) L.body = AF.bodies.find(b => b.parts === L.P) || null;
+    const want = L.body && L.body.blocking ? 0 : L.armBase; if (Math.abs(want - L.armAmt) > 0.002) { L.armAmt += (want - L.armAmt) * 0.12; for (const d of drive) if (d.limb === 'arms') d.fix = new THREE.Quaternion().slerp(d.full, L.armAmt); }
+    for (const d of drive) { _tmpQ.identity(); for (const p of d.chain) _tmpQ.multiply(p.quaternion); if (d.fix) _tmpQ.multiply(d.fix); target.set(d.i, _tmpQ.clone().multiply(inst.restWorld[d.i])); }
+    const W = L.w; for (const i of inst.order) { const b = inst.nodes[i], pi = inst.parent[i]; const pw = pi < 0 ? null : W[pi];
+      let t = target.get(i); if (t) { b.quaternion.copy(t); if (pw) b.quaternion.premultiply(pw.clone().invert()); } else b.quaternion.copy(inst.restLocal[i]);
+      W[i] = pw ? pw.clone().multiply(b.quaternion) : b.quaternion.clone(); }
+    // the sword in his hand: the figure's own for the plain iron blade, the loadout's BUILT one for anything else
+    // (the market sells fifteen — a falchion must look like a falchion on him); afDressGear stamps P.gearSword
+    const showGear = !!L.P.gearSword && !L.P.noModelSword, drawn = !!(L.P.sword && L.P.sword.visible);
+    if (L.mSword) L.mSword.visible = drawn && !showGear && !L.P.noModelSword;
+    if (L.P.shield) L.P.shield.visible = false;                                                  // (afMakeBody re-shows and rescales it; the figure's own shield is the one)
+    if (L.P.sword) L.P.sword.traverse(m => { if (m.isMesh && m.visible !== showGear) m.visible = showGear; });   // (afBuildSword rebuilds it on every gear pass)
+    if (L.mShield) L.mShield.visible = !L.P.noModelShield && !!(L.P.bow ? !L.P.bow.visible : true);
+  }
+}
+{ const _r = renderer.render.bind(renderer); renderer.render = (s, c) => { if (MODEL_LIVE.length) syncModelRigs(); return _r(s, c); }; }
+BV.modelRig = { load: loadModelRig, wear: wearModelRig, live: () => MODEL_LIVE.length, pos: () => MODEL_LIVE.map(L => [L.g.position.x, L.g.position.y, L.g.position.z, L.g.rotation.y]) };
+const MODEL_ON = !/[?&]plastic\b/.test(location.search);   // the warrior is the base soldier; ?plastic brings the plastic figures back
+const MODEL_NAME = 'warrior';
+BV.modelLoad = MODEL_ON ? loadModelRig(MODEL_NAME).then(() => { BV.modelReady = true; console.log('[model] warrior ready'); }, e => console.error('[model] load failed', e)) : Promise.resolve();   // (the home / market figure waits on this — the plastic placeholder is never shown)
+
 // the switch: ?real (or localStorage bv-real) dresses arena teams in the real figures — AZURE knights, CRIMSON centurions, VERDANT hoplites…
-const REAL_ON = !/[?&]plastic\b/.test(location.search);   // the real figures are the default now; ?plastic brings the old rigs back for comparison
-const REAL_TEAM = ['knight', 'centurion', 'hoplite', 'knight', 'centurion', 'hoplite'];
-if (REAL_ON) Promise.all(['knight', 'centurion', 'hoplite'].flatMap(n => [loadRealRig(n), loadRealRig(n, 'lo')])).then(() => { BV.realReady = true; console.log('[real] rigs ready'); }, e => console.error('[real] load failed', e));
+const REAL_ON = /[?&]real\b/.test(location.search);   // opt-in: ?real dresses the arena in the scanned figures (CHARACTER_EXPERIMENTS.md); the Vale knights are the default
+const REAL_TEAM = ['knight', 'knight', 'knight', 'knight', 'knight', 'knight'];   // knight only for now; the centurion and the hoplite wait for a review
+if (REAL_ON) Promise.all(['knight'].flatMap(n => [loadRealRig(n), loadRealRig(n, 'lo')])).then(() => { BV.realReady = true; console.log('[real] rigs ready'); }, e => console.error('[real] load failed', e));
 
 
 // ---------- Cavalry builder ----------
@@ -1033,7 +1268,7 @@ const POSES = {
   windupHeavy:{ shRx: -3.05, shRz:  0.05, elR: -0.95, shLx: -2.20, shLz:  0.30, elL: -0.95, leanX: -0.40, twistY:  0.05, wristX: 0.10 },
   strikeHeavy:{ shRx:  0.05, shRz:  0.00, elR: -0.30, shLx:  0.00, shLz:  0.30, elL: -0.35, leanX: 0.70,  twistY:  0.00, wristX: 1.95 },
   hurt:       { shRx: -0.30, shRz:  0.55, elR: -1.00, shLx: -0.50, shLz:  0.60, elL: -1.20, leanX: -0.28, twistY:  0.15, wristX: 0 },
-  block:      { shRx: -1.15, shRz: -0.45, elR: -1.30, shLx: -1.15, shLz:  0.50, elL: -1.45, leanX: -0.08, twistY: -0.20, wristX: 0.55 },
+  block:      { shRx: -1.05, shRz: -0.45, elR: -1.30, shLx: -0.80, shLz:  0.40, elL: -1.25, leanX:  0.26, twistY: -0.20, wristX: 0.55 },   // shield at the chest, not the face; the body tucks forward and the head drops behind it
   // archery: bow arm (left) extended at the target, string hand drawn to the cheek
   aimBow:     { shRx: -1.35, shRz:  0.30, elR: -2.20, shLx: -1.50, shLz:  0.10, elL: -0.12, leanX: 0,     twistY:  0.70, wristX: 0 },
   looseBow:   { shRx: -1.25, shRz:  0.60, elR: -0.50, shLx: -1.50, shLz:  0.10, elL: -0.12, leanX: 0.04,  twistY:  0.60, wristX: 0 },
@@ -1041,6 +1276,9 @@ const POSES = {
   rally:      { shRx: -2.95, shRz:  0.30, elR: -0.15, shLx: -0.25, shLz: -0.40, elL: -0.55, leanX: -0.06, twistY:  0.10, wristX: 0.20 },
   rallyPump:  { shRx: -2.30, shRz:  0.30, elR: -0.95, shLx: -0.25, shLz: -0.40, elL: -0.55, leanX:  0.10, twistY:  0.10, wristX: 0.20 },
   point:      { shRx: -1.50, shRz:  0.12, elR: -0.10, shLx: -0.20, shLz: -0.35, elL: -0.60, leanX:  0.12, twistY: -0.25, wristX: 0.35 },
+  // the home floor: stooping to take up the sword (right hand) or the shield (left) planted in the sand before him
+  pickR:      { shRx: -0.80, shRz:  0.12, elR: -0.10, shLx:  0.12, shLz: -0.30, elL: -0.25, leanX:  0.55, twistY: -0.20, wristX: -0.5 },
+  pickL:      { shRx:  0.12, shRz:  0.30, elR: -0.25, shLx: -0.80, shLz: -0.12, elL: -0.10, leanX:  0.55, twistY:  0.20, wristX: -0.5 },
 };
 
 // Attack moves: which guards to snap between. Combos cycle through them.
@@ -2088,6 +2326,19 @@ if (TOUCH) {
   const TJ_R = 60; // stick radius in px
   let moveId = null, lookId = null;
   let tjAnchor = { x: 0, y: 0 }, lookLast = { x: 0, y: 0 };
+  // THE ROLL LIVES ON THE STICK: double-tap it and push — the roll goes the way you push (forward, back, either side,
+  // or anything between). A tap is a touch that comes and goes inside TAP_MS without leaving the deadzone; a second
+  // touch landing within DBL_MS of it is ARMED, and the first push past ROLL_MAG fires the roll (once per touch —
+  // keep holding and you simply run on). Nothing fires on a plain drag, so ordinary running never rolls by accident.
+  const TAP_MS = 250, DBL_MS = 320, ARM_MS = 450, ROLL_MAG = 0.55;
+  let tapEndT = -1e9, tapDownT = 0, tapMoved = false, rollArmed = false;
+  function stickRoll(s, f) {                       // s: right (+), f: forward (+) — the stick's axes, relative to the camera
+    if (AF.on) {
+      if (!AF.me || AF.me.dead) return;
+      const yaw = AF.cam.yaw, x = Math.sin(yaw) * f - Math.cos(yaw) * s, z = Math.cos(yaw) * f + Math.sin(yaw) * s;
+      AF.locIn.rollDir = Math.atan2(x, z); AF.locIn.dodge++;   // (a world heading — host and guest read the same one)
+    } else requestDodge();                         // the vale: the roll follows the stick anyway
+  }
 
   function controllable() {
     if (AF.on) { touchRoot.classList.add('arenamode'); return { inMap: false, inBattle: true, field: false, any: !!(AF.me && !AF.me.dead && AF.phase !== 'over' && AF.phase !== 'intro') }; } // the pit: stick + ATK(hold)/BLOCK/DODGE while you stand
@@ -2112,16 +2363,22 @@ if (TOUCH) {
     touchMove.s = (dx / len) * m;   // right = strafe right (D)
     touchMove.f = -(dy / len) * m;  // up    = forward (W)
     touchMove.active = m > 0;
+    if (m > 0) tapMoved = true;
+    if (rollArmed && m >= ROLL_MAG) { rollArmed = false; if (performance.now() - tapDownT < ARM_MS) stickRoll(dx / len, -dy / len); }
   }
   function showStick(x, y) {
     tjAnchor = { x, y };
     tj.style.left = (x - 66) + 'px'; tj.style.top = (y - 66) + 'px'; tj.style.bottom = 'auto';
     touchRoot.classList.add('dragging');
+    const now = performance.now();
+    rollArmed = now - tapEndT < DBL_MS; tapDownT = now; tapMoved = false;
   }
   function hideStick() {
     tj.style.left = ''; tj.style.top = ''; tj.style.bottom = '';
     tjKnob.style.transform = ''; touchRoot.classList.remove('dragging');
     touchMove.f = touchMove.s = 0; touchMove.active = false;
+    const now = performance.now();
+    tapEndT = !tapMoved && now - tapDownT < TAP_MS ? now : -1e9; rollArmed = false;
   }
 
   canvas.addEventListener('touchstart', (e) => {
@@ -2163,9 +2420,7 @@ if (TOUCH) {
   }
   bindBtn('tb-attack', requestAttack, () => { if (AF.on) AF.locIn.atk++; }); // arena: the release swings
   bindBtn('tb-heavy', requestHeavyAttack);
-  bindBtn('tb-dodge', requestDodge);
-  bindBtn('tb-roll-l', () => { if (AF.on) { AF.locIn.rollDir = -1; AF.locIn.dodge++; } });
-  bindBtn('tb-roll-r', () => { if (AF.on) { AF.locIn.rollDir = 1; AF.locIn.dodge++; } });
+  bindBtn('tb-dodge', requestDodge);               // (the pit hides it: there the roll is the stick's double-tap-and-push)
   bindBtn('tb-block', () => { keys['ShiftLeft'] = true; }, () => { keys['ShiftLeft'] = false; });
   bindBtn('tb-weapon', toggleWeapon);
   // The ONE zoom control a phone has (no wheel, no pinch), so it has to land on a rung, not nudge
@@ -2334,7 +2589,7 @@ function startAttack() {
   showCombo(player.combo);
 }
 function requestDodge() {
-  if (AF.on) { AF.locIn.rollDir = 0; AF.locIn.dodge++; return; }   // arena: Space rolls toward the side you're moving
+  if (AF.on) { AF.locIn.rollDir = null; AF.locIn.dodge++; return; }   // arena: Space rolls the way you're moving (a side if you stand still)
   if (!gameRunning || !player.alive || player.rolling) return;
   if (player.stamina < 30) return;
   player.stamina -= 30;
@@ -12906,13 +13161,16 @@ function refreshAuthGate() {
     form.style.display = 'none';
     who.classList.remove('hidden');
     document.getElementById('auth-name').textContent = sess.username;
-    if (note) note.innerHTML = 'Ready. <b>Enter the Vale</b> to take command — press <b>U</b> in game to switch or raise new characters.';
-    if (startBtn) startBtn.classList.remove('hidden');
+    if (note) note.innerHTML = WORLD_ON ? 'Ready. <b>Enter the Vale</b> to take command — press <b>U</b> in game to switch or raise new characters.'
+                                       : 'Ready. <b>Enter the Arena</b> — your career, gear and invitations follow this account.';
+    if (startBtn) startBtn.classList.toggle('hidden', !WORLD_ON); // arena-first: the open world stays hidden unless ?world
+    afHomeOpen(sess.username); // signed in: the title screen becomes the home (your fighter left, the menu right)
     afTitlePresence(); // arena: announce yourself so challenges can find you (and finish a pending join)
   } else {
     form.style.display = '';
     who.classList.add('hidden');
     if (startBtn) startBtn.classList.add('hidden');
+    afHomeClose();
   }
 }
 (function wireAuth() {
@@ -16550,25 +16808,42 @@ const AF_TEAMS = [
   { name: 'IVORY',   col: '#f0ece0', pal: { skin: 0xe0b088, cloth: 0xd8d2c0, accent: 0x6b665a, blade: 0xeaf2ff } },
 ];
 const AF_LIM = { teamsMin: 2, teamsMax: 6, perMin: 1, perMax: 200, heroCap: 24 }; // above heroCap bodies the NPCs wear the plain rig
+// THE PITS (lobby Venue): an illegal fighting cellar under the tanners' quarter — a sunken ring of sand, a rail, and a
+// press of patrons looking down by torchlight. Two or three fighters, one a side (every man for himself), swords only:
+// no room to draw a bow, no door a horse fits through. Rookies cut their teeth here before the Colosseum.
+const AF_PIT = { r: 11, lip: 2.4, out: 22, roofY: 10.5, teamsMax: 3, arch: ['swordsman', 'brute', 'duelist', 'guardsman'] };   // (a Vale knight is ~3.3 tall: the lip is chest height, the roof three men)
+function afLim(L) { return L && L.venue === 'pit' ? { teamsMin: 2, teamsMax: AF_PIT.teamsMax, perMin: 1, perMax: 1, heroCap: AF_LIM.heroCap } : AF_LIM; }
+function afSetVenue(L, v) {                                  // the host picks the house; the pits shrink the lobby to 2–3 single seats, swords, green foes
+  v = v === 'pit' ? 'pit' : 'colosseum'; if ((L.venue || 'colosseum') === v) return true;
+  const humans = L.slots.flat().filter(Boolean).length;
+  if (v === 'pit' && humans > AF_PIT.teamsMax) { afLobbyMsg('The pits take three fighters at most — too many are seated.'); return false; }
+  if (v === 'pit') { L.prevPer = L.per; L.prevXp = L.xp; L.teams = clamp(L.teams, 2, AF_PIT.teamsMax); L.per = 1; L.xp = 'green'; L.weapon = 'sword'; for (const row of L.slots) for (const s of row) if (s) s.weapon = 'sword'; }
+  else { L.per = L.prevPer || 3; if (L.prevXp) L.xp = L.prevXp; }
+  L.venue = v; afResize(L); return true;
+}
 // the feel of the pit — one table, like BATTLE_MELEE
 const AF_F = { hp: 100, move: 5.6, reach: 2.5, cone: 0.3, radius: 34, timeLimit: 120, countdown: 3,
   light: { wind: 0.24, strike: 0.10, rec: 0.28, dmg: [10, 15] },
   heavy: { wind: 0.60, strike: 0.12, rec: 0.50, dmg: [24, 32] },
   bow:   { wind: 0.50, strike: 0.06, rec: 0.40, dmg: [11, 16], speed: 42, range: 44 },
-  blockMul: 0.15, guardBreak: 0.75, flinch: 0.18, deathDur: 1.1,
-  knock: 6, heavyKnock: 14, lightPoise: 20, heavyPoise: 40, maxPoise: 45, poiseRegen: 8, staggerDur: 1.2, executeMul: 2.2, // three quick lights, or a heavy on a chipped guard, break poise
+  blockMul: 0.15, guardBreak: 0.75, flinch: 0.32, deathDur: 1.1,   // (flinch > the light's recovery: whoever lands the blow keeps the initiative — at 0.18 the man hit always got to punish the man who hit him)
+  knock: 3, heavyKnock: 14, lightPoise: 14, heavyPoise: 40, maxPoise: 45, poiseRegen: 8, staggerDur: 1.2, executeMul: 2.2, // three lights CHIP a guard (42 of 45), a heavy on the chipped guard breaks it — a chain alone never staggers
+  comboMax: 3, comboRest: 2.0, comboCd: 0.35, chainAt: 0.75,   // the light chain is THREE blows, the next chained at 3/4 of the follow-through — ~0.37 s hit to hit, a hair LONGER than the flinch, so a man who reads the chain gets his guard up for the second (at 0.45 it was 0.29 s: nobody could): the third has twice the follow-through and nothing queues behind it; then a breath before the next tap counts
   accel: 7.13, friction: 0.0008, lunge: 2, heavyLunge: 3,      // velocity model borrowed from the field fighters (terminal speed ≈ move)
   dodge: { dur: 0.40, speed: 13, iframes: 0.32, cd: 0.55 },
   chargeMax: 0.85, heavyAt: 0.6, horseSpeed: 1.9, horseReach: 0.9 };
 // FIGHTERS OF THE VALE — the NPC archetypes: build (rig, weapon, size), body (hp/poise/speed/damage) and
 // temperament (how often he loads a swing, whether he blocks or rolls, whether he feints or walls up)
+// WHO CARRIES WHAT (the class rule): an ARCHER carries a bow AND a sword — he draws steel when a foe is in his face,
+// and if he takes a horse he shoots from the saddle. A SWORDSMAN (and a brute, duelist, guardsman, rider) carries
+// no bow at all: the SWAP is his to ignore. `bow` below is that flag; it becomes `b.canBow` on the body.
 const AF_ARCH = {
-  swordsman: { label: 'swordsman', weapon: 'sword', hp: 100, poise: 45, move: 1.0,  dmg: 1.0,  scale: 1.0,  heavyBias: 0.15, block: 0.35, dodge: 0.25, circ: 0.55, reach: 0,   shield: true,  bow: true  },
-  brute:     { label: 'brute',     weapon: 'longsword', hp: 140, poise: 75, move: 0.85, dmg: 1.3, scale: 1.12, heavyBias: 0.8,  block: 0.0,  dodge: 0.12, circ: 0.1,  reach: 0.4, shield: false, bow: false },
-  duelist:   { label: 'duelist',   weapon: 'sword', hp: 85,  poise: 35, move: 1.15, dmg: 0.9,  scale: 0.96, heavyBias: 0.05, block: 0.1,  dodge: 0.7,  circ: 0.85, reach: 0,   shield: false, bow: true,  feint: 0.35 },
-  guardsman: { label: 'guardsman', weapon: 'sword', hp: 120, poise: 60, move: 0.9,  dmg: 1.0,  scale: 1.04, heavyBias: 0.25, block: 0.8,  dodge: 0.08, circ: 0.3,  reach: 0,   shield: true,  bow: true,  wall: true, bigShield: true },
+  swordsman: { label: 'swordsman', weapon: 'sword', hp: 100, poise: 45, move: 1.0,  dmg: 1.0,  scale: 1.0,  heavyBias: 0.15, block: 0.35, dodge: 0.25, circ: 0.55, reach: 0,   shield: true,  bow: false },
+  brute:     { label: 'brute',     weapon: 'longsword', hp: 140, poise: 75, move: 0.85, dmg: 1.3, scale: 1.12, heavyBias: 0.8,  block: 0.0,  dodge: 0.12, circ: 0.1,  reach: 0.4, shield: false, bow: false, armour: true },
+  duelist:   { label: 'duelist',   weapon: 'sword', hp: 85,  poise: 35, move: 1.15, dmg: 0.9,  scale: 0.96, heavyBias: 0.05, block: 0.1,  dodge: 0.7,  circ: 0.85, reach: 0,   shield: false, bow: false, feint: 0.35 },
+  guardsman: { label: 'guardsman', weapon: 'sword', hp: 120, poise: 60, move: 0.9,  dmg: 1.0,  scale: 1.04, heavyBias: 0.25, block: 0.8,  dodge: 0.08, circ: 0.3,  reach: 0,   shield: true,  bow: false, wall: true, bigShield: true },
   archer:    { label: 'archer',    weapon: 'bow',   hp: 90,  poise: 40, move: 1.05, dmg: 1.0,  scale: 0.98, heavyBias: 0.1,  block: 0.2,  dodge: 0.4,  circ: 0.5,  reach: 0,   shield: true,  bow: true  },
-  rider:     { label: 'rider',     weapon: 'horse', hp: 150, poise: 80, move: 1.0,  dmg: 1.0,  scale: 1.0,  heavyBias: 0.2,  block: 0.2,  dodge: 0.1,  circ: 0.3,  reach: 0,   shield: true,  bow: true  },
+  rider:     { label: 'rider',     weapon: 'horse', hp: 150, poise: 80, move: 1.0,  dmg: 1.0,  scale: 1.0,  heavyBias: 0.2,  block: 0.2,  dodge: 0.1,  circ: 0.3,  reach: 0,   shield: true,  bow: false },
 };
 // a village skirmish is mostly swords with a few bows behind them; a legion fields deep ranks of archers and
 // wings of horse — the mix below slides from one to the other as the roster grows (k: 0 at a handful a side,
@@ -16602,19 +16877,20 @@ const AF = {
   on: false, role: 'solo',                 // 'solo' (no peers) | 'host' | 'guest'
   phase: 'lobby',                          // 'lobby' | 'countdown' | 'fight' | 'over'
   bodies: [], arrows: [], ground: null, props: [], seed: 1, cfg: { teams: 2, per: 3 }, roster: [],
-  me: null, keys: new Set(), locIn: { mx: 0, mz: 0, yaw: 0, atk: 0, heavy: 0, dodge: 0, block: false, hold: false, swap: 0 },
+  me: null, keys: new Set(), locIn: { mx: 0, mz: 0, yaw: 0, atk: 0, heavy: 0, dodge: 0, rollDir: null, block: false, hold: false, swap: 0 },   // rollDir: the roll's world heading (rad), or null = the way you move
   cam: { yaw: 0, pitch: 0.3, dist: 6.5 }, orbit: { theta: 0.4, phi: 0.9, r: 62, drag: false }, spec: { mode: 'orbit', target: null, fx: 0, fz: 0, touched: false },
   last: 0, t: 0, countdown: 0, over: false, winner: -1, standings: null, hudEl: null, events: [],
   inputs: new Map(), snapAcc: 0, inAcc: 0, lastSnap: 0, installed: false, log: [], torches: [], motes: null, hurt: 0, fov: CAM_BASE_FOV,
   sky: null, stars: null, rain: null, sunSpr: null, crowd: [], roar: 0, waveT: 0, waveAng: 0, nextWave: 0,
   lobby: null, online: [], whoTimer: null, invite: null, pendingRoom: null,
-  intro: null, timeScale: 1, gates: [], gateLights: [], introOff: /[?&]nointro/.test(location.search), introFilm: (location.search.match(/[?&]film=(\w+)/) || [])[1] || null,   // the entrance cinematic (afIntroStart); ?nointro skips it
+  intro: null, timeScale: 1, gates: [], gateLights: [], introOff: /[?&]nointro/.test(location.search), outro: null, victory: null, hurry: false, outroOff: /[?&]nooutro/.test(location.search), introFilm: (location.search.match(/[?&]film=(\w+)/) || [])[1] || null,   // the entrance cinematic (afIntroStart); ?nointro skips it
 };
 BV.AF = AF;
 
 // ---- the pit: a seeded, gently rolling floor inside a ring wall; the same on every client ----
 function afY(x, z) {
   const T = AF.terr; if (!T) return 0;
+  if (AF.cfg.venue === 'pit') return 0.05 * Math.sin(x * 0.9 + T.p1) * Math.cos(z * 0.8 + T.p2);   // the pits: trodden flat; the cellar floor round the ring is built (afBuildPitHouse)
   const d = Math.hypot(x, z), rim = clamp((d - AF_F.radius - AF_AMPH.out - 4) / 30, 0, 1);   // (flat under the amphitheatre; the bowl climbs beyond its outer wall)
   let h = 0.28 * Math.sin(x * 0.11 + T.p1) * Math.cos(z * 0.09 + T.p2) + 0.16 * Math.sin((x + z) * 0.17 + T.p3);
   h += rim * rim * (6 + 5 * Math.sin(Math.atan2(z, x) * 3 + T.p1));   // the ground climbs into a bowl beyond the wall
@@ -16627,7 +16903,7 @@ function afY(x, z) {
    over their own line. A ROCK is a boulder nobody walks through: a collision circle the fighters, horses and arrows all
    respect, and the NPCs steer round. A TOR is a hill with a crown of rocks; a RIDGE is a long low hill; a CRAG is a
    tall standing rock. Nothing is placed on a team's muster ground or in the corridor its column marches down. ---- */
-const AF_GROUNDS = { sand: { hills: 0, rocks: 0, tors: 0 }, hills: { hills: 1, rocks: 0, tors: 0 }, rocks: { hills: 0, rocks: 1, tors: 0 }, broken: { hills: 0.7, rocks: 0.8, tors: 1 } };
+const AF_GROUNDS = { sand: { hills: 0, rocks: 0, tors: 0, clutter: 1.3 }, hills: { hills: 1, rocks: 0, tors: 0, clutter: 1.1 }, rocks: { hills: 0, rocks: 1, tors: 0, clutter: 0.8 }, broken: { hills: 0.7, rocks: 0.8, tors: 1, clutter: 0.7 } };   // clutter: how much ruin and store the pit is dressed with (a bare sand pit gets the most)
 function afHillY(x, z) {                                    // the mounds' height at (x,z): a smoothstep bell over each ellipse
   let h = 0;
   for (const H of AF.terr.hills) {
@@ -16656,6 +16932,7 @@ function afInMuster(x, z, zones, pad) {
 function afGenTerrain(r) {                                  // deal the pit's features from the seed (r: the fight's mulberry stream)
   const T = AF.terr, G = AF_GROUNDS[AF.cfg.ground] || AF_GROUNDS.sand, R = AF_F.radius, kA = (R / 34) * (R / 34), zones = afMusterZones();
   T.hills = []; T.rocks = [];
+  if (AF.cfg.venue === 'pit') { T.deco = []; return; }       // (bare sand: nothing to hide behind in the pits)
   const pick = (margin, pad, tries) => { for (let i = 0; i < tries; i++) { const a = r() * TAU, d = Math.sqrt(r()) * (R - margin), x = Math.cos(a) * d, z = Math.sin(a) * d; if (!afInMuster(x, z, zones, pad)) return { x, z }; } return null; };
   const hill = (x, z, rx, rz, h, yaw) => { const H = { x, z, rx, rz, h, yaw, c: Math.cos(yaw), s: Math.sin(yaw), rmax: Math.max(rx, rz), ph: r() * TAU }; T.hills.push(H); return H; };
   const rock = (x, z, rr, h, kind) => { const K = { x, z, r: rr, h, yaw: r() * TAU, kind: kind || 'boulder', tilt: (r() - 0.5) * 0.35, sx: 0.85 + r() * 0.4, sz: 0.8 + r() * 0.35, tone: r() }; T.rocks.push(K); return K; };
@@ -16685,7 +16962,28 @@ function afGenTerrain(r) {                                  // deal the pit's fe
     else if (q < 0.6) { if (clear(p.x, p.z, 2.4)) boulders(p.x, p.z, 2 + (r() * 3 | 0), 1.4 + r() * 1.0); }
     else { const rr = 0.9 + r() * 1.0; if (clear(p.x, p.z, rr)) rock(p.x, p.z, rr, rr * (0.9 + r() * 0.6)); }
   }
+  // RUINS and STORES in the pit — the arena stands on an older city and is stocked for the games: broken columns (a few
+  // still whole), a fallen drum, wall stubs, a toppled statue, a building's shell (three circles under one mesh), and
+  // barrels and crates in clusters; every one a collision circle like a stone, so the men, horses and arrows respect it.
+  // Then DRESSING nobody walks round (T.deco): spears in the sand, dropped shields, bones, planks, helms, a cart wheel,
+  // stakes with pennants. All of it out of the muster grounds and the gate corridors.
+  const C = (G.clutter == null ? 1 : G.clutter) * (AF.clutterK == null ? 1 : AF.clutterK), nC = Math.round((7 + r() * 5) * C * Math.min(kA, 4));
+  for (let i = 0; i < nC; i++) {
+    const p = pick(4, 1.2, 40); if (!p) continue; const q = r();
+    if (q < 0.22) { if (clear(p.x, p.z, 0.9)) rock(p.x, p.z, 0.8, r() < 0.35 ? 6.5 + r() * 1.5 : 1.5 + r() * 3, 'column'); }
+    else if (q < 0.34) { if (clear(p.x, p.z, 1.4)) rock(p.x, p.z, 1.3, 1.2, 'drum'); }
+    else if (q < 0.52) { if (clear(p.x, p.z, 1.7)) rock(p.x, p.z, 1.6, 2 + r() * 2.2, 'stub'); }
+    else if (q < 0.62) { if (clear(p.x, p.z, 1.3)) rock(p.x, p.z, 1.2, 1.4, 'statue'); }
+    else if (q < 0.72) { if (clear(p.x, p.z, 4.2) && Math.hypot(p.x, p.z) < R - 8) { const K = rock(p.x, p.z, 1.6, 4.2, 'shell'), c = Math.cos(K.yaw), s = Math.sin(K.yaw); for (const k of [-1, 1]) rock(p.x + c * 2.5 * k, p.z - s * 2.5 * k, 1.5, 4.2, 'hidden'); } }   // (a piece's local +X runs (cos yaw, −sin yaw))
+    else { const n = 2 + (r() * 3 | 0); for (let k = 0; k < n; k++) { const a = r() * TAU, d = r() * 1.6, x = p.x + Math.cos(a) * d, z = p.z + Math.sin(a) * d; if (Math.hypot(x, z) < R - 3 && clear(x, z, 0.7) && !afInMuster(x, z, zones, 0.5)) rock(x, z, 0.62, 1.3, r() < 0.7 ? 'barrel' : 'crate'); } }
+  }
+  // the GATE GUARDIANS: a colossus on a stepped plinth against the podium wall either side of every gate, a bronze blade
+  // raised over the sand — a collision circle like a stone (afBuildPitClutter draws it), clear of the column's path
+  for (let t = 0; t < AF.cfg.teams; t++) { const F = afGateFrame(t); for (const s of [-1, 1]) { const off = AF_INTRO.gateW / 2 + 4.8, x = F.ux * (R - 1.9) + F.wx * s * off, z = F.uz * (R - 1.9) + F.wz * s * off; const K = rock(x, z, 1.8, 8.6, 'colossus'); K.yaw = F.face; K.side = s; K.tilt = 0; K.sx = K.sz = 1; } }
   for (const K of T.rocks) { K.y = afY(K.x, K.z); K.top = K.y + K.h * 0.95; }
+  T.deco = [];
+  const nD = Math.round((30 + r() * 16) * C * Math.min(kA, 4)), dk = ['spear', 'spear', 'shield', 'shield', 'bones', 'plank', 'helm', 'wheel', 'stake', 'bones'];
+  for (let i = 0; i < nD; i++) { const p = pick(2.5, 0.8, 30); if (!p || afRockAt(p.x, p.z, 0.8)) continue; T.deco.push({ x: p.x, z: p.z, kind: dk[(r() * dk.length) | 0], yaw: r() * TAU, s: 0.85 + r() * 0.3, tone: r() }); }
 }
 function afRockAt(x, z, pad) {                              // the rock (x,z) stands inside, padded by the body's own radius — or null
   const L = AF.terr && AF.terr.rocks; if (!L) return null;
@@ -16722,14 +17020,20 @@ function afAvoidRocks(x, z, ux, uz, look, pad) {            // steer a heading (
 function afSteerRocks(b) {                                  // an NPC's input, bent round the stones (his mark is still the mark; the path is not straight)
   const I = b.inp, mm = Math.hypot(I.mx, I.mz); if (mm < 1e-3 || !AF.terr.rocks.length) return;
   const [ux, uz] = afAvoidRocks(b.x, b.z, I.mx / mm, I.mz / mm, b.mounted ? 7 : 3.5, b.mounted ? 1.3 : 0.8);
+  const bend = angleDelta(Math.atan2(I.mx / mm, I.mz / mm), Math.atan2(ux, uz));
   I.mx = ux * mm; I.mz = uz * mm;
-  if (b.mounted && b.cav !== 'wheel') I.yaw = Math.atan2(ux, uz);   // a horse goes where its head points: the reins take the bend, not the rider's aim
+  if (b.mounted && b.cav !== 'wheel' && bend !== 0) I.yaw += bend;   // a horse goes where its head points: the reins take the BEND round the stone on top of where the rider meant to go
+  // (it used to REPLACE the rider's yaw with the heels' direction — and the cavalry brain sets its heels along the
+  // current facing and its yaw at the mark, so on any ground with a stone in it a horse could never turn toward its mark)
 }
-function afBuildRocks() {                                   // the boulders themselves: faceted lumps, each its own jittered icosahedron, seated into the ground
+function afBuildRocks() {                                   // the boulders themselves: the ruins pack's rocks fitted to each collision circle (afBuildRocksPack) — or, without the pack, jittered icosahedra
   const g = new THREE.Group(), T = AF.terr, jr = _mulberry32(AF.seed ^ 0x1b873593);
+  try { afBuildPitClutter(g); } catch (e) { console.warn('[arena] clutter', e); }
+  if (AF_RUINPACK) { try { g.add(afBuildRocksPack()); return g; } catch (e) { console.warn('[arena] pack rocks', e); } }
   const grey = new THREE.Color(0x776f64), warm = new THREE.Color(0x877a66), cool = new THREE.Color(0x66696f), lit = new THREE.Color(0x938b7e), moss = new THREE.Color(0x56643a), foot = new THREE.Color(0x4f4840), c = new THREE.Color();   // (a shade under the wall's stone: the sun and the tone map lift them)
   const rm = new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: true, shininess: 4, specular: 0x111111 });
   for (const K of T.rocks) {
+    if (K.kind !== 'boulder' && K.kind !== 'crag') continue;
     const geo = new THREE.IcosahedronGeometry(1, K.r > 1.4 ? 2 : 1), p = geo.attributes.position, col = new Float32Array(p.count * 3), base = grey.clone().lerp(K.tone < 0.5 ? warm : cool, Math.abs(K.tone - 0.5) * 1.6);
     const tall = K.kind === 'crag';
     for (let i = 0; i < p.count; i++) {
@@ -16749,9 +17053,75 @@ function afBuildRocks() {                                   // the boulders them
   }
   return g;
 }
+// the pack's four rocks stand in for every stone in the pit: a boulder takes one of the three squat rocks (by its tone),
+// a crag the tall one; each is scaled so its width matches the circle the men walk round (K.r × K.sx / K.sz) and its
+// height K.h, sunk a fifth so its widest girth sits near the sand, and tinted warm or cool from the seed. One mesh.
+function afBuildRocksPack() {
+  const T = AF.terr, jr = _mulberry32(AF.seed ^ 0x1b873593), S = afMesher(), tint = new THREE.Color(), grey = new THREE.Color(0xd8d0c4), warm = new THREE.Color(0xe8d2b4), cool = new THREE.Color(0xc0c8d4);
+  const dims = (n) => { const P = AF_RUINPACK[n]; return { w: P.size[0] / 100, h: P.size[1] / 100, d: P.size[2] / 100 }; };
+  for (const K of T.rocks) {
+    if (K.kind !== 'boulder' && K.kind !== 'crag') continue;   // (ruins, barrels and crates: afBuildPitClutter)
+    const name = K.kind === 'crag' ? 'Rock4' : 'Rock' + (1 + Math.min(2, (K.tone * 3) | 0)), D = dims(name), sink = 0.2;
+    const sx = (2 * K.r * K.sx) / D.w, sz = (2 * K.r * K.sz) / D.d, sy = (K.h * (1 + sink)) / D.h;
+    tint.copy(grey).lerp(K.tone < 0.5 ? warm : cool, Math.abs(K.tone - 0.5) * 1.6).multiplyScalar(1.15 + jr() * 0.2);
+    S.add(afPackGeo(name), K.x, K.y - K.h * sink, K.z, K.yaw, null, sx, sy, sz, K.tilt * 0.4, K.tilt, tint);
+    const np = 2 + (jr() * 4 | 0);                            // the scree at its foot: the smallest rock, small
+    for (let i = 0; i < np; i++) { const a = jr() * TAU, d = K.r * K.sx + 0.3 + jr() * 1.1, x = K.x + Math.cos(a) * d, z = K.z + Math.sin(a) * d, s = 0.25 + jr() * 0.45; S.add(afPackGeo('Rock1'), x, afY(x, z) - s * 0.1, z, jr() * TAU, null, s, s * 0.8, s, 0, 0, tint); }
+  }
+  const g = new THREE.Group(); g.add(S.build({ shininess: 4, specular: 0x111111 })); return g;
+}
+// a STATUE in world coordinates, k times the facade's figure — a robed body on a plinth, one arm raised. The same piece
+// dresses the arches, the podium's edge (afBuildWall) and, at colossal scale with a bronze blade and shield on a stepped
+// plinth, the gates (afBuildPitClutter). Local +Z faces the sand; o.arm ±1 picks the raised arm's side.
+function afStatue(S, x, y, z, yaw, k, hex, base, o) {
+  o = o || {}; const arm = o.arm == null ? 1 : o.arm, y0 = o.steps ? 0.5 : 0;
+  const P = (dx, dy, dz) => [x + (Math.cos(yaw) * dx + Math.sin(yaw) * dz) * k, y + dy * k, z + (-Math.sin(yaw) * dx + Math.cos(yaw) * dz) * k];   // local → world, scaled
+  const add = (geo, dx, dy, dz, c, rz, rx) => S.add(geo, ...P(dx, dy, dz), yaw, c, k, k, k, rx || 0, rz || 0);
+  const B = (w, h, d) => cachedGeo('box:' + w + ',' + h + ',' + d, () => new THREE.BoxGeometry(w, h, d));
+  if (o.steps) add(B(2.3, 0.5, 1.9), 0, 0.25, 0, base);
+  add(B(1.4, 0.8, 1.0), 0, y0 + 0.4, 0, base);                                                          // the plinth
+  add(cachedGeo('cyl:0.36,0.6,2,7', () => new THREE.CylinderGeometry(0.36, 0.6, 2, 7)), 0, y0 + 1.8, 0, hex);   // the robe
+  add(B(0.8, 0.9, 0.55), 0, y0 + 3.2, 0, hex); add(B(1.35, 0.42, 0.6), 0, y0 + 3.55, 0, hex);           // chest, shoulders
+  add(cachedGeo('sph:0.34,7,5', () => new THREE.SphereGeometry(0.34, 7, 5)), 0, y0 + 4.05, 0, hex);      // the head
+  add(B(0.22, 1.3, 0.22), arm * 0.62, y0 + 4.1, 0, hex, arm * 0.35);                                    // the raised arm, leaning in over the head
+  if (o.sword) { add(B(0.6, 0.1, 0.14), arm * 0.4, y0 + 4.72, 0, o.sword, arm * 0.35); add(B(0.13, 2.0, 0.05), arm * 0.05, y0 + 5.68, 0, o.sword, arm * 0.35); }   // a blade out of the fist
+  if (o.shield) { add(cachedGeo('cyl:0.72,0.72,0.1,12', () => new THREE.CylinderGeometry(0.72, 0.72, 0.1, 12)), -arm * 0.8, y0 + 2.7, 0.3, o.shield, 0, Math.PI / 2); add(cachedGeo('sph:0.16,6,5', () => new THREE.SphereGeometry(0.16, 6, 5)), -arm * 0.8, y0 + 2.7, 0.38, hex); }   // a round shield on the other arm
+}
+// the pit's ruins, stores and dressing (afGenTerrain's non-stone rock records and T.deco), baked into one mesh
+function afBuildPitClutter(g) {
+  const T = AF.terr, S = afMesher(), jr = _mulberry32(AF.seed ^ 0x27d4eb2f), pack = AF_RUINPACK, teams = AF.cfg.teams;
+  const OLD = 0xa89c86, OLD_D = 0x857a66, MARBLE = 0xd9d0bd, WOOD = 0x6b4a2e, WOOD_D = 0x4a3520, IRON = 0x3a3a3f, STEEL = 0xb9c2cc, BONE = 0xe8e0c8, GOLD = 0xc9a24a, BRONZE = 0x9a7434;
+  const stone = () => afTint(jr() < 0.25 ? 0x8a8f6a : OLD, 0.12, jr()), lx = (yaw, k) => [Math.cos(yaw) * k, -Math.sin(yaw) * k], lz = (yaw, k) => [Math.sin(yaw) * k, Math.cos(yaw) * k];   // a piece's local X / Z in the world
+  const teamAt = (x, z) => { const a = Math.atan2(z, x); let bt = 0, bd = 1e9; for (let t = 0; t < teams; t++) { const d = Math.abs(angleDelta(a, afGateAngle(t))); if (d < bd) { bd = d; bt = t; } } return AF_TEAMS[bt].pal.cloth; };
+  const sph = (r) => cachedGeo('sph:' + r + ',6,5', () => new THREE.SphereGeometry(r, 6, 5));
+  for (const K of T.rocks) {
+    const x = K.x, z = K.z, y = K.y, yaw = K.yaw, h = K.h;
+    if (K.kind === 'column') { const c = stone(); S.box(1.6, 0.5, 1.6, x, y + 0.2, z, yaw, OLD_D); S.cyl(0.52, 0.6, +h.toFixed(2), 8, x, y + 0.45 + h / 2, z, yaw, c);
+      if (h > 6) S.box(1.5, 0.5, 1.5, x, y + 0.45 + h + 0.25, z, yaw, c); else { const o = lx(yaw, 0.14); S.cyl(0.36, 0.5, 0.6, 8, x + o[0], y + 0.45 + h + 0.2, z + o[1], yaw + 0.3, c); } }   // broken: a ragged stump on top
+    else if (K.kind === 'drum') { const c = stone(), o = lz(yaw, 1.1); S.cyl(0.55, 0.55, 2.4, 8, x, y + 0.4, z, yaw, c, Math.PI / 2); S.cyl(0.5, 0.5, 1.1, 8, x + o[0] * 1.6, y + 0.36, z + o[1] * 1.6, yaw + 0.5, afTint(c, 0.1, jr()), Math.PI / 2); }
+    else if (K.kind === 'stub') { const c = stone(); S.box(3.0, +h.toFixed(2), 1.0, x, y + h / 2, z, yaw, c); S.box(1.9, 0.8, 1.0, x, y + h + 0.4, z, yaw, c); S.box(0.8, 0.7, 1.0, x + lx(yaw, -0.5)[0], y + h + 1.15, z + lx(yaw, -0.5)[1], yaw, afTint(c, 0.1, jr())); }
+    else if (K.kind === 'statue') { const o = lz(yaw, 1.5); S.box(1.6, 1.0, 1.6, x, y + 0.5, z, yaw, OLD_D); S.add(cachedGeo('box:0.9,2.6,0.7', () => new THREE.BoxGeometry(0.9, 2.6, 0.7)), x + o[0], y + 0.42, z + o[1], yaw, MARBLE, 1, 1, 1, Math.PI / 2, 0); S.add(sph(0.36), x + o[0] * 1.95, y + 0.36, z + o[1] * 1.95, 0, MARBLE); }
+    else if (K.kind === 'colossus') afStatue(S, x, y, z, yaw, 1.8, MARBLE, OLD_D, { steps: true, arm: -(K.side || 1), sword: BRONZE, shield: BRONZE });   // a gate guardian: blade raised towards the gate it keeps
+    else if (K.kind === 'shell') { if (pack) S.add(afPackGeo('Shell'), x, y - 0.25, z, yaw, null, 1.2, 1.2, 1.2); else { const c = stone(); S.box(6.5, 3.6, 1.2, x, y + 1.8, z, yaw, c); S.box(1.2, 5.0, 2.6, x + lx(yaw, 2.8)[0], y + 2.5, z + lx(yaw, 2.8)[1], yaw, c); } }
+    else if (K.kind === 'barrel') { S.cyl(0.5, 0.56, 1.3, 10, x, y + 0.65, z, yaw, WOOD); for (const by of [0.3, 1.0]) S.cyl(0.56, 0.56, 0.1, 10, x, y + by, z, yaw, IRON); }
+    else if (K.kind === 'crate') { S.box(1.1, 1.0, 1.1, x, y + 0.5, z, yaw, WOOD); S.box(1.16, 0.12, 1.16, x, y + 0.94, z, yaw, WOOD_D); S.box(1.16, 0.12, 1.16, x, y + 0.06, z, yaw, WOOD_D); }
+  }
+  const spear = cachedGeo('af-spear', () => { const m = afMesher(); m.box(0.08, 3.4, 0.08, 0, 1.7, 0, 0, WOOD_D); m.box(0.16, 0.55, 0.05, 0, 3.62, 0, 0, STEEL); return m.geo(); });
+  for (const D of T.deco || []) {
+    const x = D.x, z = D.z, y = afY(x, z), yaw = D.yaw, s = D.s, cloth = teamAt(x, z);
+    if (D.kind === 'spear') S.add(spear, x, y - 0.25, z, yaw, null, s, s, s, 0.32 + D.tone * 0.2, 0.12);
+    else if (D.kind === 'shield') { S.cyl(0.75 * s, 0.75 * s, 0.1, 10, x, y + 0.3, z, yaw, D.tone < 0.6 ? cloth : WOOD, 1.25); S.cyl(0.18, 0.18, 0.1, 8, x + lz(yaw, -0.28)[0], y + 0.32 + 0.34, z + lz(yaw, -0.28)[1], yaw, STEEL, 1.25); }
+    else if (D.kind === 'bones') { S.add(sph(0.28), x, y + 0.22, z, yaw, BONE); for (let k = 0; k < 3; k++) { const o = lx(yaw, 0.7 + k * 0.32); S.box(0.08, 0.08, 1.1 - k * 0.15, x + o[0], y + 0.06, z + o[1], yaw + 0.15 * k, BONE); } }
+    else if (D.kind === 'plank') { S.box(2.4, 0.12, 0.36, x, y + 0.06, z, yaw, WOOD); S.box(1.6, 0.12, 0.34, x + lz(yaw, 0.5)[0], y + 0.18, z + lz(yaw, 0.5)[1], yaw + 0.4, WOOD_D); }
+    else if (D.kind === 'helm') { S.add(sph(0.36), x, y + 0.18, z, yaw, STEEL); S.box(0.08, 0.5, 0.3, x, y + 0.5, z, yaw, GOLD); }   // a fallen Vale helm, crescent up
+    else if (D.kind === 'wheel') { S.cyl(0.9, 0.9, 0.16, 10, x, y + 0.5, z, yaw, WOOD_D, 1.3); S.cyl(0.22, 0.22, 0.22, 8, x, y + 0.5, z, yaw, IRON, 1.3); }
+    else if (D.kind === 'stake') { S.box(0.18, 1.9, 0.18, x, y + 0.95, z, yaw, WOOD_D); S.box(0.8, 0.45, 0.04, x + lx(yaw, 0.45)[0], y + 1.65, z + lx(yaw, 0.45)[1], yaw, cloth); }
+  }
+  if (S.n) g.add(S.build());
+}
 function afBuildGround() {
   const size = Math.round(AF_F.radius * 5.2), segs = AF.terr.hills.length ? clamp(Math.round(size / 0.85), 120, 240) : 120, geo = new THREE.PlaneGeometry(size, size, segs, segs); geo.rotateX(-Math.PI / 2);   // hills want a finer mesh than a flat floor
-  const p = geo.attributes.position, col = new Float32Array(p.count * 3), c = new THREE.Color();
+  const p = geo.attributes.position, col = new Float32Array(p.count * 3), c = new THREE.Color(), pit = AF.cfg.venue === 'pit';
   const sand = new THREE.Color(0xb89a6c), sandDk = new THREE.Color(0x8f7650), churn = new THREE.Color(0x745538), grass = new THREE.Color(0x4f7a2e), grassDk = new THREE.Color(0x3c5f23), stone = new THREE.Color(0x77726a), scrub = new THREE.Color(0x8e8a55), scree = new THREE.Color(0x857d70);
   const n = (x, z) => 0.5 + 0.25 * Math.sin(x * 0.37 + AF.terr.p1) * Math.cos(z * 0.41 + AF.terr.p2) + 0.25 * Math.sin((x - z) * 0.23 + AF.terr.p3); // 0..1 patches
   for (let i = 0; i < p.count; i++) {
@@ -16759,12 +17129,13 @@ function afBuildGround() {
     const d = Math.hypot(x, z), k = n(x, z);
     if (d < AF_F.radius - 1) {
       c.copy(sand).lerp(sandDk, k * 0.8);
-      const ring = clamp(1 - Math.abs(d - 11) / 13, 0, 1); c.lerp(churn, ring * 0.7 * (0.5 + k * 0.7)); // the trampled middle where the fights happen
+      const ring = clamp(1 - Math.abs(d - (pit ? 3.6 : 11)) / (pit ? 5 : 13), 0, 1); c.lerp(churn, ring * (pit ? 0.85 : 0.7) * (0.5 + k * 0.7)); // the trampled middle where the fights happen
       if (((x * 12.9898 + z * 78.233) * 43758.5453) % 1 < 0.06) c.lerp(sandDk, 0.6);                     // scattered darker grains
       if (AF.terr.hills.length) { const hk = afHillK(x, z); if (hk > 0) c.lerp(scrub, clamp(hk * 1.4 - 0.15, 0, 0.75) * (0.7 + k * 0.5)).lerp(stone, clamp(hk - 0.75, 0, 0.25) * 2 * (0.4 + k * 0.6)); }   // dry scrub up the slopes, bare stone on a crest
       if (AF.terr.rocks.length) { const K = afRockAt(x, z, 2.2); if (K) c.lerp(scree, clamp(1 - (Math.hypot(x - K.x, z - K.z) - K.r) / 2.2, 0, 1) * 0.7); }   // scree and shadow-dust round each stone
       if (d > AF_F.radius - 4) c.lerp(stone, (d - (AF_F.radius - 4)) / 3 * 0.5);
     } else if (d < AF_F.radius + 2) c.copy(stone).lerp(sandDk, 0.2 * k);
+    else if (pit) c.copy(stone).lerp(sandDk, 0.25 * k);     // (under the cellar's built floor)
     else c.copy(grass).lerp(grassDk, k).lerp(stone, clamp((y - 3) / 8, 0, 0.6));
     col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
   }
@@ -16798,6 +17169,7 @@ function afApplyTime() {
   const fk = Math.max(1, AF_F.radius / 50);                // a bigger pit pushes the fog out with it
   scene.fog = new THREE.Fog(fogC.getHex(), (rain ? T.fog[1] * 0.7 : T.fog[1]) * fk, (rain ? T.fog[2] * 0.8 : T.fog[2]) * fk); scene.background = fogC;
   renderer.toneMappingExposure = T.exp;
+  if (PBR_ON) setEnvMap(makeEnvMap(skyC[0].getHex(), skyC[1].getHex(), skyC[2].getHex(), sun.position, T.sunCol));   // the plates reflect the hour
   if (AF_POST.on) AF_POST.bright.uniforms.thr.value = T.thr;
   if (AF.sunSpr) { AF.sunSpr.visible = T.sunSpr > 0 && !rain; AF.sunSpr.position.copy(sun.position).normalize().multiplyScalar(205); AF.sunSpr.scale.set(T.sunSpr, T.sunSpr, 1); AF.sunSpr.material.color.setHex(AF.cfg.time === 'dusk' ? 0xffb070 : 0xffffff); }
   if (AF.ground) { AF.ground.material.shininess = rain ? 42 : 2; AF.ground.material.specular.setHex(rain ? 0x3a3a3a : 0x000000); AF.ground.material.needsUpdate = true; }
@@ -16807,7 +17179,7 @@ function afApplyTime() {
     t.userData.flame.scale.setScalar(T.flame); t.userData.flameBase = T.flame;
   }
   if (AF.stars) { scene.remove(AF.stars); AF.stars = null; }
-  if (AF.cfg.time === 'night' && !rain) {                    // stars
+  if (AF.cfg.time === 'night' && !rain && AF.cfg.venue !== 'pit') {   // stars
     const n = 700, pos = new Float32Array(n * 3);
     for (let i = 0; i < n; i++) { const a = Math.random() * TAU, e = Math.asin(Math.random() * 0.95 + 0.05), r = 222; pos[i * 3] = Math.cos(a) * Math.cos(e) * r; pos[i * 3 + 1] = Math.sin(e) * r; pos[i * 3 + 2] = Math.sin(a) * Math.cos(e) * r; }
     const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
@@ -16871,27 +17243,30 @@ function afMakeTorch(x, z, yaw, withLight, bracket, y) {   // a standing torch o
    amphitheatre costs a handful of draw calls; the crowd is instanced (afCrowdMat: it bobs, leaps, waves and flies
    its flags in the vertex shader). Sizes are absolute — a building is a building — so a colossal pit gets a
    proportionally thinner ring round a bigger sand. Heights are world y (the ground under the ring is flat: afY). */
-const AF_AMPH = { wall: 8.0, wallIn: 0.3, wallOut: 1.9, walk: 3.0, rows: 5, rise: 1.0, tread: 1.7, prae: 2.6, colH: 5.4, back: 27.4, backing: 27.9, face: 28.7, out: 29.3, top: 26.4, attic: 24.0, mast: 6.5, sailIn: 10, sailY: 22, crowdCap: 6500 };
+const AF_AMPH = { wall: 10.0, wallIn: 0.3, wallOut: 1.9, walk: 3.0, rows: 5, rise: 1.0, tread: 1.7, prae: 2.6, colH: 5.4, back: 27.4, backing: 27.9, face: 28.7, out: 29.3, mast: 6.5, sailIn: 10, crowdCap: 6500 };   // (levels above the wall: afAmphH)
 const _afCol = new THREE.Color();
+// every level of the building hangs off the podium's height: the lower rows, the praecinctio, the upper rows, the gallery floor, the beam, the top, the attic and its three storeys
+function afAmphH() { const A = AF_AMPH, H0 = A.wall, LOW = H0 + 0.5, PRAE = H0 + 5.0, UP = PRAE + 0.5, GAL = PRAE + 5.0, BEAM = GAL + A.colH, TOP = GAL + 8.4; return { H0, LOW, PRAE, UP, GAL, BEAM, TOP, ATTIC: TOP - 2.4, STO: (TOP - 2.4) / 3, SAILY: GAL + 4 }; }
 // the cavea's height at a radius from the centre (the surface a camera must stay above) — 0 over the sand and beyond the ring
 function afArchTop(d) {
-  const A = AF_AMPH, r = d - AF_F.radius;
+  if (AF.cfg.venue === 'pit') return 0;
+  const A = AF_AMPH, H = afAmphH(), r = d - AF_F.radius;
   if (r < -0.5 || r > A.out + 2) return 0;
-  if (r < A.wallOut + A.walk) return A.wall + 1.3;
-  if (r < 13.4) return 8.5 + Math.floor((r - 4.9) / A.tread) + 1;
-  if (r < 16) return 13.5;
-  if (r < 24.5) return 13.5 + Math.floor((r - 16) / A.tread) + 1;
-  return A.top + 1.2;
+  if (r < A.wallOut + A.walk) return H.H0 + 1.3;
+  if (r < 13.4) return H.LOW + Math.floor((r - 4.9) / A.tread) + 1;
+  if (r < 16) return H.UP;
+  if (r < 24.5) return H.UP + Math.floor((r - 16) / A.tread) + 1;
+  return H.TOP + 1.2;
 }
 // bakes many shapes into ONE vertex-coloured, flat-shaded mesh: positions are transformed on the CPU, colour per piece
 function afMesher() {
   const pos = [], col = [], c = new THREE.Color(), M = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(0, 0, 0, 'YXZ'), sV = new THREE.Vector3(), pV = new THREE.Vector3(), v = new THREE.Vector3();
   const self = {
     n: 0,
-    add(geo, x, y, z, ry, hex, sx = 1, sy = 1, sz = 1, rx = 0, rz = 0) {
-      const g = geo.index ? cachedGeo('ni:' + geo.uuid, () => geo.toNonIndexed()) : geo, a = g.attributes.position;
-      M.compose(pV.set(x, y, z), q.setFromEuler(e.set(rx, ry, rz, 'YXZ')), sV.set(sx, sy, sz)); c.setHex(hex);
-      for (let i = 0; i < a.count; i++) { v.fromBufferAttribute(a, i).applyMatrix4(M); pos.push(v.x, v.y, v.z); col.push(c.r, c.g, c.b); }
+    add(geo, x, y, z, ry, hex, sx = 1, sy = 1, sz = 1, rx = 0, rz = 0, tint) {   // hex null: the geometry's own colour attribute (a pack piece), times tint (a Color) if given
+      const g = geo.index ? cachedGeo('ni:' + geo.uuid, () => geo.toNonIndexed()) : geo, a = g.attributes.position, vc = hex == null ? g.attributes.color : null, tr = tint ? tint.r : 1, tg = tint ? tint.g : 1, tb = tint ? tint.b : 1;
+      M.compose(pV.set(x, y, z), q.setFromEuler(e.set(rx, ry, rz, 'YXZ')), sV.set(sx, sy, sz)); if (!vc) c.setHex(hex);
+      for (let i = 0; i < a.count; i++) { v.fromBufferAttribute(a, i).applyMatrix4(M); pos.push(v.x, v.y, v.z); if (vc) col.push(vc.getX(i) * tr, vc.getY(i) * tg, vc.getZ(i) * tb); else col.push(c.r, c.g, c.b); }
       self.n += a.count; return self;
     },
     box(w, h, d, x, y, z, ry, hex) { return self.add(cachedGeo('box:' + w + ',' + h + ',' + d, () => new THREE.BoxGeometry(w, h, d)), x, y, z, ry, hex); },
@@ -16923,6 +17298,15 @@ function afMesher() {
   };
   return self;
 }
+// the RUINS PACK (assets/ruins-pack.json): the user's Ancient Ruins set — four rocks, a broken shell of a building and a
+// giant runic sword — exported from the USDZ with its textures baked to vertex colours (scratchpad export.swift), so it
+// sits in the flat-shaded world without a texture. Fetched once at load; the ruins fall back to procedural pieces without it.
+let AF_RUINPACK = null;
+try { fetch('assets/ruins-pack.json').then(r => r.ok ? r.json() : null).then(j => { AF_RUINPACK = j; }).catch(() => {}); } catch (e) {}
+function afPackGeo(name) {                                   // a pack piece as a non-indexed, vertex-coloured geometry in metres (base at y 0, centred in x/z)
+  return cachedGeo('pack:' + name, () => { const P = AF_RUINPACK[name], pos = [], col = [], c = new THREE.Color(); for (const i of P.idx) { pos.push(P.pos[i * 3] / 100, P.pos[i * 3 + 1] / 100, P.pos[i * 3 + 2] / 100); c.setHex(P.col[i]); col.push(c.r, c.g, c.b); }
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3)); g.computeVertexNormals(); return g; });
+}
 function afTint(hex, k, u) { return _afCol.setHex(hex).offsetHSL(0, 0, (u - 0.5) * k).getHex(); }
 function afHash(i, j) { let h = (i * 374761393 + j * 668265263) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; }
 // the crowd's vertex shader: the same bob / leap / wave as the old per-body step, but for thousands at once.
@@ -16948,116 +17332,244 @@ function afCrowdMat(kind, hex, vcol) {
   m.customProgramCacheKey = () => 'af-crowd-' + kind + (vcol ? 'c' : '');   // (three keys programs by onBeforeCompile's source — every kind would share the first one compiled)
   return m;
 }
+// the crowd's meshes: four InstancedMeshes (bodies, heads, arms, flags) over a list of {x,y,z,yaw,s,sy,col,ph,ang,amp,flag}
+function afBuildCrowdMeshes(g, list) {
+  const n = list.length, cr = new Float32Array(n * 3), mtx = new THREE.Matrix4(), qt = new THREE.Quaternion(), YAX = new THREE.Vector3(0, 1, 0), pv = new THREE.Vector3(), sv = new THREE.Vector3(), cc = new THREE.Color();
+  list.forEach((p, i) => { cr[i * 3] = p.ph; cr[i * 3 + 1] = p.ang; cr[i * 3 + 2] = p.amp; });
+  const inst = (key, make, kind, hex, vcol, count, pick) => {   // vcol: per-instance colours (and vertex colours if the geometry carries them)
+    const geo = cachedGeo(key, make).clone(); geo.userData.cached = false; geo.setAttribute('aCrowd', new THREE.InstancedBufferAttribute(new Float32Array(count * 3), 3));
+    const im = new THREE.InstancedMesh(geo, afCrowdMat(kind, hex, vcol && !!geo.attributes.color), count); im.castShadow = false; im.receiveShadow = true; im.frustumCulled = false;
+    let k = 0; const ac = geo.attributes.aCrowd.array;
+    list.forEach((p, i) => { if (pick && !pick(p)) return; mtx.compose(pv.set(p.x, p.y, p.z), qt.setFromAxisAngle(YAX, p.yaw), sv.set(p.s, p.s * p.sy, p.s)); im.setMatrixAt(k, mtx); if (vcol) im.setColorAt(k, cc.setHex(pick ? p.flag : p.col)); ac[k * 3] = cr[i * 3]; ac[k * 3 + 1] = cr[i * 3 + 1]; ac[k * 3 + 2] = cr[i * 3 + 2]; k++; });
+    im.instanceMatrix.needsUpdate = true; if (im.instanceColor) im.instanceColor.needsUpdate = true; g.add(im); return im;
+  };
+  const nFlags = list.filter(p => p.flag).length;
+  inst('af-crowd-body', () => new THREE.CylinderGeometry(0.42, 0.55, 1.6, 6, 1, true).translate(0, 0.8, 0), 'body', 0xffffff, true, n);   // (open-ended: the head and the row hide the caps — a few thousand of these add up)
+  inst('af-crowd-head', () => new THREE.SphereGeometry(0.3, 5, 4).translate(0, 1.92, 0), 'body', 0xe0b088, false, n);
+  inst('af-crowd-arm', () => { const m = afMesher(); m.box(0.14, 1.1, 0.14, -0.5, 0.55, 0, 0, 0xe0b088); m.box(0.14, 1.1, 0.14, 0.5, 0.55, 0, 0, 0xe0b088); return m.geo(); }, 'arm', 0xe0b088, false, n);
+  if (nFlags) inst('af-crowd-flag', () => { const m = afMesher(); m.box(0.06, 1.7, 0.06, 0.6, 0.85, 0.1, 0, 0x5a4636); const q = new THREE.Shape(); q.moveTo(0, 0); q.lineTo(0.9, -0.15); q.lineTo(0, -0.62); q.closePath(); m.add(new THREE.ShapeGeometry(q), 0.63, 1.7, 0.1, 0, 0xffffff); return m.geo(); }, 'flag', 0xffffff, true, nFlags, p => p.flag);
+  AF.crowd = []; AF.crowdN = n;
+}
+
+/* ---- THE PITS: the illegal house (lobby Venue: The Pits; `AF_PIT` holds the plan) ----
+   A cellar under the tanners' quarter: a sunken ring of sand AF_PIT.r wide behind three courses of rough stone and a
+   plank cap, the patrons' flagstone floor a chest height above it behind a timber rail, braziers on the lip and
+   brackets on the walls, barrels, crates and straw against the brick, a bookmaker's table by the stair, an iron
+   candle-wheel on chains over the sand, and a beamed plank roof three men up. The crowd stands in three rings and
+   moves in the same vertex shader as the Colosseum's. No gates, no tunnels, no entrance film: the bell just rings. ---- */
+function afBuildPitHouse() {
+  const R0 = AF_F.radius, P = AF_PIT, LIP = P.lip, OUT = P.out, ROOF = P.roofY, g = new THREE.Group(), seed = _mulberry32(AF.seed ^ 0x3c6ef372), S = afMesher(), C = afMesher();   // S casts shadows; C (roof, beams) does not — the lantern key hangs under it
+  const at = (r, a, y) => [Math.cos(a) * r, y, Math.sin(a) * r], tang = (a) => -a - Math.PI / 2, arcN = (r, len) => Math.max(4, Math.round((TAU * r) / len));
+  const STONE = 0x4e4640, STONE_D = 0x37312c, BRICK = 0x5a3f33, BRICK_D = 0x3f2c24, FLAG = 0x3a3531, WOOD = 0x4a3320, WOOD_D = 0x2e1f12, IRON = 0x2a2624, STRAW = 0xa88c48, BLOOD = 0x6a1e14, BONE = 0xd8cfb8;
+  const doorA = Math.PI / 2 + Math.PI / 16, nearDoor = (a, half) => Math.abs(angleDelta(a, doorA)) < half;   // the stair comes down between the corners, so nobody musters in the doorway
+  AF.torches = []; AF.gates = []; AF.gateLights = [];
+  // ---- the RING WALL: three courses of rough blocks, joints staggered, a plank cap the patrons lean on
+  for (let c = 0; c < 3; c++) {
+    const h = LIP / 3, n = arcN(R0 + 0.36, 1.7), off = c % 2 ? 0.5 : 0, len = TAU * (R0 + 0.36) / n - 0.06;
+    for (let i = 0; i < n; i++) { const a = ((i + off) / n) * TAU, p = at(R0 + 0.36, a, h / 2 + c * h); S.box(len, h - 0.05, 0.75, p[0], p[1], p[2], tang(a), afTint(STONE, 0.24, seed())); }
+  }
+  { const n = arcN(R0 + 0.45, 1.5), len = TAU * (R0 + 0.45) / n - 0.04; for (let i = 0; i < n; i++) { const a = (i / n) * TAU, p = at(R0 + 0.45, a, LIP + 0.06); S.box(len, 0.12, 1.0, p[0], p[1], p[2], tang(a), afTint(WOOD, 0.2, seed())); } }
+  // ---- the PATRONS' FLOOR: flagstones from the wall out to the brick, a chest height over the sand
+  S.lathe([{ r: OUT + 0.6, y: LIP, c: FLAG, k: 1 }, { r: R0 + 0.75, y: LIP, c: FLAG, k: 1 }, { r: R0 + 0.75, y: -0.3, c: STONE_D, k: 0 }], 48, null, null, 0.18, afHash);
+  // ---- the RAIL round the lip
+  { const rr = R0 + 1.05, n = arcN(rr, 1.6), len = 2 * rr * Math.sin(Math.PI / n) + 0.1;
+    for (let i = 0; i < n; i++) { const a = (i / n) * TAU, p = at(rr, a, LIP + 0.85); S.box(0.16, 1.7, 0.16, p[0], p[1], p[2], tang(a), WOOD_D);
+      const a2 = ((i + 0.5) / n) * TAU, q = at(rr, a2, LIP + 1.62); S.box(len, 0.1, 0.09, q[0], q[1], q[2], tang(a2), WOOD); } }
+  // ---- the CELLAR: brick walls with pilasters, a plinth course, the stair's black doorway with a skull on a spike either side
+  { const N = 16, H = ROOF - LIP + 0.6, len = 2 * OUT * Math.sin(Math.PI / N) + 0.2;
+    for (let i = 0; i < N; i++) {
+      const a = ((i + 0.5) / N) * TAU, p = at(OUT, a, LIP + H / 2 - 0.3);
+      if (nearDoor(a, Math.PI / N * 0.9)) {                   // the doorway: two jambs, a lintel, the wall over it, and the dark beyond
+        const W = 4.2, j = at(OUT - 0.2, a, LIP + 2.6);
+        for (const sg of [-1, 1]) { const q = [j[0] + Math.cos(a + Math.PI / 2) * sg * (W / 2 + 0.55), j[1], j[2] + Math.sin(a + Math.PI / 2) * sg * (W / 2 + 0.55)]; S.box(1.1, 5.2, 1.3, q[0], q[1], q[2], tang(a), STONE_D);
+          const sk = at(OUT - 2.2, a + sg * 0.14, LIP); S.box(0.12, 3.0, 0.12, sk[0], sk[1] + 1.5, sk[2], 0, IRON); S.add(cachedGeo('sph:0.36,7,5', () => new THREE.SphereGeometry(0.36, 7, 5)), sk[0], sk[1] + 3.15, sk[2], seed() * TAU, BONE); }
+        S.box(W + 2.4, 0.9, 1.3, j[0], LIP + 5.45, j[2], tang(a), STONE_D);
+        S.box(len, H - 5.9, 1.0, p[0], LIP + 5.9 + (H - 5.9) / 2 - 0.3, p[2], tang(a), afTint(BRICK, 0.16, seed()));
+        const dk = at(OUT + 1.4, a, LIP + 2.6); S.box(W + 1.0, 5.2, 2.6, dk[0], dk[1], dk[2], tang(a), 0x050403);
+        continue;
+      }
+      S.box(len, H, 1.0, p[0], p[1], p[2], tang(a), afTint(BRICK, 0.16, seed()));
+      const b = at(OUT - 0.15, a, LIP + 0.45); S.box(len, 0.9, 1.3, b[0], b[1], b[2], tang(a), afTint(BRICK_D, 0.12, seed()));
+      const pa = (i / N) * TAU, q = at(OUT - 0.35, pa, LIP + H / 2 - 0.3); S.box(0.8, H, 0.7, q[0], q[1], q[2], tang(pa), STONE_D);
+    }
+  }
+  // ---- the ROOF: posts and braces, a ring beam, radial beams, planks
+  { const HP = ROOF - LIP;
+    for (let i = 0; i < 8; i++) { const a = ((i + 0.5) / 8) * TAU, p = at(OUT - 1.8, a, LIP + HP / 2); S.box(0.55, HP, 0.55, p[0], p[1], p[2], tang(a), afTint(WOOD_D, 0.15, seed()));
+      const bq = at(OUT - 2.9, a, ROOF - 1.6); S.add(cachedGeo('box:2.6,0.3,0.3', () => new THREE.BoxGeometry(2.6, 0.3, 0.3)), bq[0], bq[1], bq[2], -a, WOOD_D, 1, 1, 1, 0, 0.7); }   // (a brace leaning in toward the centre)
+    const N = 16, len = 2 * (OUT - 0.9) * Math.sin(Math.PI / N) + 0.2;
+    for (let i = 0; i < N; i++) { const a = ((i + 0.5) / N) * TAU, p = at(OUT - 0.9, a, ROOF - 0.5); C.box(len, 0.5, 0.45, p[0], p[1], p[2], tang(a), WOOD_D); }
+    for (let i = 0; i < 12; i++) { const a = (i / 12) * TAU, L = OUT - 0.9, p = at(L / 2, a, ROOF - 0.25); C.box(L, 0.45, 0.35, p[0], p[1], p[2], -a, afTint(WOOD_D, 0.12, seed())); }
+    C.cyl(OUT + 0.8, OUT + 0.8, 0.3, 32, 0, ROOF + 0.15, 0, 0, 0x211810);
+    for (let i = 0; i < 6; i++) { const a = seed() * TAU, r = 5 + seed() * (OUT - 9), L = 1.6 + seed() * 2.2, p = at(r, a, ROOF - 0.5 - L / 2); C.box(0.06, L, 0.06, p[0], p[1], p[2], 0, IRON); C.box(0.28, 0.1, 0.28, p[0], ROOF - 0.5 - L, p[2], a, IRON); }   // chains and hooks off the beams
+  }
+  // ---- the CANDLE-WHEEL over the sand: an iron ring on three chains, tallow candles round it, and the lantern key beneath
+  { const RW = 2.4, YW = 6.4, wheel = new THREE.Group();
+    for (let i = 0; i < 8; i++) { const a = ((i + 0.5) / 8) * TAU, p = at(RW, a, YW); S.box(2 * RW * Math.sin(Math.PI / 8) + 0.1, 0.12, 0.22, p[0], p[1], p[2], tang(a), IRON);
+      const cp = at(RW, (i / 8) * TAU, YW + 0.25), cd = new THREE.Mesh(cachedGeo('af-candle', () => new THREE.CylinderGeometry(0.07, 0.08, 0.5, 5)), mat(0xf0e0b0)); cd.position.set(cp[0], cp[1], cp[2]); cd.castShadow = false; wheel.add(cd);
+      const fl = new THREE.Mesh(cachedGeo('af-cflame', () => new THREE.IcosahedronGeometry(0.16, 0)), mat(0xffc070, { emissive: 0xff9a30, emissiveI: 2.6 })); fl.position.set(cp[0], cp[1] + 0.4, cp[2]); fl.castShadow = false; wheel.add(fl); }
+    for (let i = 0; i < 3; i++) { const p = at(RW, (i / 3) * TAU, (ROOF + YW) / 2); S.box(0.07, ROOF - YW, 0.07, p[0], p[1], p[2], 0, IRON); }
+    const key = new THREE.PointLight(0xffb060, 1.3, 30, 2); key.position.set(0, YW - 0.4, 0); wheel.add(key);
+    g.add(wheel);
+  }
+  // ---- BRAZIERS on the lip and BRACKETS on the walls (afApplyTime lights them: the pits are always night)
+  for (let i = 0; i < 6; i++) { const a = ((i + 0.5) / 6) * TAU + 0.2; if (nearDoor(a, 0.45)) continue; const p = at(R0 + 1.45, a, LIP); const t = afMakeTorch(p[0], p[2], seed() * TAU, false, false, LIP); t.scale.setScalar(0.72); g.add(t); AF.torches.push(t); }   // (a brazier, not a beacon: the lens passes close to these)
+  for (let i = 0; i < 8; i++) { const a = ((i + 0.5) / 8) * TAU; if (nearDoor(a, 0.5)) continue; const p = at(OUT - 0.62, a, 5.4); const t = afMakeTorch(p[0], p[2], Math.PI / 2 - a, false, true, 5.4); g.add(t); AF.torches.push(t); }
+  // ---- the STORE along the walls: barrels (some stacked), crates, straw; the bookmaker's table by the stair
+  const wallSpot = (pad) => { for (let k = 0; k < 20; k++) { const a = seed() * TAU; if (!nearDoor(a, pad)) return a; } return doorA + Math.PI; };
+  for (let i = 0; i < 11; i++) { const a = wallSpot(0.5), r = OUT - 2.2 - seed() * 1.2, p = at(r, a, LIP + 0.65), col = afTint(WOOD, 0.22, seed());
+    S.cyl(0.62, 0.55, 1.3, 8, p[0], p[1], p[2], seed() * TAU, col); S.cyl(0.65, 0.65, 0.08, 8, p[0], LIP + 0.35, p[2], 0, IRON); S.cyl(0.65, 0.65, 0.08, 8, p[0], LIP + 0.98, p[2], 0, IRON);
+    if (seed() < 0.4) { S.cyl(0.62, 0.55, 1.3, 8, p[0], LIP + 1.95, p[2], seed() * TAU, afTint(WOOD, 0.22, seed())); S.cyl(0.65, 0.65, 0.08, 8, p[0], LIP + 1.65, p[2], 0, IRON); S.cyl(0.65, 0.65, 0.08, 8, p[0], LIP + 2.28, p[2], 0, IRON); } }
+  for (let i = 0; i < 8; i++) { const a = wallSpot(0.5), r = OUT - 2.0 - seed() * 1.6, p = at(r, a, LIP + 0.55), s = 0.9 + seed() * 0.5; S.box(s, s, s, p[0], LIP + s / 2, p[2], seed() * TAU, afTint(0x6a4c30, 0.22, seed())); if (seed() < 0.35) S.box(s * 0.8, s * 0.8, s * 0.8, p[0], LIP + s + s * 0.4, p[2], seed() * TAU, afTint(0x6a4c30, 0.22, seed())); }
+  for (let i = 0; i < 6; i++) { const a = wallSpot(0.5), p = at(OUT - 1.9, a, LIP + 0.35); S.box(1.5, 0.7, 0.85, p[0], p[1], p[2], tang(a) + (seed() - 0.5) * 0.5, afTint(STRAW, 0.2, seed())); }
+  { const a = doorA - 0.42, p = at(OUT - 4.2, a, LIP), yaw = tang(a);
+    S.box(2.6, 0.12, 1.15, p[0], LIP + 1.05, p[2], yaw, WOOD); for (const [dx, dz] of [[-1.15, -0.45], [1.15, -0.45], [-1.15, 0.45], [1.15, 0.45]]) { const lx = p[0] + Math.cos(yaw) * dx + Math.sin(yaw) * dz, lz = p[2] - Math.sin(yaw) * dx + Math.cos(yaw) * dz; S.box(0.12, 1.0, 0.12, lx, LIP + 0.5, lz, yaw, WOOD_D); }
+    S.box(0.7, 0.42, 0.45, p[0] + Math.cos(yaw) * 0.6, LIP + 1.32, p[2] - Math.sin(yaw) * 0.6, yaw, afTint(WOOD_D, 0.1, seed())); S.box(0.5, 0.06, 0.5, p[0] - Math.cos(yaw) * 0.6, LIP + 1.14, p[2] + Math.sin(yaw) * 0.6, yaw, 0xc9a24a);   // the strongbox and the stakes
+    const lt = afMakeTorch(p[0] - Math.cos(yaw) * 1.6, p[2] + Math.sin(yaw) * 1.6, 0, false, false, LIP); lt.scale.setScalar(0.75); g.add(lt); AF.torches.push(lt); }
+  // ---- OLD BLOOD in the sand
+  for (let i = 0; i < 7; i++) { const a = seed() * TAU, r = seed() * (R0 - 2), sc = 0.5 + seed() * 0.9; S.add(cachedGeo('af-stain', () => new THREE.CircleGeometry(1, 10)), Math.cos(a) * r, 0.03, Math.sin(a) * r, seed() * TAU, afTint(BLOOD, 0.2, seed()), sc, sc * 0.7, 1, -Math.PI / 2, 0); }
+  // ---- the PATRONS: three rings on the flagstones, a lane kept open from the stair
+  const cols = [0x2e2622, 0x4a3a2c, 0x5a4a3a, 0x3b3540, 0x6b2f2a, 0x2f3b4a, 0x7a6a50, 0x4d3d5a, 0x8a4a2a, 0x3a4a3a], list = [];
+  for (const rr of [R0 + 2.0, R0 + 3.3, R0 + 4.6, R0 + 5.9]) {
+    const n = Math.round(TAU * rr / 1.35);
+    for (let k = 0; k < n; k++) {
+      const a = ((k + 0.2 + seed() * 0.6) / n) * TAU; if (seed() > 0.9 - (rr - R0) * 0.08 || (rr > R0 + 3 && nearDoor(a, 0.24))) continue;
+      const r = rr + (seed() - 0.5) * 0.4, x = Math.cos(a) * r, z = Math.sin(a) * r;
+      list.push({ x, y: LIP, z, yaw: Math.atan2(-x, -z) + (seed() - 0.5) * 0.5, s: 1.22 + seed() * 0.22, sy: 1.04, col: cols[(seed() * cols.length) | 0], ph: seed() * TAU, ang: a, amp: 0.5 + seed() * 0.7, flag: 0 });
+    }
+  }
+  afBuildCrowdMeshes(g, list);
+  g.add(S.build()); g.add(C.build({ cast: false }));
+  return g;
+}
+function afApplyPitLight() {                                // underground, after afApplyTime's night: no sky, a warm lantern key from the candle-wheel, close dark fog
+  sun.position.set(5, 38, 3); sun.color.setHex(0xffb878); sun.intensity = 0.26;   // (the shadow caster stands in for the candle-wheel: near-vertical, warm)
+  hemi.color.setHex(0x4a3428); hemi.groundColor.setHex(0x14100c); hemi.intensity = 0.38;
+  if (AF.sky) AF.sky.visible = false; if (AF.stars) AF.stars.visible = false; if (AF.sunSpr) AF.sunSpr.visible = false;
+  const fogC = new THREE.Color(0x0a0706); scene.fog = new THREE.Fog(fogC.getHex(), 16, 70); scene.background = fogC;
+  renderer.toneMappingExposure = 0.86;
+  if (AF_POST.on) AF_POST.bright.uniforms.thr.value = 0.62;
+  for (const t of AF.torches) { t.userData.lightK = 0.4; if (t.userData.light) { t.userData.light.distance = 16; t.userData.light.intensity *= 0.4; } }   // fourteen braziers a pace from the sand: each burns low
+  if (AF.motes) AF.motes.visible = true;
+}
 function afBuildWall() {
-  const R0 = AF_F.radius, A = AF_AMPH, g = new THREE.Group(), teams = AF.cfg.teams, seed = _mulberry32(AF.seed ^ 0x5bd1e995), W = AF_INTRO.gateW;
+  const R0 = AF_F.radius, A = AF_AMPH, { H0, LOW, PRAE, UP, GAL, BEAM, TOP, ATTIC, STO, SAILY } = afAmphH(), FRZ = H0 - 1.15, g = new THREE.Group(), teams = AF.cfg.teams, seed = _mulberry32(AF.seed ^ 0x5bd1e995), W = AF_INTRO.gateW;
   const S = afMesher(), C = afMesher();                     // S: stone, timber and metal (one-sided); C: cloth (the sails are seen from beneath)
   const at = (r, a, y) => [Math.cos(a) * r, y, Math.sin(a) * r], tang = (a) => -a - Math.PI / 2, arcN = (r, len) => Math.max(4, Math.round((TAU * r) / len));
-  const ST = 0xcbbc9e, ST_D = 0x9e917a, ST_L = 0xdcd0b6, SEAT = 0xd8cdb4, RISER = 0xb3a68b, WALK = 0xb0a488, FRIEZE = 0x5a3028, DARK = 0x231e1b, WOOD = 0x4a3520, GOLD = 0xc9a24a, ROOF = 0x8e4f36, ROOF_D = 0x5e3424, MARBLE = 0xe4dccb, CRIMSON = 0x7a1f22;
+  const ST = 0xbfae8f, ST_D = 0x8f836c, ST_L = 0xd6c9ad, MORTAR = 0x6e6455, SEAT = 0xd3c7ab, RISER = 0xa89b7f, WALK = 0xa89c80, FRIEZE = 0x4e2822, DARK = 0x2b2622, SHADE = 0x4a423b, WOOD = 0x4a3520, GOLD = 0xc9a24a, ROOF = 0x8e4f36, ROOF_D = 0x5e3424, MARBLE = 0xe4dccb, CRIMSON = 0x7a1f22, BRONZE = 0x6e5230;
   const mid = afGateAngle(0) + Math.PI / teams;              // the imperial box: midway between the first two gates
   const teamCloth = (t) => AF_TEAMS[t % teams].pal.cloth;
   const gateTeamAt = (a) => { let bt = 0, bd = 1e9; for (let t = 0; t < teams; t++) { const d = Math.abs(angleDelta(a, afGateAngle(t))); if (d < bd) { bd = d; bt = t; } } return { t: bt, d: bd }; };
   // ---- the CAVEA: one lathe from the exterior's dark backing over the attic and down the seats to the podium cornice
   const P = [], pt = (r, y, c, k) => P.push({ r: R0 + r, y, c, k: k == null ? 0 : k });
-  pt(A.backing, -0.6, DARK); pt(A.backing, A.attic, DARK, 0.3);              // the dark backing the arcades open onto
-  pt(A.out, A.attic, ST_D); pt(A.out, A.top, ST, 1);                        // the attic's outer face
-  pt(A.back + 0.6, A.top, ST_L, 0.3); pt(A.back + 0.6, A.top + 0.6, ST, 0.6); pt(A.back, A.top + 0.6, ST_L, 0.3);   // the top and its parapet
-  pt(A.back, 18.0, ST, 1);                                                   // the gallery's back wall (the attic's inner face)
-  pt(24.5, 18.0, WALK, 0.6);                                                 // the gallery floor
-  for (let j = A.rows - 1; j >= 0; j--) { const r = 16.0 + j * A.tread, y = 13.5 + j; pt(r + A.tread, y, RISER, 0.5); pt(r, y, SEAT, 0.5); }   // the upper maenianum
-  pt(16.0, 13.0, RISER, 0.5); pt(13.4, 13.0, WALK, 0.6);                     // the praecinctio
-  for (let i = A.rows - 1; i >= 0; i--) { const r = 4.9 + i * A.tread, y = 8.5 + i; pt(r + A.tread, y, RISER, 0.5); pt(r, y, SEAT, 0.5); }    // the lower maenianum
-  pt(4.9, A.wall, RISER, 0.5); pt(-0.2, A.wall, WALK, 0.6);                  // the podium walkway, out to the cornice's lip over the sand
-  pt(-0.2, 7.55, ST_L, 0.3); pt(0.2, 7.4, ST_D); pt(0.2, 6.85, FRIEZE, 0.2); pt(A.wallIn, 6.85, ST_D);   // cornice, frieze
+  pt(A.backing, -0.6, SHADE); pt(A.backing, ATTIC, SHADE, 0.5);              // the dark backing the arcades open onto
+  pt(A.out, ATTIC, ST_D); pt(A.out, TOP, ST, 1);                        // the attic's outer face
+  pt(A.back + 0.6, TOP, ST_L, 0.3); pt(A.back + 0.6, TOP + 0.6, ST, 0.6); pt(A.back, TOP + 0.6, ST_L, 0.3);   // the top and its parapet
+  pt(A.back, GAL, ST, 1);                                                   // the gallery's back wall (the attic's inner face)
+  pt(24.5, GAL, WALK, 0.6);                                                 // the gallery floor
+  for (let j = A.rows - 1; j >= 0; j--) { const r = 16.0 + j * A.tread, y = UP + j; pt(r + A.tread, y, RISER, 0.5); pt(r, y, SEAT, 0.5); }   // the upper maenianum
+  pt(16.0, PRAE, RISER, 0.5); pt(13.4, PRAE, WALK, 0.6);                     // the praecinctio
+  for (let i = A.rows - 1; i >= 0; i--) { const r = 4.9 + i * A.tread, y = LOW + i; pt(r + A.tread, y, RISER, 0.5); pt(r, y, SEAT, 0.5); }    // the lower maenianum
+  pt(4.9, H0, RISER, 0.5); pt(-0.2, H0, WALK, 0.6);                  // the podium walkway, out to the cornice's lip over the sand
+  pt(-0.2, H0 - 0.45, ST_L, 0.3); pt(0.2, H0 - 0.6, ST_D); pt(0.2, FRZ, FRIEZE, 0.2); pt(A.wallIn, FRZ, ST_D);   // cornice, frieze
   const segs = arcN(R0 + 15, 2.4);
   S.lathe(P, segs, null, null, 0.07, afHash);
   // ---- the PODIUM WALL below the frieze: six rusticated courses on a plinth, in arcs between the gates' pillars
-  const PW = [{ r: R0 + A.wallIn, y: 6.85, c: ST }];
-  for (let k = 5; k >= 0; k--) { const y0 = 0.85 + k, r = R0 + A.wallIn + (k % 2 ? 0.05 : 0); PW.push({ r, y: y0 + 1, c: ST_L, k: 0.4 }, { r, y: y0, c: ST, k: 1 }); }
+  const PW = [{ r: R0 + A.wallIn, y: FRZ, c: ST }], courses = Math.round(FRZ - 0.85);
+  for (let k = courses - 1; k >= 0; k--) { const y0 = 0.85 + k, r = R0 + A.wallIn + (k % 2 ? 0.05 : 0); PW.push({ r: r + 0.14, y: y0 + 1, c: MORTAR }, { r: r + 0.14, y: y0 + 0.9, c: MORTAR }, { r, y: y0 + 0.9, c: ST_L, k: 0.4 }, { r, y: y0, c: ST, k: 1.4 }); }   // a recessed joint over each course of blocks
   PW.push({ r: R0 + 0.1, y: 0.85, c: ST_L, k: 0.3 }, { r: R0 + 0.1, y: -0.6, c: ST_D, k: 0.6 });
   const hw = (W / 2 + 1.1 + 0.05) / (R0 + A.wallIn);          // half the gate hole, to the pillars' outer edges, as an angle
-  for (let t = 0; t < teams; t++) { const a0 = afGateAngle(t) + hw, a1 = afGateAngle(t + 1) - hw; S.lathe(PW, Math.max(4, Math.round((a1 - a0) * (R0 + A.wallIn) / 2.2)), a0, a1, 0.07, afHash); }
-  // pilasters with torch brackets (six of them lit), and the balustrade along the wall's top
+  for (let t = 0; t < teams; t++) { const a0 = afGateAngle(t) + hw, a1 = afGateAngle(t + 1) - hw; S.lathe(PW, Math.max(4, Math.round((a1 - a0) * (R0 + A.wallIn) / 2.2)), a0, a1, 0.09, afHash); }
+  const NG = arcN(R0, 3.2);
+  for (let k = 0; k < NG; k++) { const a = (k / NG) * TAU; if (afNearGate(a, W / 2 + 1.4, R0)) continue; S.cyl(0.2, 0.2, 0.16, 8, ...at(R0 + 0.16, a, FRZ + 0.27), tang(a), GOLD, Math.PI / 2); }   // gilt studs along the frieze
+  // pilasters (up to the frieze, under a capital) with torch brackets (six of them lit), and the balustrade along the wall's top
   AF.torches = [];
   const NT = arcN(R0, 13), litEvery = Math.max(1, Math.round(NT / 6)); let lit = 0, tk = 0;
   for (let k = 0; k < NT; k++) {
     const a = ((k + 0.5) / NT) * TAU; if (afNearGate(a, W / 2 + 2.8, R0)) continue;
-    S.box(1.0, 5.6, 0.5, ...at(R0 + 0.12, a, 3.65), tang(a), afTint(ST_D, 0.06, seed()));
-    const p = at(R0 - 0.42, a, 4.4), on = tk++ % litEvery === 0 && lit < 6; if (on) lit++;
-    const torch = afMakeTorch(p[0], p[2], Math.PI / 2 - a, on, true, 4.4); g.add(torch); AF.torches.push(torch);
+    S.box(1.0, FRZ - 0.85, 0.5, ...at(R0 + 0.12, a, (0.85 + FRZ) / 2), tang(a), afTint(ST_D, 0.06, seed())); S.box(1.3, 0.45, 0.7, ...at(R0 + 0.1, a, FRZ - 0.3), tang(a), ST_L);
+    const p = at(R0 - 0.42, a, 5.6), on = tk++ % litEvery === 0 && lit < 6; if (on) lit++;
+    const torch = afMakeTorch(p[0], p[2], Math.PI / 2 - a, on, true, 5.6); g.add(torch); AF.torches.push(torch);
   }
   const NP = arcN(R0 + 0.35, 2.4);
-  for (let k = 0; k < NP; k++) { const a = (k / NP) * TAU; S.box(0.34, 1.0, 0.34, ...at(R0 + 0.35, a, A.wall + 0.5), tang(a), ST_L); }
-  S.lathe([{ r: R0 + 0.55, y: 9.0, c: ST }, { r: R0 + 0.55, y: 9.25, c: ST }, { r: R0 + 0.15, y: 9.25, c: ST_L }, { r: R0 + 0.15, y: 9.0, c: ST }, { r: R0 + 0.55, y: 9.0, c: ST_D }], segs);
+  for (let k = 0; k < NP; k++) { const a = (k / NP) * TAU; S.box(0.34, 1.0, 0.34, ...at(R0 + 0.35, a, H0 + 0.5), tang(a), ST_L); }
+  S.lathe([{ r: R0 + 0.55, y: H0 + 1.0, c: ST }, { r: R0 + 0.55, y: H0 + 1.25, c: ST }, { r: R0 + 0.15, y: H0 + 1.25, c: ST_L }, { r: R0 + 0.15, y: H0 + 1.0, c: ST }, { r: R0 + 0.55, y: H0 + 1.0, c: ST_D }], segs);
   // the teams' drapes hung over the balustrade above their gates, with a gold hem
-  for (let t = 0; t < teams; t++) { const a = afGateAngle(t); S.box(W - 1.0, 2.4, 0.14, ...at(R0 - 0.38, a, 8.05), tang(a), teamCloth(t)); S.box(W - 1.0, 0.22, 0.18, ...at(R0 - 0.4, a, 6.96), tang(a), GOLD); }
+  for (let t = 0; t < teams; t++) { const a = afGateAngle(t); S.box(W - 1.0, 2.4, 0.14, ...at(R0 - 0.38, a, H0 + 0.05), tang(a), teamCloth(t)); S.box(W - 1.0, 0.22, 0.18, ...at(R0 - 0.4, a, H0 - 1.04), tang(a), GOLD); }
   // ---- the AISLES: stair steps down every cuneus, dark vomitoria where they meet the praecinctio, doors out of the gallery
   const NA = arcN(R0 + 15, 21), aisles = [];
   for (let k = 0; k < NA; k++) { const a = ((k + 0.5) / NA) * TAU; if (Math.abs(angleDelta(a, mid)) * R0 < 6) continue; aisles.push(a); }
   const nearAisle = (a, r) => { for (const q of aisles) if (Math.abs(angleDelta(a, q)) * r < 1.7) return true; return false; };
   for (const a of aisles) {
-    for (let i = 1; i < A.rows; i++) { S.box(2.2, 0.5, 0.85, ...at(R0 + 4.9 + i * A.tread - 0.425, a, 8.5 + i - 1 + 0.25), tang(a), ST_D); S.box(2.2, 0.5, 0.85, ...at(R0 + 16.0 + i * A.tread - 0.425, a, 13.5 + i - 1 + 0.25), tang(a), ST_D); }
-    S.box(2.6, 2.5, 2.2, ...at(R0 + 17.13, a, 14.25), tang(a), DARK);        // the vomitorium: a vault under the upper rows
-    for (const s of [-1, 1]) { const p = at(R0 + 15.9, a, 14.35); S.box(0.35, 2.7, 0.3, p[0] - Math.sin(a) * s * 1.45, p[1], p[2] + Math.cos(a) * s * 1.45, tang(a), ST_L); }
-    S.box(3.25, 0.4, 0.3, ...at(R0 + 15.9, a, 15.9), tang(a), ST_L);
-    S.box(2.4, 3.8, 0.2, ...at(R0 + A.back - 0.1, a, 19.9), tang(a), DARK);   // the door out of the gallery
-    S.box(3.0, 0.4, 0.3, ...at(R0 + A.back - 0.15, a, 22.0), tang(a), ST_L);
+    for (let i = 1; i < A.rows; i++) { S.box(2.2, 0.5, 0.85, ...at(R0 + 4.9 + i * A.tread - 0.425, a, LOW + i - 0.75), tang(a), ST_D); S.box(2.2, 0.5, 0.85, ...at(R0 + 16.0 + i * A.tread - 0.425, a, UP + i - 0.75), tang(a), ST_D); }
+    S.box(2.6, 2.5, 2.2, ...at(R0 + 17.13, a, PRAE + 1.25), tang(a), DARK);        // the vomitorium: a vault under the upper rows
+    for (const s of [-1, 1]) { const p = at(R0 + 15.9, a, PRAE + 1.35); S.box(0.35, 2.7, 0.3, p[0] - Math.sin(a) * s * 1.45, p[1], p[2] + Math.cos(a) * s * 1.45, tang(a), ST_L); }
+    S.box(3.25, 0.4, 0.3, ...at(R0 + 15.9, a, PRAE + 2.9), tang(a), ST_L);
+    S.box(2.4, 3.8, 0.2, ...at(R0 + A.back - 0.1, a, GAL + 1.9), tang(a), DARK);   // the door out of the gallery
+    S.box(3.0, 0.4, 0.3, ...at(R0 + A.back - 0.15, a, GAL + 4.0), tang(a), ST_L);
   }
+  // ---- bronze figures along the podium's edge, behind the balustrade between the aisles, a gilt blade raised over the sand
+  // (dark against the crowd so they read from the pit; none before the box or the gates)
+  { const NS = arcN(R0, 17); let i = 0; for (let k = 0; k < NS; k++) { const a = ((k + 0.5) / NS) * TAU; if (afNearGate(a, W / 2 + 4.5, R0) || Math.abs(angleDelta(a, mid)) * R0 < 6.5 || nearAisle(a, R0)) continue; const p = at(R0 + 1.5, a, H0); afStatue(S, p[0], p[1], p[2], tang(a), 1.6, BRONZE, ST_D, { arm: i++ % 2 ? -1 : 1, sword: GOLD }); } }
   // ---- the GALLERY: a colonnade under a tiled roof, the teams' long drapes on the wall behind it
   const rC = R0 + 25.2, NC = arcN(rC, 3.6);
   for (let k = 0; k < NC; k++) {
     const a = (k / NC) * TAU;
-    S.cyl(0.38, 0.42, A.colH, 8, ...at(rC, a, 18.0 + A.colH / 2), tang(a), afTint(ST_L, 0.05, seed()));
-    S.box(1.0, 0.3, 1.0, ...at(rC, a, 18.15), tang(a), ST); S.box(1.0, 0.5, 1.0, ...at(rC, a, 23.15), tang(a), ST);
-    if (k % 3 === 1) { const am = ((k + 0.5) / NC) * TAU, t = gateTeamAt(am).t; S.box(2.6, 4.0, 0.12, ...at(R0 + A.back - 0.2, am, 21.4), tang(am), teamCloth(t)); S.box(2.6, 0.25, 0.16, ...at(R0 + A.back - 0.22, am, 19.5), tang(am), GOLD); }
+    S.cyl(0.38, 0.42, A.colH, 8, ...at(rC, a, GAL + A.colH / 2), tang(a), afTint(ST_L, 0.05, seed()));
+    S.box(1.0, 0.3, 1.0, ...at(rC, a, GAL + 0.15), tang(a), ST); S.box(1.0, 0.5, 1.0, ...at(rC, a, BEAM - 0.25), tang(a), ST);
+    if (k % 3 === 1) { const am = ((k + 0.5) / NC) * TAU, t = gateTeamAt(am).t; S.box(2.6, 4.0, 0.12, ...at(R0 + A.back - 0.2, am, BEAM - 2.0), tang(am), teamCloth(t)); S.box(2.6, 0.25, 0.16, ...at(R0 + A.back - 0.22, am, BEAM - 3.9), tang(am), GOLD); }
   }
-  S.lathe([{ r: rC + 0.5, y: 23.4, c: ST_D }, { r: rC + 0.5, y: 24.2, c: ST_D }, { r: rC - 0.5, y: 24.2, c: ST }, { r: rC - 0.5, y: 23.4, c: ST_D }, { r: rC + 0.5, y: 23.4, c: ST_D }], segs);   // the beam
-  S.lathe([{ r: R0 + 24.6, y: 23.95, c: ROOF_D }, { r: R0 + A.back - 0.1, y: 25.05, c: ROOF_D }, { r: R0 + A.back - 0.1, y: 25.3, c: ROOF_D }, { r: R0 + 24.6, y: 24.2, c: ROOF, k: 1 }, { r: R0 + 24.6, y: 23.95, c: ROOF_D }], segs, null, null, 0.06, afHash);   // the roof
+  S.lathe([{ r: rC + 0.5, y: BEAM, c: ST_D }, { r: rC + 0.5, y: BEAM + 0.8, c: ST_D }, { r: rC - 0.5, y: BEAM + 0.8, c: ST }, { r: rC - 0.5, y: BEAM, c: ST_D }, { r: rC + 0.5, y: BEAM, c: ST_D }], segs);   // the beam
+  S.lathe([{ r: R0 + 24.6, y: BEAM + 0.55, c: ROOF_D }, { r: R0 + A.back - 0.1, y: BEAM + 1.65, c: ROOF_D }, { r: R0 + A.back - 0.1, y: BEAM + 1.9, c: ROOF_D }, { r: R0 + 24.6, y: BEAM + 0.8, c: ROOF, k: 1 }, { r: R0 + 24.6, y: BEAM + 0.55, c: ROOF_D }], segs, null, null, 0.06, afHash);   // the roof
   // ---- the IMPERIAL BOX on the podium walkway: a marble dais under a crimson canopy, a gilded seat
-  { const a = mid, dx = -Math.sin(a), dz = Math.cos(a), P0 = at(R0 + 3.3, a, 8.25);
+  { const a = mid, dx = -Math.sin(a), dz = Math.cos(a), P0 = at(R0 + 3.3, a, H0 + 0.25);
     S.box(7.4, 0.5, 2.6, ...P0, tang(a), MARBLE);
-    for (const s of [-3.4, 3.4]) for (const r of [R0 + 2.3, R0 + 4.4]) { const p = at(r, a, 10.7); S.cyl(0.26, 0.28, 4.4, 8, p[0] + dx * s, p[1], p[2] + dz * s, tang(a), ST_L); S.box(0.7, 0.3, 0.7, p[0] + dx * s, 13.0, p[2] + dz * s, tang(a), GOLD); }
-    S.box(8.0, 0.35, 3.4, ...at(R0 + 3.35, a, 13.3), tang(a), CRIMSON); S.box(8.2, 0.14, 3.6, ...at(R0 + 3.35, a, 13.06), tang(a), GOLD);
-    S.box(7.4, 3.6, 0.12, ...at(R0 + 4.7, a, 10.7), tang(a), CRIMSON); S.box(1.4, 1.6, 1.0, ...at(R0 + 3.7, a, 9.3), tang(a), GOLD); }
+    for (const s of [-3.4, 3.4]) for (const r of [R0 + 2.3, R0 + 4.4]) { const p = at(r, a, H0 + 2.7); S.cyl(0.26, 0.28, 4.4, 8, p[0] + dx * s, p[1], p[2] + dz * s, tang(a), ST_L); S.box(0.7, 0.3, 0.7, p[0] + dx * s, H0 + 5.0, p[2] + dz * s, tang(a), GOLD); }
+    S.box(8.0, 0.35, 3.4, ...at(R0 + 3.35, a, H0 + 5.3), tang(a), CRIMSON); S.box(8.2, 0.14, 3.6, ...at(R0 + 3.35, a, H0 + 5.06), tang(a), GOLD);
+    S.box(7.4, 3.6, 0.12, ...at(R0 + 4.7, a, H0 + 2.7), tang(a), CRIMSON); S.box(1.4, 1.6, 1.0, ...at(R0 + 3.7, a, H0 + 1.3), tang(a), GOLD); }
   // ---- the ATTIC and the VELARIUM: parapet statues, masts leaning out over the street, ropes to a ring over the seats, striped sails between
   const rF = R0 + A.face, NB = arcN(rF, 5.5), pitch = TAU * rF / NB, sw = +(pitch - 1.0).toFixed(2), sh = +(sw / 2 + 0.9).toFixed(2);
-  const statue = (r, a, y, hex) => { S.box(1.4, 0.8, 1.0, ...at(r, a, y + 0.4), tang(a), ST_D); S.box(0.9, 2.6, 0.7, ...at(r, a, y + 2.1), tang(a), hex); S.box(1.4, 0.5, 0.75, ...at(r, a, y + 3.2), tang(a), hex); S.add(cachedGeo('sph:0.36,7,5', () => new THREE.SphereGeometry(0.36, 7, 5)), ...at(r, a, y + 3.75), tang(a), hex); };
+  const statue = (r, a, y, hex) => {                        // a robed figure on a plinth, one arm raised over the crowd
+    S.box(1.4, 0.8, 1.0, ...at(r, a, y + 0.4), tang(a), ST_D); S.cyl(0.36, 0.6, 2.0, 7, ...at(r, a, y + 1.8), tang(a), hex); S.box(0.8, 0.9, 0.55, ...at(r, a, y + 3.2), tang(a), hex); S.box(1.35, 0.42, 0.6, ...at(r, a, y + 3.55), tang(a), hex);
+    S.add(cachedGeo('sph:0.34,7,5', () => new THREE.SphereGeometry(0.34, 7, 5)), ...at(r, a, y + 4.05), tang(a), hex);
+    const p = at(r, a, y + 4.1); S.add(cachedGeo('box:0.22,1.3,0.22', () => new THREE.BoxGeometry(0.22, 1.3, 0.22)), p[0] - Math.sin(a) * 0.62, p[1], p[2] + Math.cos(a) * 0.62, tang(a), hex, 1, 1, 1, 0, 0.35); };
   const ropes = [], lean = 0.16, mastTop = [];
   for (let b = 0; b < NB; b++) {
     const a = (b / NB) * TAU, am = ((b + 0.5) / NB) * TAU;
-    const mb = at(R0 + A.back + 1.4, a, A.top), tip = at(R0 + A.back + 1.4 + Math.sin(lean) * A.mast, a, A.top + Math.cos(lean) * A.mast);
+    const mb = at(R0 + A.back + 1.4, a, TOP), tip = at(R0 + A.back + 1.4 + Math.sin(lean) * A.mast, a, TOP + Math.cos(lean) * A.mast);
     S.box(0.34, A.mast, 0.34, (mb[0] + tip[0]) / 2, (mb[1] + tip[1]) / 2, (mb[2] + tip[2]) / 2, tang(a), WOOD); S.add(cachedGeo('box:0.5,0.5,0.5', () => new THREE.BoxGeometry(0.5, 0.5, 0.5)), ...tip, tang(a), GOLD, 1, 1, 1, -lean, 0);
-    mastTop.push(tip); const inner = at(R0 + A.sailIn, a, A.sailY); ropes.push(tip, inner); if (b) ropes.push(inner, at(R0 + A.sailIn, ((b - 1) / NB) * TAU, A.sailY)); if (b === NB - 1) ropes.push(inner, at(R0 + A.sailIn, 0, A.sailY));
-    if (b % 3 === 1) statue(R0 + A.back + 0.3, am, A.top + 0.6, MARBLE);
+    mastTop.push(tip); const inner = at(R0 + A.sailIn, a, SAILY); ropes.push(tip, inner); if (b) ropes.push(inner, at(R0 + A.sailIn, ((b - 1) / NB) * TAU, SAILY)); if (b === NB - 1) ropes.push(inner, at(R0 + A.sailIn, 0, SAILY));
+    if (b % 3 === 1) statue(R0 + A.back + 0.3, am, TOP + 0.6, MARBLE);
     if (b % 3 !== 2) {                                       // a sail: two bays of cloth, one of sky, sagging between its ropes
       const ga = 0.18 / rF, a0 = a + ga, a1 = ((b + 1) / NB) * TAU - ga, hex = b % 3 ? 0xc9a862 : 0xe6d8b8, K = 4, pts = [];
-      for (let k = 0; k <= K; k++) { const t = k / K, r = lerp(R0 + A.back + 2.2, R0 + A.sailIn, t), y = lerp(A.top + Math.cos(lean) * A.mast - 0.4, A.sailY, t) - Math.sin(t * Math.PI) * 1.5; pts.push([at(r, a0, y), at(r, (a0 + a1) / 2, y - 0.45 * Math.sin(t * Math.PI) - 0.15), at(r, a1, y)]); }
+      for (let k = 0; k <= K; k++) { const t = k / K, r = lerp(R0 + A.back + 2.2, R0 + A.sailIn, t), y = lerp(TOP + Math.cos(lean) * A.mast - 0.4, SAILY, t) - Math.sin(t * Math.PI) * 1.5; pts.push([at(r, a0, y), at(r, (a0 + a1) / 2, y - 0.45 * Math.sin(t * Math.PI) - 0.15), at(r, a1, y)]); }
       for (let k = 0; k < K; k++) { C.quad(pts[k][0], pts[k][1], pts[k + 1][1], pts[k + 1][0], hex); C.quad(pts[k][1], pts[k][2], pts[k + 1][2], pts[k + 1][1], afTint(hex, 0.08, 0.3)); }
     }
     // the ATTIC outside: pilasters at the bay lines, a window or a bronze shield in each bay
-    S.box(0.9, 2.4, 0.3, ...at(R0 + A.out + 0.15, a, 25.2), tang(a), ST_L);
-    if (b % 2) S.box(1.3, 1.5, 0.12, ...at(R0 + A.out + 0.02, am, 25.3), tang(am), DARK); else S.cyl(0.85, 0.85, 0.14, 10, ...at(R0 + A.out + 0.08, am, 25.2), tang(am), GOLD, Math.PI / 2);
+    S.box(0.9, 2.4, 0.3, ...at(R0 + A.out + 0.15, a, ATTIC + 1.2), tang(a), ST_L);
+    if (b % 2) S.box(1.3, 1.5, 0.12, ...at(R0 + A.out + 0.02, am, ATTIC + 1.3), tang(am), DARK); else S.cyl(0.85, 0.85, 0.14, 10, ...at(R0 + A.out + 0.08, am, ATTIC + 1.2), tang(am), GOLD, Math.PI / 2);
     // ---- three STOREYS of arcades: a pier, a spandrel over the arch, the arch's ring and keystone, an engaged column, statues in the upper arches
     for (let s = 0; s < 3; s++) {
-      const y0 = s * 8.0, capH = [0.45, 0.55, 0.75][s];
-      S.box(1.0, 7.4, 1.4, ...at(rF, a, y0 + 3.7), tang(a), afTint(ST, 0.06, seed()));
-      S.add(cachedGeo('af-spandrel:' + sw + ',' + sh, () => { const q = new THREE.Shape(); q.moveTo(-sw / 2, 0); q.lineTo(-sw / 2, sh); q.lineTo(sw / 2, sh); q.lineTo(sw / 2, 0); q.absarc(0, 0, sw / 2, 0, Math.PI, false); const e = new THREE.ExtrudeGeometry(q, { depth: 1.4, bevelEnabled: false, curveSegments: 7 }); e.translate(0, 0, -0.7); return e; }), ...at(rF, am, y0 + 7.4 - sh), tang(am), afTint(ST, 0.05, seed()));
-      S.add(cachedGeo('af-archring:' + sw, () => { const ro = sw / 2 + 0.42, ri = sw / 2, q = new THREE.Shape(); q.moveTo(ro, 0); q.absarc(0, 0, ro, 0, Math.PI, false); q.lineTo(-ri, 0); q.absarc(0, 0, ri, Math.PI, 0, true); const e = new THREE.ExtrudeGeometry(q, { depth: 0.5, bevelEnabled: false, curveSegments: 7 }); e.translate(0, 0, -0.25); return e; }), ...at(rF + 0.75, am, y0 + 7.4 - sh), tang(am), ST_D);
-      S.box(0.7, 0.9, 0.6, ...at(rF + 0.8, am, y0 + 7.4 - sh + sw / 2 + 0.2), tang(am), ST_L);
-      S.cyl(0.42, 0.46, 5.5, 8, ...at(rF + 1.05, a, y0 + 3.65), tang(a), ST_L); S.box(1.1, 0.35, 1.1, ...at(rF + 1.05, a, y0 + 0.72), tang(a), ST); S.box(1.15, capH, 1.15, ...at(rF + 1.05, a, y0 + 6.4 + capH / 2), tang(a), ST_L);
+      const y0 = s * STO, capH = [0.45, 0.55, 0.75][s], cor = STO - 0.6;   // (cor: the cornice's underside)
+      S.add(cachedGeo('box:1,' + cor + ',1.4', () => new THREE.BoxGeometry(1, cor, 1.4)), ...at(rF, a, y0 + cor / 2), tang(a), afTint(ST, 0.06, seed()));
+      S.add(cachedGeo('af-spandrel:' + sw + ',' + sh, () => { const q = new THREE.Shape(); q.moveTo(-sw / 2, 0); q.lineTo(-sw / 2, sh); q.lineTo(sw / 2, sh); q.lineTo(sw / 2, 0); q.absarc(0, 0, sw / 2, 0, Math.PI, false); const e = new THREE.ExtrudeGeometry(q, { depth: 1.4, bevelEnabled: false, curveSegments: 7 }); e.translate(0, 0, -0.7); return e; }), ...at(rF, am, y0 + cor - sh), tang(am), afTint(ST, 0.05, seed()));
+      S.add(cachedGeo('af-archring:' + sw, () => { const ro = sw / 2 + 0.42, ri = sw / 2, q = new THREE.Shape(); q.moveTo(ro, 0); q.absarc(0, 0, ro, 0, Math.PI, false); q.lineTo(-ri, 0); q.absarc(0, 0, ri, Math.PI, 0, true); const e = new THREE.ExtrudeGeometry(q, { depth: 0.5, bevelEnabled: false, curveSegments: 7 }); e.translate(0, 0, -0.25); return e; }), ...at(rF + 0.75, am, y0 + cor - sh), tang(am), ST_D);
+      S.box(0.7, 0.9, 0.6, ...at(rF + 0.8, am, y0 + cor - sh + sw / 2 + 0.2), tang(am), ST_L);
+      S.cyl(0.42, 0.46, +(cor - 1.9).toFixed(2), 8, ...at(rF + 1.05, a, y0 + 0.9 + (cor - 1.9) / 2), tang(a), ST_L); S.box(1.1, 0.35, 1.1, ...at(rF + 1.05, a, y0 + 0.72), tang(a), ST); S.box(1.15, capH, 1.15, ...at(rF + 1.05, a, y0 + cor - 1.0 + capH / 2), tang(a), ST_L);
       if (s && b % 3 === 1) statue(rF, am, y0 + 0.6, MARBLE);
     }
   }
-  for (let s = 0; s < 3; s++) { const y0 = s * 8.0; S.lathe([{ r: rF + 1.0, y: y0 + 7.4, c: ST_D }, { r: rF + 1.0, y: y0 + 8.0, c: ST }, { r: rF + 0.4, y: y0 + 8.0, c: ST_L }, { r: rF + 0.4, y: y0 + 7.4, c: ST_D }, { r: rF + 1.0, y: y0 + 7.4, c: ST_D }], NB * 2); }   // the storeys' cornices
+  for (let s = 0; s < 3; s++) { const y0 = s * STO; S.lathe([{ r: rF + 1.0, y: y0 + STO - 0.6, c: ST_D }, { r: rF + 1.0, y: y0 + STO, c: ST }, { r: rF + 0.4, y: y0 + STO, c: ST_L }, { r: rF + 0.4, y: y0 + STO - 0.6, c: ST_D }, { r: rF + 1.0, y: y0 + STO - 0.6, c: ST_D }], NB * 2); }   // the storeys' cornices
   if (ropes.length) { const rg = new THREE.BufferGeometry().setFromPoints(ropes.map(p => new THREE.Vector3(p[0], p[1], p[2]))); const rl = new THREE.LineSegments(rg, new THREE.LineBasicMaterial({ color: 0x2e261e })); g.add(rl); }
   // ---- banner poles on the walkway with pennant strings between them (as before, one ring higher)
   const NBn = Math.max(6, Math.round(teams * 3 * Math.min(AF_F.radius / 34, 3))), rB = R0 + 2.4, poles = [];
-  for (let i = 0; i < NBn; i++) { const a = (i / NBn) * TAU; if (Math.abs(angleDelta(a, mid)) * R0 < 5.5) continue; try { const ban = makeBanner(teamCloth(i)); const p = at(rB, a, A.wall); ban.position.set(p[0], p[1], p[2]); ban.rotation.y = -a + Math.PI / 2; ban.scale.setScalar(1.1); g.add(ban); poles.push(a); } catch (e) {} }
+  for (let i = 0; i < NBn; i++) { const a = (i / NBn) * TAU; if (Math.abs(angleDelta(a, mid)) * R0 < 5.5) continue; try { const ban = makeBanner(teamCloth(i)); const p = at(rB, a, H0); ban.position.set(p[0], p[1], p[2]); ban.rotation.y = -a + Math.PI / 2; ban.scale.setScalar(1.1); g.add(ban); poles.push(a); } catch (e) {} }
   const flagGeo = cachedGeo('af-flag', () => { const q = new THREE.Shape(); q.moveTo(0, 0); q.lineTo(0.5, 0); q.lineTo(0.06, -0.55); q.closePath(); return new THREE.ShapeGeometry(q); });
   const flagMats = AF_TEAMS.slice(0, teams).map(t => new THREE.MeshPhongMaterial({ color: t.pal.cloth, side: THREE.DoubleSide, flatShading: true }));
   const ropeMat = new THREE.LineBasicMaterial({ color: 0x3a2e22 });
   for (let i = 0; i < NBn; i++) {
     const a0 = (i / NBn) * TAU, a1 = ((i + 1) / NBn) * TAU; if (!poles.includes(a0) || !poles.includes(((i + 1) % NBn / NBn) * TAU)) continue;   // a string only between two standing poles
-    const pts = [], K = 10, y0 = A.wall + 4.55;
+    const pts = [], K = 10, y0 = H0 + 4.55;
     for (let k = 0; k <= K; k++) { const t = k / K, a = a0 + (a1 - a0) * t, sag = Math.sin(t * Math.PI) * 0.9; pts.push(new THREE.Vector3(Math.cos(a) * rB, y0 - sag, Math.sin(a) * rB)); }
     g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), ropeMat));
     for (let k = 1; k < K; k += 2) { const f = new THREE.Mesh(flagGeo, flagMats[(i + k) % flagMats.length]); f.position.copy(pts[k]); f.rotation.y = -(a0 + (a1 - a0) * (k / K)) + Math.PI / 2; f.castShadow = false; g.add(f); }
@@ -17072,11 +17584,11 @@ function afBuildWall() {
   for (let i = 0; i < 3; i++) { const a = dbg() * TAU, rr = 10 + dbg() * 18, x = Math.cos(a) * rr, z = Math.sin(a) * rr;
     const bl = boxMesh(0.09, 0.9, 0.2, mat(0xb9c2cc, { metal: 1 })); bl.position.set(x, afY(x, z) + 0.05, z); bl.rotation.set(Math.PI / 2 - 0.15, dbg() * TAU, 0); bl.castShadow = false; g.add(bl); }
   // ---- the CROWD: seated on every row, standing in the gallery, the dignitaries on the walkway; partisan colours near each team's gate
-  const rows = [{ r: 3.4, y: A.wall, kind: 'vip' }];
-  for (let i = 0; i < A.rows; i++) rows.push({ r: 4.9 + i * A.tread + 0.95, y: 8.5 + i, kind: 'seat' });
-  for (let j = 0; j < A.rows; j++) rows.push({ r: 16.0 + j * A.tread + 0.95, y: 13.5 + j, kind: 'seat' });
-  rows.push({ r: 26.3, y: 18.0, kind: 'stand' });
-  const cols = [0x9a3b2f, 0x3b5a9a, 0xd9b04a, 0x6b8f3a, 0x7a4a8a, 0xd8d2c0, 0x4a3520, 0xc86a3a], vipCols = [0xf0ead8, 0xe8dcc0, 0x5a2d82, 0xb8322a, 0xd9b04a, 0xf0ead8], poorCols = [0x6b5a48, 0x4a3520, 0x8a7a66, 0x9a3b2f, 0x3b5a9a, 0x5a5048];
+  const rows = [{ r: 3.4, y: H0, kind: 'vip' }];
+  for (let i = 0; i < A.rows; i++) rows.push({ r: 4.9 + i * A.tread + 0.95, y: LOW + i, kind: 'seat' });
+  for (let j = 0; j < A.rows; j++) rows.push({ r: 16.0 + j * A.tread + 0.95, y: UP + j, kind: 'seat' });
+  rows.push({ r: 26.3, y: GAL, kind: 'stand' });
+  const cols = [0x8f3a30, 0x3f5a8a, 0xc9a24a, 0x6b8a45, 0x6e4a80, 0xcfc6b0, 0x5a4030, 0xb8683c, 0x9a8a70, 0x565656], vipCols = [0xf0ead8, 0xe8dcc0, 0x5a2d82, 0xb8322a, 0xd9b04a, 0xf0ead8], poorCols = [0x6b5a48, 0x4a3520, 0x8a7a66, 0x9a3b2f, 0x3b5a9a, 0x5a5048];
   let est = 0; for (const rw of rows) est += TAU * (R0 + rw.r) / 1.45 * 0.86;
   const spacing = 1.45 * Math.max(1, est / A.crowdCap), list = [];
   for (const rw of rows) {
@@ -17089,22 +17601,8 @@ function afBuildWall() {
       list.push({ x, y: rw.y, z, yaw: Math.atan2(-x, -z), s: 0.86 + seed() * 0.26, sy: rw.kind === 'stand' ? 1.35 : 1, col, ph: seed() * TAU, ang: a, amp: 0.6 + seed() * 0.7, flag: rw.kind === 'seat' && seed() < 0.12 ? teamCloth(gt.t) : 0 });
     }
   }
-  for (const s of [-0.9, 0.9]) { const p = at(R0 + 3.1, mid, 8.5); list.push({ x: p[0] - Math.sin(mid) * s, y: 8.5, z: p[2] + Math.cos(mid) * s, yaw: Math.atan2(-p[0], -p[2]), s: 1.3, sy: 1, col: s < 0 ? 0xf0ead8 : 0x5a2d82, ph: seed() * TAU, ang: mid, amp: 0.3, flag: 0 }); }   // the box's two dignitaries
-  const n = list.length, cr = new Float32Array(n * 3), mtx = new THREE.Matrix4(), qt = new THREE.Quaternion(), YAX = new THREE.Vector3(0, 1, 0), pv = new THREE.Vector3(), sv = new THREE.Vector3(), cc = new THREE.Color();
-  list.forEach((p, i) => { cr[i * 3] = p.ph; cr[i * 3 + 1] = p.ang; cr[i * 3 + 2] = p.amp; });
-  const inst = (key, make, kind, hex, vcol, count, pick) => {   // vcol: per-instance colours (and vertex colours if the geometry carries them)
-    const geo = cachedGeo(key, make).clone(); geo.userData.cached = false; geo.setAttribute('aCrowd', new THREE.InstancedBufferAttribute(new Float32Array(count * 3), 3));
-    const im = new THREE.InstancedMesh(geo, afCrowdMat(kind, hex, vcol && !!geo.attributes.color), count); im.castShadow = false; im.receiveShadow = true; im.frustumCulled = false;
-    let k = 0; const ac = geo.attributes.aCrowd.array;
-    list.forEach((p, i) => { if (pick && !pick(p)) return; mtx.compose(pv.set(p.x, p.y, p.z), qt.setFromAxisAngle(YAX, p.yaw), sv.set(p.s, p.s * p.sy, p.s)); im.setMatrixAt(k, mtx); if (vcol) im.setColorAt(k, cc.setHex(pick ? p.flag : p.col)); ac[k * 3] = cr[i * 3]; ac[k * 3 + 1] = cr[i * 3 + 1]; ac[k * 3 + 2] = cr[i * 3 + 2]; k++; });
-    im.instanceMatrix.needsUpdate = true; if (im.instanceColor) im.instanceColor.needsUpdate = true; g.add(im); return im;
-  };
-  const nFlags = list.filter(p => p.flag).length;
-  inst('af-crowd-body', () => new THREE.CylinderGeometry(0.42, 0.55, 1.6, 6).translate(0, 0.8, 0), 'body', 0xffffff, true, n);
-  inst('af-crowd-head', () => new THREE.SphereGeometry(0.3, 6, 5).translate(0, 1.92, 0), 'body', 0xe0b088, false, n);
-  inst('af-crowd-arm', () => { const m = afMesher(); m.box(0.14, 1.1, 0.14, -0.5, 0.55, 0, 0, 0xe0b088); m.box(0.14, 1.1, 0.14, 0.5, 0.55, 0, 0, 0xe0b088); return m.geo(); }, 'arm', 0xe0b088, false, n);
-  if (nFlags) inst('af-crowd-flag', () => { const m = afMesher(); m.box(0.06, 1.7, 0.06, 0.6, 0.85, 0.1, 0, 0x5a4636); const q = new THREE.Shape(); q.moveTo(0, 0); q.lineTo(0.9, -0.15); q.lineTo(0, -0.62); q.closePath(); m.add(new THREE.ShapeGeometry(q), 0.63, 1.7, 0.1, 0, 0xffffff); return m.geo(); }, 'flag', 0xffffff, true, nFlags, p => p.flag);
-  AF.crowd = []; AF.crowdN = n;
+  for (const s of [-0.9, 0.9]) { const p = at(R0 + 3.1, mid, H0 + 0.5); list.push({ x: p[0] - Math.sin(mid) * s, y: H0 + 0.5, z: p[2] + Math.cos(mid) * s, yaw: Math.atan2(-p[0], -p[2]), s: 1.3, sy: 1, col: s < 0 ? 0xf0ead8 : 0x5a2d82, ph: seed() * TAU, ang: mid, amp: 0.3, flag: 0 }); }   // the box's two dignitaries
+  afBuildCrowdMeshes(g, list);
   afBuildRuins(S, seed);
   g.add(S.build()); g.add(C.build({ side: THREE.DoubleSide, receive: false }));
   try { afBuildGates(g, 0, 0); } catch (e) { console.warn('[arena] gates', e); AF.gates = []; }   // a gate and a tunnel behind every team
@@ -17113,31 +17611,44 @@ function afBuildWall() {
 // RUINS on the grass round the amphitheatre — an older city the pit was built over: broken colonnades, a lone arch,
 // wall stubs with ragged tops, fallen drums and toppled statues, rubble. Seeded; baked into the stone mesh.
 function afBuildRuins(S, seed) {
+  AF.sword = null;                                           // (the entrance film may open on it — afIntroLens' L.outside)
   const R0 = AF_F.radius, A = AF_AMPH, at = (r, a, y) => [Math.cos(a) * r, y, Math.sin(a) * r], tang = (a) => -a - Math.PI / 2;
-  const OLD = 0xa89c86, OLD_D = 0x857a66, MOSS = 0x8a8f6a, MARBLE = 0xd9d0bd, rmin = R0 + A.out + 5, rmax = Math.min(R0 + A.out + 34, AF_F.radius * 2.55);
-  const stone = () => afTint(seed() < 0.3 ? MOSS : OLD, 0.12, seed()), gy = (x, z) => afY(x, z);
-  const sites = 7 + Math.round(seed() * 4);
+  const OLD = 0xa89c86, OLD_D = 0x857a66, MOSS = 0x8a8f6a, MARBLE = 0xd9d0bd, rmin = R0 + A.out + 4, rmax = R0 + A.out + 13;   // (a belt hugging the wall, inside the entrance film's sweep at +22 — the lens passes the ruins, never through them)
+  const stone = () => afTint(seed() < 0.3 ? MOSS : OLD, 0.12, seed()), gy = (x, z) => afY(x, z), pack = AF_RUINPACK, KS = 1.9;   // KS: the pack is human-scale; a Vale knight is ~1.9 men tall
+  const rock = (p, yaw, sc) => { if (pack) S.add(afPackGeo('Rock' + (1 + ((seed() * 4) | 0))), p[0], p[1] - 0.15 * sc, p[2], yaw, null, sc, sc, sc); else { const sz = sc * 0.6; S.add(cachedGeo('af-rock', () => new THREE.IcosahedronGeometry(1, 0)), p[0], p[1] + sz * 0.3, p[2], yaw, OLD_D, sz * 1.3, sz * 0.7, sz); } };
+  const sites = 11 + Math.round(seed() * 5);
   for (let s = 0; s < sites; s++) {
-    const sa = seed() * TAU, sr = rmin + seed() * (rmax - rmin), kind = seed(), sx = Math.cos(sa) * sr, sz = Math.sin(sa) * sr, yaw = seed() * TAU;
+    const kind = s === 0 ? -1 : seed(), sword = kind < 0 && pack;   // the sword stands far out at the imperial box's bearing (opposite no gate), where the entrance film's sweep never looks: it is filmed alone
+    const sa = sword ? afGateAngle(0) + Math.PI / AF.cfg.teams + (seed() - 0.5) * 0.3 : seed() * TAU, sr = sword ? Math.min(R0 + A.out + 30, R0 * 2.45) : rmin + seed() * (rmax - rmin), sx = Math.cos(sa) * sr, sz = Math.sin(sa) * sr, yaw = seed() * TAU;
     const near = (dx, dz) => { const x = sx + Math.cos(yaw) * dx - Math.sin(yaw) * dz, z = sz + Math.sin(yaw) * dx + Math.cos(yaw) * dz; return [x, gy(x, z), z]; };
-    if (kind < 0.3) {                                        // a COLONNADE: a row of column stumps, one or two still whole, drums fallen between
+    if (!sword && AF.sword && Math.hypot(sx - AF.sword.x, sz - AF.sword.z) < 30) continue;   // nothing stands near the sword: it is filmed alone against the grass
+    if (kind < 0 && pack) {                                  // the SWORD: one giant runic blade stands on its point among the rocks, the Vale's own monument
+      const p = near(0, 0); S.add(afPackGeo('Sword'), p[0], p[1] - 0.3, p[2], yaw, null, KS, KS, KS, 0.06, 0.04);
+      AF.sword = { x: p[0], y: p[1] - 0.3, z: p[2], a: sa, h: (pack.Sword.size[1] / 100) * KS };
+      for (let i = 0; i < 4; i++) rock(near(Math.cos(i * 1.7) * (2.2 + seed() * 1.5), Math.sin(i * 1.7) * (2.2 + seed() * 1.5)), seed() * TAU, 0.9 + seed() * 0.9);
+    } else if (kind < 0.22 && pack) {                        // a SHELL of a fallen building from the pack, rubble round it
+      const p = near(0, 0); S.add(afPackGeo('Shell'), p[0], p[1] - 0.25, p[2], yaw, null, KS, KS, KS);
+      for (let i = 0; i < 5; i++) rock(near(seed() * 12 - 6, 4 + seed() * 4), seed() * TAU, 0.7 + seed() * 1.2);
+    } else if (kind < 0.34 && pack) {                        // a ROCK FIELD
+      for (let i = 0; i < 6 + seed() * 5; i++) rock(near(seed() * 14 - 7, seed() * 10 - 5), seed() * TAU, 0.8 + seed() * 1.8);
+    } else if (kind < 0.5) {                                        // a COLONNADE: a row of column stumps, one or two still whole, drums fallen between
       const n = 3 + Math.round(seed() * 3);
       for (let i = 0; i < n; i++) { const p = near((i - (n - 1) / 2) * 3.2, 0), h = seed() < 0.3 ? 6.5 : 1 + seed() * 3.5, c = stone();
         S.box(1.5, 0.5, 1.5, p[0], p[1] + 0.05, p[2], yaw, OLD_D); S.cyl(0.5, 0.56, h, 8, p[0], p[1] + 0.3 + h / 2, p[2], yaw, c);
         if (h > 6) S.box(1.4, 0.5, 1.4, p[0], p[1] + 0.3 + h + 0.25, p[2], yaw, c);
         else if (seed() < 0.7) { const q = near((i - (n - 1) / 2) * 3.2 + 1.2 + seed(), 2 + seed() * 2.5); S.cyl(0.5, 0.5, 2 + seed() * 2, 8, q[0], q[1] + 0.4, q[2], yaw + seed() * 1.5, c, Math.PI / 2); } }
       if (n > 3 && seed() < 0.6) { const p = near(0, 0); S.box((n - 1) * 3.2 * 0.6, 0.6, 1.2, p[0], p[1] + 0.3 + 6.5 + 0.8, p[2], yaw, OLD_D); }   // a length of lintel still up
-    } else if (kind < 0.5) {                                 // a lone ARCH
+    } else if (kind < 0.62) {                                // a lone ARCH
       const w = 4.2, p = near(0, 0), c = stone();
       for (const sg of [-1, 1]) { const q = near(sg * (w / 2 + 0.5), 0); S.box(1.0, 5.2, 1.4, q[0], q[1] + 2.6, q[2], yaw, c); }
       S.add(cachedGeo('af-spandrel:' + w + ',' + (w / 2 + 0.8), () => { const q = new THREE.Shape(); q.moveTo(-w / 2, 0); q.lineTo(-w / 2, w / 2 + 0.8); q.lineTo(w / 2, w / 2 + 0.8); q.lineTo(w / 2, 0); q.absarc(0, 0, w / 2, 0, Math.PI, false); const e = new THREE.ExtrudeGeometry(q, { depth: 1.4, bevelEnabled: false, curveSegments: 7 }); e.translate(0, 0, -0.7); return e; }), p[0], p[1] + 5.2 - (w / 2 + 0.8) + 2.9, p[2], yaw, c);
       const q = near(3.5, 1.5); S.box(2.0, 1.4, 1.2, q[0], q[1] + 0.6, q[2], yaw + 0.4, OLD_D);
-    } else if (kind < 0.8) {                                 // WALL STUBS with ragged tops, an L of them
+    } else if (kind < 0.84) {                                // WALL STUBS with ragged tops, an L of them
       for (const [dx, dz, ry, L] of [[0, 0, 0, 6 + seed() * 4], [-(3 + seed() * 2), 3, Math.PI / 2, 4 + seed() * 3]]) {
         const p = near(dx, dz), c = stone(), h = 2 + seed() * 3;
         S.box(L, h, 1.0, p[0], p[1] + h / 2, p[2], yaw + ry, c); S.box(L * 0.6, 0.9, 1.0, p[0], p[1] + h + 0.45, p[2], yaw + ry, c); S.box(L * 0.25, 0.8, 1.0, p[0], p[1] + h + 1.3, p[2], yaw + ry, afTint(c, 0.1, seed()));
       }
-      for (let i = 0; i < 5; i++) { const q = near(seed() * 6 - 3, 2 + seed() * 4), sz = 0.3 + seed() * 0.5; S.add(cachedGeo('af-rock', () => new THREE.IcosahedronGeometry(1, 0)), q[0], q[1] + sz * 0.3, q[2], seed() * TAU, OLD_D, sz * 1.3, sz * 0.7, sz); }
+      for (let i = 0; i < 5; i++) rock(near(seed() * 6 - 3, 2 + seed() * 4), seed() * TAU, 0.5 + seed() * 0.9);
     } else {                                                 // a TOPPLED STATUE on its plinth's stump
       const p = near(0, 0), q = near(2.6, 0.6), c = MARBLE;
       S.box(2.0, 1.2, 2.0, p[0], p[1] + 0.6, p[2], yaw, OLD_D);
@@ -17419,6 +17930,25 @@ function afIntroLens(I, rnd) {
   L.crane = (t, dur, onStart) => { const F = I.frames[t];
     return shot(dur, 1, (k) => { const e = k * k * (3 - 2 * k), Rr = R(), d = lerp(2.5, Rr * 0.42, e), h = lerp(AF_INTRO.gateH + 3.5, Rr * 0.78 + 8, e), px = F.gx + F.ux * d, pz = F.gz + F.uz * d;
       afIntroCam(px, Math.max(gy(px, pz) + 2, h), pz, lerp(F.gx * 0.5, 0, e), 2.5, lerp(F.gz * 0.5, 0, e), 55, 0); }, onStart, null); };
+  // OUTSIDE the walls: on the grass among the ruins, low, the lens sweeps along the facade with the statues in the arches
+  // sliding past; then it cranes up the facade, over the masts and the sails, and turns down into the bowl. With the SWORD
+  // (the Vale's monument, far out on the grass) it opens on the blade alone against grass and sky, circles it until the
+  // house rises behind it, and the circle flows straight into the sweep — the lens never stops or pushes in: the sweep
+  // begins where the circle ends and its radius, height and gaze blend over as it goes.
+  L.outside = (t, dur, sw) => { const F = I.frames[t], A = AF_AMPH, H = afAmphH(), side = sideOf(), Rr = R(), rO = Rr + A.out + 22, rF = Rr + A.face, sm = (q) => q * q * (3 - 2 * q);
+    const sword = (v) => { const inn = Math.atan2(sw.z, sw.x) + Math.PI, th = inn - side * v * (Math.PI - 0.5), r = 14, px = sw.x + Math.cos(th) * r, pz = sw.z + Math.sin(th) * r;   // from the house's side (grass and sky behind the blade) round to the far side (the house behind it)
+      return { p: [px, gy(px, pz) + lerp(2.2, 4.5, v), pz], l: [sw.x, sw.y + sw.h * lerp(0.42, 0.48, v), sw.z], fov: lerp(44, 46, v) }; };
+    const E = sw ? sword(1) : null, aE = E ? Math.atan2(E.p[2], E.p[0]) : 0, rE = E ? Math.hypot(E.p[0], E.p[2]) : 0;   // where the circle lets go
+    const a0 = sw ? aE - side * 40 / rO : F.a;                // the sweep's bearing: the gate's, or so that its first frame is the circle's last
+    const sweep = (u, e) => { const arc = side * lerp(40, -6, u), ca = a0 + arc / rO, w = sw ? sm(clamp(u / 0.5, 0, 1)) : 1, wl = sw ? sm(clamp(u / 0.35, 0, 1)) : 1;
+      const r = lerp(sw ? rE : rO, lerp(rO, Rr + A.back - 7, e * e), w), px = Math.cos(ca) * r, pz = Math.sin(ca) * r;   // (it climbs before it closes in: over the masts, never through the attic)
+      const py = lerp(sw ? E.p[1] : 0, lerp(lerp(gy(px, pz) + 2.4, 7.5, u), H.TOP + 18, e), w), la = a0 + (arc - side * 18) / rF, lr = lerp(rF, 0, e);
+      const l = [Math.cos(la) * lr, lerp(lerp(H.STO * 1.4, H.STO * 1.9, u), 2.5, e), Math.sin(la) * lr];
+      return { p: [px, py, pz], l: sw ? [0, 1, 2].map(i => lerp(E.l[i], l[i], wl)) : l, fov: lerp(sw ? E.fov : 46, lerp(46, 56, e), wl) }; };
+    const kS = sw ? 3.6 / 11.6 : 0;                           // the circle's share of the shot
+    const sh = shot(dur, 1, (k) => { const V = k < kS ? sword(k / kS) : (() => { const kk = (k - kS) / (1 - kS), q = clamp((kk - 0.58) / 0.42, 0, 1); return sweep(clamp(kk / 0.66, 0, 1), sm(q)); })();
+      afIntroCam(V.p[0], V.p[1], V.p[2], V.l[0], V.l[1], V.l[2], V.fov, 0); }, null, null);
+    sh.sword = !!sw; return sh; };
   // the AERIAL: high over the pit, descending and turning
   L.aerial = (dur, onStart, ang) => { const a0 = ang != null ? ang + 0.4 : rnd() * TAU, dir = sideOf();
     return shot(dur, 1, (k) => { const e = k * k * (3 - 2 * k), Rr = R(), a = a0 + dir * e * 0.9, r = lerp(Rr * 1.5, Rr * 0.9, e), h = lerp(Rr * 1.6 + 20, Rr * 0.7 + 8, e);
@@ -17508,6 +18038,9 @@ const AF_ACT_DIRECTORS = {
 // the BILL: each team's act in order (mine first), then the finale everyone shares
 function afIntroCompose(I, L) {
   const m = AF.cfg.teams <= 2 ? 1 : AF.cfg.teams === 3 ? 0.8 : 0.65;
+  if (AF.cfg.venue !== 'pit') {                              // the establishing shots: half the time the sword on the grass first (a coin from the seed), then the house from the street
+    const sw = L.sideOf() > 0 ? AF.sword : null;
+    L.outside(I.myT, (sw ? 11.6 : 8.0) * Math.max(m, 0.8), sw).cap = '<div style="font-size:.68em;letter-spacing:5px;opacity:.7">THE COLOSSEUM</div>'; }
   I.order.forEach((t, k) => {
     const n0 = I.shots.length, style = I.styles[t];
     (AF_ACT_DIRECTORS[style] || AF_ACT_DIRECTORS.pen)(I, L, t, k >= 3 ? m * 0.8 : m);
@@ -17594,8 +18127,8 @@ function afIntroEnd() {
   afIntroUi(false); afHud();
   const fade = document.getElementById('af-intro-fade'); if (fade) { fade.style.transition = 'none'; fade.style.opacity = '1'; setTimeout(() => { fade.style.transition = 'opacity .55s'; fade.style.opacity = '0'; }, 60); }
 }
-function afIntroSkip() { if (AF.phase === 'intro' && AF.intro) afIntroEnd(); }
-function afIntroUi(show) {
+function afIntroSkip() { if (AF.phase === 'intro' && AF.intro) afIntroEnd(); else if (AF.outro) afOutroSkip(); }
+function afIntroUi(show, label) {
   let el = document.getElementById('af-intro');
   if (!el) {
     el = document.createElement('div'); el.id = 'af-intro';
@@ -17604,20 +18137,164 @@ function afIntroUi(show) {
     el.innerHTML = bar('top') + bar('bottom') +
       '<div id="af-intro-cap" style="position:absolute;left:4vw;bottom:12vh;font:600 clamp(14px,2.2vw,22px) system-ui;color:#f3ead8;letter-spacing:1px;text-shadow:0 2px 10px #000;opacity:0;transition:opacity .3s"></div>' +
       '<button id="af-intro-skip" style="position:absolute;right:4vw;bottom:2.4vh;pointer-events:auto;background:rgba(16,14,24,.7);color:#f3ead8;border:1px solid #6b5e7a;border-radius:8px;padding:6px 12px;cursor:pointer;font:700 13px system-ui;touch-action:manipulation">Skip intro ▸</button>' +
+      '<div id="af-outro-board" style="display:none;position:absolute;right:3vw;top:12vh;bottom:13vh;width:clamp(250px,34vw,460px);overflow:hidden;padding:12px 14px;box-sizing:border-box;border-left:1px solid rgba(255,211,77,.35);background:linear-gradient(90deg,rgba(12,9,18,0),rgba(12,9,18,.72) 18%,rgba(12,9,18,.82));color:#f3ead8;font:600 clamp(11px,1.35vw,15px)/1.45 system-ui;text-shadow:0 1px 6px #000"></div>' +
+      '<style>.af-ob-grid{display:grid;grid-template-columns:1fr 3.2em 3.6em 3.6em 4.4em;gap:6px;align-items:baseline;padding:2px 0}.af-ob-grid>span:nth-child(n+2){text-align:right}.af-ob-star{color:#ffe089}.af-ob-team{margin-top:10px}@media (max-aspect-ratio:1/1){#af-outro-board{top:auto;right:4vw;left:4vw;bottom:13vh;width:auto;max-height:44vh;border-left:none;border-top:1px solid rgba(255,211,77,.35);background:linear-gradient(180deg,rgba(12,9,18,0),rgba(12,9,18,.78) 18%,rgba(12,9,18,.86))}#af-intro-cap{bottom:auto;top:12vh}}</style>' +
       '<div id="af-intro-fade" style="position:absolute;inset:0;background:#000;opacity:0;transition:opacity .5s"></div>';
     document.body.appendChild(el);
     const b = document.getElementById('af-intro-skip'); b.addEventListener('pointerdown', e => e.stopPropagation()); b.addEventListener('click', e => { e.stopPropagation(); afIntroSkip(); });
   }
   el.style.display = '';
   el.querySelectorAll('.af-intro-bar').forEach((b, i) => { b.style.transform = show ? 'translateY(0)' : 'translateY(' + (i ? '100%' : '-100%') + ')'; });
-  document.getElementById('af-intro-skip').style.display = show ? '' : 'none';
+  { const sk = document.getElementById('af-intro-skip'); sk.style.display = show ? '' : 'none'; sk.textContent = label || 'Skip intro ▸'; }
   document.getElementById('af-intro-cap').style.opacity = '0';
-  for (const id of ['af-hud', 'af-me', 'af-log', 'af-charge']) { const h = document.getElementById(id); if (h) h.style.display = show ? 'none' : ''; }
+  { const ob = document.getElementById('af-outro-board'); if (ob) ob.style.display = 'none'; }
+  for (const id of ['af-hud', 'af-log', 'af-charge', 'help-btn']) { const h = document.getElementById(id); if (h) h.style.display = show ? 'none' : ''; }
   if (show) { const sp = document.getElementById('af-spec'); if (sp) sp.style.display = 'none'; }
 }
 
+// ---- THE VICTORY: the end-game cinematic ----
+/* When the last man falls the pit freezes where it stands: every man still on his feet keeps the spot he held at the
+   bell, the winners put their blades up (afVictoryBody drives the living for the whole 'over' phase, on the host and
+   on every guest alike — nobody is left frozen mid-swing, and the host's stale states are not replayed), and the lens
+   leaves your shoulder for a short film (AF.outro, a shot list like the entrance's): the star of the match in close as
+   the steel goes up, the winning line with its swords in the air, a turn round the cavea while the house roars the
+   win, and a crane back down onto the sand. Then the end panel. Skippable (the button, space/enter/escape);
+   ?nooutro or BV.arena({outro:false}) drops the film (the poses stay). */
+const AF_OUTRO = { raise: 0.35, stagger: 1.0, pump: [1.2, 2.3], pumpDur: 0.3, shots: { star: 3.6, line: 3.4, crowd: 5.2, crane: 2.8 } };
+function afVictoryStart() {
+  const w = AF.winner, alive = AF.bodies.filter(b => !b.dead);
+  let mvp = null;                                            // the star of the match: the host's pick (a guest has only the name the host sent)
+  if (AF.role === 'guest') { if (AF.starName) mvp = AF.bodies.find(b => b.name === AF.starName) || null; } else mvp = afStarOf();
+  if (!mvp) mvp = alive.find(b => b.team === w) || alive[0] || AF.bodies[0] || null;
+  const winners = w >= 0 ? alive.filter(b => b.team === w) : [];
+  for (const b of alive) { const r = (b.idx * 0.6180339887) % 1; b.vic = { win: w >= 0 && b.team === w, at: AF_OUTRO.raise + r * AF_OUTRO.stagger, t: 0, up: false, pumpAt: 1.1 + r * 1.3, pumpT: 0, r }; }
+  AF.victory = mvp ? { mvp, winners, t: 0 } : null;
+  return !!AF.victory;
+}
+// a living man after the bell: rooted to his spot, the winners' blades up (then a pump now and then), the beaten at rest
+function afVictoryBody(b, dt) {
+  const V = b.vic; if (!V) { afCommit(b, dt); return; }
+  V.t += dt;
+  b.vx = b.vz = 0; b.moving = false; b.atk = null; b.blocking = false; b.dodgeT = 0; b.rollAng = 0; b.rollSq = 0; b.tiltX = 0; b.roll = 0; b.lookYaw = b.yaw;
+  if (b.mounted && b.parts.mount) { b.parts.mount.userData.rig.speed01 = 0; if (b.horse) { b.horse.x = b.x; b.horse.z = b.z; b.horse.yaw = b.yaw; } }
+  restLegs(b.parts, dt, false);
+  if (V.win && V.t >= V.at) {
+    if (V.pumpT > 0) { V.pumpT -= dt; setPose(b.anim, 'rallyPump', 0.12); }
+    else { if (!V.up && b.weapon === 'bow' && b.parts.sword) afSetWeapon(b, 'sword');   // an archer puts the bow away: it is the SWORD that goes up
+      setPose(b.anim, 'rally', V.up ? 0.16 : 0.5); V.up = true; if ((V.pumpAt -= dt) <= 0) { V.pumpT = AF_OUTRO.pumpDur; V.pumpAt = lerp(AF_OUTRO.pump[0], AF_OUTRO.pump[1], (V.r * 7.3) % 1); } }
+  } else setPose(b.anim, V.win && b.weapon !== 'bow' ? 'guard' : 'relax', 0.45);
+  afCommit(b, dt);
+}
+function afOutroCam(px, py, pz, lx, ly, lz, fov, inPit) {
+  camera.position.set(px, py, pz);
+  if (inPit) { afCamInPit(); afCamAboveGround(0.5); }
+  camera.lookAt(lx, ly, lz); if (fov) AF.fov = fov;
+}
+// the LEDGER: every man's kills, damage dealt and taken (by body index — the host's over message carries it to the guests)
+function afLedger() { return AF.bodies.map(b => [b.kills | 0, Math.round(b.dmgDealt || 0), Math.round(b.dmgTaken || 0)]); }
+// the SHIFT: the film's subject sits in the left third of the frame, the board on the right (portrait: the subject up, the board below)
+function afOutroShift(on) {
+  if (!on) { if (camera.view && camera.view.enabled) camera.clearViewOffset(); return; }
+  const W = renderer.domElement.width, H = renderer.domElement.height, portrait = W < H;
+  camera.setViewOffset(W, H, portrait ? 0 : Math.round(W * 0.2), portrait ? -Math.round(H * 0.14) : 0, W, H);
+}
+// the BOARD: the result, then every team's tally and its men — kills, damage dealt, damage taken, standing or fallen —
+// the rows coming in one after another as the film runs (many a side: the top eight of each, and a count of the rest)
+function afOutroBoard(V) {
+  const el = document.getElementById('af-outro-board'); if (!el) return;
+  const w = AF.winner, M = V.mvp, pit = AF.cfg.venue === 'pit', cap = AF.bodies.length > 24 ? 8 : 12;
+  const teams = []; for (let t = 0; t < AF.cfg.teams; t++) teams.push(t);
+  teams.sort((a, b) => (a === w ? -1 : b === w ? 1 : 0));
+  let i = 0; const row = (html, cls) => '<div class="af-ob-row' + (cls ? ' ' + cls : '') + '" style="animation-delay:' + (0.25 + i++ * 0.11).toFixed(2) + 's">' + html + '</div>';
+  let html = '<style>@keyframes afObIn{from{opacity:0;transform:translateX(18px)}to{opacity:1;transform:none}}.af-ob-row{animation:afObIn .45s ease both}</style>';
+  html += row('<div style="font-size:1.35em;font-weight:900;color:#ffd34d;letter-spacing:1px">' + (w < 0 ? 'A DRAW' : (pit ? ((V.winners[0] || {}).name || AF_TEAMS[w].name) : AF_TEAMS[w].name) + (pit ? ' holds the ring' : ' holds the pit')) + '</div>' +
+    (M ? '<div style="opacity:.85">★ Star of the match: <b style="color:' + M.teamDef.col + '">' + M.name + '</b></div>' : ''));
+  for (const t of teams) {
+    const men = AF.bodies.filter(b => b.team === t).sort((a, b) => (b.kills | 0) - (a.kills | 0) || (b.dmgDealt || 0) - (a.dmgDealt || 0) || (a.dead ? 1 : 0) - (b.dead ? 1 : 0));
+    const alive = men.filter(b => !b.dead).length, kills = men.reduce((a, b) => a + (b.kills | 0), 0), dealt = men.reduce((a, b) => a + (b.dmgDealt || 0), 0), taken = men.reduce((a, b) => a + (b.dmgTaken || 0), 0);
+    html += row('<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;border-bottom:1px solid rgba(255,255,255,.18);padding-bottom:3px"><b style="color:' + AF_TEAMS[t].col + ';font-size:1.1em">' + AF_TEAMS[t].name + (t === w ? ' ✦' : '') + '</b><span style="opacity:.8;font-size:.85em">' + alive + '/' + men.length + ' standing · ' + kills + ' kills · ' + Math.round(dealt) + ' dealt · ' + Math.round(taken) + ' taken</span></div>', 'af-ob-team');
+    html += row('<div class="af-ob-grid" style="opacity:.55;font-size:.72em;letter-spacing:1px"><span>FIGHTER</span><span>KILLS</span><span>DEALT</span><span>TAKEN</span><span></span></div>');
+    men.slice(0, cap).forEach(b => { const me = b === AF.me, star = b === M;
+      html += row('<div class="af-ob-grid' + (star ? ' af-ob-star' : '') + '"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (star ? '★ ' : '') + (me ? '<b>' + b.name + '</b> <i style="opacity:.6;font-size:.8em">you</i>' : b.name) + (b.kind === 'npc' && b.A ? ' <span style="opacity:.5;font-size:.78em">' + b.A.label + '</span>' : '') + '</span><span>' + (b.kills | 0) + '</span><span>' + Math.round(b.dmgDealt || 0) + '</span><span>' + Math.round(b.dmgTaken || 0) + '</span><span style="opacity:.75;font-size:.8em">' + (b.dead ? 'fallen' : 'standing') + '</span></div>'); });
+    if (men.length > cap) html += row('<div style="opacity:.55;font-size:.8em">… and ' + (men.length - cap) + ' more</div>');
+  }
+  el.innerHTML = html; el.style.display = '';
+}
+function afOutroCompose(O, V) {
+  const R = AF_F.radius, gy = (x, z) => afY(x, z), pit = AF.cfg.venue === 'pit', M = V.mvp, W = V.winners, D = AF_OUTRO.shots;
+  const shot = (dur, cam, cap, onStart) => { const s = { dur, cam, cap, onStart }; O.shots.push(s); return s; };
+  const side = Math.random() < 0.5 ? -1 : 1, sm = q => q * q * (3 - 2 * q);
+  const ctr = () => { let x = 0, z = 0, n = 0; for (const b of W) { x += b.x; z += b.z; n++; } return n ? { x: x / n, z: z / n } : { x: M.x, z: M.z }; };
+  // the ANCHOR of the line shots: the star if he stands with the winners, else the winner nearest their middle (a centroid between two men at opposite walls is empty sand)
+  const c0 = ctr(); let A = !M.dead && W.includes(M) ? M : null; if (!A) { let bd = 1e9; for (const b of W) { const d = Math.hypot(b.x - c0.x, b.z - c0.z); if (d < bd) { bd = d; A = b; } } } if (!A) A = M;
+  let spread = 0; for (const b of W) spread = Math.max(spread, Math.hypot(b.x - A.x, b.z - A.z));
+  const head = t => '<div style="font-size:.68em;letter-spacing:5px;opacity:.7;margin-bottom:6px">' + t + '</div>';
+  const w = AF.winner, wCol = w >= 0 ? AF_TEAMS[w].col : '#e8def8', wName = w >= 0 ? (pit ? ((W[0] || {}).name || AF_TEAMS[w].name) : AF_TEAMS[w].name) : null;
+  const mvpCap = head('STAR OF THE MATCH') + '<span style="color:' + M.teamDef.col + '">★ ' + M.name + '</span> · ' + M.kills + (M.kills === 1 ? ' kill' : ' kills') + ' · ' + Math.round(M.dmgDealt || 0) + ' dealt' + (M.dead ? ' · fallen' : '');
+  const lineCap = wName ? head(pit ? 'THE RING IS HIS' : 'THE PIT IS THEIRS') + '<span style="color:' + wCol + '">' + wName + '</span>' + (pit ? '' : ' · ' + W.length + (W.length === 1 ? ' man standing' : ' men standing')) : head('A DRAW') + 'the bell rang on a stalemate';
+  // 1. THE STAR — low ahead of him, easing in, the blade going up over the lens (a fallen star: the sand where he lies)
+  shot(D.star, (k) => {
+    const e = sm(k), fx = Math.sin(M.yaw), fz = Math.cos(M.yaw), rx = -Math.cos(M.yaw), rz = Math.sin(M.yaw);
+    if (M.dead) { const ah = lerp(7.5, 6.2, e), px = M.x + fx * ah * 0.35 + rx * side * ah * 0.94, pz = M.z + fz * ah * 0.35 + rz * side * ah * 0.94; afOutroCam(px, gy(px, pz) + 2.2, pz, M.x, gy(M.x, M.z) + 0.7, M.z, 44, true); }
+    else { const ah = lerp(7.0, 5.2, e), px = M.x + fx * ah + rx * side * 1.5, pz = M.z + fz * ah + rz * side * 1.5;
+      afOutroCam(px, gy(px, pz) + (M.mounted ? 2.9 : 1.35), pz, M.x, gy(M.x, M.z) + (M.mounted ? 3.4 : 2.7), M.z, lerp(46, 40, e), true); }
+  }, mvpCap, () => afCrowdReact(true));
+  // 2. THE LINE — a slow circle round the winners with their steel in the air, the star nearest the lens at the start
+  { const a0 = Math.atan2(A.z - c0.z, A.x - c0.x) || side * 0.7, r = clamp(6.5 + Math.min(spread, 14) * 0.35, 6.5, 12), h = 2.8 + Math.min(spread, 14) * 0.08, ly = A.mounted ? 3.2 : 2.4;   // (from the star's side of the line, so his men are behind him)
+    shot(D.line, (k) => { const a = a0 + side * k * 1.25;
+      afOutroCam(A.x + Math.cos(a) * r, gy(A.x, A.z) + h, A.z + Math.sin(a) * r, A.x, gy(A.x, A.z) + ly, A.z, 44, true); }, lineCap, () => { AF.roar = 2.4; }); }
+  // 3. THE CROWD — the lens rides the rim round the bowl, the tiers rising ahead of it, the house on its feet (a wave runs with it)
+  const aC = Math.atan2(M.z, M.x) + side * 0.35, turn = 1.6;
+  const cr = pit ? AF_PIT.r - 1.4 : R + 2.6, cy = pit ? AF_PIT.lip + 1.7 : AF_AMPH.wall + 4.5, lr = pit ? AF_PIT.out - 2.5 : R + 15, ly = pit ? AF_PIT.lip + 1.3 : AF_AMPH.wall + 7.5;
+  shot(D.crowd, (k) => { const a = aC + side * k * turn, la = a + side * 0.55;
+    afOutroCam(Math.cos(a) * cr, cy, Math.sin(a) * cr, Math.cos(la) * lr, ly, Math.sin(la) * lr, pit ? 62 : 58, false); },
+    head(pit ? 'THE CELLAR' : 'THE HOUSE') + (pit ? 'the patrons have had their sport' : 'the crowd has its winner'),
+    () => { afCrowdReact(true); AF.roar = 2.6; AF.waveT = 3.6; AF.waveAng = aC + side * 0.9 - 0.6; });
+  // 4. THE CRANE — from the rim back down onto the sand and the men holding it
+  { const aE = aC + side * turn, laE = aE + side * 0.55, P0 = [Math.cos(aE) * cr, cy, Math.sin(aE) * cr], L0 = [Math.cos(laE) * lr, ly, Math.sin(laE) * lr];
+    shot(D.crane, (k) => { const e = sm(k), rr = pit ? 5.5 : 7.5, P1 = [A.x + Math.cos(aE) * rr, gy(A.x, A.z) + (pit ? 3.0 : 3.8), A.z + Math.sin(aE) * rr], L1 = [A.x, gy(A.x, A.z) + (A.mounted ? 3.0 : 2.2), A.z];
+      afOutroCam(lerp(P0[0], P1[0], e), lerp(P0[1], P1[1], e), lerp(P0[2], P1[2], e), lerp(L0[0], L1[0], e), lerp(L0[1], L1[1], e), lerp(L0[2], L1[2], e), lerp(pit ? 62 : 58, 46, e), e > 0.85); }, null, null); }
+}
+function afOutroStart() {
+  const V = AF.victory; if (!V || !V.mvp || AF.outro) return false;
+  const O = { t: 0, shotT: 0, i: 0, shots: [] };
+  afOutroCompose(O, V); if (!O.shots.length) return false;
+  AF.outro = O; AF.hurt = 0; afIntroUi(true, 'Skip ▸'); afOutroBoard(V); afOutroApplyShot();   // (no death flush over the film)
+  return true;
+}
+function afOutroApplyShot() {
+  const O = AF.outro, s = O.shots[O.i]; if (!s) return;
+  O.shotT = 0; if (s.onStart) s.onStart();
+  const cap = document.getElementById('af-intro-cap'); if (cap) { cap.innerHTML = s.cap || ''; cap.style.opacity = s.cap ? '1' : '0'; }
+}
+function afOutroStep(dt) {
+  const O = AF.outro; if (!O) return;
+  O.t += dt; O.shotT += dt;
+  AF.roar = Math.max(AF.roar, O.i >= 1 ? 2.0 : 1.2);        // the house stays on its feet for the whole film
+  if (O.shotT >= O.shots[O.i].dur) { O.i++; if (O.i >= O.shots.length) { afOutroEnd(); return; } afOutroApplyShot(); }
+}
+function afOutroCamera(dt) { const O = AF.outro, s = O.shots[O.i]; if (s) s.cam(clamp(O.shotT / s.dur, 0, 1), dt); afOutroShift(true); }
+function afOutroEnd() {
+  if (!AF.outro) return; AF.outro = null; AF.fov = CAM_BASE_FOV; afOutroShift(false);
+  afIntroUi(false); afHud(); afSpecLabel(true);
+  const fade = document.getElementById('af-intro-fade'); if (fade) { fade.style.transition = 'none'; fade.style.opacity = '1'; setTimeout(() => { fade.style.transition = 'opacity .55s'; fade.style.opacity = '0'; }, 60); }
+  if (!AF.leaving) afEndPanel();
+}
+function afOutroSkip() { if (AF.outro) afOutroEnd(); }
+
 // ---- fighters ----
+// A name floats a hand above the helmet: a Vale knight is ~3.4 units tall on foot, his crown ~4.3 up when he sits a
+// horse (rider at 1.22 + a 0.88-scaled rig), and the whole group scales with his archetype (and his horse's size).
+function afTagH(mounted, scale) { return (mounted ? 4.3 : 3.4) * (scale || 1) + 0.45; }
+// Only the men near us wear a name: past ~24 m a tag is an unreadable smear over the fight (12 m in a big fight).
+const AF_TAG_R2 = { near: 24 * 24, big: 12 * 12 };
+function afTagNear(pos) { return camera.position.distanceToSquared(pos) < (AF.bodies.length > AF_LIM.heroCap ? AF_TAG_R2.big : AF_TAG_R2.near); }
 function afFreshInput() { return { mx: 0, mz: 0, yaw: 0, atk: 0, heavy: 0, dodge: 0, block: false, hold: false, swap: 0 }; } // atk = release count (a tap between samples still lands); hold = the button is down (charging)
+function afWearModel(h, pal) {                            // dress a fresh rig (foot, or a cavalry build / seated rider) in the warrior figure
+  if (!MODEL_ON || !BV.modelReady || !h || !h.parts) return false;
+  const g = h.riderGroup || h.group || h;                    // a horseman: only the man in the saddle wears it, the horse is the horse
+  return wearModelRig({ group: g, parts: h.parts }, MODEL_NAME, { team: pal.cloth });
+}
 function afMakeBody(entry, idx, r) {
   const td = AF_TEAMS[entry.t];
   const archKey = entry.arch || (entry.weapon === 'bow' ? 'archer' : entry.weapon === 'horse' ? 'rider' : 'swordsman'), A = AF_ARCH[archKey] || AF_ARCH.swordsman;
@@ -17630,6 +18307,7 @@ function afMakeBody(entry, idx, r) {
   const hsz = G.horse && AF_LOOK.horse[gear.horse] ? AF_LOOK.horse[gear.horse].scale : 1;   // a nag is small, a warhorse big
   const h = mounted ? buildCavalry(td.pal, A.scale * hsz, 'sword', rigOpts) : buildHumanoid(td.pal, A.scale, A.bow ? weapon : weapon, rigOpts); const group = h.group || h;
   if (REAL_ON && !mounted && BV.realReady) wearRealRig(h, REAL_TEAM[entry.t % REAL_TEAM.length] || 'knight', { lo: big && npc, team: td.pal.cloth, swordScale: A.weapon === 'longsword' ? 1.25 : 1 });   // the real figures
+  else afWearModel(h, td.pal);                                                                            // the warrior — on foot or in the saddle
   if (h.parts.shield) { h.parts.shield.visible = A.shield && weapon !== 'bow'; if (A.bigShield) h.parts.shield.scale.set(1.3, 1.3, 1.3); }
   group.rotation.order = 'YXZ';                              // yaw first, then a body-local tilt/roll (somersaults, crumples)
   const sp = afSpawn(entry.t, AF.cfg.teams), rgx = -Math.cos(sp.yaw), rgz = Math.sin(sp.yaw), so = afSlotOffset(entry.s, AF.cfg.per), off = so.right, back = so.back * (mounted ? 1.3 : 1);
@@ -17642,18 +18320,18 @@ function afMakeBody(entry, idx, r) {
     // (a PLAYER is the hero: ×1.6 poise, so four jabs break it, not three)
     vx: 0, vz: 0, poise: A.poise * (entry.kind !== 'npc' ? 1.6 : 1) + G.poise, maxPoise: A.poise * (entry.kind !== 'npc' ? 1.6 : 1) + G.poise, queued: false, cd: 0, waiting: false, slotAngle: 0, retreatT: 0, bob: 0,
     gait: null, hitT: 0, hitSide: 0, lookYaw: 0, headYaw: 0, capeX: 0.12, phase0: r() * TAU, roll: 0, lastStep: 0, flashT: 0, sway: r() * TAU, clashT: 0, clashAtk: false, clashDx: 0, clashDz: 0,
-    charge: null, chargeMove: 0, prevHold: false, releaseNow: false, aiHoldT: 0, prefBow: weapon === 'bow', swapT: 0, seenSwap: 0,
+    charge: null, chargeMove: 0, prevHold: false, releaseNow: false, aiHoldT: 0, prefBow: weapon === 'bow', canBow: !!A.bow, swapT: 0, seenSwap: 0,
     mounted, trampleT: 0, passT: 0, sp01: 0,
     pal: td.pal, rigOpts, footScale: mounted ? 1 : A.scale, riderGroup: h.riderGroup || null, horse: null, mountCd: 0,   // (so he can be re-dressed on foot or in a saddle)
     arch: archKey, A, moveMul: A.move * (1 + G.move), dmgMul: A.dmg * G.swordDmg * (npc ? lerp(0.92, 1.0, xp / 100) : 1), reachBonus: A.reach + G.reach,   // (the sword carries the XP damage step now)
     bowDmg: G.bowDmg, horseMul: G.horseSpeed, blade: G0.blade, gear, rank: entry.rank || (entry.gear && entry.gear.rank) || null, dmgDealt: 0, swordHits: 0, bowHits: 0, rideT: 0, noShield: !A.shield, feint: 0,
     seenAtk: 0, seenHeavy: 0, seenDodge: 0,
     // NPC brain traits (seeded so a replay of the same seed fields the same temperaments)
-    skill: (r(), xp / 100), heavyBias: A.heavyBias * (0.7 + r() * 0.6), target: null, aiT: r() * 0.3, strafe: r() < 0.5 ? -1 : 1, strafeT: 0.5 + r(), swingT: 0.4 + r() * 0.5, holdBlock: 0, reactedTo: null, shotCd: 1 + r(),
+    skill: (r(), xp / 100), bowSk: npc ? xp / 100 : clamp((gear.bowLv | 0) / AF_BOW.masterLv, 0, 1), heavyBias: A.heavyBias * (0.7 + r() * 0.6), target: null, aiT: r() * 0.3, strafe: r() < 0.5 ? -1 : 1, strafeT: 0.5 + r(), swingT: 0.4 + r() * 0.5, holdBlock: 0, reactedTo: null, shotCd: 1 + r(),
     // guest-side interpolation targets
     tx: 0, tz: 0, tyaw: 0, tstate: 0, tmove: 0, rollT: 0, remoteSeen: false,
   };
-  b.tx = b.x; b.tz = b.z; b.tyaw = b.yaw; b.inp.yaw = b.yaw; b.tagH = mounted ? 3.5 : 2.25; b.baseScale = group.scale.x;
+  b.tx = b.x; b.tz = b.z; b.tyaw = b.yaw; b.inp.yaw = b.yaw; b.baseScale = group.scale.x; b.tagH = afTagH(mounted, b.baseScale);
   if (mounted) { const hh = afNewHorse(group, h.horse); hh.rider = b; b.horse = hh; hh.x = b.x; hh.z = b.z; hh.yaw = b.yaw; hh.hp = hh.maxHp = Math.round(G.horseHp); }
   afDressGear(b.parts, b.gear, td.pal);
   group.position.set(b.x, afY(b.x, b.z), b.z); group.rotation.y = b.yaw;
@@ -17685,9 +18363,9 @@ function afDismount(b, thrown, quiet) {                    // the man leaves the
   const h = b.horse; if (!h) return;
   h.rider = null; b.horse = null; h.x = b.x; h.z = b.z; h.yaw = b.yaw; h.vx = b.vx; h.vz = b.vz; h.sp01 = b.sp01 || 0; h.seen = true; h.tx = h.x; h.tz = h.z; h.tyaw = h.yaw;
   if (b.riderGroup) { h.group.remove(b.riderGroup); try { disposeGroup(b.riderGroup); } catch (e) {} b.riderGroup = null; }
-  const hm = buildHumanoid(b.pal, b.footScale || 1, b.weapon === 'longsword' ? 'longsword' : 'sword', b.rigOpts || {});
+  const hm = buildHumanoid(b.pal, b.footScale || 1, b.weapon === 'longsword' ? 'longsword' : 'sword', b.rigOpts || {}); afWearModel(hm, b.pal);
   b.group = hm.group; b.parts = hm.parts; b.anim = makeAnimator(hm.parts); b.group.rotation.order = 'YXZ'; b.group.userData.afBody = b;
-  b.mounted = false; b.gallop = 0; b.sp01 = 0; b.aimYaw = null; b.twist = 0; b.cav = null; b.tagH = 2.25; b.baseScale = b.group.scale.x; b.mountCd = 2; b.wantHorse = null;
+  b.mounted = false; b.gallop = 0; b.sp01 = 0; b.aimYaw = null; b.twist = 0; b.cav = null; b.baseScale = b.group.scale.x; b.tagH = afTagH(false, b.baseScale); b.mountCd = 2; b.wantHorse = null;
   b.atk = null; b.charge = null; b.queued = false; b.blocking = false; b.dodgeT = 0; b.rollAng = 0; b.rollSq = 0; b.moving = false; b.remoteSeen = true;
   afDressRig(b); afBladeLook(b); setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.2); scene.add(b.group);
   const side = Math.random() < 0.5 ? -1 : 1, rgx = -Math.cos(b.yaw), rgz = Math.sin(b.yaw);   // he lands beside the horse, not inside it
@@ -17704,10 +18382,10 @@ function afMount(b, h, quiet) {                            // a man on foot swin
   scene.remove(b.group); try { disposeGroup(b.group); } catch (e) {}
   const rider = buildHumanoid(b.pal, 0.88, b.weapon === 'longsword' ? 'longsword' : 'sword', b.rigOpts || {});
   rider.group.position.set(0, 1.22, -0.06); h.group.add(rider.group);
-  const parts = Object.assign({}, rider.parts, { mount: h.horseG }); saddleRider(parts);
+  const parts = Object.assign({}, rider.parts, { mount: h.horseG }); saddleRider(parts); afWearModel({ group: rider.group, parts }, b.pal);
   b.riderGroup = rider.group; b.group = h.group; b.parts = parts; b.anim = makeAnimator(parts); b.group.userData.afBody = b;
   b.mounted = true; b.horse = h; h.rider = b; b.x = h.x; b.z = h.z; b.yaw = h.yaw; b.vx = h.vx; b.vz = h.vz; b.gallop = 0; b.sp01 = h.sp01; b.cav = null; b.aimYaw = b.yaw; b.twist = 0; b.wantHorse = null;
-  b.tagH = 3.5; b.baseScale = h.group.scale.x; b.dodgeT = 0; b.rollAng = 0; b.rollSq = 0; b.atk = null; b.charge = null; b.queued = false; b.blocking = false; b.moving = false; b.tx = b.x; b.tz = b.z; b.tyaw = b.yaw;
+  b.baseScale = h.group.scale.x; b.tagH = afTagH(true, b.baseScale); b.dodgeT = 0; b.rollAng = 0; b.rollSq = 0; b.atk = null; b.charge = null; b.queued = false; b.blocking = false; b.moving = false; b.tx = b.x; b.tz = b.z; b.tyaw = b.yaw;
   afDressRig(b); afBladeLook(b); setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.2);
   b.group.position.set(b.x, afY(b.x, b.z), b.z); b.group.rotation.set(0, b.yaw, 0);
   if (!quiet) { afLogLine(b.name + ' swings into the saddle', b.teamDef.col); AF.events.push({ k: 'horse', e: 'mount', h: h.id, i: b.idx }); }
@@ -17787,7 +18465,7 @@ function afMountCheck() {                                  // a man on foot who 
 function afHorseTags() {
   for (const h of AF.horses) { if (!h.tag) continue; if (h.dead || h.gone) { h.tag.visible = false; continue; }
     const px = h.rider ? h.rider.x : h.x, pz = h.rider ? h.rider.z : h.z;
-    h.tag.visible = camera.position.distanceToSquared(h.group.position) < (AF.bodies.length > AF_LIM.heroCap ? 900 : 4e4);
+    h.tag.visible = afTagNear(h.group.position);
     h.tag.position.set(px, afY(px, pz) + (h.rider ? 3.22 : 2.95), pz); h.bar.quaternion.copy(camera.quaternion); h.bar.userData.fill.scale.x = clamp(h.hp / h.maxHp, 0, 1); }
 }
 /* ---- the CAREER: what you own and have earned rides in with you. Signed-in accounts keep an arena career on the
@@ -17796,17 +18474,17 @@ function afHorseTags() {
 const AF_GEAR_FREE = { sword: 'iron_sword', bow: 'hunting_bow', horse: 'courser' };
 function afCareerLoad(seed) {
   if (!afSession() || !window.net || !window.net.arenaCareer) { AF.career = null; return Promise.resolve(null); }
-  return window.net.arenaCareer(seed).then(c => { AF.career = c || null; AF.careerAt = Date.now(); if (AF.lobby) { afLobbyRender(); afSendGear(); } if (AF.marketOpen) afMarketRender(); return AF.career; });
+  return window.net.arenaCareer(seed).then(c => { AF.career = c || null; AF.careerAt = Date.now(); if (AF.lobby) { afLobbyRender(); afSendGear(); } if (AF.marketOpen) afMarketRender(); if (AF.homeOpen) afHomeRender(); return AF.career; });
 }
 function afGear() {                                        // my loadout as the roster carries it
   const c = AF.career, eq = c ? c.equipped : AF_GEAR_FREE, I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}, g = {};
   for (const k of (window.ARENA_CAT ? ARENA_CAT.ARENA_SLOTS : [])) if (eq[k] && I[eq[k]] && I[eq[k]].slot === k) g[k] = eq[k];
-  if (!g.sword) g.sword = c ? 'wood_sword' : 'iron_sword'; if (c) g.rank = c.rank.name; return g;
+  if (!g.sword) g.sword = c ? 'wood_sword' : 'iron_sword'; if (c) { g.rank = c.rank.name; g.bowLv = c.skills && c.skills.bow ? c.skills.bow.level | 0 : 0; } return g;
 }
 function afGearClean(g) {                                  // (a guest's word for his loadout — only real items, in their own slots)
   const I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}, out = {}; if (!g || typeof g !== 'object') g = AF_GEAR_FREE;
   for (const k of (window.ARENA_CAT ? ARENA_CAT.ARENA_SLOTS : [])) { const id = g[k]; if (typeof id === 'string' && I[id] && I[id].slot === k) out[k] = id; }
-  if (!out.sword) out.sword = 'iron_sword'; if (typeof g.rank === 'string') out.rank = g.rank.slice(0, 12); return out;
+  if (!out.sword) out.sword = 'iron_sword'; if (typeof g.rank === 'string') out.rank = g.rank.slice(0, 12); if (typeof g.bowLv === 'number') out.bowLv = clamp(g.bowLv | 0, 0, 12); return out;
 }
 function afGearStats(g) {                                  // what the loadout does in the pit
   const I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}, sw = I[g.sword] || { dmg: 1 }, ar = g.armor && I[g.armor], bw = g.bow && I[g.bow], hs = g.horse && I[g.horse], pl = g.plume && I[g.plume], tr = g.trim && I[g.trim];
@@ -17864,7 +18542,7 @@ function afDressGear(parts, gear, pal) {
   if (!parts || !window.ARENA_CAT) return; const I = ARENA_CAT.ARENA_ITEMS; gear = gear || {};
   // every dressing pass starts clean: the pieces the last pass hung on the rig come off
   for (const m of parts.gearBits || []) { if (m.parent) m.parent.remove(m); try { disposeGroup(m); } catch (e) {} } parts.gearBits = [];
-  const bit = (parent, mesh) => { parent.add(mesh); parts.gearBits.push(mesh); if (parts.realMesh) mesh.visible = false; return mesh; };   // a real figure wears its own sculpted armour
+  const bit = (parent, mesh) => { parent.add(mesh); parts.gearBits.push(mesh); if (parts.realMesh || parts.modelRig) mesh.visible = false; return mesh; };   // a real figure wears its own sculpted armour
   const ar = AF_LOOK.armor[gear.armor || 'none'], ub = parts.upperBody;
   const pads = []; for (const sh of [parts.shoulderL, parts.shoulderR]) if (sh) { const pad = sh.children.find(c => c.isMesh); if (pad) pads.push(pad); }
   if (parts.torso && ub) {
@@ -17873,10 +18551,10 @@ function afDressGear(parts, gear, pal) {
       parts.torso.material = mat(clothC, { shared: false }); pads.forEach(p => { p.visible = false; });
       const dark = new THREE.Color(clothC).multiplyScalar(0.62).getHex(); for (const y of [0.22, 0.4, 0.58]) { const q = bit(ub, boxMesh(0.9, 0.025, 0.7, mat(dark, { shared: false }))); q.position.y = y; }
     } else {
-      parts.torso.material = mat(ar.torso, { metal: ar.metal, shared: false }); pads.forEach(p => { p.visible = !parts.realMesh; p.material = mat(ar.pad, { metal: ar.metal, shared: false }); p.scale.set(ar.gorget ? 1.6 : 1.28, ar.gorget ? 0.9 : 0.68, ar.gorget ? 1.2 : 0.95); if (p.userData.big) p.scale.multiplyScalar(1.22); });
+      parts.torso.material = mat(ar.torso, { metal: ar.metal, shared: false }); pads.forEach(p => { p.visible = !parts.realMesh && !parts.armorSet && !parts.modelRig; p.material = mat(ar.pad, { metal: ar.metal, shared: false }); p.scale.set(ar.gorget ? 1.6 : 1.28, ar.gorget ? 0.9 : 0.68, ar.gorget ? 1.2 : 0.95); if (p.userData.big) p.scale.multiplyScalar(1.22); });
       const M = (c, metal) => mat(c, { metal: metal == null ? ar.metal : metal, shared: false });
       if (ar.straps) {                                       // a baldric across the chest and a row of studs
-        const st = bit(ub, boxMesh(0.14, 0.95, 0.06, M(0x3a2414, 0))); st.position.set(0, 0.42, 0.34); st.rotation.z = 0.55;
+        const st = bit(ub, boxMesh(0.14, 0.95, 0.06, mat(0x3a2414, { shared: false, pbr: 'leather' }))); st.position.set(0, 0.42, 0.34); st.rotation.z = 0.55;
         for (let i = 0; i < 5; i++) { const s = bit(ub, sphereMesh(0.03, M(0x8a8a90, 1), 5, 4)); s.position.set(-0.26 + 0.13 * i, 0.68 - 0.13 * i, 0.36); } }
       if (ar.rivets) for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) { const s = bit(ub, sphereMesh(0.028, M(0xc8c0a0, 1), 5, 4)); s.position.set(-0.3 + 0.2 * c, 0.2 + 0.16 * r, 0.36 - 0.03 * r); }
       if (ar.sleeves) for (const sh of [parts.shoulderL, parts.shoulderR]) if (sh) { const sl = bit(sh, new THREE.Mesh(cachedGeo('sleeve', () => new THREE.CylinderGeometry(0.215, 0.13, 0.4, 7)), M(ar.sleeves))); sl.position.y = -0.26; }
@@ -17888,7 +18566,7 @@ function afDressGear(parts, gear, pal) {
       if (ar.crest) { const hp = parts.headPivot; const cr = bit(hp || ub, boxMesh(0.07, 0.2, 0.46, M(ar.crest, 1))); cr.position.set(0, (hp ? 0.62 : 1.6), 0.02); }
       if (ar.gorget && !parts.gorget) { const gt = new THREE.Mesh(cachedGeo('gorget', () => new THREE.CylinderGeometry(0.3, 0.44, 0.22, 7)), M(ar.gold ? 0xd9b24a : ar.torso, 1)); gt.position.y = 0.84; ub.add(gt); parts.gorget = gt; }
     }
-    if (parts.gorget) { parts.gorget.visible = !!(ar && ar.gorget) && !parts.realMesh; if (ar && ar.gorget) parts.gorget.material = mat(ar.gold ? 0xd9b24a : ar.rim || ar.torso, { metal: 1, shared: false }); }
+    if (parts.gorget) { parts.gorget.visible = !!(ar && ar.gorget) && !parts.realMesh && !parts.armorSet && !parts.modelRig; if (ar && ar.gorget) parts.gorget.material = mat(ar.gold ? 0xd9b24a : ar.rim || ar.torso, { metal: 1, shared: false }); }
   }
   const hs = gear.horse && AF_LOOK.horse[gear.horse], H = parts.mount && parts.mount.userData.rig;
   if (H && hs) {                                             // the horse: coat, a nag's droop and thin neck, cloth barding, a steel chamfron and crinet
@@ -17901,6 +18579,11 @@ function afDressGear(parts, gear, pal) {
   }
   const sw = AF_LOOK.sword[gear.sword] || AF_LOOK.sword.iron_sword, trim = gear.trim && I[gear.trim];
   if (parts.sword) afBuildSword(parts.sword, sw, trim ? trim.blade : null);
+  parts.gearSword = !!((gear.sword && gear.sword !== 'iron_sword' && AF_LOOK.sword[gear.sword]) || trim);   // the warrior figure puts his own blade away for this one (syncModelRigs)
+  if (parts.modelRig && parts.modelRig.inst) {                // the figure's sculpted armour is one mesh: the piece you wear tints it (leather brown, mail grey, plate bright, gold for the champion)
+    const L = parts.modelRig, R = MODEL_RIGS.get(L.g.userData.model), an = R && R.spec.meshes && R.spec.meshes.armor, am = an && L.inst.skinned[an];
+    if (am) { if (!am.userData.tintMat) { am.material = am.material.clone(); am.userData.tintMat = true; }
+      const c = ar ? new THREE.Color(ar.torso).lerp(new THREE.Color(0xffffff), 0.4) : new THREE.Color(0xffffff); if (ar && ar.gold) c.lerp(new THREE.Color(0xd9b24a), 0.35); am.material.color.copy(c); } }
   const bw = gear.bow && AF_LOOK.bow[gear.bow];
   if (parts.bow && bw) {                                     // the bow: wood, size, a leather wrap at the grip, tips of gold or horn
     parts.bow.scale.setScalar(bw.scale); let arc = null; parts.bow.traverse(c => { if (c.isMesh && c.geometry.type === 'TorusGeometry') { arc = c; c.material = mat(bw.wood, { smooth: true, shared: false }); } });
@@ -17918,7 +18601,7 @@ function afBuildSword(g, sw, tint) {
   for (const c of g.children.slice()) { g.remove(c); try { disposeGroup(c); } catch (e) {} }
   const len = 1.35 * (sw.len || 1), w = sw.w || 0.2, t = sw.style === 'thin' ? 0.05 : 0.085, great = sw.style === 'great';
   const bladeM = mat(tint || sw.blade, { metal: sw.metal === 0 && !tint ? 0 : 1, shared: false, emissive: sw.glow || 0x000000, emissiveI: sw.glow ? 0.55 : 1 });
-  const hiltM = mat(sw.gold ? 0xd9b24a : (sw.guard || 0x3a2a18), { metal: 1, shared: false }), gripM = mat(sw.grip || 0x241812, { smooth: true, shared: false }), pomM = mat(sw.gold ? 0xd9b24a : (sw.pommel || 0x6a5630), { metal: 1, shared: false });
+  const hiltM = mat(sw.gold ? 0xd9b24a : (sw.guard || 0x3a2a18), { metal: 1, shared: false }), gripM = mat(sw.grip || 0x241812, { smooth: true, shared: false, pbr: 'leather' }), pomM = mat(sw.gold ? 0xd9b24a : (sw.pommel || 0x6a5630), { metal: 1, shared: false });
   const gripL = great ? 0.5 : sw.style === 'thin' ? 0.3 : 0.34, y0 = 0.2;
   const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.055, gripL, 8), gripM); grip.position.y = great ? -0.08 : 0; g.add(grip);
   const pommel = sphereMesh(great ? 0.09 : 0.07, pomM, 8, 6); pommel.position.y = -(gripL / 2 + 0.04) + (great ? -0.08 : 0); g.add(pommel);
@@ -17953,6 +18636,7 @@ function afBladeLook(b) { afDressGear(b.parts, b.gear, b.pal); }   // (the rig s
 function afItemName(id) { const I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}; return I[id] ? I[id].name : id; }
 // sheathe one, draw the other: bow in the left hand, or sword and shield (the arm settles for a beat)
 function afSetWeapon(b, w) {
+  if (w === 'bow' && !b.canBow) { if (b === AF.me && !(b.noBowT > 0)) { b.noBowT = 1.5; afPopup(b.group.position, 'no bow — a ' + (b.mounted ? 'rider' : 'swordsman') + ' carries none', '#d8c8a8'); } return; }   // the class rule: only an archer has one
   if (b.weapon === w || (w === 'bow' && !b.parts.bow)) return;
   b.weapon = w; const p = b.parts, ranged = w === 'bow';
   if (p.bow) p.bow.visible = ranged; if (p.sword) p.sword.visible = !ranged; if (p.shield) p.shield.visible = !ranged && !b.noShield;
@@ -17964,13 +18648,14 @@ function afStateCode(b) {
   if (b.clashT > 0) return 12;
   if (b.stagger > 0) return 11;
   if (b.flinch > 0) return 5;
-  if (b.dodgeT > 0) return b.rollSide < 0 ? 14 : 7;
+  if (b.dodgeT > 0) return 7;                                // (the roll's heading rides the snapshot's move slot)
   if (b.charge) return b.weapon === 'bow' ? 9 : 2;
   if (b.atk) { if (b.atk.bow) return b.atk.hit ? 10 : 9; return b.atk.hit ? (b.atk.t > b.atk.wind + b.atk.strike ? 4 : 3) : 2; }
   if (b.blocking) return 6;
   return b.moving ? 1 : 0;
 }
 const AF_MOVES = ['slashR', 'slashL', 'chop', 'heavy'];
+const _rollQ = new THREE.Quaternion(), _rollUp = new THREE.Vector3(0, 1, 0);
 function afMove(b, ux, uz, spd, dt) {                     // steer: accelerate toward a velocity of spd along (ux,uz)
   b.vx += ux * spd * AF_F.accel * dt; b.vz += uz * spd * AF_F.accel * dt;
 }
@@ -18021,15 +18706,20 @@ function afCommit(b, dt) {
   }
   const y = afY(b.x, b.z) + (b.moving && !b.dead && !b.mounted ? Math.abs(Math.cos(b.phase)) * g.bob : 0);
   if (b.rollAng) {                                           // pivot the roll about the tucked body's middle: the feet swing over, the hips stay low
+    // the tumble turns about the horizontal axis square to the roll's heading (rollRel, in the body's frame: +X is its
+    // left, +Z its front), the head tipping the way it goes; the group's origin (the feet) is swung round a pivot at
+    // the tucked body's middle, then the whole thing is yawed into the world
     const bs = b.baseScale || 1, sq = 1 - 0.45 * (b.rollSq || 0), h = 0.95 * bs * sq, th = b.rollAng;
-    const ox = h * Math.sin(th), oy = h * (1 - Math.cos(th));
+    const rel = b.rollRel == null ? -Math.PI / 2 : b.rollRel, dx = Math.sin(rel), dz = Math.cos(rel);
+    const st = Math.sin(th), lx = -h * dx * st, ly = h * (1 - Math.cos(th)), lz = -h * dz * st, cy = Math.cos(b.yaw), sy = Math.sin(b.yaw);
     b.group.scale.set(bs, bs * sq, bs);
-    b.group.position.set(b.x + Math.cos(b.yaw) * ox, y + oy, b.z - Math.sin(b.yaw) * ox); b.group.rotation.set(0, b.yaw, th);
+    b.group.position.set(b.x + lx * cy + lz * sy, y + ly, b.z - lx * sy + lz * cy);
+    b.group.quaternion.setFromAxisAngle(tmpV.set(dz, 0, -dx), th).premultiply(_rollQ.setFromAxisAngle(_rollUp, b.yaw));
   } else {
     if (b.baseScale && b.group.scale.y !== b.baseScale) b.group.scale.setScalar(b.baseScale);
     b.group.position.set(b.x, y, b.z); b.group.rotation.set(b.tiltX || 0, b.yaw, b.roll || 0);
   }
-  if (b.tag) { b.tag.visible = !b.dead && AF.phase !== 'intro' && camera.position.distanceToSquared(b.group.position) < (AF.bodies.length > AF_LIM.heroCap ? 900 : 4e4); b.tag.position.set(b.x, y + (b.tagH || 2.25), b.z); b.bar.quaternion.copy(camera.quaternion); b.bar.userData.fill.scale.x = clamp(b.hp / b.maxHp, 0, 1); }
+  if (b.tag) { b.tag.visible = !b.dead && AF.phase !== 'intro' && !AF.outro && afTagNear(b.group.position); b.tag.position.set(b.x, y + (b.tagH || afTagH(b.mounted, b.baseScale)), b.z); b.bar.quaternion.copy(camera.quaternion); b.bar.userData.fill.scale.x = clamp(b.hp / b.maxHp, 0, 1); }
 }
 // ONE control routine for everyone: reads b.inp (keyboard, NPC brain, or a remote player's record).
 // sim=true means this client is the authority (hits land); a guest driving its own body passes false.
@@ -18042,7 +18732,7 @@ function afDrive(b, dt, sim) {
   if (b.stagger <= 0 && b.poise < b.maxPoise) b.poise = Math.min(b.maxPoise, b.poise + F.poiseRegen * dt); // poise recovers off the pressure
   b.moving = false;
   if (b.downT > 0) {                                         // ridden down: flat on the sand, then up again
-    b.downT -= dt; b.atk = null; b.charge = null; b.blocking = false; b.queued = false;
+    b.downT -= dt; b.atk = null; b.charge = null; b.blocking = false; b.queued = false; b.prevHold = !!I.hold; if (!human) b.aiHoldT = 0;
     const k = b.downT > 0.45 ? 1 : clamp(b.downT / 0.45, 0, 1);   // the last half-second: getting up
     b.tiltX = -1.35 * k; b.roll = (b.downSide || 1) * 0.45 * k;
     setPose(b.anim, 'hurt', 0.08); restLegs(b.parts, dt, true);
@@ -18051,19 +18741,19 @@ function afDrive(b, dt, sim) {
   }
   if (b.stagger > 0 || b.flinch > 0) {                     // reeling (flinch) or guard broken / poise gone (stagger: open to an execution)
     if (b.stagger > 0) b.stagger -= dt; else b.flinch -= dt;
-    b.atk = null; b.charge = null; b.queued = false; b.blocking = false; b.tiltX = 0;
+    b.atk = null; b.charge = null; b.queued = false; b.blocking = false; b.tiltX = 0; b.prevHold = !!I.hold; if (!human) b.aiHoldT = 0;   // (no press buffers through the reel: the hold has to come again — an NPC's cancelled load used to run its whole 0.9 s with nothing behind it)
     setPose(b.anim, 'hurt', 0.06); restLegs(b.parts, dt, true);
     if (!b.tinted && b.flashT <= 0) { setTint(b.parts, 0x551111); b.tinted = true; }
     afIntegrate(b, dt); afCommit(b, dt); return;
   }
   if (b.tinted) { setTint(b.parts, null); b.tinted = false; }
   if (b.clashT > 0) {                                        // blades locked: hold the pose, then shove apart (the attacker further, and open)
-    b.clashT -= dt; b.vx *= 0.4; b.vz *= 0.4; b.blocking = !b.clashAtk; restLegs(b.parts, dt, true);
+    b.clashT -= dt; b.vx *= 0.4; b.vz *= 0.4; b.blocking = !b.clashAtk; b.prevHold = !!I.hold; restLegs(b.parts, dt, true);
     if (b.clashT <= 0) { const k = b.clashAtk ? 5.5 : 2.5; b.vx += b.clashDx * k; b.vz += b.clashDz * k; b.cd = Math.max(human ? 0 : b.cd, b.clashAtk ? 0.35 : 0.05); b.anim.ease = null; setPose(b.anim, b.clashAtk ? 'hurt' : 'block', 0.12); if (b.clashAtk) b.flinch = 0.16; }
     afIntegrate(b, dt); afCommit(b, dt); return;
   }
   if (b.dodgeT > 0) {                                        // mid-roll: i-frames, a burst of sideways speed, tucked into a ball and rolling over the shoulder
-    b.dodgeT -= dt; const k = 1 - clamp(b.dodgeT / F.dodge.dur, 0, 1);
+    b.dodgeT -= dt; const k = 1 - clamp(b.dodgeT / F.dodge.dur, 0, 1); b.prevHold = !!I.hold;
     const sp = F.dodge.speed * (1 - k * 0.5); b.vx = b.ddx * sp; b.vz = b.ddz * sp;
     afRollPose(b, k, dt);
     if (b.dodgeT <= 0) { b.rollAng = 0; b.rollSq = 0; b.vx *= 0.4; b.vz *= 0.4; if (b === AF.me) afAutoTurn(b); }
@@ -18075,10 +18765,15 @@ function afDrive(b, dt, sim) {
     if (b.mounted) { if (b.dodgeCd <= 0) { b.dodgeCd = 1.2; b.vx += Math.sin(b.yaw) * 6; b.vz += Math.cos(b.yaw) * 6; b.iframes = 0.15; try { SFX.foot(b.group.position); } catch (e) {} } }
     else if (b.dodgeCd <= 0 && !(b.atk && b.atk.hit)) {
       b.dodgeT = F.dodge.dur; b.iframes = F.dodge.iframes; b.dodgeCd = F.dodge.dur + F.dodge.cd; b.atk = null; b.charge = null; b.queued = false; b.blocking = false;
-      // a SIDEWAYS roll: the side asked for (Q / E, the two touch buttons), else the side the stick leans, else a coin
+      // THE ROLL'S HEADING: the one asked for (Q / E, the stick's double-tap-and-push), else — a player — the way he is
+      // moving, else a SIDE: the side the stick leans, else a coin. (An NPC always takes a side: he closes on his man,
+      // and a roll along his line of advance would carry him onto the blade he is dodging.)
       const rgx = -Math.cos(b.yaw), rgz = Math.sin(b.yaw), lean = mm > 1e-3 ? ux * rgx + uz * rgz : 0;
-      b.rollSide = I.rollDir ? Math.sign(I.rollDir) : Math.abs(lean) > 0.2 ? Math.sign(lean) : (Math.random() < 0.5 ? -1 : 1);
-      b.ddx = rgx * b.rollSide; b.ddz = rgz * b.rollSide;   // (rollDir stays as sent: the guest's own copy and the host's must agree)
+      let hd;
+      if (I.rollDir != null) hd = I.rollDir;                 // (stays as sent: the guest's own copy and the host's must agree)
+      else if (human && mm > 0.2) hd = Math.atan2(ux, uz);
+      else { const side = Math.abs(lean) > 0.2 ? Math.sign(lean) : (Math.random() < 0.5 ? -1 : 1); hd = Math.atan2(rgx * side, rgz * side); }
+      b.ddx = Math.sin(hd); b.ddz = Math.cos(hd); b.rollRel = angleDelta(b.yaw, hd);   // rollRel: the heading relative to the facing (0 = forward, +pi/2 = left)
       try { SFX.foot(b.group.position); } catch (e) {}
       afIntegrate(b, dt); afCommit(b, dt); return;
     }
@@ -18098,6 +18793,7 @@ function afDrive(b, dt, sim) {
   if (human) b.lookYaw = I.yaw; else if (b.target && !b.target.dead) b.lookYaw = Math.atan2(b.target.x - b.x, b.target.z - b.z); else b.lookYaw = b.yaw;
   if (I.swap !== b.seenSwap) { b.seenSwap = I.swap; if (!b.atk && b.clashT <= 0) afSetWeapon(b, b.weapon === 'bow' ? 'sword' : 'bow'); }
   if (b.swapT > 0) { b.swapT -= dt; b.charge = null; }         // hands busy changing weapons
+  if (b.noBowT > 0) b.noBowT -= dt;
   if (b.charge && I.block) { b.charge = null; b.cd = 0.05; b.anim.ease = null; }   // block-cancel out of a load
   // HOLD to load, RELEASE to swing. A press starts the load (the arm goes up, and past ~0.35 s coils into the heavy
   // windup); the release swings with a weight k = hold time / chargeMax — a tap is a quick light, a full hold a heavy.
@@ -18117,7 +18813,7 @@ function afDrive(b, dt, sim) {
       const released = b.releaseNow || (!holdNow && b.prevHold) || tapped;
       if (released) { b.seenAtk = I.atk; b.releaseNow = false;
         if (bow && b.charge.t < 0.12) { b.anim.ease = null; setPose(b.anim, 'relax', 0.15); }   // too short to be a shot: the bow comes down
-        else afRelease(b, clamp(b.charge.t / F.chargeMax, 0, 1));
+        else afRelease(b, clamp(b.charge.t / (bow ? afDrawSecs(b) : F.chargeMax), 0, 1));   // (a bow fills at the archer's own pace — afDrawSecs)
         b.charge = null; }
     } else b.seenAtk = I.atk;
   } else { if ((pressed || tapped) && !bow) b.queued = true; b.seenAtk = I.atk; } // a press mid-swing queues the next light of the combo (blades only)
@@ -18139,7 +18835,7 @@ function afDrive(b, dt, sim) {
       afMove(b, Math.sin(b.yaw), Math.cos(b.yaw), F.move * lerp(F.lunge, F.heavyLunge, a.k || 0) * 0.85, dt);
     if (!a.hit && a.t >= a.wind) {
       a.hit = true;
-      if (a.bow) { setPose(b.anim, 'looseBow', 0.05); if (sim) afShoot(b, a.k || 0); try { SFX.bow(b.group.position); } catch (e) {} }
+      if (a.bow) { setPose(b.anim, 'looseBow', 0.05); const loosed = sim ? afShoot(b, a.k || 0) : true; if (loosed) try { SFX.bow(b.group.position); } catch (e) {} }   // (an NPC with a stone in his arc holds the arrow — no twang)
       else {
         const mv = MOVES[AF_MOVES[a.move]], col = AF_TEAM_HEX[b.team];
         b.anim.ease = AF_EASE_BACK; setPose(b.anim, mv.strike, a.heavy ? 0.09 : 0.1);   // the blade whips PAST the mark and settles
@@ -18150,8 +18846,8 @@ function afDrive(b, dt, sim) {
       }
     }
     const total = a.wind + a.strike + a.rec;
-    if (a.hit && b.queued && a.t >= a.wind + a.strike + a.rec * 0.45) { b.queued = false; afStartAttack(b, false); } // chain from the follow-through
-    else if (a.t >= total) { b.atk = null; b.queued = false; b.cd = human ? 0.04 : Math.max(b.cd, 0.04);   // (an NPC keeps the pause his brain chose)
+    if (a.hit && b.queued && !a.last && a.t >= a.wind + a.strike + a.rec * F.chainAt) { b.queued = false; afStartAttack(b, false); } // chain from the follow-through (never past the third: mashing the button through the finisher queues nothing)
+    else if (a.t >= total) { b.atk = null; b.queued = false; b.cd = human ? (a.last ? F.comboCd : 0.04) : Math.max(b.cd, a.last ? F.comboCd : 0.04); if (a.last) b.combo = 0;   // (an NPC keeps the pause his brain chose; after a full chain everyone breathes)
        b.anim.ease = null; setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.3); if (b === AF.me) afAutoTurn(b); }
     else if (a.hit && a.t > a.wind + a.strike + a.rec * 0.5 && !a.bow) { b.anim.ease = null; setPose(b.anim, 'guard', 0.3); }
     b.blocking = false;
@@ -18159,7 +18855,7 @@ function afDrive(b, dt, sim) {
   if (b.blocking) setPose(b.anim, 'block', 0.1);
   else if (!b.atk && !b.charge) setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.22);
   const canMove = !b.atk || (!b.atk.heavy && !b.atk.bow && !b.atk.hit);
-  if (b.mounted) { afRide(b, dt, I, mm, canMove, sim); afIntegrate(b, dt); afCommit(b, dt); return; }
+  if (b.mounted) { afRide(b, dt, I, mm, canMove || !!(b.atk && b.atk.bow), sim); afIntegrate(b, dt); afCommit(b, dt); return; }   // (a shot from the saddle is the rider's arms — the horse runs on under him; a sword cut still checks it)
   if (mm > 1e-3 && canMove) {
     const spd = F.move * (b.moveMul || 1) * (b.blocking ? 0.4 : (b.atk || b.charge) ? 0.35 : 1) * Math.min(1, mm);
     afMove(b, ux, uz, spd, dt); b.moving = true;
@@ -18257,11 +18953,12 @@ function afAutoTurn(b) {
   const want = Math.atan2(best.x - b.x, best.z - b.z);
   if (Math.abs(angleDelta(AF.cam.yaw, want)) > 0.45) AF.autoTurn = { yaw: want, t: 0.35, last: AF.cam.yaw };
 }
-// the ROLL: a full turn about the body's forward axis, tucked (legs folded, body squashed into a ball), feet leaving
-// the ground and landing again on the far side — the facing never changes, so you come up still looking at your man
+// the ROLL: a full turn about the horizontal axis square to the way it goes — over the shoulder for a sideways roll,
+// head over heels forward or back — tucked (legs folded, body squashed into a ball), feet leaving the ground and
+// landing again on the far side. The facing never changes, so you come up still looking at your man.
 function afRollPose(b, k, dt) {
   const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;      // ease in-out: a push, the turn, a landing
-  b.rollAng = (b.rollSide || 1) * TAU * e; b.rollSq = Math.sin(k * Math.PI);
+  b.rollAng = TAU * e; b.rollSq = Math.sin(k * Math.PI);
   b.tiltX = 0; b.moving = false;
   restLegs(b.parts, dt * 3, true, b.rollSq); setPose(b.anim, 'guard', 0.08);
 }
@@ -18282,7 +18979,9 @@ function afRelease(b, k) {
   if (b.weapon === 'bow') { b.atk = { bow: true, k, t: 0, wind: 0.05, strike: F.bow.strike, rec: F.bow.rec, hit: false, move: 4 }; return; }
   let move;
   if (heavy) { move = 3; b.combo = 0; } else { move = b.chargeMove; b.combo++; b.comboT = 1.1; }
-  b.atk = { heavy, k, t: 0, wind: 0.06 + 0.08 * k, strike: lerp(F.light.strike, F.heavy.strike, k), rec: lerp(F.light.rec, F.heavy.rec, k), hit: false, move };
+  const last = !heavy && b.combo >= F.comboMax;             // the END of the chain: the blade swings wide and he has to gather it — the window a patient foe waits for
+  if (last) { b.combo = 0; b.comboT = 0; }                    // (the count closes here, so a finisher cut short by a block or a hit doesn't leave a 4th and 5th behind it)
+  b.atk = { heavy, k, t: 0, wind: 0.06 + 0.08 * k, strike: lerp(F.light.strike, F.heavy.strike, k), rec: lerp(F.light.rec, F.heavy.rec, k) * (last ? F.comboRest : 1), hit: false, move, last };
   b.blocking = false;
 }
 // where a fighter's blow goes: his facing — or, in the saddle, where the RIDER is turned (a man can twist to cut
@@ -18298,7 +18997,7 @@ function afStrike(b, heavy, k) {
     if (o.dead || o.team === b.team || o === b) continue;
     const [px, pz] = afHitPoint(o, b.x, b.z), dx = px - b.x, dz = pz - b.z, dd = Math.hypot(dx, dz); if (dd > reach) continue;
     if ((dx * fdx + dz * fdz) / (dd || 1) < cone) continue;  // a loaded blow cleaves a wider arc
-    let dmg = (lerp(rand(F.light.dmg[0], F.light.dmg[1]), rand(F.heavy.dmg[0], F.heavy.dmg[1]), w) + b.combo * 1.5) * shock;
+    let dmg = (lerp(rand(F.light.dmg[0], F.light.dmg[1]), rand(F.heavy.dmg[0], F.heavy.dmg[1]), w) + (b.atk && b.atk.last ? F.comboMax : b.combo) * 1.5) * shock;
     const exec = o.stagger > 0;                            // a staggered foe is open: the execution lands for real
     if (exec) dmg *= F.executeMul;
     afDamage(o, dmg, b, heavy, exec, false, w);
@@ -18319,8 +19018,8 @@ function afDamage(t, amt, from, heavy, exec, arrow, k) {   // heavy: cracks guar
     else {
       blocked = 1; amt *= AF_F.blockMul; afPopup(pos, 'block', '#ffe089'); try { SFX.clang(pos); } catch (e) {}
       if (!arrow) {                                          // BLADE LOCK: steel bites steel, both freeze for a beat, then the shove — and the attacker's swing is spent
-        from.clashT = 0.3; from.clashAtk = true; from.clashDx = ax / ad; from.clashDz = az / ad; from.atk = null; from.charge = null; from.queued = false; from.vx = from.vz = 0;
-        t.clashT = 0.22; t.clashAtk = false; t.clashDx = -ax / ad; t.clashDz = -az / ad; t.vx = t.vz = 0;
+        from.clashT = 0.3; from.clashAtk = true; from.clashDx = ax / ad; from.clashDz = az / ad; from.atk = null; from.charge = null; from.queued = false; from.aiHoldT = 0; from.vx = from.vz = 0;
+        t.clashT = 0.22; t.clashAtk = false; t.clashDx = -ax / ad; t.clashDz = -az / ad; t.vx = t.vz = 0; t.holdBlock = 0;   // (the guard did its work: an NPC lets it drop and ripostes into the shove instead of standing behind it)
         tmpV.set((t.x + from.x) / 2, afY(t.x, t.z) + 1.4, (t.z + from.z) / 2); afSparks(tmpV, 0xffffff, 12); afSparks(tmpV, 0xffdf6b, 8);
         if (from === AF.me || t === AF.me) { addShake(0.14); AF.hitstop = Math.max(AF.hitstop, 0.05); }
       }
@@ -18329,8 +19028,8 @@ function afDamage(t, amt, from, heavy, exec, arrow, k) {   // heavy: cracks guar
   } else {
     // HEAVY ARMOUR: a blow loaded past the heavy windup (or already swinging heavy) rides through a light hit — he takes
     // the wound but his swing still comes. Without it a held attack could never trade with a jab: every hit reset the load.
-    const armoured = !heavy && !exec && weight < 0.5 && ((t.charge && t.charge.heavyPose) || (t.atk && t.atk.heavy && !t.atk.hit));
-    if (!armoured) { t.atk = null; t.charge = null; t.queued = false; }
+    const armoured = !heavy && !exec && weight < 0.5 && ((t.charge && (t.charge.heavyPose || (t.A && t.A.armour && t.ctrl === 'ai'))) || (t.atk && t.atk.heavy && !t.atk.hit));   // (a BRUTE loads through the jabs from the first: his answer to a chain is the blow that comes anyway)
+    if (!armoured) { t.atk = null; t.charge = null; t.queued = false; t.combo = 0; t.comboT = 0; t.aiHoldT = 0; }   // a blow that lands breaks the chain he was cutting (and an NPC's load: the hold ran on with nothing behind it)
     t.blocking = false;
     const k = lerp(AF_F.knock, AF_F.heavyKnock, weight) * (armoured ? 0.3 : 1); t.vx -= ax / ad * k; t.vz -= az / ad * k; // an impulse, not a teleport
     if (t.stagger <= 0) {                                    // poise: chip it and he flinches; break it and he reels wide open
@@ -18346,7 +19045,7 @@ function afDamage(t, amt, from, heavy, exec, arrow, k) {   // heavy: cracks guar
     afSplat(t.x, t.z, heavy || exec ? 1.1 : 0.7);
     afPopup(pos, exec ? 'EXECUTE ' + Math.round(amt) : String(Math.round(amt)), exec ? '#ff5a3c' : heavy ? '#ffd27a' : '#ff7d6f');
   }
-  t.hp -= amt; from.dmgDealt = (from.dmgDealt || 0) + amt; if (arrow) from.bowHits = (from.bowHits || 0) + 1; else from.swordHits = (from.swordHits || 0) + 1;   // (the career's ledger)
+  t.hp -= amt; from.dmgDealt = (from.dmgDealt || 0) + amt; t.dmgTaken = (t.dmgTaken || 0) + amt; if (arrow) from.bowHits = (from.bowHits || 0) + 1; else from.swordHits = (from.swordHits || 0) + 1;   // (the career's ledger)
   if ((from === AF.me || t === AF.me) && AF.role !== 'guest') afJuice(from, t, amt, heavy, blocked); // your blows and your wounds rattle the camera
   AF.events.push({ k: 'hit', i: t.idx, d: Math.round(amt), b: blocked, h: heavy ? 1 : 0, by: from.idx });
   if (t.hp <= 0) afKill(t, from);
@@ -18418,13 +19117,19 @@ function afStepSplats(dt) {
 function afShoot(b, k) {                                    // a longer draw flies faster and hits harder
   const ay = afAimOf(b), fdx = Math.sin(ay), fdz = Math.cos(ay), w = k || 0;
   let best = null, bd = AF_F.bow.range;                      // aim assist: the nearest foe inside a frontal cone
-  for (const o of AF.bodies) { if (o.dead || o.team === b.team) continue; const dx = o.x - b.x, dz = o.z - b.z, dd = Math.hypot(dx, dz); if (dd < bd && (dx * fdx + dz * fdz) / (dd || 1) > 0.86) { bd = dd; best = o; } }
+  let anyB = null, anyD = AF_F.bow.range;                    // (a foe with a clear line beats a nearer one behind a stone; none clear → the nearest, and the arrow flies where it flies)
+  for (const o of AF.bodies) { if (o.dead || o.team === b.team) continue; const dx = o.x - b.x, dz = o.z - b.z, dd = Math.hypot(dx, dz); if (dd >= AF_F.bow.range || (dx * fdx + dz * fdz) / (dd || 1) <= 0.86) continue;
+    if (dd < anyD) { anyD = dd; anyB = o; } if (dd < bd && !afShotBlocker(b.x, b.z, o.x, o.z, w)) { bd = dd; best = o; } }
+  if (!best && anyB) { best = anyB; bd = anyD; }
   let tx = best ? best.x : b.x + fdx * 30, tz = best ? best.z : b.z + fdz * 30;
-  if (best && b.ctrl === 'ai') {                             // NPC aim by XP: lead a moving mark, and a shaky hand scatters the shot
-    const sk = b.skill, fly = bd / (AF_F.bow.speed * (0.8 + w * 0.4)), err = (1 - sk) * (0.5 + bd * 0.09), ea = Math.random() * TAU, er = err * Math.sqrt(Math.random());
-    tx += (best.vx || 0) * fly * sk + Math.cos(ea) * er; tz += (best.vz || 0) * fly * sk + Math.sin(ea) * er;
+  if (best && b.ctrl === 'ai') { const sk = afBowSk(b), fly = bd / (AF_F.bow.speed * (0.8 + w * 0.4)); tx += (best.vx || 0) * fly * sk; tz += (best.vz || 0) * fly * sk; }   // an NPC leads a moving mark as well as he knows how
+  { const err = afBowScatter(b, best ? bd : 30, w), ea = Math.random() * TAU, er = err * Math.sqrt(Math.random()); tx += Math.cos(ea) * er; tz += Math.sin(ea) * er; }   // and EVERY hand wanders by its skill (afBowScatter) — a master's barely, a recruit's by paces
+  if (b.ctrl === 'ai') {                                     // the moment of release (the draw was checked; men move while he draws, and the lead and the scatter
+    let K = afShotBlocker(b.x, b.z, tx, tz, w);               // shift the point): a scattered point behind a stone → the true mark; that blocked too → he holds the arrow
+    if (K && best) { tx = best.x; tz = best.z; K = afShotBlocker(b.x, b.z, tx, tz, w); }
+    if (K) { afNoLine(b, tx, tz, K); return false; }
   }
-  afSpawnArrow(b.team, b.idx, b.x, afY(b.x, b.z) + 1.6, b.z, tx, afY(tx, tz) + 1.1, tz, true, w);
+  afSpawnArrow(b.team, b.idx, b.x, afY(b.x, b.z) + (b.mounted ? 2.6 : 1.6), b.z, tx, afY(tx, tz) + 1.1, tz, true, w); return true;
 }
 function afSpawnArrow(team, owner, sx, sy, sz, tx, ty, tz, announce, k) {
   const dist = Math.hypot(tx - sx, tz - sz), flight = Math.max(0.12, dist / (AF_F.bow.speed * (0.75 + 0.45 * (k || 0)))), grav = 9;
@@ -18453,7 +19158,7 @@ function afStepArrows(dt, sim) {
     if (sim && !done) for (const o of AF.bodies) {
       if (o.dead || o.team === a.team) continue;
       const [px, pz] = afHitPoint(o, a.g.position.x, a.g.position.z), dx = px - a.g.position.x, dz = pz - a.g.position.z;
-      if (dx * dx + dz * dz < 1.1 && Math.abs(a.g.position.y - (gy + 1.1)) < 1.6) { const ow = AF.bodies[a.owner]; afDamage(o, rand(AF_F.bow.dmg[0], AF_F.bow.dmg[1]) * (0.7 + 0.6 * a.k) * (ow && ow.bowDmg || 1), ow || o, false, false, true); done = true; break; }
+      if (dx * dx + dz * dz < 1.1 && Math.abs(a.g.position.y - (gy + 1.1)) < 1.6) { const ow = AF.bodies[a.owner]; afDamage(o, rand(AF_F.bow.dmg[0], AF_F.bow.dmg[1]) * (0.55 + 0.75 * a.k) * (ow && ow.bowDmg || 1), ow || o, false, false, true); done = true; break; }
     }
     if (done) { scene.remove(a.g); try { disposeGroup(a.g); } catch (e) {} AF.arrows.splice(i, 1); }
   }
@@ -18466,7 +19171,9 @@ function afStepArrows(dt, sim) {
    at a walk, release the charge at contact, send the riders wide to flank, regroup when the line has scattered,
    and fall back to a wall when losing badly. Humans are never commanded, but see their captain's order. ---- */
 const AF_TACT = { formSecs: 1.6, walk: 0.62, contact: 10, regroupAfter: 8, rallyRatio: 0.45, rallySecs: 3.5, pursueRatio: 1.7, engageMin: 16, engageMax: 60, riderEngageMul: 1.7, wpTimeout: 6,
-  bowGap: 6, bowNear: 11, bowFar: 22, bowShot: 28, bowRoom: 5.5 };   // archers: the gap behind the swords at muster; give ground inside bowNear, close beyond bowFar, loose out to bowShot, and keep bowRoom of clear sand from their own swordsmen
+  bowGap: 6, bowNear: 11, bowFar: 22, bowShot: 28, bowRoom: 5.5,
+  hbNear: 9, hbFar: 16, hbPace: 0.8 };   // the HORSE ARCHER's ring (afHorseArcher): the band he rides round his mark, and his throttle (a canter — the gallop would cancel his draw)
+  // archers: the gap behind the swords at muster; give ground inside bowNear, close beyond bowFar, loose out to bowShot, and keep bowRoom of clear sand from their own swordsmen
 function afClampPit(x, z, margin) { const d = Math.hypot(x, z); const max = AF_F.radius - margin; if (d > max && d > 1e-4) { const k = max / d; x *= k; z *= k; } return AF.terr && AF.terr.rocks.length ? afFreePoint(x, z, 1.2) : { x, z }; }
 function afPlanTeams() {
   AF.teams = [];
@@ -18621,6 +19328,49 @@ function afSepFrom(b, R) {                                  // soft spacing from
 // an NPC's swing is a HOLD like anyone's: a tap for a light, a long visible load for a heavy (so you can read it and roll)
 // an archer giving ground backs away from EVERY foe near him (weighted by closeness) and leans toward his own side —
 // straight away from his target used to walk him into the next team in a free-for-all
+// THE BOW IS A SKILL. A full draw takes drawSlow seconds for a man who has never held one and drawFast for a master; a
+// recruit's arrow wanders (scatterFar per pace of range, worse under-drawn), and he fumbles the nock between shots. NPC
+// skill is his XP; a player's is his career bow level (career.skills.bow.level, carried in the gear as bowLv) — it is
+// hard to be a good archer, and only the very experienced draw quickly and put the arrow where they look.
+// Measured at 20 paces on a standing man (BV.arena + a pinned pair): a recruit lands about 1 in 4, a middling archer
+// under half, the very experienced 4 in 5, a master nearly all — and a recruit takes three times as long over the draw
+// and fumbles the nock between shots. (Only the sideways wander really misses: an arrow long or short still passes the man.)
+const AF_BOW = { drawSlow: 2.4, drawFast: 0.55, masterLv: 6, steadyMaster: 0.26, steadyGap: 1.1, steadyPow: 1.4, spreadNear: 0.3, spreadFar: 0.2, underDraw: 0.8, nockSlow: 1.8 };
+function afBowSk(b) { return b.bowSk != null ? b.bowSk : (b.skill || 0); }
+function afDrawSecs(b) { return lerp(AF_BOW.drawSlow, AF_BOW.drawFast, afBowSk(b)); }   // seconds of hold for a full draw (k = 1)
+function afBowScatter(b, dist, k) {                         // the radius (paces) the arrow may wander from the mark: unskilled, far, and under-drawn all widen it
+  const B = AF_BOW, sk = afBowSk(b);
+  return (B.steadyMaster + B.steadyGap * Math.pow(1 - sk, B.steadyPow)) * (B.spreadNear + B.spreadFar * dist) * (1 + B.underDraw * (1 - clamp(k || 0, 0, 1)));
+}
+// LINE OF FLIGHT: what would an arrow from (sx,sz) at a mark (tx,tz) bury itself in before it got there? Samples the same
+// ballistic arc afSpawnArrow flies (at draw k) against every stone's top and the ground itself (a hill) — the rock or hill
+// point that stops it, or null for a clear shot. The AI asks before it draws; the aim assist asks before it picks a mark.
+function afShotBlocker(sx, sz, tx, tz, k) {
+  const T = AF.terr; if (!T || (!T.rocks.length && !T.hills.length)) return null;
+  const sy = afY(sx, sz) + 1.6, ty = afY(tx, tz) + 1.1, dist = Math.hypot(tx - sx, tz - sz);
+  const flight = Math.max(0.12, dist / (AF_F.bow.speed * (0.75 + 0.45 * (k == null ? 0.5 : k)))), grav = 9, vy0 = (ty - sy) / flight + 0.5 * grav * flight;
+  const n = Math.max(2, Math.ceil(dist / 0.8));
+  for (let i = 1; i < n; i++) {
+    const f = i / n, t = flight * f, x = sx + (tx - sx) * f, z = sz + (tz - sz) * f, y = sy + vy0 * t - 0.5 * grav * t * t;
+    if (T.rocks.length) { const K = afRockAt(x, z, 0); if (K && y < K.top) return K; }
+    if (T.hills.length && y <= afY(x, z)) return { x, z, r: 0, hill: true };
+  }
+  return null;
+}
+// an NPC archer looses at his mark — unless a stone (or a hill) stands in the arc, in which case he does NOT waste the
+// arrow on it: he notes which side the stone lies and sidesteps for a line (afArcherSidestep), and looks again shortly
+function afArcherLoose(b, t, hold, cd) {                    // hold: how much of a draw he means (0..1 of afDrawSecs); cd: the pause after, plus a recruit's fumbled nock
+  const K = afShotBlocker(b.x, b.z, t.x, t.z, hold);
+  if (!K) { b.aiHoldT = afDrawSecs(b) * hold + 0.05; b.shotCd = cd + AF_BOW.nockSlow * (1 - afBowSk(b)); b.noLineT = 0; return true; }
+  afNoLine(b, t.x, t.z, K); return false;
+}
+function afNoLine(b, tx, tz, K) {                           // no line on (tx,tz) past the stone K: sidestep away from the stone's side, and look again shortly
+  const dx = tx - b.x, dz = tz - b.z, d = Math.hypot(dx, dz) || 1e-4, side = (K.x - b.x) * (dz / d) - (K.z - b.z) * (dx / d);
+  b.noLineT = 0.35; b.losSide = side >= 0 ? -1 : 1; b.shotCd = Math.min(b.shotCd, 0.25);
+}
+function afArcherSidestep(b, ux, uz, dt, w) {              // while the line is blocked: a step across the line of the mark, away from the stone's side
+  if (!(b.noLineT > 0)) return; b.noLineT -= dt; const I = b.inp; I.mx += uz * b.losSide * w; I.mz += -ux * b.losSide * w;
+}
 function afArcherRetreat(b, T) {                            // give ground: away from every foe within bowNear+3, and away from the ENEMY's mass (toward our own
   let rx = 0, rz = 0; const R2 = (AF_TACT.bowNear + 3) ** 2;   // centre was wrong once the lines had met — it walked the bowmen straight into their own melee)
   for (const o of AF.bodies) { if (o.dead || o.team === b.team) continue; const ox = b.x - o.x, oz = b.z - o.z, d2 = ox * ox + oz * oz; if (d2 > R2 || d2 < 1e-4) continue; const d = Math.sqrt(d2), w = 1 / Math.max(1, d); rx += ox / d * w; rz += oz / d * w; }
@@ -18638,11 +19388,40 @@ function afArcherRoom(b) {
     for (let ox = -rad; ox <= rad; ox++) for (let oz = -rad; oz <= rad; oz++) { const arr = g.get((gx + ox) + ':' + (gz + oz)); if (arr) for (const o of arr) one(o); } }
   const m = Math.hypot(sx, sz); if (m > 1) { sx /= m; sz /= m; } return [sx, sz];
 }
-function afAiSwing(b, heavy) { b.aiHoldT = heavy ? AF_F.chargeMax + 0.05 : 0.06; b.guardUp = Math.random() < 0.15 + b.skill * 0.85; } // (guardUp: does he raise the guard again between blows?)
+// THE HORSE ARCHER (an archer who took a loose horse — no seat in the lobby fields one): he never charges home.
+// He rides a ring round his mark at a canter, `AF_TACT.hbNear`–`hbFar` out, loosing across his own line the whole
+// way round (the rider's aim twists ±115°, so a mark on the beam is an easy shot); closing on a foe that comes
+// inside `hbNear`, he opens the ring rather than turning the horse on the spot, and a foe at his stirrup makes him
+// draw steel (the prefBow swap above) — the cavalry cycle takes over with the sword and hands back when clear.
+function afHorseArcher(b, t, d, ux, uz, sx, sz, busy, dt) {
+  const I = b.inp, TT = AF_TACT, R0 = AF_F.radius, nearWall = Math.hypot(b.x, b.z) > R0 - 8;
+  b.shotCd -= dt;
+  b.strafeT -= dt; if (b.strafeT <= 0) { b.strafeT = 4 + Math.random() * 4; if (Math.random() < 0.35) b.strafe = -b.strafe; }   // (one way round for a good while — a horse doesn't fidget)
+  const tx = -uz * b.strafe, tz = ux * b.strafe;             // the ring's tangent
+  let hx, hz;
+  if (nearWall) { const cx = -b.x, cz = -b.z, cd = Math.hypot(cx, cz) || 1; hx = cx / cd + tx * 0.5; hz = cz / cd + tz * 0.5; }   // off the wall: bend the ring back toward the middle
+  else if (d > TT.hbFar) { hx = ux * 0.8 + tx * 0.6; hz = uz * 0.8 + tz * 0.6; }   // too far: spiral in
+  else if (d < TT.hbNear) { hx = -ux * 0.7 + tx * 0.8; hz = -uz * 0.7 + tz * 0.8; }   // too close: spiral out (never a pivot at the foe)
+  else { hx = tx; hz = tz; }
+  const hm = Math.hypot(hx, hz) || 1; hx /= hm; hz /= hm;
+  const want = Math.atan2(hx, hz);
+  I.yaw = b.yaw + clamp(angleDelta(b.yaw, want), -1.2, 1.2); I.mx = Math.sin(b.yaw) * TT.hbPace + sx * 0.3; I.mz = Math.cos(b.yaw) * TT.hbPace + sz * 0.3;   // heels in along the facing; the reins bend it
+  if (b.shotCd <= 0 && !busy && d > 5 && d < TT.bowShot) afArcherLoose(b, t, 0.55 + b.skill * 0.35, 1.5 + Math.random() * 1.2 * (1.3 - b.skill * 0.5));   // a shorter draw than a man standing — he's moving
+  b.cav = 'ring';
+}
+function afRemoteLegs(b, dt, rest) {                        // a remote rider's horse keeps its stride under him while he draws (a foot archer plants his feet)
+  if (b.mounted && (b.rsp || 0) > 0.4) { b.parts.mount.userData.rig.speed01 = clamp((b.rsp || 0) / (AF_F.move * AF_F.horseSpeed * 1.3), 0, 1); walkLegs(b.parts, b.phase += dt * (3 + 2.4 * (b.rsp || 0)), 0.6); }
+  else restLegs(b.parts, dt, rest);
+}
+function afAiSwing(b, heavy) { if (heavy) b.aiHoldT = AF_F.chargeMax + 0.05; else { b.aiHoldT = 0; b.inp.atk = (b.inp.atk | 0) + 1; } b.holdBlock = 0; b.guardUp = Math.random() < 0.15 + b.skill * 0.85; }   // a light is a TAP, as quick as a player's (a 0.06 s hold was three frames slower: every race for the first blow went to the man with the mouse); committing to the blow drops the guard // (guardUp: does he raise the guard again between blows?)
 function afThink(b, dt) {
   const I = b.inp, F = AF_F; I.mx = 0; I.mz = 0; I.block = false;
   if (b.aiHoldT > 0) { b.aiHoldT -= dt; I.hold = true; } else I.hold = false;
-  const busy = b.atk || b.charge || b.aiHoldT > 0;
+  // reeling, staggered, locked on a guard, mid-roll or ridden down: the body can't act on a decision, and a swing
+  // decided now was simply LOST — the press expired before the hands were free, but the pause after it still ran.
+  // Under a chain of blows that made a champion swing once in a long while. He reads on; he decides when he can.
+  const locked = b.flinch > 0 || b.stagger > 0 || b.clashT > 0 || b.dodgeT > 0 || b.downT > 0;
+  const busy = b.atk || b.charge || b.aiHoldT > 0 || locked;
   const t = b.target && !b.target.dead ? b.target : null;
   if (!b.mounted && !busy && AF.horses.length && b.stagger <= 0) {   // a loose horse within reach and no foe at his throat: go and take it
     const near = t ? Math.hypot(t.x - b.x, t.z - b.z) : 99;
@@ -18655,12 +19434,17 @@ function afThink(b, dt) {
   if (!t) { const [sx, sz] = afSepFrom(b, 2.4); I.mx = sx; I.mz = sz; return; }
   const dx = t.x - b.x, dz = t.z - b.z, d = Math.hypot(dx, dz) || 1e-4, ux = dx / d, uz = dz / d;
   const [sx, sz] = afSepFrom(b, 2.6);
+  if (b.prefBow && !busy) {                                 // an archer draws steel when a foe is in his face, and the bow again once clear
+    const near = b.mounted ? 3 : 4.2, clear = b.mounted ? 6.5 : 11;   // (in the saddle the foe has to be at his stirrup, and a few strides of open sand give him the bow back — a horse archer lives by it)
+    if (b.weapon === 'bow' && d < near) I.swap++;           // (ahead of the orders: a man holding his place in the line, or a rider at his mark, still changes hands —
+    else if (b.weapon === 'sword' && d > clear && (b.mounted || b.hp > b.maxHp * 0.3)) I.swap++;   // below the orders' early returns he was stuck with the sword until the charge)
+  }
   // ORDERS: until the captain releases the charge, a man keeps his place in the line and only fights what
   // reaches him (the battle editor's leash rule); riders ride to their flanking mark; a fallback is a guarded walk home
   const T = AF.teams && AF.teams[b.team];
   const ord = T ? (b.mounted ? T.riderOrder : T.order) : 'charge';
-  const bow = b.weapon === 'bow' && !b.mounted;
-  if (ord !== 'charge' && !busy && !(bow && d < AF_TACT.bowNear)) {   // (an archer with a foe inside bowNear leaves his place and gives ground — below)
+  const bow = b.weapon === 'bow' && !b.mounted, horseBow = b.mounted && b.weapon === 'bow';
+  if (ord !== 'charge' && !busy && !(bow && d < AF_TACT.bowNear) && !horseBow) {   // (an archer with a foe inside bowNear leaves his place and gives ground — below; a HORSE ARCHER is a skirmisher: no order holds him at a mark, he rings the enemy from the first — afHorseArcher)
     if (ord === 'flank' && T.wp) {
       const mk = b.flankMark || T.wp, wx = mk.x - b.x, wz = mk.z - b.z, wd = Math.hypot(wx, wz) || 1e-4;
       if (d > 8) {                                           // (a foe riding at the squadron is met, not watched)
@@ -18672,11 +19456,11 @@ function afThink(b, dt) {
       const slot = afFormationSlot(T, b), slx = slot.x - b.x, slz = slot.z - b.z, sd = Math.hypot(slx, slz);
       const reach = F.reach + (b.reachBonus || 0) + (b.mounted ? F.horseReach : 0);
       const inFace = d <= reach * 1.25, pressing = d < 4 && ord === 'advance';
-      if (ord === 'fallback') { if (sd > 1) { I.mx = slx / sd + sx; I.mz = slz / sd + sz; } I.yaw = d < 9 ? Math.atan2(dx, dz) : T.face; I.block = d < 4.5 && b.weapon !== 'bow'; if (b.weapon === 'bow' && d > 6 && d < AF_TACT.bowShot && b.shotCd <= 0) { b.aiHoldT = 0.45; b.shotCd = 1.9 + Math.random(); } b.shotCd -= dt; return; }
+      if (ord === 'fallback') { if (sd > 1) { I.mx = slx / sd + sx; I.mz = slz / sd + sz; } I.yaw = d < 9 ? Math.atan2(dx, dz) : T.face; I.block = d < 4.5 && b.weapon !== 'bow'; if (b.weapon === 'bow' && d > 6 && d < AF_TACT.bowShot && b.shotCd <= 0) afArcherLoose(b, t, 0.6, 1.9 + Math.random()); b.shotCd -= dt; return; }
       if (!inFace && !pressing) {
         if (sd > 0.5) { const pace = ord === 'advance' ? AF_TACT.walk + 0.15 : 1; I.mx = slx / sd * pace + sx * 0.5; I.mz = slz / sd * pace + sz * 0.5; }
         I.yaw = d < 12 ? Math.atan2(dx, dz) : T.face;
-        if (b.weapon === 'bow') { b.shotCd -= dt; if (d > 6 && d < AF_TACT.bowShot && b.shotCd <= 0 && !busy) { b.aiHoldT = 0.35 + b.skill * 0.4; b.shotCd = 1.7 + Math.random() * 1.2; } }
+        if (b.weapon === 'bow') { b.shotCd -= dt; if (d > 6 && d < AF_TACT.bowShot && b.shotCd <= 0 && !busy) afArcherLoose(b, t, 0.7 + b.skill * 0.3, 1.7 + Math.random() * 1.2); }   // (a man holding his place in the line doesn't wander for a line: no shot until the stone or the foe moves)
         return;
       }
     }
@@ -18691,10 +19475,6 @@ function afThink(b, dt) {
   I.yaw = Math.atan2(dx, dz);
   b.strafeT -= dt; if (b.strafeT <= 0) { b.strafeT = 0.8 + Math.random() * 1.4; b.strafe = Math.random() < 0.5 ? -1 : 1; }
   const tx = -uz * b.strafe, tz = ux * b.strafe;             // tangent around the mark
-  if (b.prefBow && !busy) {                                 // an archer draws steel when a foe is in his face, and the bow again once clear
-    if (b.weapon === 'bow' && d < 4.2) I.swap++;
-    else if (b.weapon === 'sword' && d > 11 && b.hp > b.maxHp * 0.3) I.swap++;
-  }
   if (b.mounted) {
     // CAVALRY IS A CYCLE, not a dogfight: CHARGE straight at the mark, strike in passing, ride OUT through and past
     // the press until the ground is clear, WHEEL round in a wide arc, and charge again. (Steering at a man inside the
@@ -18702,6 +19482,7 @@ function afThink(b, dt) {
     const reach = F.reach + F.horseReach, R0 = AF_F.radius;
     const foeNear = r => { for (const o of AF.bodies) if (!o.dead && o.team !== b.team && Math.abs(o.x - b.x) < r && Math.abs(o.z - b.z) < r && Math.hypot(o.x - b.x, o.z - b.z) < r) return o; return null; };
     if (!b.atk && !b.charge) b.aimYaw = Math.atan2(dx, dz);   // his eyes (and his sword arm) on his mark, whichever way the horse is going
+    if (b.weapon === 'bow') { afHorseArcher(b, t, d, ux, uz, sx, sz, busy, dt); return; }   // an archer in the saddle: the ring and the shot, not the charge
     const strikeInPassing = () => { if (busy || b.cd > 0) return; const fx = Math.sin(b.yaw), fz = Math.cos(b.yaw);
       for (const o of AF.bodies) { if (o.dead || o.team === b.team) continue; const ox = o.x - b.x, oz = o.z - b.z, od = Math.hypot(ox, oz); if (od < reach && (ox * fx + oz * fz) / (od || 1) > -0.3) { b.aimYaw = Math.atan2(ox, oz); afAiSwing(b, false); b.cd = 0.4 + Math.random() * 0.3; return; } } };   // (a cut to either flank as he passes)
     const nearWall = Math.hypot(b.x, b.z) > R0 - 7;
@@ -18733,9 +19514,10 @@ function afThink(b, dt) {
   if (b.weapon === 'bow') {                                  // archers keep their distance, loose, and drift sideways between shots
     b.shotCd -= dt;
     const canShoot = b.shotCd <= 0 && !busy, TT = AF_TACT, [wx, wz] = afArcherRoom(b);   // (room: away from his own swordsmen — a bowman in the press is neither seen nor useful)
-    if (d < TT.bowNear) { const [rx, rz] = afArcherRetreat(b, T); I.mx = rx + sx * 0.5 + wx; I.mz = rz + sz * 0.5 + wz; if (canShoot && d > 3) { b.aiHoldT = 0.3; b.shotCd = 1.1 + Math.random() * 0.8; } } // give ground — but a swordsman who keeps coming gets shot in the face
-    else if (d > TT.bowFar) { I.mx = ux * 0.8 + sx + wx; I.mz = uz * 0.8 + sz + wz; if (canShoot && d < TT.bowShot) { b.aiHoldT = 0.35 + b.skill * 0.4; b.shotCd = 1.7 + Math.random() * 1.2 * (1.3 - b.skill * 0.5); } } // close to a decisive range, loosing on the way
-    else { I.mx = tx * 0.25 + sx + wx; I.mz = tz * 0.25 + sz + wz; if (canShoot) { b.aiHoldT = 0.35 + b.skill * 0.4; b.shotCd = 1.7 + Math.random() * 1.2 * (1.3 - b.skill * 0.5); } } // a longer draw for the better archer
+    if (d < TT.bowNear) { const [rx, rz] = afArcherRetreat(b, T); I.mx = rx + sx * 0.5 + wx; I.mz = rz + sz * 0.5 + wz; if (canShoot && d > 3) afArcherLoose(b, t, 0.45, 1.1 + Math.random() * 0.8); } // give ground — but a swordsman who keeps coming gets shot in the face
+    else if (d > TT.bowFar) { I.mx = ux * 0.8 + sx + wx; I.mz = uz * 0.8 + sz + wz; if (canShoot && d < TT.bowShot) afArcherLoose(b, t, 0.7 + b.skill * 0.3, 1.7 + Math.random() * 1.2 * (1.3 - b.skill * 0.5)); } // close to a decisive range, loosing on the way
+    else { I.mx = tx * 0.25 + sx + wx; I.mz = tz * 0.25 + sz + wz; if (canShoot) afArcherLoose(b, t, 0.7 + b.skill * 0.3, 1.7 + Math.random() * 1.2 * (1.3 - b.skill * 0.5)); } // a longer draw for the better archer
+    afArcherSidestep(b, ux, uz, dt, 0.9);                    // (no line on him past a stone: step across for one instead of loosing into the rock)
     return;
   }
   // hurt and pressed: back off toward the team, guard up, and let the poise come back
@@ -18746,16 +19528,21 @@ function afThink(b, dt) {
   if (t.mounted && !b.mounted && t.sp01 > 0.5 && d < 7 && facingMe > 0.6 && b.reactedTo !== t && Math.random() < b.skill * b.skill * 0.9) { b.reactedTo = t; I.dodge++; I.mx = tx; I.mz = tz; return; } // a charge is coming: roll out of its line
   // XP decides how early he SEES it: a green man never reads a raised arm, only the blade once it moves — and late
   const sk01 = b.skill, swing = t.atk && !t.atk.hit && !t.atk.bow ? t.atk : null;
-  const incoming = swing || (sk01 >= 0.45 ? t.charge : null);                      // a raised arm, loading — or the swing itself
+  // a man MID-CHAIN (a light landed, the next tap is coming) is as readable as a raised arm: a tapped light lands 0.06 s
+  // after the press, too fast for anyone to see — but the rhythm of the chain isn't, and a soldier or better gets the
+  // guard up for the second and third blow (this is what stops button-mashing from stun-locking him to death)
+  const chainOn = !swing && !t.charge && t.combo > 0 && t.comboT > 0 && t.weapon !== 'bow' && t.flinch <= 0 && t.stagger <= 0 && t.clashT <= 0 && t.cd <= 0.1;   // (a man reeling, locked on my guard or resting throws no next blow: that is the moment to hit HIM)
+  if (chainOn && (!b.chainInc || b.chainInc.n !== t.combo)) b.chainInc = { n: t.combo, chain: true };
+  const incoming = swing || (sk01 >= 0.45 ? (t.charge || (chainOn ? b.chainInc : null)) : null);   // a raised arm, loading — the swing itself — or the chain between blows
   if (incoming !== b.seenInc) { b.seenInc = incoming; b.seenIncT = 0; } else if (incoming) b.seenIncT += dt;
-  if (incoming && d < 3.8 && facingMe > 0.3 && b.reactedTo !== incoming && b.seenIncT >= lerp(0.42, 0.05, sk01)) {
+  if (incoming && d < 3.8 && facingMe > 0.3 && b.dodgeT <= 0 && b.reactedTo !== incoming && b.seenIncT >= lerp(0.42, 0.05, sk01)) {   // (not mid-roll: the roll IS the answer)
     b.reactedTo = incoming;
     const r = Math.random(), A = b.A || AF_ARCH.swordsman, sk = lerp(0.15, 1.15, sk01);
     if (t.charge && t.charge.heavyPose || (t.atk && t.atk.heavy)) { if (r < (A.dodge * 1.3 + A.block * 0.2) * sk) I.dodge++; }   // a loaded blow: roll (a guardsman may still trust the shield)
-    else if (r < A.block * sk) b.holdBlock = ((t.atk ? t.atk.wind : Math.max(0.1, F.chargeMax - t.charge.t)) + 0.25) * (sk01 < 0.5 ? 0.45 + Math.random() * 0.8 : 1);   // guard up until the blow should land (a green man drops it too soon)
+    else if (r < A.block * sk) b.holdBlock = ((t.atk ? t.atk.wind : t.charge ? Math.max(0.1, F.chargeMax - t.charge.t) : 0.3) + 0.25) * (sk01 < 0.5 ? 0.45 + Math.random() * 0.8 : 1);   // guard up until the blow should land (a green man drops it too soon; mid-chain: the next tap is ~0.3 s out)
     else if (r < (A.block + A.dodge) * sk) I.dodge++;
   }
-  if (b.holdBlock > 0) { b.holdBlock -= dt; I.block = true; }
+  if (b.holdBlock > 0) { b.holdBlock -= dt; if (b.charge && b.charge.heavyPose) b.holdBlock = 0; else { I.block = true; if (b.aiHoldT > 0) { b.aiHoldT = 0; I.hold = false; } } }   // the guard comes up and a light load is let go; a heavy already coiled comes anyway (he's armoured)
   const A = b.A || AF_ARCH.swordsman;
   if (A.wall) {                                            // the SHIELD WALL: a guardsman edges toward the nearest fellow guardsman and holds his guard between swings
     let mate = null, md = 1e9; for (const o of AF.bodies) { if (o === b || o.dead || o.team !== b.team || !(o.A && o.A.wall)) continue; const dd = Math.hypot(o.x - b.x, o.z - b.z); if (dd < md) { md = dd; mate = o; } }
@@ -18780,14 +19567,18 @@ function afThink(b, dt) {
     if ((behind || open) && d <= reach * 1.05 && b.cd <= 0 && !busy) { afAiSwing(b, false); b.cd = 0.5 + Math.random() * 0.4; }
     return;
   }
-  if (d > reach * 0.9) {                                     // close in — a charge when far, a wary circling approach near contact
+  if (d > reach * lerp(0.9, 1.2, sk01)) {                    // close in — a charge when far, a wary circling approach near contact (a veteran strikes from the edge of reach: the lunge covers the last pace, a recruit walks onto the blade)
     const circ = d < 4.5 ? A.circ * lerp(0.3, 1, sk01) : 0.12, pace = d > 7 ? 1 : 0.85;   // a recruit walks straight onto the blade
     I.mx = (ux + tx * circ) * pace + sx * 1.2; I.mz = (uz + tz * circ) * pace + sz * 1.2;
     if (open && d <= reach * 1.3 && b.cd <= 0 && !busy) { afAiSwing(b, false); b.cd = 0.4; }   // he's open and a lunge covers the gap
     return;
   }
-  if (busy) return;
-  if (open && b.cd <= 0) { afAiSwing(b, false); b.cd = 0.35 + Math.random() * 0.3; return; }   // punish the follow-through
+  if (b.atk && b.atk.hit && !b.atk.heavy && !b.atk.last && !b.atk.bow && !b.queued && !b.atk.chainRoll) {   // his light landed and the foe reels: a skilled man FOLLOWS it — the same three-blow chain a player has, with the same rest at the end
+    b.atk.chainRoll = true;
+    if ((t.flinch > 0 || t.stagger > 0) && d < reach * 1.3 && Math.random() < lerp(-0.2, 1, sk01)) b.queued = true;
+  }
+  if (busy || b.holdBlock > 0) return;                     // (behind a raised guard nothing is decided: the guard drops, then the riposte)
+  if (open && b.cd <= 0) { afAiSwing(b, t.atk && t.atk.last && sk01 > 0.55 && Math.random() < sk01); b.cd = lerp(0.5, 0.1, sk01) + Math.random() * 0.25; return; }   // punish the follow-through — a whole chain spent, and a veteran answers with the HEAVY (the guard that meets it breaks)
   if (b.cd <= 0) {
     const guarded = t.blocking && facingMe > 0.15;
     if (guarded && Math.random() < 0.2 + sk01 * 0.8) { if (Math.random() < 0.55 + b.skill * 0.3) afAiSwing(b, true); else { I.mx = tx * 0.9 + sx; I.mz = tz * 0.9 + sz; b.cd = 0.25; return; } } // crack it or go around it (a recruit just swings into the shield)
@@ -18833,7 +19624,7 @@ function afReadLocalInput() {
 
 // ---- the sim tick (host / solo): brains, drives, arrows, resolution ----
 function afTick(dt) {
-  if (AF.over) { for (const b of AF.bodies) if (b.dead) afStepDead(b, dt); for (const h of AF.horses) if (h.dead) afStepHorseDead(h, dt); return; }   // the fight is decided, but the last man cut down still falls
+  if (AF.over) { for (const b of AF.bodies) { if (b.dead) afStepDead(b, dt); else if (AF.victory) afVictoryBody(b, dt); } for (const h of AF.horses) if (h.dead) afStepHorseDead(h, dt); return; }   // the fight is decided, but the last man cut down still falls — and the rest hold where they stand
   afRebuildGrid();
   if ((AF.assignT = (AF.assignT || 0) - dt) <= 0) { afAssignTargets(); AF.assignT = 0.3; }
   if (AF.teams) for (const T of AF.teams) afCaptainThink(T, dt);
@@ -18901,7 +19692,7 @@ function afReportResult() {                                // the host (or a sol
     players.push({ handle: b.kind === 'host' ? afSession() : b.name, team: b.team, kills: b.kills, dmg: Math.round(b.dmgDealt || 0), alive: !b.dead, star: b === best, enemyPower: +(AF.teamPower ? AF.teamPower[b.team] : 1).toFixed(2),
       skills: { sword: b.swordHits | 0, bow: b.bowHits | 0, riding: Math.floor((b.rideT || 0) / 10) } }); }
   if (!players.length) return;
-  window.net.arenaResult({ seed: String(AF.seed), winner: AF.winner, players }).then(r => { AF.reward = r && r.ok ? (r.rewards[afSession()] || { error: 'no purse for you this time' }) : { error: (r && r.error) || 'the war-net kept no record of this fight' }; afEndRewards(); if (r && r.ok) afCareerLoad(); });
+  AF.reportP = window.net.arenaResult({ seed: String(AF.seed), winner: AF.winner, venue: AF.cfg.venue, players }).then(r => { AF.reward = r && r.ok ? (r.rewards[afSession()] || { error: 'no purse for you this time' }) : { error: (r && r.error) || 'the war-net kept no record of this fight' }; afEndRewards(); if (r && r.ok) afCareerLoad(); });
 }
 function afAwaitReward(tries) {                            // a guest: the host's report lands on the server a moment after the bell
   if (!afSession() || !window.net || !window.net.arenaCareer) return; tries = tries || 0;
@@ -18924,19 +19715,22 @@ function afEndRewards() { const el = document.getElementById('af-rewards'); if (
 function afFinish(winner, standings) {
   AF.over = true; AF.phase = 'over'; AF.winner = winner; AF.standings = standings || afStandings();
   if (AF.role !== 'guest') { const st = afStarOf(); AF.starName = st ? st.name : null; }
-  if (AF.role === 'host') afSend({ k: 'over', winner, standings: AF.standings, star: AF.starName });
+  if (AF.role === 'host') afSend({ k: 'over', winner, standings: AF.standings, star: AF.starName, ledger: afLedger() });
   if (AF.role !== 'guest') afReportResult(); else afAwaitReward();
   const mine = AF.me ? AF.me.team : -1;
   afBanner(winner < 0 ? 'DRAW' : winner === mine ? 'VICTORY' : AF_TEAMS[winner].name + ' WINS', winner === mine ? 'your team holds the pit' : winner < 0 ? 'the bell rang on a stalemate' : 'the pit belongs to them', 3.5);
   try { document.exitPointerLock && document.exitPointerLock(); } catch (e) {}
-  setTimeout(afEndPanel, 1600);
+  afVictoryStart();                                          // the living freeze where they stand, the winners' blades go up (afVictoryBody)
+  if (!AF.leaving && !AF.hurry && !AF.outroOff && afOutroStart()) return;   // the film ends on the panel; skipped, hurried or off: the panel as before
+  setTimeout(() => { if (!AF.leaving) afEndPanel(); }, 1600);
 }
 
 // ---- guest side: drive my own body, interpolate everyone else, apply the host's truth ----
 function afGuestTick(dt) {
   for (const b of AF.bodies) {
-    if (b === AF.me && !b.dead) { afDrive(b, dt, false); continue; }
     if (b.dead) { afStepDead(b, dt); continue; }
+    if (AF.over && AF.victory) { afVictoryBody(b, dt); continue; }   // after the bell everyone holds his spot (the host's states are stale by then)
+    if (b === AF.me && !b.dead) { afDrive(b, dt, false); continue; }
     if (!b.remoteSeen) { afCommit(b, dt); continue; }
     const k = clamp(dt * 14, 0, 1), ox = b.x, oz = b.z;
     b.x = lerp(b.x, b.tx, k); b.z = lerp(b.z, b.tz, k);
@@ -18964,14 +19758,14 @@ function afApplyRemotePose(b, dt) {
     case 4: setPose(b.anim, 'guard', 0.15); restLegs(b.parts, dt, true); break;
     case 5: case 11: setPose(b.anim, 'hurt', 0.06); restLegs(b.parts, dt, true); break;
     case 6: setPose(b.anim, 'block', 0.1); restLegs(b.parts, dt, true); break;
-    case 7: case 14: b.rollT += dt; b.rollSide = s === 14 ? -1 : 1; afRollPose(b, clamp(b.rollT / AF_F.dodge.dur, 0, 1), dt); break;
+    case 7: b.rollT += dt; b.rollRel = (b.tmove || 0) / 100; afRollPose(b, clamp(b.rollT / AF_F.dodge.dur, 0, 1), dt); break;   // (tmove carries the heading, in hundredths of a radian)
     case 12: restLegs(b.parts, dt, true); break;              // blades locked — hold whatever the blade was doing
     case 13: b.tiltX = -1.35; b.roll = 0.45; setPose(b.anim, 'hurt', 0.08); restLegs(b.parts, dt, true); break;   // ridden down
-    case 9: setPose(b.anim, 'aimBow', 0.1); restLegs(b.parts, dt, false); break;
-    case 10: setPose(b.anim, 'looseBow', 0.05); restLegs(b.parts, dt, false); break;
+    case 9: setPose(b.anim, 'aimBow', 0.1); afRemoteLegs(b, dt, false); break;
+    case 10: setPose(b.anim, 'looseBow', 0.05); afRemoteLegs(b, dt, false); break;
     default: setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.2); restLegs(b.parts, dt, true);
   }
-  if (s !== 7 && s !== 14) { b.rollT = 0; b.rollAng = 0; b.rollSq = 0; }
+  if (s !== 7) { b.rollT = 0; b.rollAng = 0; b.rollSq = 0; }
 }
 function afApplySnap(s) {
   if (s.ph === 'fight' && (AF.phase === 'countdown' || AF.phase === 'intro')) { if (AF.phase === 'intro') afIntroEnd(); AF.phase = 'fight'; AF.countdown = 0; afBanner('FIGHT', '', 1.0); afCrowdReact(false); }   // the host's bell rang while we were still watching the entrance
@@ -19042,7 +19836,7 @@ function afNetTick(dt) {
   if (AF.role === 'host') {
     AF.snapAcc += dt; if (AF.snapAcc < AF_NET.snapDt) return; AF.snapAcc = 0;
     const rows = [];
-    for (const b of AF.bodies) rows.push([b.idx, Math.round(b.x * 100), Math.round(b.z * 100), Math.round(b.yaw * 100), Math.round(b.hp), afStateCode(b), b.atk ? b.atk.move : b.charge ? (b.charge.heavyPose ? 3 : b.chargeMove) : 0, b.kills, b.weapon === 'bow' ? 1 : 0, b.mounted ? Math.round(angleDelta(b.yaw, afAimOf(b)) * 100) : 0]);
+    for (const b of AF.bodies) rows.push([b.idx, Math.round(b.x * 100), Math.round(b.z * 100), Math.round(b.yaw * 100), Math.round(b.hp), afStateCode(b), b.dodgeT > 0 ? Math.round((b.rollRel || 0) * 100) : b.atk ? b.atk.move : b.charge ? (b.charge.heavyPose ? 3 : b.chargeMove) : 0, b.kills, b.weapon === 'bow' ? 1 : 0, b.mounted ? Math.round(angleDelta(b.yaw, afAimOf(b)) * 100) : 0]);
     const hs = AF.horses.map(h => [h.id, Math.round(h.x * 100), Math.round(h.z * 100), Math.round(h.yaw * 100), Math.round(h.hp), h.rider ? h.rider.idx : -1, h.dead ? 1 : 0]);
     afSend({ k: 'snap', t: +AF.t.toFixed(2), ph: AF.phase, b: rows, h: hs, ev: AF.events });
     AF.events = [];
@@ -19050,7 +19844,7 @@ function afNetTick(dt) {
     AF.events = [];
     AF.inAcc += dt; if (AF.inAcc < AF_NET.inDt) return; AF.inAcc = 0;
     const I = AF.locIn;
-    afSend({ k: 'in', mx: +I.mx.toFixed(2), mz: +I.mz.toFixed(2), yaw: +I.yaw.toFixed(3), st: I.steer == null ? null : +I.steer.toFixed(2), th: I.thr == null ? null : +I.thr.toFixed(2), hy: AF.me && AF.me.mounted ? +AF.me.yaw.toFixed(3) : null, atk: I.atk, heavy: I.heavy, dodge: I.dodge, roll: I.rollDir || 0, block: I.block ? 1 : 0, hold: I.hold ? 1 : 0, swap: I.swap });
+    afSend({ k: 'in', mx: +I.mx.toFixed(2), mz: +I.mz.toFixed(2), yaw: +I.yaw.toFixed(3), st: I.steer == null ? null : +I.steer.toFixed(2), th: I.thr == null ? null : +I.thr.toFixed(2), hy: AF.me && AF.me.mounted ? +AF.me.yaw.toFixed(3) : null, atk: I.atk, heavy: I.heavy, dodge: I.dodge, roll: I.rollDir == null ? null : +I.rollDir.toFixed(2), block: I.block ? 1 : 0, hold: I.hold ? 1 : 0, swap: I.swap });
   } else AF.events = [];
 }
 // the START must reach every player: a phone that was switching apps (or asleep on a dead socket) when the host
@@ -19070,17 +19864,17 @@ function afOnFightMsg(m) {
     const e = AF.roster.find(x => x.kind === 'player' && x.peer === m.from); if (!e) return;     // (not one of this fight's players)
     if (d.k === 'go-ack') { if ((d.seed >>> 0) === AF.seed && AF.goAcks) AF.goAcks.add(m.from); return; }
     if ((d.seed >>> 0) !== AF.seed) afSend(afGoSpecNow(), m.from);                              // they never saw this fight start: send it now
-    else if (AF.over) afSend({ k: 'over', winner: AF.winner, standings: AF.standings }, m.from); // they missed the final bell
+    else if (AF.over) afSend({ k: 'over', winner: AF.winner, standings: AF.standings, star: AF.starName, ledger: afLedger() }, m.from); // they missed the final bell
     return;
   }
   if (AF.role === 'host' && d.k === 'in') {
     let inp = AF.inputs.get(m.from);
     if (!inp) { inp = afFreshInput(); AF.inputs.set(m.from, inp); const b = AF.bodies.find(x => x.peer === m.from); if (b) b.inp = inp; }
     inp.mx = +d.mx || 0; inp.mz = +d.mz || 0; inp.yaw = +d.yaw || 0; inp.steer = d.st == null ? null : +d.st || 0; inp.thr = d.th == null ? null : +d.th || 0;
-    if (d.hy != null) { const hb = inp.body && inp.body.peer === m.from ? inp.body : (inp.body = AF.bodies.find(x => x.peer === m.from)); if (hb && hb.mounted && !hb.dead) hb.yaw = angleLerp(hb.yaw, +d.hy || 0, 0.7); } // a horse's heading is steered, not aimed: the rider's own screen owns it, or the two copies drift apart inp.atk = d.atk | 0; inp.heavy = d.heavy | 0; if ((d.dodge | 0) !== inp.dodge) inp.rollDir = d.roll || 0; inp.dodge = d.dodge | 0; inp.block = !!d.block; inp.hold = !!d.hold; inp.swap = d.swap | 0;
+    if (d.hy != null) { const hb = inp.body && inp.body.peer === m.from ? inp.body : (inp.body = AF.bodies.find(x => x.peer === m.from)); if (hb && hb.mounted && !hb.dead) hb.yaw = angleLerp(hb.yaw, +d.hy || 0, 0.7); } // a horse's heading is steered, not aimed: the rider's own screen owns it, or the two copies drift apart inp.atk = d.atk | 0; inp.heavy = d.heavy | 0; if ((d.dodge | 0) !== inp.dodge) inp.rollDir = d.roll == null ? null : +d.roll; inp.dodge = d.dodge | 0; inp.block = !!d.block; inp.hold = !!d.hold; inp.swap = d.swap | 0;
   } else if (AF.role === 'guest') {
     if (d.k === 'snap') afApplySnap(d);
-    else if (d.k === 'over' && !AF.over) { AF.starName = d.star || null; afFinish(d.winner, d.standings); }
+    else if (d.k === 'over' && !AF.over) { AF.starName = d.star || null; if (d.ledger) d.ledger.forEach((r, i) => { const b = AF.bodies[i]; if (b) { b.kills = r[0]; b.dmgDealt = r[1]; b.dmgTaken = r[2]; } }); afFinish(d.winner, d.standings); }
     else if (d.k === 'go') { if ((d.seed >>> 0) === AF.seed) afSend({ k: 'go-ack', seed: AF.seed }); else afBoot(d); } // a re-sent start we already run: just ack it; else a rematch
   }
 }
@@ -19125,10 +19919,11 @@ function afFrame(now, noRaf) {
     afIntroStep(dt);
     if (AF.role === 'guest') afNetTick(dt);
   }
+  if (AF.outro) afOutroStep(dt);                             // the end-game film (real time, whatever the hit-stop)
   if (AF.phase !== 'intro') afStepGates(dt);                 // (the gates swing shut behind the men during the countdown)
   updateSparks(gdt); updatePopups(gdt); updateArcs(dt); updateTrails(dt); afStepSplats(dt);
   const TT = AF_TIMES[AF.cfg.time] || AF_TIMES.day;
-  for (const t of AF.torches) { const f = 0.85 + Math.sin(rtNow * 9 + t.position.x) * 0.15 + Math.random() * 0.1; t.userData.flame.scale.setScalar((t.userData.flameBase || 1) * (0.85 + f * 0.25)); if (t.userData.light) t.userData.light.intensity = (TT.torch || 1.3) * f; }
+  for (const t of AF.torches) { const f = 0.85 + Math.sin(rtNow * 9 + t.position.x) * 0.15 + Math.random() * 0.1; t.userData.flame.scale.setScalar((t.userData.flameBase || 1) * (0.85 + f * 0.25)); if (t.userData.light) t.userData.light.intensity = (TT.torch || 1.3) * f * (t.userData.lightK || 1); }   // (lightK: the pits' braziers burn low)
   afStepWeather(dt); afStepCrowd(dt);
   if (AF.me) player.pos.set(AF.me.x, 0, AF.me.z);            // the synth attenuates sounds toward the hero — in the pit that's your fighter
   if (TOUCH && window.updateTouchHud) window.updateTouchHud(); // the stick + ATK/HVY/BLOCK/DODGE set
@@ -19142,7 +19937,11 @@ function afFrame(now, noRaf) {
 function afCamInPit() {                                   // the podium wall is solid stone now: a lens behind a man at the wall slides along it instead of through it
   const c = camera.position, d = Math.hypot(c.x, c.z), lim = AF_F.radius - 0.7; if (d > lim) { const k = lim / d; c.x *= k; c.z *= k; }
 }
-function afCamOverBuilding() { const c = camera.position, top = afArchTop(Math.hypot(c.x, c.z)); if (top && c.y < top + 1.6) c.y = top + 1.6; }   // the free camera rides over the seats, never inside the shell
+function afCamOverBuilding() {
+  const c = camera.position, d = Math.hypot(c.x, c.z);
+  if (AF.cfg.venue === 'pit') { if (c.y > AF_PIT.roofY - 0.9) c.y = AF_PIT.roofY - 0.9; if (d > AF_F.radius - 0.5 && c.y < AF_PIT.lip + 2.4) c.y = AF_PIT.lip + 2.4; if (d > AF_PIT.out - 1.5) { const k = (AF_PIT.out - 1.5) / d; c.x *= k; c.z *= k; } return; }   // under the beams, over the patrons, inside the walls
+  const top = afArchTop(d); if (top && c.y < top + 1.6) c.y = top + 1.6;
+}   // the free camera rides over the seats, never inside the shell
 function afCamAboveGround(clr) {                          // the lens never sinks into a hill behind you, nor into a boulder
   const c = camera.position; let floor = afY(c.x, c.z) + clr;
   if (AF.terr.rocks.length) { const K = afRockAt(c.x, c.z, 0.3); if (K) floor = Math.max(floor, K.top + 0.4); }
@@ -19151,6 +19950,7 @@ function afCamAboveGround(clr) {                          // the lens never sink
 function afCamera(dt) {
   const me = AF.me, cam = AF.cam;
   if (AF.phase === 'intro' && AF.intro) afIntroCamera(dt);   // the entrance's own lens (afIntroStart's shot list)
+  else if (AF.outro) afOutroCamera(dt);                      // the end-game film's (afOutroCompose)
   else if (me && !me.dead) {
     const hy = afY(me.x, me.z) + 1.55, cp = Math.cos(cam.pitch);
     // OVER THE CROWD: if a body stands between you and the lens (the press behind you in a big fight), the camera
@@ -19162,11 +19962,11 @@ function afCamera(dt) {
     tmpV.set(me.x - Math.sin(cam.yaw) * dist * cp, hy + dist * Math.sin(cam.pitch) + 0.6 + lift, me.z - Math.cos(cam.yaw) * dist * cp);
     if (AF.phase === 'countdown') {                          // the SWEEP: from high over the pit down onto your shoulder as the bell nears
       const k = 1 - clamp(AF.countdown / AF_F.countdown, 0, 1), e = k * k * (3 - 2 * k), a = cam.yaw + Math.PI * 0.9 * (1 - e);
-      const r = lerp(AF_F.radius * 1.12, cam.dist, e), h = lerp(clamp(AF_F.radius * 0.55 + 6, 12, 19), tmpV.y - hy, e);   // (from over the lower rows, under the sails, down onto the shoulder)
+      const r = lerp(AF_F.radius * 1.12, cam.dist, e), h = lerp(AF.cfg.venue === 'pit' ? AF_PIT.roofY - 2.4 : clamp(AF_F.radius * 0.55 + 6, 12, 19), tmpV.y - hy, e);   // (from over the lower rows, under the sails, down onto the shoulder)
       tmpV2.set(me.x - Math.sin(a) * r, hy + h, me.z - Math.cos(a) * r);
       camera.position.copy(tmpV2); camera.lookAt(me.x, hy + 0.2, me.z);
     } else { const la = 3 * AF.camLift; camera.position.lerp(tmpV, clamp(dt * 14, 0, 1)); afCamInPit(); afCamAboveGround(0.7); camera.lookAt(me.x + Math.sin(cam.yaw) * la, hy + 0.9 * AF.camLift, me.z + Math.cos(cam.yaw) * la); } // lifted: look ahead over the fight, not down at your own helmet
-    const sp = Math.hypot(me.vx, me.vz); AF.fov = lerp(AF.fov, CAM_BASE_FOV + clamp(sp / AF_F.move, 0, 1.2) * 5, clamp(dt * 4, 0, 1)); // a run widens the lens
+    const sp = Math.hypot(me.vx, me.vz); AF.fov = lerp(AF.fov, afBaseFov() + clamp(sp / AF_F.move, 0, 1.2) * 5, clamp(dt * 4, 0, 1)); // a run widens the lens
   } else {                                                  // SPECTATING: ride on any fighter's shoulder, or a free camera over the pit
     const S = AF.spec, o = AF.orbit;
     if (S.mode === 'follow' && S.target && S.target.dead) afSpecFree();   // the man you were watching fell: the free camera takes over where he stood
@@ -19175,7 +19975,7 @@ function afCamera(dt) {
       if (performance.now() - (AF.lookAt || 0) > 2500) cam.yaw = angleLerp(cam.yaw, t.yaw, clamp(dt * 1.5, 0, 1));   // settles behind him unless you're looking round
       const cp = Math.cos(cam.pitch); tmpV.set(t.x - Math.sin(cam.yaw) * cam.dist * cp, hy + cam.dist * Math.sin(cam.pitch) + 0.6, t.z - Math.cos(cam.yaw) * cam.dist * cp);
       camera.position.lerp(tmpV, clamp(dt * 10, 0, 1)); afCamInPit(); afCamAboveGround(0.7); camera.lookAt(t.x, hy + 0.2, t.z);
-      AF.fov = lerp(AF.fov, CAM_BASE_FOV + clamp(Math.hypot(t.vx, t.vz) / AF_F.move, 0, 1.2) * 5, clamp(dt * 4, 0, 1));
+      AF.fov = lerp(AF.fov, afBaseFov() + clamp(Math.hypot(t.vx, t.vz) / AF_F.move, 0, 1.2) * 5, clamp(dt * 4, 0, 1));
     } else {
       const K = AF.keys; let f = 0, sd = 0;                   // WASD / the stick glide the focus across the sand; drag turns, wheel or −/+ zooms
       if (K.has('w')) f++; if (K.has('s')) f--; if (K.has('d')) sd++; if (K.has('a')) sd--;
@@ -19186,7 +19986,7 @@ function afCamera(dt) {
       const st = Math.sin(o.phi), orr = o.r * AF_F.radius / 34;
       tmpV.set(S.fx + orr * st * Math.sin(o.theta), 2 + orr * Math.cos(o.phi), S.fz + orr * st * Math.cos(o.theta));
       camera.position.lerp(tmpV, clamp(dt * 4, 0, 1)); afCamOverBuilding(); camera.lookAt(S.fx, 1.6, S.fz);
-      AF.fov = lerp(AF.fov, CAM_BASE_FOV, clamp(dt * 4, 0, 1));
+      AF.fov = lerp(AF.fov, afBaseFov(), clamp(dt * 4, 0, 1));
     }
     afSpecLabel();
   }
@@ -19218,6 +20018,38 @@ function afSpecLabel(force) {
   const show = AF.on && (!AF.me || AF.me.dead) && AF.phase !== 'countdown'; if (el.style.display !== (show ? 'flex' : 'none')) el.style.display = show ? 'flex' : 'none'; if (!show) return;
   const S = AF.spec, txt = S.mode === 'follow' && S.target ? S.target.name + (S.target.kind === 'npc' ? ' · ' + (S.target.A ? S.target.A.label : 'npc') : '') : 'free camera';
   const nm = document.getElementById('af-spec-name'); if (nm && (force || nm.textContent !== txt)) { nm.textContent = txt; nm.style.color = S.target ? S.target.teamDef.col : '#e8def8'; }
+  const sk = document.getElementById('af-spec-skip'), lv = document.getElementById('af-spec-leave');   // the exits: skip only when no one else is in the fight; leave until the bell (the end panel has its own)
+  const skipOk = !AF.over && !AF.leaving && !afOthersInFight(), leaveOk = !AF.over && !AF.leaving;
+  if (sk && (sk.style.display !== '') !== !skipOk) sk.style.display = skipOk ? '' : 'none';
+  if (lv && (lv.style.display !== '') !== !leaveOk) lv.style.display = leaveOk ? '' : 'none';
+}
+// other PEOPLE in this fight (a guest's host, a host's guests): the sim is theirs too, so it can't be hurried
+function afOthersInFight() { return AF.role === 'guest' || AF.roster.some(r => r.kind === 'player' && r.peer); }
+// the dead man's right: the fight resolves at once — the sim runs headless to the bell (solo only; the result still
+// reaches the war-net through afFinish → afReportResult, so the kills you made before you fell are paid)
+function afFastForward() {
+  if (!AF.on || AF.over || AF.role === 'guest' || AF.phase !== 'fight' || afOthersInFight()) return false;
+  const dt = 1 / 30, cap = Math.ceil((AF_F.timeLimit * (AF.bodies.length > AF_LIM.heroCap ? 2 : 1) - AF.t) / dt) + 90;
+  AF.hitstop = 0; AF.timeScale = 1; AF.hurry = true;        // (hurried: no end-game film, the panel comes straight up)
+  for (let i = 0; i < cap && !AF.over; i++) afTick(dt);
+  if (!AF.over) { const st = afStandings(); afFinish(st[0].alive === st[1].alive && st[0].hp === st[1].hp ? -1 : st[0].team); }
+  AF.hurry = false;
+  for (const b of AF.bodies) if (b.dead) for (let i = 0; i < 90; i++) afStepDead(b, dt); else if (AF.victory) for (let i = 0; i < 90; i++) afVictoryBody(b, dt);   // the last men cut down finish falling, the winners' blades are already up
+  for (const h of AF.horses) if (h.dead) for (let i = 0; i < 90; i++) afStepHorseDead(h, dt);
+  afSpecFree(); afSpecLabel(true);
+  return true;
+}
+function afSpecSkip() { if (afFastForward()) { const ep = document.getElementById('af-end'); if (!ep || ep.style.display !== 'block') afEndPanel(); } }
+function afSpecLeave() {
+  if (!AF.on || AF.leaving) return;
+  if (AF.over) { afLeaveToMenu(); return; }
+  if (AF.role === 'host' && afOthersInFight() && !confirm('You are the host — the fight ends for everyone in it when you leave. Leave the pit?')) return;
+  AF.leaving = true; afSpecLabel(true);
+  if (afOthersInFight()) { afLeaveToMenu(); return; }        // a guest walks out (the host hands the sword to an NPC); a host takes the fight with them
+  afFastForward();                                            // alone: resolve it first so the career keeps the fight, then go once the purse is counted
+  afBanner('LEAVING THE PIT', 'the fight runs to the bell without you · tallying the purse…', 3);
+  const rep = AF.reportP || Promise.resolve();
+  Promise.race([rep, new Promise(r => setTimeout(r, 2500))]).then(afLeaveToMenu, afLeaveToMenu);
 }
 /* ---- POST: a small pipeline of our own (three core only): scene → bright pass → separable blur → composite.
    Bloom lifts the torches, sparks, blade trails and the sun; a vignette frames the pit; the edges flush red
@@ -19271,7 +20103,7 @@ function afInstallControls() {
   const o = AF.orbit; let px = 0, py = 0;
   canvas.addEventListener('pointerdown', e => {
     if (!AF.on) return;
-    if (AF.phase === 'intro') return;                       // (the entrance: the skip button is the only control)
+    if (AF.phase === 'intro' || AF.outro) return;           // (the entrance and the end-game film: the skip button is the only control)
     if (AF.me && !AF.me.dead && AF.phase !== 'over') {
       if (locked()) { if (e.button === 2) AF.mouseRight = true; else if (e.button === 0) AF.mouseDown = true; } // left: hold to load, release to swing · right: block
       else if (!TOUCH) { try { const p = canvas.requestPointerLock(); if (p && p.catch) p.catch(() => {}); } catch (err) {} }
@@ -19297,13 +20129,15 @@ function afInstallControls() {
   }, { passive: false });
   window.addEventListener('keydown', e => {
     if (!AF.on) return;
-    if (AF.phase === 'intro') { if ((e.key === ' ' || e.key === 'Enter' || e.key === 'Escape') && !e.repeat) { e.preventDefault(); afIntroSkip(); } return; }
+    if (AF.phase === 'intro' || AF.outro) { if ((e.key === ' ' || e.key === 'Enter' || e.key === 'Escape') && !e.repeat) { e.preventDefault(); afIntroSkip(); } return; }
     const k = e.key.toLowerCase();
     if ('wasd'.includes(k) && k.length === 1) AF.keys.add(k);
     if (e.key === 'Shift') AF.keys.add('shift');
     if (k === 'f' && !e.repeat) { if (AF.me && !AF.me.dead) AF.locIn.swap++; else afSpecFree(); }   // sword <-> bow (dead: the free camera)
     if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !e.repeat && (!AF.me || AF.me.dead)) afSpecPick(e.key === 'ArrowLeft' ? -1 : 1);
-    if ((k === 'q' || k === 'e') && !e.repeat) { AF.locIn.rollDir = k === 'q' ? -1 : 1; AF.locIn.dodge++; }   // roll left / right
+    if ((k === 'q' || k === 'e') && !e.repeat) { AF.locIn.rollDir = AF.cam.yaw + (k === 'q' ? 1 : -1) * Math.PI / 2; AF.locIn.dodge++; }   // roll left / right (Space: the way you move)
+    if (e.key === 'Tab') { e.preventDefault(); if (!e.repeat) afHudOpen(); }                       // the score card opens to the full sheet (works under pointer lock)
+    if (e.key === '[' || e.key === ']') afSetFov(afBaseFov() + (e.key === '[' ? -5 : 5));          // the lens, without leaving the fight (the card has a slider too)
   });
   window.addEventListener('keyup', e => { const k = e.key.toLowerCase(); if ('wasd'.includes(k) && k.length === 1) AF.keys.delete(k); if (e.key === 'Shift') AF.keys.delete('shift'); });
   window.addEventListener('blur', () => AF.keys.clear());
@@ -19320,61 +20154,101 @@ function afInstallControls() {
     addEventListener('touchmove', e => { if (!AF.on || lookId === null) return; for (const t of e.changedTouches) if (t.identifier === lookId) { AF.lookAt = performance.now(); AF.cam.yaw -= (t.clientX - lx) * 0.0055; AF.cam.pitch = clamp(AF.cam.pitch + (t.clientY - ly) * 0.003, -0.1, 1.1); lx = t.clientX; ly = t.clientY; } }, { passive: true, capture: true });
     const end = e => { for (const t of e.changedTouches) if (t.identifier === lookId) lookId = null; };
     addEventListener('touchend', end, { capture: true }); addEventListener('touchcancel', end, { capture: true });
+    // PINCH: two fingers on the sand zoom the lens the way the wheel does on a desk — in closer, out wider. While you
+    // stand, both must be on the right half (the left thumb is the stick); dead or spectating, anywhere on the canvas.
+    let pinch = null;
+    const pinchable = e => { const out = [], alive = AF.me && !AF.me.dead; for (const t of e.touches) if (t.target === canvas && (!alive || t.clientX > innerWidth * 0.5)) out.push(t); return out; };
+    const pinchDist = (a, b) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+    addEventListener('touchstart', e => { if (!AF.on || pinch) return; const ts = pinchable(e); if (ts.length >= 2) { pinch = { a: ts[0].identifier, b: ts[1].identifier, d: pinchDist(ts[0], ts[1]) }; lookId = null; } }, { passive: true, capture: true });   // (after the look grab: the second finger ends the look)
+    addEventListener('touchmove', e => {
+      if (!AF.on || !pinch) return;
+      let a = null, b = null; for (const t of e.touches) { if (t.identifier === pinch.a) a = t; else if (t.identifier === pinch.b) b = t; } if (!a || !b) return;
+      const d = pinchDist(a, b); if (d < 1) return; const k = pinch.d / d; pinch.d = d;   // fingers apart → closer in
+      if (AF.me && !AF.me.dead) AF.cam.dist = clamp(AF.cam.dist * k, 3.5, 14); else afSpecZoom(k);
+    }, { passive: true, capture: true });
+    const pinchEnd = e => { if (!pinch) return; for (const t of e.changedTouches) if (t.identifier === pinch.a || t.identifier === pinch.b) pinch = null; };
+    addEventListener('touchend', pinchEnd, { capture: true }); addEventListener('touchcancel', pinchEnd, { capture: true });
   }
 }
 
-// ---- HUD: team tallies, your bar, the clock, the banner, the kill log, the end panel ----
+// ---- HUD: one small card top-left (score · clock · your health) that opens to the full sheet on a tap or Tab;
+// the banner, the kill log, the end panel. The user wanted the screen clear: nothing else sits on the sand but the
+// load meter under your hand and the spectator bar once you are down. ----
+function afBaseFov() { return AF.fovUser || CAM_BASE_FOV; }
+function afSetFov(v) {                                      // the lens you chose (40–100°, kept on the device); a run still widens it a touch
+  AF.fovUser = clamp(Math.round(+v) || CAM_BASE_FOV, 40, 100); try { localStorage.setItem('bv-fov', String(AF.fovUser)); } catch (e) {}
+  const r = document.getElementById('af-fov'), l = document.getElementById('af-fov-v'); if (r && +r.value !== AF.fovUser) r.value = AF.fovUser; if (l) l.textContent = AF.fovUser + '°';
+}
+function afHudOpen(v) { AF.hudOpen = v == null ? !AF.hudOpen : !!v; try { localStorage.setItem('bv-hud-open', AF.hudOpen ? '1' : '0'); } catch (e) {} afUpdateHud(true); }
 function afHud() {
   let p = document.getElementById('af-hud');
   if (!p) {
+    try { AF.hudOpen = localStorage.getItem('bv-hud-open') === '1'; } catch (e) { AF.hudOpen = false; }
+    try { const f = +localStorage.getItem('bv-fov'); if (f) AF.fovUser = clamp(f, 40, 100); } catch (e) {}
     p = document.createElement('div'); p.id = 'af-hud';
-    p.style.cssText = 'position:fixed;left:12px;top:12px;z-index:40;background:rgba(16,14,24,.82);border:1px solid #3a3247;border-radius:10px;padding:10px 14px;min-width:170px;font:13px system-ui;color:#e8def8;pointer-events:none';
+    p.style.cssText = 'position:fixed;left:10px;top:10px;z-index:40;background:rgba(16,14,24,.78);border:1px solid #3a3247;border-radius:9px;padding:5px 9px 6px;font:12px system-ui;color:#e8def8;cursor:pointer;user-select:none;-webkit-user-select:none;touch-action:manipulation;max-width:min(340px,86vw);box-sizing:border-box';
+    p.innerHTML = '<div id="af-hud-body"></div>' +
+      '<div id="af-hud-fov" style="display:none;align-items:center;gap:8px;margin-top:8px;padding-top:7px;border-top:1px solid #3a3247;font-size:11px;color:#c9bfda;cursor:default"><span>lens</span><input id="af-fov" type="range" min="40" max="100" step="1" style="flex:1;min-width:110px;margin:0;accent-color:#ffd34d"><span id="af-fov-v" style="min-width:32px;text-align:right;font-weight:700;color:#e8def8"></span></div>';
+    p.addEventListener('pointerdown', e => e.stopPropagation());
+    p.addEventListener('click', e => { e.stopPropagation(); if (e.target.closest && e.target.closest('#af-hud-fov')) return; afHudOpen(); });   // (the slider row is not a toggle)
+    p.addEventListener('input', e => { if (e.target.id === 'af-fov') afSetFov(e.target.value); });
     document.body.appendChild(p);
-    const me = document.createElement('div'); me.id = 'af-me';
-    me.style.cssText = 'position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:40;background:rgba(16,14,24,.82);border:1px solid #3a3247;border-radius:10px;padding:8px 16px;min-width:260px;font:13px system-ui;color:#e8def8;text-align:center;pointer-events:none';
-    document.body.appendChild(me);
     const ban = document.createElement('div'); ban.id = 'af-banner';
     ban.style.cssText = 'position:fixed;left:50%;top:22%;transform:translateX(-50%);z-index:41;text-align:center;pointer-events:none;opacity:0;transition:opacity .25s';
     document.body.appendChild(ban);
     const sp = document.createElement('div'); sp.id = 'af-spec';                     // the spectator bar: ◀ name ▶ · free · − +
     sp.style.cssText = 'position:fixed;left:50%;bottom:78px;transform:translateX(-50%);z-index:42;display:none;gap:6px;align-items:center;background:rgba(16,14,24,.82);border:1px solid #3a3247;border-radius:10px;padding:6px 8px;font:13px system-ui;color:#e8def8';
     const mk = (id, label, title) => '<button id="' + id + '" title="' + title + '" style="background:#2a2233;color:#f3ead8;border:1px solid #6b5e7a;border-radius:8px;padding:6px 10px;cursor:pointer;font-weight:700;touch-action:manipulation">' + label + '</button>';
-    sp.innerHTML = mk('af-spec-prev', '◀', 'previous fighter') + '<span id="af-spec-name" style="min-width:120px;text-align:center;font-weight:700"></span>' + mk('af-spec-next', '▶', 'next fighter') + mk('af-spec-free', 'Free', 'free camera — WASD / stick to glide') + mk('af-spec-out', '−', 'zoom out') + mk('af-spec-in', '+', 'zoom in');
+    sp.innerHTML = mk('af-spec-prev', '◀', 'previous fighter') + '<span id="af-spec-name" style="min-width:120px;text-align:center;font-weight:700"></span>' + mk('af-spec-next', '▶', 'next fighter') + mk('af-spec-free', 'Free', 'free camera — WASD / stick to glide') + mk('af-spec-out', '−', 'zoom out') + mk('af-spec-in', '+', 'zoom in') +
+      mk('af-spec-skip', '⏭ Skip to the end', 'you are dead — let the fight resolve at once and see the result') + mk('af-spec-leave', 'Leave', 'leave the pit now');   // a dead man is not made to watch (afSpecLabel shows/hides these)
+    sp.style.flexWrap = 'wrap'; sp.style.justifyContent = 'center'; sp.style.maxWidth = '96vw';
     document.body.appendChild(sp);
     const on = (id, fn) => { const b = document.getElementById(id); b.addEventListener('pointerdown', e => { e.stopPropagation(); }); b.addEventListener('click', e => { e.stopPropagation(); fn(); }); };
     on('af-spec-prev', () => afSpecPick(-1)); on('af-spec-next', () => afSpecPick(1)); on('af-spec-free', afSpecFree); on('af-spec-out', () => afSpecZoom(1.25)); on('af-spec-in', () => afSpecZoom(0.8));
+    on('af-spec-skip', afSpecSkip); on('af-spec-leave', afSpecLeave);
+    document.getElementById('af-spec-skip').style.background = '#3a6fd0'; document.getElementById('af-spec-skip').style.borderColor = '#3a6fd0';
     const lg = document.createElement('div'); lg.id = 'af-log';
-    lg.style.cssText = 'position:fixed;right:12px;top:12px;z-index:40;font:12px system-ui;color:#e8def8;text-align:right;pointer-events:none;text-shadow:0 1px 3px #000';
+    lg.style.cssText = 'position:fixed;right:12px;top:44px;z-index:40;font:12px system-ui;color:#e8def8;text-align:right;pointer-events:none;text-shadow:0 1px 3px #000';
     document.body.appendChild(lg);
   }
-  AF.hudEl = p; p.style.display = ''; document.getElementById('af-me').style.display = ''; document.getElementById('af-log').style.display = ''; afSpecLabel(true);
-  afUpdateHud();
+  AF.hudEl = p; p.style.display = ''; document.getElementById('af-log').style.display = ''; afSpecLabel(true);
+  afSetFov(afBaseFov());
+  afUpdateHud(true);
 }
-function afUpdateHud() {
+function afUpdateHud(force) {
   const p = AF.hudEl; if (!p || !AF.on) return;
   const tally = new Map(); for (const b of AF.bodies) { const t = tally.get(b.team) || { alive: 0, total: 0 }; t.total++; if (!b.dead) t.alive++; tally.set(b.team, t); }
   const rem = Math.max(0, AF_F.timeLimit * (AF.bodies.length > AF_LIM.heroCap ? 2 : 1) - AF.t), mm = Math.floor(rem / 60), ss = Math.floor(rem % 60);
-  let html = '<div style="display:flex;justify-content:space-between;gap:14px;margin-bottom:6px"><b style="color:#ffe089">⚔ Arena</b><span style="color:#c9bfda">' + (AF.phase === 'countdown' || AF.phase === 'intro' ? 'ready…' : mm + ':' + (ss < 10 ? '0' : '') + ss) + '</span></div>';
-  const myT = AF.teams && AF.me ? AF.teams[AF.me.team] : null, ordTxt = myT ? (myT.phase === 'form' ? 'form up' : myT.order) : AF.myOrder ? (AF.myOrder === 'form' || AF.myOrder === 'regroup' ? 'form up' : AF.myOrder) : null;
-  if (ordTxt && AF.phase === 'fight') html += '<div style="font-size:11px;color:#ffe089;margin-bottom:4px">⚑ captain: ' + ordTxt + '</div>';
-  for (let t = 0; t < AF.cfg.teams; t++) { const c = tally.get(t) || { alive: 0, total: 0 }, me = AF.me && AF.me.team === t;
-    html += '<div style="display:flex;justify-content:space-between;gap:10px;margin-top:2px' + (c.alive ? '' : ';opacity:.45') + '"><span style="color:' + AF_TEAMS[t].col + ';font-weight:800">' + AF_TEAMS[t].name + (me ? ' ◉' : '') + '</span><span style="font-weight:800">' + c.alive + '<span style="opacity:.5;font-weight:400">/' + c.total + '</span></span></div>'; }
-  p.innerHTML = html;
-  const me = document.getElementById('af-me'), b = AF.me;
-  if (me) {
+  const clock = AF.phase === 'countdown' || AF.phase === 'intro' ? 'ready…' : mm + ':' + (ss < 10 ? '0' : '') + ss;
+  const b = AF.me, hp = b ? clamp(b.hp / b.maxHp, 0, 1) : 0, open = !!AF.hudOpen;
+  const bar = h => '<div style="height:' + h + 'px;margin-top:' + (open ? 5 : 4) + 'px;border-radius:3px;background:#2a2438;overflow:hidden"><div style="height:100%;width:' + Math.round(hp * 100) + '%;background:' + (hp > 0.35 ? '#8fd08f' : '#ff6a5a') + ';transition:width .15s"></div></div>';
+  let html;
+  if (!open) {                                              // AZURE 3 / CRIMSON 1 · 2:14, your health under it
+    html = '<div style="display:flex;align-items:baseline;gap:5px;white-space:nowrap">';
+    for (let t = 0; t < AF.cfg.teams; t++) { const c = tally.get(t) || { alive: 0, total: 0 }, mine = b && b.team === t;
+      html += (t ? '<span style="opacity:.35;margin:0 2px">/</span>' : '') + '<b style="color:' + AF_TEAMS[t].col + (c.alive ? '' : ';opacity:.45') + (mine ? ';text-decoration:underline;text-underline-offset:2px' : '') + '">' + AF_TEAMS[t].name + '</b><span style="font-weight:800' + (c.alive ? '' : ';opacity:.45') + '">' + c.alive + '</span>'; }
+    html += '<span style="margin-left:auto;padding-left:10px;color:#c9bfda">' + clock + '</span></div>';
+    if (b) html += bar(4);
+  } else {                                                  // the sheet: clock, the captain, every team, you, the controls (the lens row sits below, kept across redraws)
+    html = '<div style="display:flex;justify-content:space-between;gap:14px;margin-bottom:6px;font-size:13px"><b style="color:#ffe089">⚔ Arena</b><span style="color:#c9bfda">' + clock + ' <span style="opacity:.5;margin-left:6px">▴</span></span></div>';
+    const myT = AF.teams && b ? AF.teams[b.team] : null, ordTxt = myT ? (myT.phase === 'form' ? 'form up' : myT.order) : AF.myOrder ? (AF.myOrder === 'form' || AF.myOrder === 'regroup' ? 'form up' : AF.myOrder) : null;
+    if (ordTxt && AF.phase === 'fight') html += '<div style="font-size:11px;color:#ffe089;margin-bottom:4px">⚑ captain: ' + ordTxt + '</div>';
+    for (let t = 0; t < AF.cfg.teams; t++) { const c = tally.get(t) || { alive: 0, total: 0 }, mine = b && b.team === t;
+      html += '<div style="display:flex;justify-content:space-between;gap:10px;margin-top:2px' + (c.alive ? '' : ';opacity:.45') + '"><span style="color:' + AF_TEAMS[t].col + ';font-weight:800">' + AF_TEAMS[t].name + (mine ? ' ◉' : '') + '</span><span style="font-weight:800">' + c.alive + '<span style="opacity:.5;font-weight:400">/' + c.total + '</span></span></div>'; }
     if (b) {
-      const hp = clamp(b.hp / b.maxHp, 0, 1);
-      me.innerHTML = '<div style="display:flex;justify-content:space-between;gap:12px"><b style="color:' + b.teamDef.col + '">' + b.name + '</b><span style="color:#c9bfda">' + b.kills + ' kill' + (b.kills === 1 ? '' : 's') + '</span></div>' +
-        '<div style="height:8px;margin:5px 0 4px;border-radius:4px;background:#2a2438;overflow:hidden"><div style="height:100%;width:' + Math.round(hp * 100) + '%;background:' + (hp > 0.35 ? '#8fd08f' : '#ff6a5a') + '"></div></div>' +
-        '<div style="font-size:11px;color:#9a90ab">' + (b.dead ? (TOUCH ? '◀ ▶ follow another fighter · FREE roams (stick glides, drag looks) · − + zoom' : '◀ ▶ (arrows) follow another fighter · F free camera (WASD glides, drag turns) · wheel zooms') : b.mounted ? (TOUCH ? 'stick: left/right turns the horse, up/down the pace · drag right side to aim the rider · hold ATK, release to strike · SWAP sword/bow' : 'A/D turn the horse · W/S pace · mouse aims the rider · hold click, release to strike · F sword/bow' + (document.pointerLockElement === canvas ? '' : ' · <b style="color:#ffe089">click to aim</b>')) : TOUCH ? 'stick move · drag right side aim · hold ATK to load, release to swing · SWAP sword/bow · BLOCK · ◀ ROLL ▶' : 'WASD move · mouse aim · hold click to load, release to ' + (b.weapon === 'bow' ? 'loose' : 'strike') + ' · F ' + (b.weapon === 'bow' ? 'sword' : 'bow') + ' · Shift / right-click block · Q / E roll' + (document.pointerLockElement === canvas ? '' : ' · <b style="color:#ffe089">click to aim</b>')) + '</div>';
-    } else me.innerHTML = '<span style="color:#9a90ab">spectating · ◀ ▶ follow a fighter · Free roams · − + zoom</span>';
+      html += '<div style="display:flex;justify-content:space-between;gap:12px;margin-top:8px;padding-top:6px;border-top:1px solid #3a3247"><b style="color:' + b.teamDef.col + '">' + b.name + '</b><span style="color:#c9bfda">' + b.kills + ' kill' + (b.kills === 1 ? '' : 's') + (b.dead ? ' · fallen' : '') + '</span></div>' + bar(7);
+    } else html += '<div style="font-size:11px;color:#9a90ab;margin-top:6px">spectating</div>';
   }
+  const body = document.getElementById('af-hud-body');
+  if (body && (force || body._html !== html)) { body.innerHTML = html; body._html = html; }
+  const fr = document.getElementById('af-hud-fov'); if (fr) { const want = open ? 'flex' : 'none'; if (fr.style.display !== want) fr.style.display = want; }
+  { const tw = document.getElementById('tb-weapon'); if (tw) tw.style.display = b && !b.canBow ? 'none' : ''; }   // (a swordsman has nothing to swap to)
 }
 function afChargeMeter() {                                  // the load in your hand: fills gold while you hold, turns red past the heavy line
   let el = document.getElementById('af-charge');
   if (!el) { el = document.createElement('div'); el.id = 'af-charge'; el.style.cssText = 'position:fixed;left:50%;bottom:92px;transform:translateX(-50%);width:150px;height:7px;border-radius:4px;background:rgba(16,14,24,.7);border:1px solid #3a3247;z-index:40;pointer-events:none;opacity:0;transition:opacity .15s'; el.innerHTML = '<div style="height:100%;width:0%;border-radius:3px;background:#ffd34d"></div><div style="position:absolute;top:-2px;bottom:-2px;left:60%;width:2px;background:#ff8a5b"></div>'; document.body.appendChild(el); }
   const me = AF.me, ch = me && !me.dead && me.charge; const fill = el.firstChild;
-  if (ch) { const k = clamp(ch.t / AF_F.chargeMax, 0, 1); el.style.opacity = '1'; fill.style.width = Math.round(k * 100) + '%'; fill.style.background = k >= AF_F.heavyAt ? '#ff6a4d' : '#ffd34d'; }
+  if (ch) { const k = clamp(ch.t / (me.weapon === 'bow' ? afDrawSecs(me) : AF_F.chargeMax), 0, 1); el.style.opacity = '1'; fill.style.width = Math.round(k * 100) + '%'; fill.style.background = k >= AF_F.heavyAt ? '#ff6a4d' : '#ffd34d'; }
   else el.style.opacity = '0';
 }
 let _afBanT = null;
@@ -19392,9 +20266,9 @@ function afLogLine(text, col) {
 function afEndPanel() {
   let p = document.getElementById('af-end');
   if (!p) { p = document.createElement('div'); p.id = 'af-end'; p.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);min-width:340px;max-width:86vw;background:rgba(16,12,24,.95);border:1px solid #ffd34d;border-radius:14px;padding:20px 24px;z-index:60;color:#f3ead8;box-shadow:0 10px 40px rgba(0,0,0,.6);font-family:inherit;text-align:center'; document.body.appendChild(p); }
-  const st = AF.standings || afStandings(), w = AF.winner;
-  p.innerHTML = '<h2 style="margin:0 0 4px;font-size:26px;color:#ffd34d">' + (w < 0 ? 'Draw' : AF_TEAMS[w].name + ' holds the pit') + '</h2>' +
-    '<div style="font-size:13px;opacity:.7;margin-bottom:8px">' + (AF.me && AF.me.team === w ? 'Your team won.' : AF.me ? 'Your team fell.' : '') + (AF.starName ? ' · ★ Star of the match: <b>' + AF.starName + '</b>' : '') + '</div>' +
+  const st = AF.standings || afStandings(), w = AF.winner, pit = AF.cfg.venue === 'pit', wName = w >= 0 && pit ? ((AF.bodies.find(b => b.team === w) || {}).name || AF_TEAMS[w].name) : (w >= 0 ? AF_TEAMS[w].name : '');
+  p.innerHTML = '<h2 style="margin:0 0 4px;font-size:26px;color:#ffd34d">' + (w < 0 ? 'Draw' : wName + ' holds the pit') + '</h2>' +
+    '<div style="font-size:13px;opacity:.7;margin-bottom:8px">' + (AF.me && AF.me.team === w ? (pit ? 'You won.' : 'Your team won.') : AF.me ? (pit ? 'You fell.' : 'Your team fell.') : '') + (AF.starName ? ' · ★ Star of the match: <b>' + AF.starName + '</b>' : '') + '</div>' +
     (AF.me && afSession() ? '<div id="af-rewards" style="margin:0 0 10px;padding:8px 10px;border:1px solid #6b5e3a;border-radius:8px;background:rgba(255,211,77,.06);font-size:13px">' + afRewardHtml(AF.reward) + '</div>' : '') +
     st.map((s, i) => '<div style="display:flex;justify-content:space-between;gap:16px;padding:6px 0;border-top:1px solid #3a3247;font-size:14px"><span><b style="color:' + AF_TEAMS[s.team].col + '">' + (i + 1) + '. ' + AF_TEAMS[s.team].name + '</b> <span style="opacity:.6;font-size:12px">' + (s.names.length ? s.names.join(', ') : 'all fallen') + '</span></span><span>' + s.alive + ' standing · ' + s.kills + ' kills</span></div>').join('') +
     '<div style="display:flex;gap:10px;justify-content:center;margin-top:16px">' +
@@ -19405,11 +20279,13 @@ function afEndPanel() {
   document.getElementById('af-leave').onclick = () => { afLeaveToMenu(); };
 }
 function afRematch() {
-  const spec = { k: 'go', seed: (Math.random() * 0xffffffff) >>> 0, teams: AF.cfg.teams, per: AF.cfg.per, time: AF.cfg.time, weather: AF.cfg.weather, pit: AF.cfg.pit, ground: AF.cfg.ground, roster: AF.roster.map(r => ({ ...r })) };
+  const spec = { k: 'go', seed: (Math.random() * 0xffffffff) >>> 0, teams: AF.cfg.teams, per: AF.cfg.per, venue: AF.cfg.venue, time: AF.cfg.time, weather: AF.cfg.weather, pit: AF.cfg.pit, ground: AF.cfg.ground, roster: AF.roster.map(r => ({ ...r })) };
   if (AF.role === 'host') afGoSend(spec);
   afBoot(spec);
 }
 function afLeaveToMenu() {
+  { const tw = document.getElementById('tb-weapon'); if (tw) tw.style.display = ''; }   // (the world's SWAP button comes back)
+  if (PBR_ON) setEnvMap(ENV_DEFAULT);                     // the overworld sky is back in the steel
   try { if (window.coop && window.coop.connected) window.coop.leave(); } catch (e) {}
   location.href = location.pathname + (location.search.replace(/[?&]arena(=[^&]*)?/, '').replace(/^&/, '?') || '');
 }
@@ -19422,6 +20298,7 @@ function afClear() {
   for (const h of AF.horses || []) { if (!h.rider && !h.gone) { scene.remove(h.group); try { disposeGroup(h.group); } catch (e) {} } if (h.tag) { scene.remove(h.tag); try { disposeGroup(h.tag); } catch (e) {} } }
   AF.horses = [];
   AF.bodies.length = 0; AF.arrows.length = 0; AF.props.length = 0; AF.torches = []; AF.crowd = []; AF.gates = []; AF.gateLights = []; AF.intro = null; AF.timeScale = 1;
+  if (AF.outro) { AF.outro = null; afIntroUi(false); } AF.victory = null; for (const b of AF.bodies) b.vic = null;
   for (const o of _afSplats) scene.remove(o.m); _afSplats.length = 0;
   if (AF.ground) { scene.remove(AF.ground); try { disposeGroup(AF.ground); } catch (e) {} AF.ground = null; }
   const ep = document.getElementById('af-end'); if (ep) ep.style.display = 'none';
@@ -19430,14 +20307,16 @@ function afClear() {
 // spec = { seed, teams, per, roster:[{t,s,name,kind:'host'|'player'|'npc',peer,weapon}] } — identical on every client
 function afBoot(spec) {
   const first = !AF.on;
-  AF.on = true; AF.seed = spec.seed >>> 0 || 1; AF.cfg = { teams: spec.teams, per: spec.per, time: spec.time || 'day', weather: spec.weather || 'clear', pit: spec.pit || 'wide', ground: AF_GROUNDS[spec.ground] ? spec.ground : 'broken' }; AF.roster = spec.roster;
-  { const pv = AF.cfg.pit; AF_F.radius = typeof pv === 'number' ? pv : (AF_PITS[pv] || AF_PITS.wide); }
+  AF.on = true; AF.seed = spec.seed >>> 0 || 1; AF.cfg = { teams: spec.teams, per: spec.per, time: spec.time || 'day', weather: spec.weather || 'clear', pit: spec.pit || 'wide', ground: AF_GROUNDS[spec.ground] ? spec.ground : 'broken', venue: spec.venue === 'pit' ? 'pit' : 'colosseum' }; AF.roster = spec.roster;
+  const inPit = AF.cfg.venue === 'pit';
+  if (inPit) { AF.cfg.time = 'night'; AF.cfg.weather = 'clear'; AF.cfg.ground = 'sand'; }   // underground: torchlight, bare sand, whatever the lobby said
+  { const pv = AF.cfg.pit; AF_F.radius = inPit ? AF_PIT.r : typeof pv === 'number' ? pv : (AF_PITS[pv] || AF_PITS.wide); }
   if (first) {
     try { setBattleDressing(false); } catch (e) {}
     for (const c of scene.children.slice()) { if (!c.isLight) c.visible = false; } // strip the boot-time world clutter
     scene.background = new THREE.Color(0xe9dfd0);
     const hudEl = document.getElementById('hud'); if (hudEl) hudEl.classList.add('hidden');
-    document.querySelectorAll('.overlay').forEach(o => o.classList.add('hidden'));
+    document.querySelectorAll('.overlay').forEach(o => o.classList.add('hidden')); afShellHide();
     const inv = document.getElementById('arena-invite'); if (inv) inv.classList.add('hidden');
     // the pit is small enough to afford the full look everywhere: crisp shadows over the whole ring, native pixel
     // density (the phone tier's 1× looked soft), filmic tone mapping, warm key light + cool fill
@@ -19471,16 +20350,17 @@ function afBoot(spec) {
     if (AF.whoTimer) { clearInterval(AF.whoTimer); AF.whoTimer = null; }
   }
   afClear();
-  try { const sc = sun.shadow.camera, e = AF_F.radius + AF_AMPH.out + 6; sc.left = -e; sc.right = e; sc.top = e; sc.bottom = -e; sc.far = 220 + AF_F.radius * 2; sc.updateProjectionMatrix(); } catch (e) {}   // (the ring and its masts cast too)
+  try { const sc = sun.shadow.camera, e = inPit ? AF_PIT.out + 3 : AF_F.radius + AF_AMPH.out + 6; sc.left = -e; sc.right = e; sc.top = e; sc.bottom = -e; sc.far = 220 + AF_F.radius * 2; sc.updateProjectionMatrix(); } catch (e) {}   // (the ring and its masts cast too)
   const r = _mulberry32(AF.seed);
   AF.terr = { p1: r() * TAU, p2: r() * TAU, p3: r() * TAU, hills: [], rocks: [] };
   try { afGenTerrain(r); } catch (e) { console.warn('[arena] terrain', e); AF.terr.hills = []; AF.terr.rocks = []; }   // the hills and the stones (from the seed — every client the same)
   editTerrainFn = afY;
   AF.ground = afBuildGround(); scene.add(AF.ground);
-  if (AF.terr.rocks.length) { try { const rocks = afBuildRocks(); scene.add(rocks); AF.props.push(rocks); } catch (e) { console.warn('[arena] rocks', e); } }
-  const wall = afBuildWall(); scene.add(wall); AF.props.push(wall);
+  if (AF.terr.rocks.length || (AF.terr.deco && AF.terr.deco.length)) { try { const rocks = afBuildRocks(); scene.add(rocks); AF.props.push(rocks); } catch (e) { console.warn('[arena] rocks', e); } }
+  const wall = inPit ? afBuildPitHouse() : afBuildWall(); scene.add(wall); AF.props.push(wall);
   afApplyTime();                                             // day / dusk / night, clear / rain — the same on every client
-  for (let t = 0; t < AF.cfg.teams; t++) {                  // a banner behind each team's spawn
+  if (inPit) afApplyPitLight();                              // …and then the cellar: no sky, a lantern key, the braziers
+  if (!inPit) for (let t = 0; t < AF.cfg.teams; t++) {      // a banner behind each team's spawn
     try { const sp = afSpawn(t, AF.cfg.teams), ban = makeBanner(AF_TEAMS[t].pal.cloth), gf = afGateFrame(t); const bx = sp.cx * 1.3 + gf.wx * 4.4, bz = sp.cz * 1.3 + gf.wz * 4.4; ban.position.set(bx, afY(bx, bz), bz); ban.rotation.y = sp.yaw; scene.add(ban); AF.props.push(ban); } catch (e) {}   // (beside the gate, out of the column's way)
   }
   AF.me = null; AF.inputs.clear();
@@ -19491,6 +20371,7 @@ function afBoot(spec) {
   }
   spec.roster.forEach((entry, i) => {
     const b = afMakeBody(entry, i, r);
+    if (inPit) b.canBow = false;                             // (the pits: swords only, whoever you are)
     AF.bodies.push(b);
     const mine = AF.role === 'guest' ? i === myIdx : entry.kind === 'host';
     if (mine) { AF.me = b; b.inp = AF.locIn; }
@@ -19501,7 +20382,7 @@ function afBoot(spec) {
   });
   const I = AF.locIn; I.atk = I.heavy = I.dodge = 0; I.block = false; AF.keys.clear();
   if (AF.me) { AF.cam.yaw = AF.me.yaw; AF.cam.pitch = 0.3; AF.me.seenAtk = AF.me.seenHeavy = AF.me.seenDodge = 0; }
-  AF.phase = 'countdown'; AF.countdown = AF_F.countdown; AF.t = 0; AF.over = false; AF.winner = -1; AF.standings = null; AF.events = []; AF._hc = 0; AF.last = 0; AF.hitstop = 0; AF.assignT = 0; trauma = 0; camKick.set(0, 0, 0); fovPunch = 0;
+  AF.phase = 'countdown'; AF.countdown = AF_F.countdown; AF.t = 0; AF.over = false; AF.leaving = false; AF.reportP = null; AF.winner = -1; AF.standings = null; AF.events = []; AF._hc = 0; AF.last = 0; AF.hitstop = 0; AF.assignT = 0; trauma = 0; camKick.set(0, 0, 0); fovPunch = 0;
   AF.spec = { mode: 'orbit', target: null, fx: 0, fz: 0, touched: false };
   AF.orbit.theta = AF.me ? AF.me.yaw + Math.PI : 0.4; AF.roar = 0; AF.waveT = 0; AF.nextWave = 22 + Math.random() * 10;
   AF.teams = null; if (AF.role !== 'guest') afPlanTeams();   // the captains draw up their lines (the sim runs here)
@@ -19509,8 +20390,8 @@ function afBoot(spec) {
   AF.reward = null; AF.starName = null; AF.reported = null;
   afHud();
   AF.intro = null; AF.timeScale = 1;
-  if (!AF.introOff) { AF.phase = 'intro'; try { afIntroStart(); } catch (e) { console.warn('[arena] intro', e); AF.intro = null; AF.phase = 'countdown'; } }   // the entrance: gates, the march in, the stars in slow motion
-  if (AF.phase !== 'intro') afBanner(AF.cfg.teams + ' TEAMS · ' + AF.cfg.per + ' EACH', AF.me ? 'you fight for ' + AF.me.teamDef.name + ' — steel yourself' : '', 2.6);
+  if (!AF.introOff && !inPit) { AF.phase = 'intro'; try { afIntroStart(); } catch (e) { console.warn('[arena] intro', e); AF.intro = null; AF.phase = 'countdown'; } }   // the entrance: gates, the march in, the stars in slow motion
+  if (AF.phase !== 'intro') { if (inPit) afBanner('THE PITS', AF.bodies.length + ' in the ring — every man for himself', 2.6); else afBanner(AF.cfg.teams + ' TEAMS · ' + AF.cfg.per + ' EACH', AF.me ? 'you fight for ' + AF.me.teamDef.name + ' — steel yourself' : '', 2.6); }
   if (AF.role === 'guest') afSend({ k: 'go-ack', seed: AF.seed });   // tell the host the start got here (it re-sends until we do)
   try { console.log('[arena]', JSON.stringify({ seed: AF.seed, teams: AF.cfg.teams, per: AF.cfg.per, role: AF.role, bodies: AF.bodies.length })); } catch (e) {}
 }
@@ -19579,7 +20460,7 @@ function afNetWire() {
     if (AF.lobby.role === 'guest') { if (d.k === 'lobby') afLobbyApply(d); else if (d.k === 'go') { AF.role = 'guest'; afCloseLobbyUi(); afMarketClose(); afBoot(d); } }
     else if (AF.lobby.role === 'host') {
       if (d.k === 'team') { afMoveSeat(m.from, d.t | 0); afLobbyRender(); afLobbyBroadcast(); }
-      else if (d.k === 'weapon') { const s = afFindSeat(m.from); if (s) { const gs = afGearStats(afGearClean(s.gear)); s.weapon = d.w === 'bow' && gs.bow ? 'bow' : d.w === 'horse' && gs.horse ? 'horse' : 'sword'; afLobbyRender(); afLobbyBroadcast(); } }   // (only what he owns)
+      else if (d.k === 'weapon') { const s = afFindSeat(m.from); if (s) { const gs = afGearStats(afGearClean(s.gear)); s.weapon = AF.lobby.venue === 'pit' ? 'sword' : d.w === 'bow' && gs.bow ? 'bow' : d.w === 'horse' && gs.horse ? 'horse' : 'sword'; afLobbyRender(); afLobbyBroadcast(); } }   // (only what he owns — and only a sword in the pits)
       else if (d.k === 'gear') { const s = afFindSeat(m.from); if (s) { s.gear = afGearClean(d.gear); const gs = afGearStats(s.gear); if ((s.weapon === 'bow' && !gs.bow) || (s.weapon === 'horse' && !gs.horse)) s.weapon = 'sword'; afLobbyRender(); afLobbyBroadcast(); } }
       else if (d.k === 'invite-declined') { AF.lobby.invites.set(d.name, 'declined'); afLobbyRender(); }
       else if (d.k === 'lobby-req') afLobbyBroadcast();
@@ -19597,13 +20478,13 @@ function afNetGaveUp() {
   else if (AF.lobby && AF.lobby.role === 'host') {
     for (const row of AF.lobby.slots) for (let i = 0; i < row.length; i++) if (row[i] && row[i].kind === 'player') { AF.lobby.invites.delete(row[i].name); row[i] = null; }
     AF.lobby.away = null;
-    if (C && C.connected) { C.host({ arena: true, host: AF.lobby.host, teams: AF.lobby.teams, per: AF.lobby.per }); C.who(); afLobbyMsg('Back on the war-net — invite your players again.'); }
+    if (C && C.connected) { C.host({ arena: true, host: AF.lobby.host, teams: AF.lobby.teams, per: AF.lobby.per, venue: AF.lobby.venue }); C.who(); afLobbyMsg('Back on the war-net — invite your players again.'); }
     afLobbyRender();
   }
   else if (AF.lobby && AF.lobby.role === 'guest') { afLobbyMsg('The war-net dropped — the host\'s lobby is gone. Ask for a new challenge.'); afOpenLobby('host'); }
 }
 function afNewLobby(role) {
-  const L = { role, teams: 2, per: 3, weapon: 'sword', time: 'day', weather: 'clear', pit: 'wide', ground: 'broken', xp: 'mixed', slots: [], invites: new Map(), host: afSession() || 'You', room: null };
+  const L = { role, teams: 2, per: 3, weapon: 'sword', time: 'day', weather: 'clear', pit: 'wide', ground: 'broken', xp: 'mixed', venue: 'colosseum', slots: [], invites: new Map(), host: afSession() || 'You', room: null };
   afResize(L); return L;
 }
 function afResize(L) {
@@ -19623,6 +20504,11 @@ function afPlace(L, p, prefTeam) {                          // first free seat: 
 }
 function afRollNpcMix(L) {                                 // who the fighters of the vale will be, seat by seat (rolled by the host, shown to all)
   const r = _mulberry32((L.mixSeed = L.mixSeed || ((Math.random() * 0xffffffff) >>> 0)) ^ (L.teams * 977 + L.per * 31));
+  if (L.venue === 'pit') {                                   // the pits: one man a side, rolled apart (a dealt mix would make every foe the same class)
+    L.npcArch = []; L.npcXp = [];
+    for (let t = 0; t < L.teams; t++) { L.npcArch.push([AF_PIT.arch[Math.floor(r() * AF_PIT.arch.length)]]); L.npcXp.push([afXpAt(r(), L.xp)]); }
+    return;
+  }
   // DEAL the mix, don't roll it: each team gets the archetypes in exactly the table's proportions (largest-remainder
   // rounding), shuffled into seats — independent rolls let one lobby field 30 bowmen where 19 were meant, and made
   // one side's army a different shape from the other's. Both sides now muster the same kind of host.
@@ -19690,22 +20576,21 @@ function afUnseat(peer) { const L = AF.lobby; for (const row of L.slots) for (le
 function afFindSeat(peer) { for (const row of AF.lobby.slots) for (const s of row) if (s && s.peer === peer) return s; return null; }
 function afMoveSeat(peer, t) { const L = AF.lobby, s = afFindSeat(peer); if (!s || t < 0 || t >= L.teams || L.slots[t].indexOf(null) < 0) return; afUnseat(peer); afPlace(L, s, t); }
 function afHostSeat() { for (const row of AF.lobby.slots) for (const s of row) if (s && s.kind === 'host') return s; return null; }
-function afCloseLobbyUi() { const el = document.getElementById('arena-lobby'); if (el) el.classList.add('hidden'); if (AF.whoTimer) { clearInterval(AF.whoTimer); AF.whoTimer = null; } }
+function afCloseLobbyUi() { if (AF.whoTimer) { clearInterval(AF.whoTimer); AF.whoTimer = null; } }   // (the lobby page goes with the shell — afShellHide at the bell, afShellBack on Back)
 function afLobbyMsg(t) { const el = document.getElementById('al-msg'); if (el) el.textContent = t || ''; }
 // open the lobby from the title screen. role 'host' = my lobby (solo until someone accepts an invite);
 // 'guest' = I accepted somebody's challenge and mirror THEIR lobby
 function afOpenLobby(role, beacon) {
-  const start = document.getElementById('start'), el = document.getElementById('arena-lobby'); if (!el) return;
-  if (start) start.classList.add('hidden'); el.classList.remove('hidden');
-  AF.lobby = afNewLobby(role);
-  if (role === 'guest') { AF.lobby.host = (beacon && beacon.host) || 'the host'; if (beacon) { AF.lobby.teams = beacon.teams || 2; AF.lobby.per = beacon.per || 3; afResize(AF.lobby); } }
+  if (!document.getElementById('page-lobby')) return;
+  AF.lobby = afNewLobby(role); afShellPage('lobby');
+  if (role === 'guest') { AF.lobby.host = (beacon && beacon.host) || 'the host'; if (beacon) { AF.lobby.teams = beacon.teams || 2; AF.lobby.per = beacon.per || 3; if (beacon.venue === 'pit') AF.lobby.venue = 'pit'; afResize(AF.lobby); } }
   afLobbyMsg('');
   afLobbyRender();
   afCareerLoad();
   if (afSession() && window.coop) {
     afNetConnect().then(ok => {
       if (!ok) { afLobbyMsg('The war-net is unreachable — you can still fight NPCs.'); afLobbyRender(); return; }
-      if (AF.lobby && AF.lobby.role === 'host') { window.coop.host({ arena: true, host: afSession(), teams: AF.lobby.teams, per: AF.lobby.per }); }
+      if (AF.lobby && AF.lobby.role === 'host') { window.coop.host({ arena: true, host: afSession(), teams: AF.lobby.teams, per: AF.lobby.per, venue: AF.lobby.venue }); }
       window.coop.who();
       if (!AF.whoTimer) AF.whoTimer = setInterval(() => { if (AF.lobby && window.coop.connected) window.coop.who(); }, 3000);
       afLobbyRender();
@@ -19714,35 +20599,39 @@ function afOpenLobby(role, beacon) {
 }
 function afLobbyBroadcast() {
   const L = AF.lobby; if (!L || L.role !== 'host' || !window.coop || !window.coop.connected) return;
-  window.coop.updateBeacon({ arena: true, host: L.host, teams: L.teams, per: L.per });
-  window.coop.send({ k: 'lobby', teams: L.teams, per: L.per, time: L.time, weather: L.weather, pit: L.pit, ground: L.ground, xp: L.xp, npcArch: L.npcArch, npcXp: L.npcXp, host: L.host, slots: L.slots.map(row => row.map(s => s ? { kind: s.kind, name: s.name, peer: s.peer, weapon: s.weapon, rank: s.gear && s.gear.rank || null, away: !!(L.away && L.away.has(s.peer)) } : null)) });
+  window.coop.updateBeacon({ arena: true, host: L.host, teams: L.teams, per: L.per, venue: L.venue });
+  window.coop.send({ k: 'lobby', teams: L.teams, per: L.per, venue: L.venue || 'colosseum', time: L.time, weather: L.weather, pit: L.pit, ground: L.ground, xp: L.xp, npcArch: L.npcArch, npcXp: L.npcXp, host: L.host, slots: L.slots.map(row => row.map(s => s ? { kind: s.kind, name: s.name, peer: s.peer, weapon: s.weapon, rank: s.gear && s.gear.rank || null, away: !!(L.away && L.away.has(s.peer)) } : null)) });
 }
 function afLobbyApply(d) {                                   // guest: mirror the host's lobby
   const L = AF.lobby; if (!L || L.role !== 'guest') return;
-  L.teams = d.teams; L.per = d.per; L.host = d.host || L.host; L.slots = d.slots; L.time = d.time || 'day'; L.weather = d.weather || 'clear'; L.pit = d.pit || 'wide'; L.ground = d.ground || 'broken'; if (d.npcArch) L.npcArch = d.npcArch; if (d.npcXp) L.npcXp = d.npcXp; L.xp = d.xp || 'mixed';
+  L.teams = d.teams; L.per = d.per; L.venue = d.venue === 'pit' ? 'pit' : 'colosseum'; L.host = d.host || L.host; L.slots = d.slots; L.time = d.time || 'day'; L.weather = d.weather || 'clear'; L.pit = d.pit || 'wide'; L.ground = d.ground || 'broken'; if (d.npcArch) L.npcArch = d.npcArch; if (d.npcXp) L.npcXp = d.npcXp; L.xp = d.xp || 'mixed';
   const me = afFindSeat(window.coop.id); if (me) L.weapon = me.weapon || 'sword';
   afLobbyRender();
 }
 function afLobbyRender() {
   const L = AF.lobby; if (!L) return;
+  const pit = L.venue === 'pit';
   afBalanceXp(L);                                            // (the host re-levels on every change; guests mirror the result)
   const host = L.role === 'host', online = !!(window.coop && window.coop.connected), signed = !!afSession();
   document.getElementById('al-teams-n').textContent = L.teams; document.getElementById('al-per-n').textContent = L.per;
   for (const id of ['al-teams-minus', 'al-teams-plus', 'al-per-minus', 'al-per-plus']) document.getElementById(id).disabled = !host;
-  const G = afGearStats(afGear()), can = { sword: true, bow: G.bow, horse: G.horse };
+  const G = afGearStats(afGear()), can = { sword: true, bow: G.bow && !pit, horse: G.horse && !pit };
   if (!can[L.weapon]) { L.weapon = 'sword'; if (host) { const hs = afHostSeat(); if (hs) hs.weapon = 'sword'; } }
-  for (const w of ['sword', 'bow', 'horse']) { const el = document.getElementById('al-wpn-' + w); if (el) { el.classList.toggle('on', L.weapon === w); el.classList.toggle('locked', !can[w]); el.title = can[w] ? '' : 'buy a ' + w + ' in the marketplace first'; } }
+  for (const w of ['sword', 'bow', 'horse']) { const el = document.getElementById('al-wpn-' + w); if (el) { el.classList.toggle('on', L.weapon === w); el.classList.toggle('hidden', pit && w !== 'sword'); el.classList.toggle('locked', !can[w]); el.title = can[w] ? '' : 'buy a ' + w + ' in the marketplace first'; } }
   if (host) { const hs = afHostSeat(); if (hs) hs.gear = afGear(); }
   const cr = document.getElementById('al-career'), ct = document.getElementById('al-career-txt');
   if (cr) { cr.classList.toggle('hidden', !signed); if (signed) { const c = AF.career, g = afGear();
     ct.innerHTML = c ? '<b>' + c.rank.name + '</b> · ' + c.xp + (c.rank.nextAt ? ' / ' + c.rank.nextAt : '') + ' XP · <b>' + c.gold + '</b> gold · 🏆 ' + c.trophies + ' &nbsp;·&nbsp; ' + afItemName(g.sword) + ' · ' + (g.armor ? afItemName(g.armor) : 'no armor') + ' · ' + (g.bow ? afItemName(g.bow) : 'no bow') + ' · ' + (g.horse ? afItemName(g.horse) : 'on foot')
       : (AF.careerAt ? 'The war-net kept no career for you — the pit lends plain gear.' : 'fetching your career…'); } }
   for (const pt of ['cosy', 'wide', 'vast', 'colossal']) { const el = document.getElementById('al-pit-' + pt); if (el) { el.classList.toggle('on', L.pit === pt); el.disabled = !host; } }
+  for (const v of ['colosseum', 'pit']) { const el = document.getElementById('al-venue-' + v); if (el) { el.classList.toggle('on', (L.venue || 'colosseum') === v); el.disabled = !host; } }
+  for (const row of ['per', 'pit', 'time', 'wx', 'ground']) { const el = document.getElementById('al-row-' + row); if (el) el.classList.toggle('hidden', pit); }   // (the pits: one a side, one size, always night, bare sand)
+  { const tl = document.getElementById('al-teams-lbl'); if (tl) tl.textContent = pit ? 'Fighters' : 'Teams'; }
   for (const tm of ['day', 'dusk', 'night']) { const el = document.getElementById('al-time-' + tm); if (el) { el.classList.toggle('on', L.time === tm); el.disabled = !host; } }
   for (const wx of ['clear', 'rain']) { const el = document.getElementById('al-wx-' + wx); if (el) { el.classList.toggle('on', L.weather === wx); el.disabled = !host; } }
   for (const gr of Object.keys(AF_GROUNDS)) { const el = document.getElementById('al-gr-' + gr); if (el) { el.classList.toggle('on', (L.ground || 'broken') === gr); el.disabled = !host; } }
   for (const xb of ['green', 'mixed', 'veteran']) { const el = document.getElementById('al-xp-' + xb); if (el) { el.classList.toggle('on', L.xp === xb); el.disabled = !host; } }
-  const sub = document.getElementById('al-sub'); if (sub) sub.textContent = host ? 'Choose the teams, invite players who are online, and every empty place is taken by a fighter of the vale.' : L.host + ' set the teams — pick a side, pick a weapon, and wait for the bell.';
+  const sub = document.getElementById('al-sub'); if (sub) sub.textContent = pit ? (host ? 'An illegal ring in a cellar under the tanners\' quarter: two or three fighters, every man for himself, swords only. Rookies cut their teeth here before the Colosseum.' : L.host + ' called a fight in the pits — every man for himself, swords only. Take a corner and wait for the bell.') : host ? 'Choose the teams, invite players who are online, and every empty place is taken by a fighter of the vale.' : L.host + ' set the teams — pick a side, pick a weapon, and wait for the bell.';
   const me = host ? afHostSeat() : afFindSeat(window.coop && window.coop.id);
   const grid = document.getElementById('al-teams');
   grid.innerHTML = L.slots.map((row, t) => {
@@ -19751,7 +20640,7 @@ function afLobbyRender() {
     return '<div class="al-team" style="--tc:' + td.col + '"><div class="al-tname"><span>' + td.name + (pw ? ' <i style="opacity:.6;font-weight:400;font-size:11px" title="average XP — a player counts as ' + AF_PLAYER_XP + '">avg ' + pw + 'xp</i>' : '') + '</span>' + (!host && free && !mine ? '<button data-team="' + t + '">join</button>' : '') + '</div>' +
       (L.per > 8 ? row.filter(Boolean) : row).map(s => s ? '<div class="al-slot ' + (s === me ? 'you' : 'player') + '"><span>' + (s === me ? 'You' : s.name) + (s.away || (L.away && L.away.has(s.peer)) ? ' <i style="opacity:.6">· reconnecting…</i>' : '') + '</span><span class="al-tag">' + (s.weapon === 'bow' ? '🏹' : s.weapon === 'horse' ? '🐎' : '🗡') + (((s.gear && s.gear.rank) || s.rank) ? ' ' + ((s.gear && s.gear.rank) || s.rank) : '') + (s.kind === 'host' && s !== me ? ' host' : '') + '</span></div>'
                         : null).map((html, i) => { if (html != null) return html; const xp = L.npcXp && L.npcXp[t] ? L.npcXp[t][i] : null;
-                          return '<div class="al-slot npc"><span>' + ((L.npcArch && L.npcArch[t] && L.npcArch[t][i]) || 'swordsman') + ' of the vale</span><span class="al-tag">' + (xp != null ? xp + 'xp ' + afXpRank(xp) : 'npc') + '</span></div>'; }).join('') +
+                          return '<div class="al-slot npc"><span>' + ((L.npcArch && L.npcArch[t] && L.npcArch[t][i]) || 'swordsman') + (pit ? ' of the pits' : ' of the vale') + '</span><span class="al-tag">' + (xp != null ? xp + 'xp ' + afXpRank(xp) : 'npc') + '</span></div>'; }).join('') +
       (L.per > 8 ? '<div class="al-slot npc"><span>' + afMixSummary(L, t) + '</span><span class="al-tag">npc</span></div>' : '') + '</div>';
   }).join('');
   for (const btn of grid.querySelectorAll('button[data-team]')) btn.onclick = () => { if (window.coop) window.coop.send({ k: 'team', t: parseInt(btn.getAttribute('data-team'), 10) }); };
@@ -19772,9 +20661,9 @@ function afLobbyRender() {
   document.getElementById('al-inv-name').disabled = !(host && online); document.getElementById('al-inv-btn').disabled = !(host && online);
   const startBtn = document.getElementById('al-start'); startBtn.classList.toggle('hidden', !host);
   const humans = L.slots.flat().filter(Boolean).length, total = L.teams * L.per;
-  const pitNote = afPitFor(L.pit, L.per) !== L.pit ? ' · ' + afPitFor(L.pit, L.per) + ' pit' : '';
-  startBtn.textContent = (humans > 1 ? 'Start Fight · ' + humans + ' players + ' + (total - humans) + ' NPCs' : 'Start Fight · you + ' + (total - 1) + ' NPCs') + pitNote;
-  document.getElementById('al-back').textContent = host ? 'Back' : 'Leave';
+  const pitNote = pit ? ' · the pits' : afPitFor(L.pit, L.per) !== L.pit ? ' · ' + afPitFor(L.pit, L.per) + ' pit' : '';
+  startBtn.textContent = (humans > 1 ? 'Start Fight · ' + humans + ' players + ' + (total - humans) + ' NPCs' : 'Start Fight · you + ' + (total - 1) + (total - 1 === 1 ? ' NPC' : ' NPCs')) + pitNote;
+  { const b = document.getElementById('shell-back'); if (b && SHELL.page === 'lobby') b.textContent = host ? '← Back' : '← Leave'; }
 }
 function afMixSummary(L, t) {                              // "12 swordsmen, 4 brutes, …" for the empty seats of a big team
   const counts = {}; const row = L.slots[t] || [];
@@ -19787,14 +20676,14 @@ function afInvite(name) {
   name = String(name || '').trim(); const L = AF.lobby; if (!name || !L || L.role !== 'host') return;
   if (!window.coop || !window.coop.connected) { afLobbyMsg('Not connected to the war-net.'); return; }
   if (name === L.host) { afLobbyMsg('That is you.'); return; }
-  window.coop.invite(name, { host: L.host, teams: L.teams, per: L.per });
+  window.coop.invite(name, { host: L.host, teams: L.teams, per: L.per, venue: L.venue });
   L.invites.set(name, 'invited…'); afLobbyMsg('Challenge sent to ' + name + '.'); afLobbyRender();
 }
 function afShowInvite(m) {                                   // a challenge arrives — wherever you are
   const el = document.getElementById('arena-invite'), tx = document.getElementById('ai-text'); if (!el) return;
   if (AF.on) return;                                         // mid-fight: ignore
   AF.invite = m;
-  tx.innerHTML = '⚔ <b>' + (m.name || 'Someone') + '</b> challenges you to an arena fight — ' + ((m.cfg && m.cfg.teams) || '?') + ' teams × ' + ((m.cfg && m.cfg.per) || '?');
+  tx.innerHTML = '⚔ <b>' + (m.name || 'Someone') + '</b> ' + (m.cfg && m.cfg.venue === 'pit' ? 'calls you down to the pits — ' + (m.cfg.teams || '?') + ' in the ring, every man for himself' : 'challenges you to an arena fight — ' + ((m.cfg && m.cfg.teams) || '?') + ' teams × ' + ((m.cfg && m.cfg.per) || '?'));
   el.classList.remove('hidden');
   try { SFX.clang && SFX.clang(camera.position); } catch (e) {}
   if (AF._invT) clearTimeout(AF._invT); AF._invT = setTimeout(() => { if (AF.invite === m) afDeclineInvite(true); }, 45000);
@@ -19811,9 +20700,8 @@ function afAcceptInvite() {
   else { try { sessionStorage.setItem('bv-arena-join', JSON.stringify({ room: m.room, host: m.name })); } catch (e) {} location.reload(); } // out in the vale: come back to the title and join
 }
 function afJoin(room, hostName) {
-  afCloseLobbyUi(); const start = document.getElementById('start'); if (start) start.classList.add('hidden');
-  const el = document.getElementById('arena-lobby'); if (el) el.classList.remove('hidden');
-  AF.lobby = afNewLobby('guest'); AF.lobby.host = hostName || 'the host'; afLobbyRender(); afLobbyMsg('Joining ' + AF.lobby.host + '…');
+  afCloseLobbyUi();
+  AF.lobby = afNewLobby('guest'); afShellPage('lobby'); AF.lobby.host = hostName || 'the host'; afLobbyRender(); afLobbyMsg('Joining ' + AF.lobby.host + '…');
   AF.pendingRoom = room;
   afNetConnect().then(ok => { if (!ok) { afLobbyMsg('The war-net is unreachable.'); return; } window.coop.join(room); });
 }
@@ -19824,7 +20712,7 @@ function afStartFight() {
   const pick = arr => arr[Math.floor(r() * arr.length)];
   for (let t = 0; t < L.teams; t++) for (let s = 0; s < L.per; s++) {
     const seat = L.slots[t][s];
-    if (seat) { const gear = seat.kind === 'host' ? afGear() : afGearClean(seat.gear); roster.push({ t, s, name: seat.name, kind: seat.kind, peer: seat.peer, weapon: seat.weapon || 'sword', gear, rank: gear.rank || null }); used.add(seat.name); continue; }
+    if (seat) { const gear = seat.kind === 'host' ? afGear() : afGearClean(seat.gear); roster.push({ t, s, name: seat.name, kind: seat.kind, peer: seat.peer, weapon: L.venue === 'pit' ? 'sword' : (seat.weapon || 'sword'), gear, rank: gear.rank || null }); used.add(seat.name); continue; }
     let nm; do { nm = pick(GIVEN_NAMES) + (r() < 0.35 ? ' ' + pick(BYNAMES) : ''); } while (used.has(nm)); used.add(nm);
     const arch = (L.npcArch && L.npcArch[t] && L.npcArch[t][s]) || 'swordsman';
     roster.push({ t, s, name: nm, kind: 'npc', peer: null, arch, xp: (L.npcXp && L.npcXp[t] && L.npcXp[t][s] != null) ? L.npcXp[t][s] : 50, weapon: AF_ARCH[arch].weapon === 'bow' ? 'bow' : AF_ARCH[arch].weapon === 'horse' ? 'horse' : 'sword' });
@@ -19832,7 +20720,7 @@ function afStartFight() {
   for (const e of roster) if (e.kind === 'player' && L.away && L.away.has(e.peer)) e.away = true;   // (a seat whose phone is mid-reconnect)
   const humans = roster.filter(x => x.kind === 'player').length;
   AF.role = humans ? 'host' : 'solo';
-  const spec = { k: 'go', seed: (Math.random() * 0xffffffff) >>> 0, teams: L.teams, per: L.per, time: L.time, weather: L.weather, pit: afPitFor(L.pit, L.per), ground: L.ground, roster };
+  const spec = { k: 'go', seed: (Math.random() * 0xffffffff) >>> 0, teams: L.teams, per: L.per, venue: L.venue || 'colosseum', time: L.time, weather: L.weather, pit: afPitFor(L.pit, L.per), ground: L.ground, roster };
   if (humans) afGoSend(spec);
   afCloseLobbyUi();
   afBoot(spec);
@@ -19849,11 +20737,11 @@ function afPreviewEl() {
   const cv = document.createElement('canvas'); cv.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;background:radial-gradient(ellipse at 50% 60%,rgba(255,211,77,.12),rgba(0,0,0,.2));cursor:grab;touch-action:none;display:block';
   wrap.appendChild(cv);
   const side = document.createElement('div'); side.id = 'af-preview-side'; side.style.cssText = 'position:absolute;left:0;right:0;bottom:0;padding:8px 10px;font-size:12px;line-height:1.45;background:linear-gradient(to top,rgba(8,6,14,.96),rgba(8,6,14,.8) 70%,rgba(8,6,14,0));pointer-events:none'; wrap.appendChild(side);
-  const P = AF.preview = { wrap, cv, W: 0, H: 0, renderer: null, scene: new THREE.Scene(), camera: new THREE.PerspectiveCamera(30, 1, 0.1, 60), rig: null, yaw: 0.5, mounted: false, drag: null };
-  try { P.renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: true }); P.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2)); P.renderer.toneMapping = THREE.ACESFilmicToneMapping; } catch (e) { P.renderer = null; }
+  const P = AF.preview = { wrap, cv, W: 0, H: 0, renderer: null, scene: new THREE.Scene(), camera: new THREE.PerspectiveCamera(30, 1, 0.1, 60), rig: null, yaw: -0.3, mounted: false, drag: null, crouch: 0 };
+  try { P.renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: true }); P.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2)); P.renderer.toneMapping = THREE.ACESFilmicToneMapping; P.renderer.localClippingEnabled = true; } catch (e) { P.renderer = null; }   // (clipping: the planted sword's buried tip is cut at the sand)
   P.scene.add(new THREE.HemisphereLight(0xbfd8ff, 0x6a5a44, 0.9)); const sun = new THREE.DirectionalLight(0xfff0d0, 1.1); sun.position.set(3, 6, 4); P.scene.add(sun);
-  const disc = new THREE.Mesh(new THREE.CircleGeometry(1.6, 24), mat(0xc9b79a, { shared: false })); disc.rotation.x = -Math.PI / 2; P.scene.add(disc);
-  const down = e => { P.drag = { x: e.clientX, yaw: P.yaw }; P.holdT = performance.now(); try { cv.setPointerCapture(e.pointerId); } catch (err) {} }; const move = e => { if (P.drag) { P.yaw = P.drag.yaw + (e.clientX - P.drag.x) * 0.012; P.holdT = performance.now(); } }; const up = () => { P.drag = null; };
+  const disc = new THREE.Mesh(new THREE.CircleGeometry(2.7, 32), mat(0xc9b79a, { shared: false })); disc.rotation.x = -Math.PI / 2; P.scene.add(disc);   // (wide enough that the planted sword's buried tip stays under it from the lens)
+  const down = e => { P.drag = { x: e.clientX, y: e.clientY, yaw: P.yaw, moved: false }; P.holdT = performance.now(); try { cv.setPointerCapture(e.pointerId); } catch (err) {} }; const move = e => { if (P.drag) { if (Math.hypot(e.clientX - P.drag.x, e.clientY - P.drag.y) > 6) P.drag.moved = true; if (P.drag.moved) { P.yaw = P.drag.yaw + (e.clientX - P.drag.x) * 0.012; P.yawTo = null; } P.holdT = performance.now(); } }; const up = e => { const d = P.drag; P.drag = null; if (d && !d.moved) afPreviewClick(e); };   // a tap (no drag) picks what it lands on
   cv.addEventListener('pointerdown', down); cv.addEventListener('pointermove', move); cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
   AF.previewEl = wrap; return wrap;
 }
@@ -19871,11 +20759,17 @@ function afPreviewSet(gear, pal, mounted) {
   const hsz = P.mounted && AF_LOOK.horse[gear.horse] ? AF_LOOK.horse[gear.horse].scale : 1;
   const r = P.mounted ? buildCavalry(pal, hsz, 'sword', opts) : buildHumanoid(pal, 1, 'sword', opts);
   P.rig = { group: r.group || r, parts: P.mounted ? Object.assign({}, r.parts, { mount: r.horse }) : r.parts };
+  afWearModel({ group: P.mounted ? r.riderGroup : P.rig.group, parts: P.rig.parts }, pal);   // the marketplace man is the warrior too
+  afPreviewFloor(pal, gear);                                 // (the home floor: his sword and shield, until he takes them up)
+  if (MODEL_ON && !BV.modelReady) {                          // the warrior is still loading: an empty disc until he is, never the plastic stand-in
+    P.rig.group.visible = false; const gen = P.gen = (P.gen || 0) + 1;
+    BV.modelLoad.then(() => { if (AF.preview === P && P.gen === gen && BV.modelReady) afPreviewSet(P.gear, P.pal, P.mounted); });
+  } else P.gen = (P.gen || 0) + 1;
   const showBow = !!(t && t.slot === 'bow');                 // trying a bow: he draws it so you can see it
   if (P.rig.parts.shield) P.rig.parts.shield.visible = !showBow; if (P.rig.parts.bow) P.rig.parts.bow.visible = showBow; if (P.rig.parts.sword) P.rig.parts.sword.visible = !showBow;
   afDressGear(P.rig.parts, gear, pal); P.scene.add(P.rig.group);
   if (P.mounted) saddleRider(P.rig.parts); else restLegs(P.rig.parts, 1, true);
-  const anim = makeAnimator(P.rig.parts); setPose(anim, showBow ? 'aimBow' : 'guard', 0.01); updateAnimator(anim, 1); P.anim = anim;
+  const anim = makeAnimator(P.rig.parts); P.anim = anim; afPreviewPose();
   P.gear = gear; P.pal = pal; P.W = 0;                        // (W=0: the frame re-fits the camera to the canvas)
   const own = AF.career, side = P.wrap.querySelector('#af-preview-side'), btn = (act, label, dis) => '<button data-act="' + act + '" ' + (dis ? 'disabled' : '') + ' style="cursor:pointer;padding:7px 12px;border-radius:7px;border:1px solid #ffcf5b;background:rgba(255,180,80,.18);color:#ffe2a8;font-weight:700;opacity:' + (dis ? .45 : 1) + ';touch-action:manipulation;margin:4px 4px 0 0">' + label + '</button>';
   let html = '';
@@ -19883,28 +20777,245 @@ function afPreviewSet(gear, pal, mounted) {
     html += '<div style="padding:8px 10px;border-radius:8px;background:rgba(255,211,77,.10);border:1px solid rgba(255,207,91,.5)"><div style="font-size:11px;letter-spacing:1px;text-transform:uppercase;opacity:.7">Trying on</div><b style="font-size:14px;color:#ffe089">' + t.name + '</b>' + (t.unique ? ' <span style="opacity:.7">· unique, loot only</span>' : owned ? ' <span style="opacity:.7">· owned</span>' : ' <span style="opacity:.7">· ' + t.price + ' gold</span>') +
       '<div>' + (owned ? (worn ? '<span style="opacity:.7;font-size:12px">you are wearing it</span>' : btn('equip:' + t.slot + ':' + AF.tryItem, 'Wear it')) : t.unique ? '' : btn('buy:' + AF.tryItem, why ? why : 'Buy for ' + t.price + ' g', !!why)) + btn('untry', 'What I own') + '</div></div>'; }
   html += '<div style="opacity:.7;font-size:11px;margin-top:4px">health ' + (100 + G.hp) + ' · damage ×' + G.swordDmg.toFixed(2) + (G.reach ? ' · reach +' + G.reach : '') + (G.bow ? ' · arrows ×' + G.bowDmg.toFixed(2) : '') + (G.horse ? ' · horse ' + G.horseHp + ' hp, pace ×' + G.horseSpeed : '') + '</div>' +
-    (G.horse ? btn('mount', P.mounted ? '🚶 On foot' : '🐎 In the saddle') : '') + '<span style="font-size:11px;opacity:.5"> drag him to turn</span>';
+    (G.horse ? btn('mount', P.mounted ? '🚶 On foot' : '🐎 In the saddle') : '');
   side.innerHTML = html;
   for (const el of side.querySelectorAll('button, div, span')) el.style.pointerEvents = 'auto';
   for (const b of side.querySelectorAll('button[data-act]')) b.onclick = () => afMarketAct(b.getAttribute('data-act'), b);
 }
+// THE HOME FLOOR: on the home his sword stands in the sand before him, tip buried, and the shield leans on it. He
+// stands empty-handed until you tap one — then he stoops, takes it up, and stands with it (the market always shows him
+// armed; what he has not picked up is back in the sand when you return). A tap on the canvas without a drag is a pick.
+function afPreviewFloor(pal, gear) {
+  const P = AF.preview, R = MODEL_RIGS.get(MODEL_NAME); if (!P || !R || !MODEL_ON) return;
+  if (!P.floor) {
+    const S = R.spec.hipY ? 1.52 / R.spec.hipY : 3.3 / (R.spec.height || 1.9);
+    const grp = new THREE.Group(); grp.name = 'floor'; P.scene.add(grp);
+    const F = P.floor = { grp, S, held: { sword: false, shield: false }, busy: null, sword: null, shield: null, at: new THREE.Vector3(-0.85, 0, 0.6) };
+    const sw = modelPropGeo(R, 'sword'), sh = modelPropGeo(R, 'shield');
+    F.own = sw;
+    if (sh) { const m = new THREE.Mesh(sh, new THREE.MeshPhongMaterial({ map: R.tex, shininess: 6, specular: 0x111111 })); m.name = 'shield'; m.castShadow = true; m.scale.setScalar(S);
+      const tilt = 0.3, bb = sh.boundingBox, half = (bb.max.z - bb.min.z) / 2, mid = (bb.max.z + bb.min.z) / 2;   // long axis Z; it stands beside the sword, leaning sideways onto the blade, rim in the sand, face to the lens
+      const U = new THREE.Vector3(Math.sin(tilt), Math.cos(tilt), 0), N = new THREE.Vector3(0, 0, 1);   // long axis up, tipped toward the sword; face straight out
+      m.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(N, new THREE.Vector3().crossVectors(U, N), U));
+      const cx = F.at.x - 0.06 - (2 * half * Math.sin(tilt) * S) + half * Math.sin(tilt) * S;   // top edge just short of the blade, centre half a length down the lean
+      m.position.set(cx - mid * Math.sin(tilt) * S, (half - mid) * Math.cos(tilt) * S, F.at.z + 0.12);
+      grp.add(m); F.shield = m; }
+  }
+  const F = P.floor; if (F.shield && pal) F.shield.material.color.set(pal.cloth).lerp(new THREE.Color(0xffffff), 0.35);   // the same team tint the figure's own shield wears
+  // THE PLANTED SWORD is the one he owns: the figure's own for the plain iron blade, the loadout's built one for any other
+  const I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}, g = gear || {}, own = !((g.sword && g.sword !== 'iron_sword' && AF_LOOK.sword[g.sword]) || g.trim), key = own ? 'own' : g.sword + '|' + (g.trim || '');
+  if (F.swordKey !== key) {
+    if (F.sword) { F.grp.remove(F.sword); if (!F.sword.userData.own) { try { disposeGroup(F.sword); } catch (e) {} } F.sword = null; }
+    const S = F.S; let m = null;
+    if (own && F.own) { m = new THREE.Mesh(F.own, new THREE.MeshPhongMaterial({ map: R.tex, shininess: 6, specular: 0x111111 })); m.userData.own = true; m.scale.setScalar(S);
+      m.rotation.x = Math.PI / 2;                            // the blade ran +Z: now it points −Y, straight down
+      m.position.set(F.at.x, (F.own.boundingBox.max.z - 0.2) * S, F.at.z); }   // the tip 0.2 (model units) under the sand, the grip up
+    else if (!own) { m = new THREE.Group(); const trim = g.trim && I[g.trim]; afBuildSword(m, AF_LOOK.sword[g.sword] || AF_LOOK.sword.iron_sword, trim ? trim.blade : null);
+      m.rotation.x = Math.PI; m.rotateY(Math.PI / 2); m.position.set(F.at.x, 0, F.at.z); F.grp.add(m); m.updateMatrixWorld(true);   // built blade-up at the grip: turned over, flat to the lens, then sunk until the whole tip is under
+      const sw2 = AF_LOOK.sword[g.sword] || AF_LOOK.sword.iron_sword, bb = new THREE.Box3().setFromObject(m); m.position.y = -bb.min.y - (0.2 * S + 0.2 + (sw2.w || 0.2) * 0.5); F.grp.remove(m); }
+    if (m) { m.name = 'sword'; const sand = [new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)]; m.traverse(x => { if (x.isMesh) { x.castShadow = true; x.material.clippingPlanes = sand; } }); F.grp.add(m); F.sword = m; }   // whatever is under the sand is not drawn (the disc is flat; from the lens a buried tip would show past its rim)
+    F.swordKey = key;
+  }
+}
+function afPreviewClick(e) {
+  const P = AF.preview, F = P && P.floor; if (!F || F.busy || AF.marketOpen || !P.camera) return;
+  const r = P.cv.getBoundingClientRect(); if (!r.width || !r.height) return;
+  const nd = new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), rc = new THREE.Raycaster(); rc.setFromCamera(nd, P.camera);
+  // a blade is thin and a thumb is not: the sword is picked by the ray's distance to its axis, the shield by its box
+  const ray = rc.ray, S = F.S; let best = null, bd = Infinity;
+  if (F.sword && F.sword.visible) { const bb = new THREE.Box3().setFromObject(F.sword), c = bb.getCenter(new THREE.Vector3()), a = new THREE.Vector3(c.x, bb.min.y, c.z), b = new THREE.Vector3(c.x, bb.max.y, c.z);   // it stands vertical either way
+    const d = Math.sqrt(ray.distanceSqToSegment(a, b)); if (d < 0.28 * S) { best = 'sword'; bd = d; } }
+  if (F.shield && F.shield.visible) { const box = new THREE.Box3().setFromObject(F.shield).expandByScalar(0.06); if (ray.intersectsBox(box) && !(best === 'sword' && bd < 0.12 * S)) best = 'shield'; }   // a square hit on the blade wins over the shield's box behind it
+  if (best) afPreviewPickup(best);
+}
+function afPreviewPickup(kind) {
+  const P = AF.preview, F = P && P.floor; if (!F || !F[kind] || F.held[kind] || F.busy || !P.anim) return false;
+  F.busy = kind; P.yawTo = Math.atan2(F.at.x, F.at.z);       // he turns to it, stoops, closes his hand on it, and rises with it
+  setPose(P.anim, kind === 'sword' ? 'pickR' : 'pickL', 0.5); P.crouch = 0.3;
+  clearTimeout(F.t1); clearTimeout(F.t2);
+  F.t1 = setTimeout(() => { F.held[kind] = true; afPreviewPose(0.7); P.crouch = 0; }, 560);
+  F.t2 = setTimeout(() => { F.busy = null; }, 700);
+  return true;
+}
+function afHomeVisible() { const st = document.getElementById('start'); return !!(AF.homeOpen && st && !st.classList.contains('hidden')); }
+function afPreviewRun() { const P = AF.preview; if (!P || P.loop) return; P.loop = true; requestAnimationFrame(afPreviewFrame); }
+// the pose of the figure: at ease on the home (sword and shield down), a guard in the market, drawing a bow he tries on
+function afPreviewPose(dur) {
+  const P = AF.preview; if (!P || !P.rig || !P.anim) return; const I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}, t = AF.tryItem && I[AF.tryItem];
+  const showBow = !!(t && t.slot === 'bow'), relaxed = !AF.marketOpen && !showBow;
+  setPose(P.anim, showBow ? 'aimBow' : relaxed ? 'relax' : 'guard', dur || 0.01); if (!dur) updateAnimator(P.anim, 1);
+  P.fighting = !relaxed; if (!P.mounted && !dur) restLegs(P.rig.parts, 1, !relaxed, P.crouch || 0);
+}
+const br0 = (now, i) => Math.sin(now / 1000 * 2.6 - 0.9 - i * 0.35);   // the breath reaching the cape, segment by segment
+const dt0 = P => clamp((performance.now() - (P.lastT || performance.now())) / 1000, 0, 0.1);   // the frame's dt before P.lastT is stamped
 function afPreviewFrame() {
-  const P = AF.preview; if (!P || !AF.marketOpen || !P.renderer || !P.rig) return;
+  const P = AF.preview; if (!P || !afShellVisible() || !P.renderer || !P.rig) { if (P) P.loop = false; return; }
   const w = P.cv.clientWidth, h = P.cv.clientHeight;
   if (w && h && (w !== P.W || h !== P.H)) { P.W = w; P.H = h; P.renderer.setSize(w, h, false); P.camera.aspect = w / h; P.camera.updateProjectionMatrix();
     const k = Math.max(1, 1 / P.camera.aspect) * 1.08; P.camera.position.set(0, P.mounted ? 2.9 : 2.1, (P.mounted ? 9.4 : 6.4) * k); P.camera.lookAt(0, P.mounted ? 1.9 : 1.45, 0); }   // a narrow canvas backs off so he fits; he sits a little high, clear of the strip along the bottom
-  if (!P.drag && performance.now() - (P.holdT || 0) > 1500) P.yaw += 0.006;
-  P.rig.group.rotation.y = P.yaw;
+  if (P.yawTo != null && !P.drag) { P.yaw = angleLerp(P.yaw, P.yawTo, clamp(dt0(P) * 6, 0, 1)); if (Math.abs(angleDelta(P.yaw, P.yawTo)) < 0.01) P.yawTo = null; }   // (only a pick turns him; a drag is yours)
+  P.rig.group.rotation.y = P.yaw;                           // (he stands where you left him — drag turns him, nothing else does)
+  // STANDING: the pose holds, and on top of it he breathes hard, like a man just out of the pit — the chest heaves,
+  // the shoulders rise and fall with it, the head lifts a hair on the intake and settles, the whole man settles into
+  // his stance with a slow sway. Additive over updateAnimator (which assigns the pose absolutely each frame).
+  const now = performance.now(), dt = clamp((now - (P.lastT || now)) / 1000, 0, 0.1); P.lastT = now;
+  if (P.anim) {
+    updateAnimator(P.anim, dt);
+    const p = P.rig.parts, t = now / 1000, br = Math.sin(t * 2.6), br2 = Math.sin(t * 2.6 - 0.7);   // ~25 breaths a minute, the shoulders a beat behind the chest
+    p.upperBody.rotation.x += 0.045 * br - 0.02;                                                     // the chest heaves (biased forward: he is bent a little, winded)
+    p.upperBody.rotation.z += 0.012 * Math.sin(t * 0.9);                                             // a slow sway as the weight shifts
+    p.shoulderR.rotation.z -= 0.05 * br2; p.shoulderL.rotation.z += 0.05 * br2;                      // the shoulders lift outward on the intake
+    p.shoulderR.rotation.x += 0.03 * br2; p.shoulderL.rotation.x += 0.03 * br2;
+    if (p.headPivot) { p.headPivot.rotation.x = -0.035 * br + 0.05; p.headPivot.rotation.y = 0.04 * Math.sin(t * 0.55); }   // the head lifts on the intake, drifts as he looks about
+    P.rig.group.position.y = -0.012 * (1 - br2) * 0.5;                                               // a hair of give at the knees with each breath
+    if (!P.mounted) restLegs(p, dt, !!P.fighting, P.crouch || 0);                                    // the knees ease into a stoop and back
+  }
+  if (P.floor) {                                            // the floor: what he has not taken up lies there (on the home); his hands show only what he holds
+    const F = P.floor, home = !AF.marketOpen, p = P.rig.parts;
+    if (F.sword) F.sword.visible = home && !F.held.sword; if (F.shield) F.shield.visible = home && !F.held.shield;
+    p.noModelSword = home && !F.held.sword; p.noModelShield = home && !F.held.shield;
+  }
   if (P.rig.parts.mount) saddleRider(P.rig.parts);
-  if (P.rig.parts.cape) { const segs = P.rig.parts.cape.userData.segs || []; segs.forEach((sg, i) => { sg.rotation.x = 0.06 + Math.sin(performance.now() / 700 + i) * 0.03; }); }
+  if (P.rig.parts.cape) { const segs = P.rig.parts.cape.userData.segs || []; segs.forEach((sg, i) => { sg.rotation.x = 0.06 + Math.sin(now / 700 + i) * 0.03 + 0.02 * br0(now, i); }); }
+  if (MODEL_LIVE.length) syncModelRigs();                     // (the warrior's bones follow the pivots before THIS renderer draws — the hook sits on the main one)
   P.renderer.render(P.scene, P.camera);
   requestAnimationFrame(afPreviewFrame);
 }
-function afMarketOpen() { AF.marketOpen = true; AF.tryItem = null; let p = document.getElementById('af-market'); if (!p) { p = document.createElement('div'); p.id = 'af-market'; p.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(8,6,14,.95);pointer-events:auto;font:14px system-ui;color:#e8def8;display:flex;overflow:hidden'; document.body.appendChild(p); } p.style.display = 'flex'; afMarketRender(); afCareerLoad(); requestAnimationFrame(afPreviewFrame); }   // (always re-read the purse: a fight may just have paid out)
-function afMarketClose() { AF.marketOpen = false; AF.tryItem = null; const p = document.getElementById('af-market'); if (p) p.style.display = 'none'; }
+// ---- THUMBNAILS: every ware drawn from its own mesh by a small offscreen lens, once, cached in AF.thumbs ----
+const TH = { r: null, size: 256, rig: null, wearing: false };
+function afThumbInit() {
+  if (TH.r) return true;
+  try { TH.r = new THREE.WebGLRenderer({ alpha: true, antialias: true, preserveDrawingBuffer: true }); TH.r.setPixelRatio(1); TH.r.setSize(TH.size, TH.size, false); TH.r.setClearColor(0x000000, 0); TH.r.toneMapping = THREE.ACESFilmicToneMapping;
+    TH.scene = new THREE.Scene(); TH.scene.add(new THREE.HemisphereLight(0xbfd8ff, 0x6a5a44, 0.9)); const sun = new THREE.DirectionalLight(0xfff0d0, 1.1); sun.position.set(3, 6, 5); TH.scene.add(sun);
+    TH.cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 100); } catch (e) { TH.r = null; return false; }
+  return true;
+}
+function afThumbShot(obj, box) {                            // an orthographic lens fitted to the object's box (or the box given), straight on
+  TH.scene.add(obj); obj.updateMatrixWorld(true);
+  const bb = box || new THREE.Box3().setFromObject(obj), c = bb.getCenter(new THREE.Vector3()), sz = bb.getSize(new THREE.Vector3());
+  const half = Math.max(sz.x, sz.y) * 0.5 * 1.1;
+  TH.cam.left = -half; TH.cam.right = half; TH.cam.top = half; TH.cam.bottom = -half; TH.cam.near = 0.01; TH.cam.far = sz.z + 40; TH.cam.updateProjectionMatrix();
+  TH.cam.position.set(c.x, c.y, bb.max.z + 10); TH.cam.lookAt(c.x, c.y, c.z); TH.cam.updateMatrixWorld(true);
+  if (MODEL_LIVE.length) syncModelRigs();
+  TH.r.render(TH.scene, TH.cam); const url = TH.r.domElement.toDataURL('image/png'); TH.scene.remove(obj); return url;
+}
+function afThumbRig() {                                     // one figure for the armour and bow wares, dressed anew per ware
+  if (!TH.rig) { const h = buildHumanoid(AF_TEAMS[0].pal, 1, 'sword', { hero: true, both: true }); TH.rig = h; const anim = makeAnimator(h.parts); setPose(anim, 'relax', 0.01); updateAnimator(anim, 1); restLegs(h.parts, 1, false); }
+  if (!TH.wearing && MODEL_ON && BV.modelReady) { afWearModel(TH.rig, AF_TEAMS[0].pal); TH.wearing = true; }
+  return TH.rig;
+}
+function afThumb(id) {
+  AF.thumbs = AF.thumbs || new Map(); if (AF.thumbs.has(id)) return AF.thumbs.get(id);
+  if (!window.ARENA_CAT || !afThumbInit()) return null; const it = ARENA_CAT.ARENA_ITEMS[id]; if (!it) return null; const pal = AF_TEAMS[0].pal; let url = null;
+  try {
+    if (it.slot === 'sword' || it.slot === 'trim') {          // the blade, flat to the lens, tip up and to the right
+      const wrap = new THREE.Group(), s = new THREE.Group(); afBuildSword(s, AF_LOOK.sword[it.slot === 'sword' ? id : 'iron_sword'] || AF_LOOK.sword.iron_sword, it.slot === 'trim' ? it.blade : null);
+      s.rotation.y = 0; wrap.add(s); wrap.rotation.z = -0.8; url = afThumbShot(wrap); try { disposeGroup(wrap); } catch (e) {} }   // (afBuildSword leaves it edge-forward for the grip; y = 0 shows the flat)
+    else if (it.slot === 'plume') { const m = softCapsule(0.09, 0.5, mat(it.plume, { shared: false, pbr: 'cloth' }), 8); m.rotation.z = -0.5; url = afThumbShot(m); }
+    else if (it.slot === 'horse') {                          // the horse alone, three-quarter on, in its barding
+      const hs = AF_LOOK.horse[id] || {}, r = buildCavalry(pal, hs.scale || 1, 'sword', { hero: false }); if (r.riderGroup) r.riderGroup.visible = false;
+      afDressGear(Object.assign({}, r.parts, { mount: r.horse }), { horse: id }, pal); if (r.horse.parent) r.horse.parent.remove(r.horse); r.horse.rotation.y = Math.PI / 2 + 0.45;
+      url = afThumbShot(r.horse); try { disposeGroup(r.group); disposeGroup(r.horse); } catch (e) {} }
+    else if (it.slot === 'bow') {                            // the bow off the figure's hand, then back
+      const h = afThumbRig(); afDressGear(h.parts, { bow: id }, pal); const b = h.parts.bow; if (!b) return null;
+      const keep = { p: b.parent, pos: b.position.clone(), rot: b.rotation.clone() }; b.visible = true; b.traverse(x => { if (x.isMesh) x.visible = true; });
+      const wrap = new THREE.Group(); wrap.add(b); b.position.set(0, 0, 0); b.rotation.set(0, 0, 0); wrap.rotation.z = -0.35; url = afThumbShot(wrap);
+      wrap.remove(b); if (keep.p) keep.p.add(b); b.position.copy(keep.pos); b.rotation.copy(keep.rot); }
+    else if (it.slot === 'armor') {                          // a bust of the figure wearing it (the warrior, tinted — so it waits for him)
+      if (MODEL_ON && !BV.modelReady) { BV.modelLoad.then(() => { if (AF.marketOpen) afMarketRender(); }); return null; }
+      const h = afThumbRig(); afDressGear(h.parts, { armor: id }, pal); h.group.rotation.y = 0.4;
+      url = afThumbShot(h.group, new THREE.Box3(new THREE.Vector3(-0.95, 1.55, -3), new THREE.Vector3(0.95, 3.45, 3))); }   // (a bust: shoulders to crown)
+  } catch (e) { console.warn('[thumb]', id, e); url = null; }
+  if (url) AF.thumbs.set(id, url); return url;
+}
+BV.thumb = id => afThumb(id);   // test: a ware's picture (data URL)
+function afMarketOpen() { AF.marketOpen = true; AF.tryItem = null; afShellPage('market'); afMarketRender(); afCareerLoad(); afPreviewRun(); }   // (always re-read the purse: a fight may just have paid out)
+function afMarketClose() { if (SHELL.page === 'market') afShellBack(); else { AF.marketOpen = false; AF.tryItem = null; } }
+
+// ---- THE HOME: the signed-in title screen. Your fighter stands on the left (the market's preview, wearing what
+// you own); the menu is on the right. Click under the figure for the career sheet — the market sells wares only.
+function afCareerSheetHtml(c) {
+  if (!c || !window.ARENA_CAT) return '<div class="career-card" style="opacity:.7">' + (afSession() ? 'reaching the war-net…' : 'sign in to keep a career') + '</div>';
+  const r = c.rank, lo = ARENA_CAT.ARENA_RANKS[r.idx][1], prog = r.nextAt ? Math.round((c.xp - lo) / (r.nextAt - lo) * 100) : 100;
+  return '<div class="career-card"><b>' + r.name + '</b> · ' + c.xp + ' XP' + (r.next ? ' · ' + r.next + ' at ' + r.nextAt : '') + ' <span class="career-bar"><span style="width:' + prog + '%"></span></span><br>' +
+    '<b>' + c.gold + '</b> gold · 🏆 ' + c.trophies + ' trophies<br>' +
+    c.matches + ' fights · ' + c.wins + ' won · ' + c.kills + ' kills · ' + c.deaths + ' deaths · ' + c.stars + '× star · ' + Math.round(c.damage) + ' damage<br>' +
+    'skills: sword ' + c.skills.sword.level + ' · bow ' + c.skills.bow.level + ' · riding ' + c.skills.riding.level + '</div>' +
+    '<h3>Achievements</h3><div class="career-ach">' + ARENA_CAT.ARENA_ACHIEVEMENTS.map(([id, label]) => '<span class="' + (c.achievements.includes(id) ? 'got' : '') + '">' + (c.achievements.includes(id) ? '🏅 ' : '') + label + '</span>').join('') + '</div>';
+}
+// ---- THE SHELL: one layout for every screen outside the fight — the fighter on the left, the page on the right,
+// Back always in the same place, ? a page like any other. #start IS the shell (so everything that hid the title
+// screen still hides it); the pages are its .page children (afShellPage shows one). ----
+const SHELL = { page: null, stack: [], titles: { title: 'Blade Vale', home: 'Blade Vale', career: 'Career & stats', lobby: 'Arena Fights', market: 'Marketplace', help: 'Controls' } };
+function afShellVisible() { const st = document.getElementById('start'); return !!(st && !st.classList.contains('hidden') && SHELL.page); }
+function afShellPage(name, o) {
+  const st = document.getElementById('start'); if (!st || !document.getElementById('page-' + name)) return;
+  const root = name === 'home' || name === 'title';
+  if (root) SHELL.stack.length = 0; else if (SHELL.page && SHELL.page !== name && !(o && o.replace)) SHELL.stack.push(SHELL.page);
+  SHELL.page = name; st.classList.remove('hidden');
+  for (const p of st.querySelectorAll('.page')) p.classList.toggle('on', p.id === 'page-' + name);
+  const t = document.getElementById('shell-title'); if (t) t.textContent = SHELL.titles[name] || '';
+  const b = document.getElementById('shell-back'); if (b) { b.style.visibility = root && !AF.on ? 'hidden' : ''; b.textContent = name === 'lobby' && AF.lobby && AF.lobby.role === 'guest' ? '← Leave' : AF.on && !SHELL.stack.length && name !== 'lobby' ? '← Fight' : '← Back'; }
+  const hb = document.getElementById('shell-help'); if (hb) hb.style.visibility = name === 'help' ? 'hidden' : '';
+  const card = document.getElementById('home-char'); if (card) { card.style.display = afSession() ? '' : 'none'; card.classList.toggle('on', name === 'career'); }
+  const pg = document.getElementById('shell-page'); if (pg) pg.scrollTop = 0;
+  afShellFigure(); afPreviewRun();
+}
+function afShellFigure() {                                  // the figure on the left — for a guest too, in the free kit
+  const slot = document.getElementById('home-preview-slot'); if (!slot || !window.ARENA_CAT) return;
+  const el = afPreviewEl(); if (el.parentNode !== slot) slot.appendChild(el);
+  const pal = (AF.lobby && afHostSeat() ? AF_TEAMS[AF.lobby.slots.findIndex(r => r.includes(afHostSeat()))] : AF_TEAMS[0]) || AF_TEAMS[0];
+  const gear = afPreviewGear(); if (!AF.preview.rig || JSON.stringify(AF.preview.gear) !== JSON.stringify(afGearClean(gear))) afPreviewSet(gear, pal.pal, AF.preview.mounted);
+  AF.preview.W = 0; afPreviewPose(0.3);
+}
+function afShellBack() {
+  const cur = SHELL.page; if (!cur) return;
+  if (cur === 'lobby') { try { if (window.coop && window.coop.connected) window.coop.leave(); } catch (e) {} afCloseLobbyUi(); AF.lobby = null; AF.pendingRoom = null; SHELL.stack.length = 0; }   // (leaving the lobby drops its trail)
+  if (cur === 'market') { AF.marketOpen = false; AF.tryItem = null; }
+  let prev = SHELL.stack.pop();
+  if (!prev) { if (AF.on) { afShellHide(); return; } prev = afSession() ? 'home' : 'title'; }   // (in the pit: back to the fight)
+  if (prev === 'market') { AF.marketOpen = true; afMarketRender(); afCareerLoad(); }
+  afShellPage(prev, { replace: true }); if (prev === 'home' || prev === 'title') afHomeResume();
+}
+function afShellHide() { const st = document.getElementById('start'); if (st) st.classList.add('hidden'); SHELL.page = null; SHELL.stack.length = 0; }   // (the pit: whatever page was up is forgotten — a ? in the fight starts a fresh trail, and Back goes to the fight)
+function afHomeVisible() { return afShellVisible(); }
+function afHomeRender() {
+  const c = AF.career, g = id => document.getElementById(id);
+  const nm = g('home-char-name'), sub = g('home-char-sub'), body = g('home-stats-body');
+  if (nm) nm.textContent = afSession() || '';
+  if (sub) sub.innerHTML = c ? '<b>' + c.rank.name + '</b> · <b>' + c.gold + '</b> gold · 🏆 ' + c.trophies + (c.rank.next ? ' · ' + (c.rank.nextAt - c.xp) + ' XP to ' + c.rank.next : '') : (window.net && window.net.arenaCareer ? 'reaching the war-net…' : 'no career yet');
+  if (body) body.innerHTML = afCareerSheetHtml(c);
+  if (afShellVisible()) { afShellFigure(); afPreviewRun(); }
+}
+function afHomeOpen(name) {
+  AF.homeOpen = true; const hn = document.getElementById('home-name'); if (hn) hn.textContent = name || afSession() || '';
+  if (!SHELL.page || SHELL.page === 'title' || SHELL.page === 'home') afShellPage('home');   // (signing in mid-lobby keeps the lobby)
+  afHomeRender(); afCareerLoad().then(afHomeRender);
+}
+function afHomeClose() { AF.homeOpen = false; if (!SHELL.page || SHELL.page === 'home' || SHELL.page === 'career') afShellPage('title'); else afShellPage(SHELL.page, { replace: true }); }
+function afHomeResume() { AF.tryItem = null; afHomeRender(); }   // back on the home / title: the figure wears what you own again
+(function afWireHome() {
+  const g = id => document.getElementById(id); if (!g('shell-page')) return;
+  g('home-arena-btn').onclick = () => { SFX.init && SFX.init(); afOpenLobby('host'); };
+  g('home-market-btn').onclick = () => { SFX.init && SFX.init(); afMarketOpen(); };
+  if (g('home-world-btn')) g('home-world-btn').onclick = () => { requestFullscreenSafe(); if (window.net && window.net.session) enterTheVale(); };
+  g('home-char').onclick = () => { if (SHELL.page === 'career') afShellBack(); else { afHomeRender(); afShellPage('career'); } };   // the name card under the figure opens the sheet
+  if (g('home-logout')) g('home-logout').onclick = () => window.net && window.net.logout();
+  g('shell-back').onclick = e => { e.stopPropagation(); afShellBack(); };
+  g('shell-help').onclick = e => { e.stopPropagation(); afShellPage('help'); };
+  const hb = g('help-btn'); if (hb) { hb.addEventListener('pointerdown', e => e.stopPropagation()); hb.addEventListener('click', e => { e.stopPropagation(); afShellPage('help'); }); }   // in the pit: the shell opens over the fight
+  window.addEventListener('keydown', e => {
+    if (e.target && /input|textarea/i.test(e.target.tagName)) return;
+    if (e.key === '?' && !e.repeat) { if (SHELL.page === 'help' && afShellVisible()) afShellBack(); else afShellPage('help'); }
+    else if (e.key === 'Escape' && afShellVisible() && AF.on) afShellBack();
+  });
+  BV.help = v => { if (v === false) { if (SHELL.page === 'help') afShellBack(); } else afShellPage('help'); return SHELL.page; };
+  BV.shell = () => ({ page: SHELL.page, stack: SHELL.stack.slice(), visible: afShellVisible(), title: (document.getElementById('shell-title') || {}).textContent, back: (document.getElementById('shell-back') || {}).style && document.getElementById('shell-back').style.visibility !== 'hidden' && document.getElementById('shell-back').textContent });   // test: where the shell is
+})();
 function afMarketMsg(t, bad) { AF.marketMsg = t ? { t, bad } : null; const el = document.getElementById('af-market-msg'); if (el) { el.textContent = t || ''; el.style.color = bad ? '#ff9a9a' : '#ffe089'; el.style.display = t ? '' : 'none'; } }
 function afMarketAct(act, b) {                              // every button in the market: buy / wear / take off / try / mount
   const a = act.split(':'), I = ARENA_CAT.ARENA_ITEMS, it = I[a[a.length - 1]];
+  if (a[0] === 'tab') { AF.marketTab = a[1]; afMarketRender(); const pg = document.getElementById('shell-page'); if (pg) pg.scrollTop = 0; return; }
   if (a[0] === 'try') { AF.tryItem = AF.tryItem === a[1] ? null : a[1]; afMarketRender(); afPreviewSet(null, AF.preview.pal, AF.preview.mounted); return; }
   if (a[0] === 'untry') { AF.tryItem = null; afMarketRender(); afPreviewSet(null, AF.preview.pal, AF.preview.mounted); return; }
   if (a[0] === 'mount') { afPreviewSet(null, AF.preview.pal, !AF.preview.mounted); return; }
@@ -19917,49 +21028,33 @@ function afMarketAct(act, b) {                              // every button in t
 }
 function afMarketRender() {
   const p = document.getElementById('af-market'); if (!p || !window.ARENA_CAT) return; const c = AF.career, I = ARENA_CAT.ARENA_ITEMS;
-  const right0 = p.querySelector('#af-market-right'), keepScroll = right0 ? right0.scrollTop : 0;
+  const pg = document.getElementById('shell-page'), keepScroll = pg ? pg.scrollTop : 0;
   const btn = (act, label, dis) => '<button data-act="' + act + '" ' + (dis ? 'disabled' : '') + ' style="cursor:' + (dis ? 'default' : 'pointer') + ';padding:' + (TOUCH ? '9px 12px' : '6px 12px') + ';border-radius:7px;border:1px solid #ffcf5b;background:rgba(255,180,80,.16);color:#ffe2a8;font-weight:700;opacity:' + (dis ? .45 : 1) + ';touch-action:manipulation">' + label + '</button>';
   // LEFT: the head (title, purse, the word on your last buy) and the fighter, pinned
-  let left = '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><b style="color:#ffd34d;letter-spacing:1px;font-size:15px">🏪 Market</b><button id="af-market-close" style="cursor:pointer;padding:6px 12px;border-radius:8px;border:1px solid #6b5e7a;background:#2a2233;color:#f3ead8;font-weight:700;touch-action:manipulation;font-size:12px">← Lobby</button></div>' +
-    (c ? '<div style="font-size:12px;margin:4px 0 6px;color:#ffe2a8"><b style="color:#ffd34d">' + c.rank.name + '</b> · <b>' + c.gold + '</b> gold · 🏆 ' + c.trophies + '</div>' : '<div style="font-size:12px;margin:4px 0 6px;opacity:.7">' + (afSession() ? 'reaching the war-net…' : 'sign in to keep a career') + '</div>') +
+  let left = (c ? '<div style="font-size:12px;margin:4px 0 6px;color:#ffe2a8"><b style="color:#ffd34d">' + c.rank.name + '</b> · <b>' + c.gold + '</b> gold · 🏆 ' + c.trophies + '</div>' : '<div style="font-size:12px;margin:4px 0 6px;opacity:.7">' + (afSession() ? 'reaching the war-net…' : 'sign in to keep a career') + '</div>') +
     '<div id="af-market-msg" style="display:' + (AF.marketMsg ? '' : 'none') + ';margin-bottom:6px;padding:6px 9px;border-radius:8px;background:rgba(255,211,77,.12);border:1px solid rgba(255,207,91,.5);font-size:12px;font-weight:700;color:' + (AF.marketMsg && AF.marketMsg.bad ? '#ff9a9a' : '#ffe089') + '">' + (AF.marketMsg ? AF.marketMsg.t : '') + '</div>' +
     '';
-  // RIGHT: the wares, scrolling; a card is a TRY-ON, its button the buy
-  let html = '';
-  if (c) {
-    const r = c.rank, lo = ARENA_CAT.ARENA_RANKS[r.idx][1], prog = r.nextAt ? Math.round((c.xp - lo) / (r.nextAt - lo) * 100) : 100;
-    html += '<div style="padding:8px 12px;border:1px solid rgba(255,207,91,.3);border-radius:10px;background:rgba(0,0,0,.3);font-size:12px;line-height:1.6"><b style="color:#ffd34d">' + r.name + '</b> · ' + c.xp + ' XP' + (r.next ? ' · ' + r.next + ' at ' + r.nextAt : '') + ' <span style="display:inline-block;vertical-align:middle;height:5px;width:90px;background:#2a2438;border-radius:3px;overflow:hidden"><span style="display:block;height:100%;width:' + prog + '%;background:#ffd34d"></span></span><br>' +
-      c.matches + ' fights · ' + c.wins + ' won · ' + c.kills + ' kills · ' + c.deaths + ' deaths · ' + c.stars + '× star · ' + Math.round(c.damage) + ' damage · skills: sword ' + c.skills.sword.level + ' · bow ' + c.skills.bow.level + ' · riding ' + c.skills.riding.level + '</div>';
-  }
-  const slotNames = { sword: 'Swords', armor: 'Armor', bow: 'Bows', horse: 'Horses' };
-  for (const slot of ['sword', 'armor', 'bow', 'horse']) {
-    const eq = c ? c.equipped[slot] : (AF_GEAR_FREE[slot] || null);
-    html += '<h3 style="margin:12px 0 6px;color:#ffe2a8;letter-spacing:1px;font-size:14px">' + slotNames[slot] + ' <span style="font-size:11px;opacity:.7;font-weight:400">— ' + (eq ? 'wearing ' + I[eq].name : slot === 'armor' ? 'none' : 'none (you can\'t ride in with ' + (slot === 'bow' ? 'a bow' : 'a horse') + ' until you own one)') + (eq && slot !== 'sword' && c ? ' · ' + btn('unequip:' + slot, 'take off') : '') + '</span></h3>';
-    html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(' + (TOUCH ? 150 : 190) + 'px,1fr));gap:7px">';
-    for (const id in I) { const it = I[id]; if (it.slot !== slot || it.unique) continue; const owned = !!(c && c.items.includes(id)), why = c ? ARENA_CAT.lockReason(id, c) : 'sign in', trying = AF.tryItem === id;
-      const stat = [it.dmg ? 'dmg ×' + it.dmg : '', it.reach ? 'reach +' + it.reach : '', it.hp ? (slot === 'horse' ? it.hp + ' hp' : '+' + it.hp + ' hp') : '', it.poise ? '+' + it.poise + ' poise' : '', it.move ? 'speed ' + Math.round(it.move * 100) + '%' : '', it.speed && it.speed !== 1 ? 'pace ×' + it.speed : ''].filter(Boolean).join(' · ');
-      const need = [it.rank ? ARENA_CAT.ARENA_RANKS[it.rank][0] : '', it.skill ? it.skill[0] + ' ' + it.skill[1] : ''].filter(Boolean).join(', ');
-      html += '<div data-act="try:' + id + '" style="cursor:pointer;border:1px solid ' + (trying ? '#ffe089' : eq === id ? '#ffd34d' : owned ? 'rgba(255,207,91,.5)' : '#3a3247') + ';border-radius:9px;padding:8px 10px;background:' + (trying ? 'rgba(255,211,77,.12)' : 'rgba(0,0,0,.3)') + '"><div style="display:flex;justify-content:space-between;gap:6px"><b style="font-size:13px">' + it.name + '</b><span style="color:#ffe089;font-size:12px;white-space:nowrap">' + (owned ? (eq === id ? 'worn' : 'owned') : it.price + ' g') + '</span></div>' +
-        '<div style="font-size:11px;opacity:.8;margin:2px 0">' + (stat || 'no bonus') + (need && !owned ? ' · needs ' + need : '') + '</div><div style="margin-top:5px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">' +
-        (owned ? (eq === id ? '' : btn('equip:' + slot + ':' + id, 'Wear')) : btn('buy:' + id, why ? why : 'Buy ' + it.price + ' g', !!why)) + '<span style="font-size:11px;opacity:.55">' + (trying ? 'on him now' : 'tap to try on') + '</span></div></div>';
-    }
-    html += '</div>';
-  }
-  const uniques = c ? c.items.filter(id => I[id] && I[id].unique) : [];
-  html += '<h3 style="margin:12px 0 6px;color:#ffe2a8;letter-spacing:1px;font-size:14px">Uniques <span style="font-size:11px;opacity:.7;font-weight:400">— loot only; a look, a hair of power. Tap one to see it.</span></h3><div style="display:flex;gap:6px;flex-wrap:wrap">' +
-    Object.keys(I).filter(id => I[id].unique).map(id => { const it = I[id], owned = uniques.includes(id), eq = c && c.equipped[it.slot] === id, trying = AF.tryItem === id; return '<div data-act="try:' + id + '" style="cursor:pointer;border:1px solid ' + (trying ? '#ffe089' : eq ? '#ffd34d' : owned ? 'rgba(255,207,91,.5)' : '#3a3247') + ';border-radius:9px;padding:6px 10px;background:rgba(0,0,0,.3);font-size:12px;opacity:' + (owned ? 1 : .7) + '"><b>' + it.name + '</b> <span style="opacity:.6">' + (owned ? (eq ? '· worn' : '') : '· not yet yours') + '</span> ' + (owned && !eq ? btn('equip:' + it.slot + ':' + id, 'Wear') : owned && eq ? btn('unequip:' + it.slot, 'Take off') : '') + '</div>'; }).join('') + '</div>';
-  if (c) html += '<h3 style="margin:12px 0 6px;color:#ffe2a8;letter-spacing:1px;font-size:14px">Achievements</h3><div style="display:flex;gap:5px;flex-wrap:wrap">' + ARENA_CAT.ARENA_ACHIEVEMENTS.map(([id, label]) => '<span style="font-size:11px;padding:3px 8px;border-radius:12px;border:1px solid ' + (c.achievements.includes(id) ? '#ffd34d;color:#ffe089' : '#3a3247;opacity:.45') + '">' + (c.achievements.includes(id) ? '🏅 ' : '') + label + '</span>').join('') + '</div>';
-  html += '<p style="font-size:11px;opacity:.55;margin:14px 0 30px">XP and gold come from every fight — more for a bigger, better army; a win pays half again, the ★ star of the match 60% more. Beat real players and you take 8% of their purse (at most 60 gold each). One win in four drops a purse, one in twenty a unique.</p>';
-  p.innerHTML = '<div id="af-market-left" style="position:relative;flex:0 0 ' + (TOUCH ? 'clamp(220px, 40vw, 360px)' : 'clamp(260px, 34vw, 400px)') + ';min-height:0;border-right:1px solid #3a3247;background:rgba(0,0,0,.25)"><div id="af-preview-slot" style="position:absolute;inset:0"></div><div id="af-market-head" style="position:absolute;left:0;right:0;top:0;padding:8px 10px;background:linear-gradient(to bottom,rgba(8,6,14,.96),rgba(8,6,14,.8) 70%,rgba(8,6,14,0));z-index:2">' + left + '</div></div><div id="af-market-right" style="flex:1;min-width:0;overflow-y:auto;padding:10px 14px">' + html + '</div>';
-  const slot = document.getElementById('af-preview-slot'); if (slot) { slot.appendChild(afPreviewEl()); const pal = (AF.lobby && afHostSeat() ? AF_TEAMS[AF.lobby.slots.findIndex(r => r.includes(afHostSeat()))] : AF_TEAMS[0]) || AF_TEAMS[0]; const g = afPreviewGear(); if (!AF.preview.rig || JSON.stringify(AF.preview.gear) !== JSON.stringify(afGearClean(g))) afPreviewSet(g, pal.pal, AF.preview.mounted); }
-  p.querySelector('#af-market-right').scrollTop = keepScroll;
-  document.getElementById('af-market-close').onclick = afMarketClose;
+  // RIGHT: one tab at a time — a picture card per ware; the card is a TRY-ON, its button the buy
+  const TABS = [['sword', 'Swords'], ['armor', 'Armor'], ['bow', 'Bows'], ['horse', 'Horses'], ['unique', 'Uniques']]; if (!AF.marketTab) AF.marketTab = 'sword'; const tab = AF.marketTab;
+  let html = '<div class="mk-tabs">' + TABS.map(([k, l]) => '<button data-act="tab:' + k + '" class="' + (tab === k ? 'on' : '') + '">' + l + '</button>').join('') + '</div>';
+  const statOf = it => [it.dmg ? '×' + it.dmg + ' dmg' : '', it.reach ? (it.reach > 0 ? '+' : '') + it.reach + ' reach' : '', it.hp ? (it.slot === 'horse' ? it.hp + ' hp' : '+' + it.hp + ' hp') : '', it.poise ? '+' + it.poise + ' poise' : '', it.move ? Math.round(it.move * 100) + '% speed' : '', it.speed && it.speed !== 1 ? '×' + it.speed + ' pace' : ''].filter(Boolean).join(' · ');
+  const ids = Object.keys(I).filter(id => tab === 'unique' ? I[id].unique : I[id].slot === tab && !I[id].unique);
+  if (tab !== 'unique') { const eq = c ? c.equipped[tab] : (AF_GEAR_FREE[tab] || null);
+    html += '<div class="mk-head">' + (eq ? 'Wearing <b>' + I[eq].name + '</b>' + (tab !== 'sword' && c ? ' ' + btn('unequip:' + tab, 'take off') : '') : tab === 'armor' ? 'No armour yet' : 'None yet — ' + (tab === 'bow' ? 'a bow lets you ride in as an archer' : 'a horse lets you ride in')) + '</div>'; }
+  else html += '<div class="mk-head">Loot only — a look, and a hair of power.</div>';
+  html += '<div class="mk-grid">' + ids.map(id => {
+    const it = I[id], owned = !!(c && c.items.includes(id)), eq = c ? c.equipped[it.slot] === id : (!it.unique && AF_GEAR_FREE[it.slot] === id), trying = AF.tryItem === id, why = it.unique ? null : (c ? ARENA_CAT.lockReason(id, c) : 'sign in'), th = afThumb(id);
+    const foot = eq && !c ? '<span>worn</span>' : owned ? (eq ? '<span>worn</span>' : btn('equip:' + it.slot + ':' + id, 'Wear')) : it.unique ? '<span class="mk-lock">not yet yours</span>' : why === 'sign in' ? '<span>' + it.price + ' g</span>' : why ? '<span class="mk-lock">🔒 ' + why + '</span>' : btn('buy:' + id, 'Buy ' + it.price + ' g');
+    return '<div class="mk-card' + (trying ? ' on' : '') + (eq ? ' worn' : owned ? ' owned' : '') + (why && !owned && !eq ? ' locked' : '') + '" data-act="try:' + id + '"><div class="mk-img">' + (th ? '<img src="' + th + '" alt="">' : '<span class="mk-wait">…</span>') + '</div><div class="mk-name">' + it.name + '</div><div class="mk-stat">' + statOf(it) + '</div><div class="mk-foot">' + foot + '</div></div>'; }).join('') + '</div>';
+  p.innerHTML = '<div id="af-market-head" style="font-size:14px;color:#e8def8">' + left + '</div><div id="af-market-right">' + html + '</div>';   // (the figure is the shell's, on the left; a try-on shows on him with its buy strip under him)
+  afShellFigure();
+  if (pg) pg.scrollTop = keepScroll;
   for (const b of p.querySelectorAll('#af-market-right [data-act]')) b.onclick = e => { e.stopPropagation(); afMarketAct(b.getAttribute('data-act'), b.tagName === 'BUTTON' ? b : null); };
 }
 (function afWireLobbyUi() {
   const g = id => document.getElementById(id);
-  if (!g('arena-lobby')) return;
-  const bump = (key, d) => { const L = AF.lobby; if (!L || L.role !== 'host') return; const lim = key === 'teams' ? [AF_LIM.teamsMin, AF_LIM.teamsMax] : [AF_LIM.perMin, AF_LIM.perMax];
+  if (!g('page-lobby')) return;
+  const bump = (key, d) => { const L = AF.lobby; if (!L || L.role !== 'host') return; const LM = afLim(L), lim = key === 'teams' ? [LM.teamsMin, LM.teamsMax] : [LM.perMin, LM.perMax];
     L[key] = clamp(L[key] + d, lim[0], lim[1]); afResize(L); afLobbyRender(); afLobbyBroadcast(); };
   g('al-teams-minus').onclick = () => bump('teams', -1); g('al-teams-plus').onclick = () => bump('teams', 1);
   g('al-per-minus').onclick = () => bump('per', -1); g('al-per-plus').onclick = () => bump('per', 1);
@@ -19969,6 +21064,7 @@ function afMarketRender() {
     if (L.role === 'host') { const s = afHostSeat(); if (s) s.weapon = w; afLobbyRender(); afLobbyBroadcast(); } else { if (window.coop) window.coop.send({ k: 'weapon', w }); afLobbyRender(); } };
   g('al-wpn-sword').onclick = () => wpn('sword'); g('al-wpn-bow').onclick = () => wpn('bow'); if (g('al-wpn-horse')) g('al-wpn-horse').onclick = () => wpn('horse');
   for (const pt of ['cosy', 'wide', 'vast', 'colossal']) { const el = g('al-pit-' + pt); if (el) el.onclick = () => setOpt('pit', pt); }
+  for (const v of ['colosseum', 'pit']) { const el = g('al-venue-' + v); if (el) el.onclick = () => { const L = AF.lobby; if (!L || L.role !== 'host') return; if (afSetVenue(L, v)) afLobbyMsg(''); afLobbyRender(); afLobbyBroadcast(); }; }
   for (const tm of ['day', 'dusk', 'night']) { const el = g('al-time-' + tm); if (el) el.onclick = () => setOpt('time', tm); }
   for (const wx of ['clear', 'rain']) { const el = g('al-wx-' + wx); if (el) el.onclick = () => setOpt('weather', wx); }
   for (const gr of Object.keys(AF_GROUNDS)) { const el = g('al-gr-' + gr); if (el) el.onclick = () => setOpt('ground', gr); }
@@ -19977,7 +21073,6 @@ function afMarketRender() {
   g('al-inv-btn').onclick = () => { const i = g('al-inv-name'); afInvite(i.value); i.value = ''; };
   g('al-inv-name').addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') { afInvite(g('al-inv-name').value); g('al-inv-name').value = ''; } });
   g('al-start').onclick = () => { if (typeof requestFullscreenSafe === 'function' && TOUCH) requestFullscreenSafe(); SFX.init && SFX.init(); afStartFight(); };
-  g('al-back').onclick = () => { try { if (window.coop && window.coop.connected) window.coop.leave(); } catch (e) {} afCloseLobbyUi(); AF.lobby = null; AF.pendingRoom = null; g('start').classList.remove('hidden'); };
   g('arena-btn').onclick = () => { SFX.init && SFX.init(); afOpenLobby('host'); };
   g('ai-accept').onclick = afAcceptInvite; g('ai-decline').onclick = () => afDeclineInvite(false);
 })();
@@ -19989,12 +21084,19 @@ function afTitlePresence() {
     if (pend && pend.room) afJoin(pend.room, pend.host);
   });
 }
-BV.arena = (cfg) => { afOpenLobby('host'); if (cfg && cfg.intro != null) AF.introOff = !cfg.intro; if (cfg && cfg.film) AF.introFilm = cfg.film; if (cfg && AF.lobby) { if (cfg.teams) AF.lobby.teams = clamp(cfg.teams, AF_LIM.teamsMin, AF_LIM.teamsMax); if (cfg.per) AF.lobby.per = clamp(cfg.per, AF_LIM.perMin, AF_LIM.perMax); if (cfg.xp) AF.lobby.xp = cfg.xp; afResize(AF.lobby);
-  if (cfg.npcXp) AF.lobby.npcXp = cfg.npcXp; if (cfg.arch) AF.lobby.npcArch = AF.lobby.npcArch.map(row => row.map(() => cfg.arch)); afLobbyRender(); if (cfg.start) afStartFight(); } return BV.arenaStatus(); }; // (npcXp / arch: test overrides)
+BV.arena = (cfg) => { afOpenLobby('host'); if (cfg && cfg.intro != null) AF.introOff = !cfg.intro; if (cfg && cfg.outro != null) AF.outroOff = !cfg.outro; if (cfg && cfg.film) AF.introFilm = cfg.film; if (cfg && AF.lobby) { if (cfg.venue) afSetVenue(AF.lobby, cfg.venue); const LM = afLim(AF.lobby); if (cfg.teams) AF.lobby.teams = clamp(cfg.teams, LM.teamsMin, LM.teamsMax); if (cfg.per) AF.lobby.per = clamp(cfg.per, LM.perMin, LM.perMax); if (cfg.xp) AF.lobby.xp = cfg.xp; afResize(AF.lobby);
+  if (cfg.npcXp) AF.lobby.npcXp = cfg.npcXp; if (cfg.clutter != null) AF.clutterK = cfg.clutter; if (cfg.time) AF.lobby.time = cfg.time; if (cfg.weather) AF.lobby.weather = cfg.weather; if (cfg.pit) AF.lobby.pit = cfg.pit; if (cfg.ground) AF.lobby.ground = cfg.ground; if (cfg.arch) AF.lobby.npcArch = AF.lobby.npcArch.map(row => row.map(() => cfg.arch)); afLobbyRender(); if (cfg.start) afStartFight(); } return BV.arenaStatus(); }; // (npcXp / arch: test overrides)
 BV.arenaStart = () => { afStartFight(); return BV.arenaStatus(); };
+BV.ruinPreview = (scale = 1.9) => { if (!AF_RUINPACK || !AF.on) return null; const m = afMesher(), names = Object.keys(AF_RUINPACK); names.forEach((n, i) => { const x = (i - (names.length - 1) / 2) * 7; m.add(afPackGeo(n), x, afY(x, 0), 0, 0, null, scale, scale, scale); }); const mesh = m.build(); scene.add(mesh); AF.props.push(mesh); return names; };   // test: the pack's pieces in a row across the sand
+BV.renderInfo = () => { renderer.info.autoReset = false; renderer.info.reset(); if (AF.on) afFrame((AF.last || performance.now()) + 16, true); const r = { calls: renderer.info.render.calls, tris: renderer.info.render.triangles, crowd: AF.crowdN || 0 }; renderer.info.autoReset = true; return r; };   // test: one whole frame's draw calls / triangles (all passes)
+BV.arenaTerr = () => ({ rocks: AF.terr.rocks.length, kinds: AF.terr.rocks.reduce((m, K) => (m[K.kind] = (m[K.kind] || 0) + 1, m), {}), deco: (AF.terr.deco || []).length, inRock: AF.bodies.filter(b => !b.dead && afRockAt(b.x, b.z, 0.5)).map(b => b.idx) });   // test: the pit's furniture, and who stands inside a piece
+BV.arenaCam = (o) => { if (!AF.on) return null; if (o && o.follow != null) { AF.spec.target = AF.bodies[o.follow]; AF.spec.mode = 'follow'; AF.spec.touched = true; if (o.yaw != null) AF.cam.yaw = o.yaw; if (o.pitch != null) AF.cam.pitch = o.pitch; if (o.dist != null) AF.cam.dist = o.dist; } else if (o) { afSpecFree(); if (o.r != null) AF.orbit.r = o.r; if (o.phi != null) AF.orbit.phi = o.phi; if (o.theta != null) AF.orbit.theta = o.theta; if (o.fx != null) AF.spec.fx = o.fx; if (o.fz != null) AF.spec.fz = o.fz; } if (o && o.snap) for (let i = 0; i < 90; i++) afCamera(1 / 30); return camera.position.toArray().map(v => +v.toFixed(1)); };   // test: place the spectator lens (orbit r/phi/theta/fx/fz, or follow a body idx with yaw/pitch/dist); snap converges the lerp
 BV.arenaFrame = (now) => { if (AF.on) afFrame(now, true); return AF.phase; };   // test: render one arena frame at this clock (no rAF) — for recording the entrance
 BV.arenaHorseHit = (id, amt) => { const h = AF.horses[id]; if (h) afDamageHorse(h, amt, AF.bodies.find(b => !b.dead && (!h.rider || b.team !== h.rider.team)) || AF.bodies[0], false); return BV.arenaHorses(); };   // test: wound a horse
+BV.arenaSeat = (w) => { const s = AF.lobby && afHostSeat(); if (s) { s.weapon = w; AF.lobby.weapon = w; } return s && s.weapon; };   // test: what the host rides in with (sword / bow / horse), bypassing the gear check
+BV.arenaMount = (idx, hid) => { const b = AF.bodies[idx], h = AF.horses[hid]; if (!b || !h || h.dead) return null; if (h.rider) { const r = h.rider; afDismount(r, false, true); r.mountCd = 99; } if (b.mounted) afDismount(b, false, true); b.mountCd = 0; afMount(b, h, true); return { mounted: b.mounted, weapon: b.weapon, canBow: b.canBow }; };   // test: put a man in a saddle (its rider steps down)
 BV.arenaKill = (idx) => { const b = AF.bodies[idx]; if (b && !b.dead) afKill(b, null); return BV.arenaStatus(); };   // test: fell a man
+BV.previewPick = (kind) => { const P = AF.preview; return P && P.floor ? { ok: kind ? afPreviewPickup(kind) : null, held: { ...P.floor.held }, busy: P.floor.busy, yaw: +P.yaw.toFixed(2), sword: P.floor.sword && P.floor.sword.visible, shield: P.floor.shield && P.floor.shield.visible } : null; };   // test: the home floor — pick 'sword' | 'shield', or read it
 BV.previewPose = (name) => { const P = AF.preview; if (P && P.anim) { setPose(P.anim, name, 0.01); updateAnimator(P.anim, 1); } return !!P; };   // test: pose the market figure
 BV.arenaHorses = () => AF.horses.map(h => ({ id: h.id, hp: Math.round(h.hp), dead: h.dead, rider: h.rider ? h.rider.name : null, x: +h.x.toFixed(1), z: +h.z.toFixed(1), sp: +h.sp01.toFixed(2), pace: h.pace }));
 BV.arenaAutoMe = (xp) => { const b = AF.me; if (!b) return null; b.ctrl = 'ai'; b.inp = afFreshInput(); b.inp.yaw = b.yaw; if (xp != null) { b.xp = xp; b.skill = xp / 100; } AF.me = null; return b.idx; }; // test: hand my fighter to the brain
@@ -20004,13 +21106,39 @@ BV.arenaNet = () => ({ id: window.coop && window.coop.id, room: window.coop && w
   lobby: AF.lobby ? { role: AF.lobby.role, seats: AF.lobby.slots.flat().filter(Boolean).map(x => x.name + ':' + x.kind + ':' + x.peer + (x.away ? ':away' : '')), msg: (document.getElementById('al-msg') || {}).textContent } : null,
   roster: AF.on ? AF.roster.filter(e => e.kind !== 'npc').map(e => e.name + ':' + e.kind + ':' + e.peer + (e.away ? ':away' : '')) : null, acks: AF.goAcks ? [...AF.goAcks] : null,
   bodies: AF.on ? AF.bodies.filter(b => b.kind !== 'npc' || b.awayPeer).map(b => b.name + ':' + b.ctrl + ':' + (b.peer || '')) : null });
-BV.arenaStatus = () => ({ on: AF.on, role: AF.role, phase: AF.phase, t: +AF.t.toFixed(1), teams: AF.cfg.teams, per: AF.cfg.per, seed: AF.seed, over: AF.over, winner: AF.winner,
+BV.arenaStatus = () => ({ on: AF.on, role: AF.role, phase: AF.phase, t: +AF.t.toFixed(1), teams: AF.cfg.teams, per: AF.cfg.per, venue: AF.cfg.venue, seed: AF.seed, over: AF.over, winner: AF.winner,
   bodies: AF.bodies.map(b => ({ i: b.idx, name: b.name, team: b.team, kind: b.kind, ctrl: b.ctrl, weapon: b.weapon, hp: Math.round(b.hp), dead: b.dead, kills: b.kills, x: +b.x.toFixed(1), z: +b.z.toFixed(1), state: afStateCode(b) })),
   me: AF.me ? AF.me.idx : null, lobby: AF.lobby ? { role: AF.lobby.role, teams: AF.lobby.teams, per: AF.lobby.per, seats: AF.lobby.slots.map(r => r.map(s => s ? s.name : null)) } : null, online: AF.online.map(p => p.name) });
 BV.arenaIntro = (cmd) => { if (cmd === 'skip') afIntroSkip(); else if (typeof cmd === 'number' && AF.intro) { const I = AF.intro, n = clamp(cmd, 0, I.shots.length - 1); for (let k = I.i + 1; k < n; k++) if (I.shots[k].onStart) I.shots[k].onStart(); I.i = n; afIntroApplyShot(); } /* (a jump still fires the beats it skips over) */ else if (cmd && cmd.advance && AF.intro) { for (let t = 0; t < cmd.advance && AF.intro; t += 1 / 60) { afIntroStep(1 / 60); if (AF.intro) afIntroCamera(1 / 60); } } const I = AF.intro; return I ? { film: I.film, shot: I.i, of: I.shots.length, t: +I.t.toFixed(1), shotT: +I.shotT.toFixed(2), ts: AF.timeScale, released: I.released, cap: I.cap, stars: I.stars.map(a => a.map(b => b.name + ':' + b.xp)), gates: AF.gates.map(g => +g.open.toFixed(2)), march: AF.bodies.map(b => b.intro ? b.intro.phase[0] : '-').join('') } : { shot: -1, phase: AF.phase }; };   // test: the entrance (skip / jump to a shot / read it)
+BV.arenaOutro = (cmd) => { const O = AF.outro; if (cmd === 'skip') afOutroSkip(); else if (typeof cmd === 'number' && O) { const n = clamp(cmd, 0, O.shots.length - 1); for (let k = O.i + 1; k < n; k++) if (O.shots[k].onStart) O.shots[k].onStart(); O.i = n; afOutroApplyShot(); } else if (cmd && cmd.advance && O) { for (let t = 0; t < cmd.advance && AF.outro; t += 1 / 60) { afTick(1 / 60); afOutroStep(1 / 60); if (AF.outro) afOutroCamera(1 / 60); } }
+  const V = AF.victory, P = AF.outro, ndc = V && V.mvp ? tmpV.set(V.mvp.x, afY(V.mvp.x, V.mvp.z) + 2, V.mvp.z).project(camera) : null; return { film: !!P, mvpScreen: ndc ? [+ndc.x.toFixed(2), +ndc.y.toFixed(2)] : null, view: camera.view ? [camera.view.enabled, camera.view.offsetX, camera.view.fullWidth] : null, shot: P ? P.i : -1, of: P ? P.shots.length : 0, t: P ? +P.t.toFixed(1) : 0, shotT: P ? +P.shotT.toFixed(2) : 0, mvp: V && V.mvp ? V.mvp.name + (V.mvp.dead ? ' (fallen)' : '') : null, winners: V ? V.winners.map(b => b.name + ':' + (b.anim ? b.anim.name : '-')).join(' ') : '', roar: +AF.roar.toFixed(2), cam: [camera.position.x, camera.position.y, camera.position.z].map(v => +v.toFixed(1)), fov: +AF.fov.toFixed(0) }; };   // test: the end-game film (skip / jump to a shot / advance seconds / read it)
 BV.arenaStep = (steps = 60, dt = 1 / 60) => { if (AF.phase === 'intro') afIntroEnd(); if (AF.phase === 'countdown') { AF.phase = 'fight'; AF.countdown = 0; } for (let i = 0; i < steps; i++) afTick(dt); return BV.arenaStatus(); };
 BV.arenaInput = (patch) => { Object.assign(AF.locIn, patch || {}); return { ...AF.locIn }; };
 
+
+// BV.showcase(o): stand ONE fighter in front of the camera for a look at the character — {team, weapon, armor, hero, real}. BV.showcase(null) clears.
+BV.showcase = (o) => {
+  if (BV._show) { scene.remove(BV._show.group); BV._show = null; }
+  if (o === null) return null; o = o || {};
+  const pal = (AF_TEAMS[o.team || 0] || AF_TEAMS[0]).pal;
+  const h = buildHumanoid(pal, o.scale || 1, o.weapon || 'sword', { hero: o.hero !== false, both: !!o.both, armor: o.armor, plume: AF_TEAM_HEX[o.team || 0] });
+  if (o.real && REAL_RIGS.size) wearRealRig(h, o.real, { team: pal.cloth });
+  else if (o.model !== false && MODEL_RIGS.size && (o.model || MODEL_ON)) wearModelRig(h, o.model || MODEL_NAME, { team: pal.cloth });
+  const fwd = new THREE.Vector3(); camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
+  const p = o.at ? new THREE.Vector3().fromArray(o.at) : camera.position.clone().add(fwd.multiplyScalar(o.dist || 7)); p.y = o.y != null ? o.y : (typeof afY === 'function' && AF.on ? afY(p.x, p.z) : 0);
+  h.group.position.copy(p); h.group.rotation.y = o.yaw != null ? o.yaw : Math.atan2(camera.position.x - p.x, camera.position.z - p.z);
+  scene.add(h.group); BV._show = h; return h;
+};
+BV.shot = (w = 1280, h = 800, pose) => {              // a still of the scene from a given camera {pos, look, fov}: no sim step, no post — for character renders
+  const sz = renderer.getSize(new THREE.Vector2()), pr = renderer.getPixelRatio();
+  renderer.setPixelRatio(1); renderer.setSize(w, h, false);
+  const cam = camera.clone(); cam.aspect = w / h; if (pose && pose.fov) cam.fov = pose.fov; cam.updateProjectionMatrix();
+  if (pose) { cam.position.fromArray(pose.pos); cam.lookAt(new THREE.Vector3().fromArray(pose.look)); cam.updateMatrixWorld(true); }
+  renderer.setRenderTarget(null); renderer.render(scene, cam);
+  const url = canvas.toDataURL('image/jpeg', 0.92);
+  renderer.setPixelRatio(pr); renderer.setSize(sz.x, sz.y, false);
+  return url;
+};
 BV.arenaShot = (w = 1280, h = 720) => {              // headless: render one frame at a fixed size (a hidden tab has none) and hand back a JPEG data URL
   const sz = renderer.getSize(new THREE.Vector2()), pr = renderer.getPixelRatio();
   renderer.setPixelRatio(1); renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
@@ -20026,6 +21154,11 @@ BV.arenaPump = (frames = 60, dt = 1 / 60) => { for (let i = 0; i < frames; i++) 
 // and DEFER the universe boot until the player clicks "Enter the Vale". The game no longer auto-
 // enters: you sign in (or create an account) first, and entering loads your active character.
 const _editQ = (typeof location !== 'undefined') ? new URLSearchParams(location.search) : null;
+// Arena-first (2026-09-12): Arena Fights is the product; the open world is still built but hidden from
+// the title screen. `?world` (or localStorage bv-world=1) shows "Enter the Vale" and the world copy again.
+const WORLD_ON = !!(_editQ && _editQ.has('world')) || (() => { try { return localStorage.getItem('bv-world') === '1'; } catch (e) { return false; } })();
+if (typeof document !== 'undefined' && document.body) document.body.classList.toggle('world', WORLD_ON);
+BV.worldOn = WORLD_ON;
 const _editWord = (_editQ && _editQ.get('edit')) ||
   ((typeof location !== 'undefined' && location.hash || '').match(/edit=([^&]+)/) || [])[1];
 // the deferred universe boot: a PINNED #u=<seed> reproduces a dramatic station, else the humble drifter.
@@ -20070,3 +21203,4 @@ if (window.BV_BATTLE || (_editQ && _editQ.has('battle'))) {
 }
 
 })();
+{ try { if (!SHELL.page) afShellPage(afSession() ? 'home' : 'title'); } catch (e) { console.warn('[shell]', e); } }   // the shell shows from the first frame: the figure left, the title right

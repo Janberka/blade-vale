@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const Database = require('better-sqlite3');
 
-const DB_PATH = process.env.BV_DB || path.join(__dirname, 'world.db');
+const DB_PATH = process.env.BV_DB || path.join(__dirname, 'play.db');   // the live game's DB (accounts, careers, worlds) lives with the server, not in /tmp (macOS wipes /tmp on reboot); BV_DB overrides
 const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');     // concurrent reads while a write is in flight
 db.pragma('synchronous = NORMAL');

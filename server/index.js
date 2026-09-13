@@ -16,6 +16,26 @@ const admin = require('./admin');
 const settlements = require('./settlements');
 const arena = require('./arena');       // the arena career: XP, gold, ranks, the marketplace
 const zlib = require('zlib');
+const fs = require('fs'), path = require('path');
+
+// ----- the game itself, served from the repo: one port carries the page, the API and the /coop relay, so a single
+// tunnel (cloudflared / ngrok) in front of it puts the whole thing on the internet. Anything under the server, the
+// databases, the training and tooling trees is never served. -----
+const STATIC_ROOT = path.resolve(__dirname, '..');
+const STATIC_DENY = /^\/(server|node_modules|\.git|train|tools|bot|perf|mocap|updates|admin\.html)(\/|$)|\.(db|sqlite3|db-wal|db-shm|log|md|py|swift|sh)$|\/\./;
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.gltf': 'model/gltf+json', '.bin': 'application/octet-stream', '.usdz': 'model/vnd.usdz+zip', '.wav': 'audio/wav', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.woff2': 'font/woff2', '.woff': 'font/woff', '.txt': 'text/plain; charset=utf-8', '.mov': 'video/quicktime', '.mp4': 'video/mp4' };
+function serveStatic(req, res, p) {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return false;
+  let rel; try { rel = decodeURIComponent(p); } catch (e) { return false; }
+  if (rel === '/') rel = '/index.html';
+  if (STATIC_DENY.test(rel)) return false;
+  const file = path.resolve(STATIC_ROOT, '.' + rel); if (!file.startsWith(STATIC_ROOT + path.sep)) return false;
+  let st; try { st = fs.statSync(file); } catch (e) { return false; } if (!st.isFile()) return false;
+  const ext = path.extname(file).toLowerCase(), type = MIME[ext] || 'application/octet-stream';
+  res.writeHead(200, { 'Content-Type': type, 'Content-Length': st.size, 'Cache-Control': ext === '.html' ? 'no-cache' : 'public, max-age=300' });
+  if (req.method === 'HEAD') return res.end(), true;
+  fs.createReadStream(file).pipe(res); return true;
+}
 
 // lazily open the SEPARATE battle-AI training DB (train/ai.db) — optional subsystem; a failure here must
 // never take down the game server, so it's guarded and memoised.
@@ -412,6 +432,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ok: true, advanced: tick.forceTicks(viewWorldId, Math.min(1000, (b.n | 0) || 50)) });
     }
 
+    if (!p.startsWith('/api/') && serveStatic(req, res, p)) return;   // the game's own files (the page, the scripts, the rigs)
     return send(res, 404, { error: 'not found' });
   } catch (e) {
     return send(res, 500, { error: String((e && e.message) || e) });
@@ -419,4 +440,4 @@ const server = http.createServer(async (req, res) => {
 });
 
 coop.attach(server); // upgrade /coop WebSocket connections into the co-op battle relay
-server.listen(PORT, () => console.log('Blade Vale server on http://localhost:' + PORT + '  (db: better-sqlite3, co-op relay on /coop)'));
+server.listen(PORT, () => console.log('Blade Vale server on http://localhost:' + PORT + '  (the game, the API and the co-op relay on /coop — one port; db: better-sqlite3)'));

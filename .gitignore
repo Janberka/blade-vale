@@ -6,6 +6,9 @@ node_modules/
 # runtime world state — the living world's SQLite DB (large, machine-local)
 world.db
 server/world.db
+server/play.db
+server/play.db-shm
+server/play.db-wal
 server/world.db-shm
 server/world.db-wal
 server/world.db.bak-*

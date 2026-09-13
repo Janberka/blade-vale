@@ -5,7 +5,10 @@
    flight by the time the player clicks "Enter the Vale". */
 (function () {
   'use strict';
-  var BASE = (location.protocol + '//' + (location.hostname || 'localhost') + ':8787') + '/api/v1';
+  // served by the game server itself (port 8787, or no port at all — a tunnel or a real host in front of it): the API
+  // is on the same origin. A plain static dev server (8099 / 8102) still talks to :8787 next door.
+  var SAME = location.port === '' || location.port === '8787';
+  var BASE = (SAME && location.origin !== 'null' ? location.origin : location.protocol + '//' + (location.hostname || 'localhost') + ':8787') + '/api/v1';
   var TIMEOUT = 2500;
   var OUTBOX_KEY = 'bv-careers-outbox';
 

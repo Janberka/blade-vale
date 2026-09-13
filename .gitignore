@@ -34,3 +34,6 @@ server/run.log
 
 # the Cloudflare Workers upload, assembled by tools/build-site.js
 dist/
+
+# wrangler dev state (local D1 + Durable Object storage)
+.wrangler/

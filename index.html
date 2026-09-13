@@ -931,10 +931,9 @@
 
 <button id="help-btn" title="Controls (?)">?</button>
 <script>
-  /* Where the backend lives. The Cloudflare Workers deploy serves this page and the rigs from the CDN
-     and nothing else — server/ is Node + better-sqlite3 + a stateful /coop relay, which Workers cannot
-     run. Uncomment and point these at the tunnel to switch accounts, careers and co-op back on; leave
-     them off and the arena still plays, with careers kept on the device. */
+  /* Where the backend lives. Unset, the page talks to its own origin: on bladevale.com that is the
+     Worker (worker/index.js — accounts, careers, the /coop relay), on :8787 the Node server. Set these
+     only to point a static dev copy at a backend on another host. */
   // window.BV_API  = 'https://api.bladevale.com';
   // window.BV_COOP = 'wss://api.bladevale.com/coop';
 </script>

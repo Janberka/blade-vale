@@ -1,27 +1,38 @@
 {
-  // Blade Vale on Cloudflare Workers — static assets only, no Worker script.
+  // Blade Vale on Cloudflare Workers — the whole of bladevale.com in one Worker.
   //
-  // The game client is pure static: one HTML page, the scripts, the three.js vendor build and the
-  // rigs. It is served from the CDN and needs no origin.
+  //   * the game client, as static assets: dist/, assembled by tools/build-site.js (an allowlist, so the
+  //     upload is the client and nothing else — the repo root would sweep in node_modules, server/, the
+  //     databases and the docs)
+  //   * /api/v1/*  — accounts, sessions, the arena career and the marketplace, on the D1 database below
+  //   * /coop      — the co-op relay, one Durable Object holding every player's WebSocket
   //
-  // The BACKEND DOES NOT RUN HERE. server/ is plain Node with better-sqlite3 (a native module) and a
-  // stateful, host-authoritative /coop WebSocket relay — neither of which Workers can execute. The
-  // API and the relay live behind a Cloudflare Tunnel; point the page at them by setting BV_API and
-  // BV_COOP in index.html. Without them the arena still plays, careers just stay on the device.
-  //
-  // "dist" is built by tools/build-site.js. It exists so the deploy uploads the client and NOTHING
-  // else: uploading the repo root sweeps in node_modules (workerd alone is 148 MiB, over the 25 MiB
-  // per-file limit) along with server/, the databases and the docs.
+  // worker/index.js is the port of server/ cut down to what Arena Fights uses; the living world does
+  // not run here (see VISION.md). The D1 schema is worker/schema.sql, applied by hand:
+  //   npx wrangler d1 execute blade-vale --remote --file worker/schema.sql
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "blade-vale",
+  "main": "worker/index.js",
   "compatibility_date": "2026-09-01",
   "build": {
-    "command": "node tools/build-site.js"
+    "command": "node tools/build-site.js",
+    "watch_dir": "worker"            // (with a custom build, wrangler dev only watches ./src unless told)
   },
   "assets": {
     "directory": "./dist",
-    "not_found_handling": "404-page"
+    "binding": "ASSETS",
+    "not_found_handling": "404-page",
+    "run_worker_first": ["/api/*", "/coop"]
   },
+  "d1_databases": [
+    { "binding": "DB", "database_name": "blade-vale", "database_id": "77cd12aa-1938-4f4f-999a-35ca4d43f3d5" }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "RELAY", "class_name": "Relay" }]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Relay"] }
+  ],
   "observability": {
     "enabled": true
   }

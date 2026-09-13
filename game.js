@@ -21202,5 +21202,6 @@ if (window.BV_BATTLE || (_editQ && _editQ.has('battle'))) {
   if (_editQ && _editQ.has('arena')) afOpenLobby('host'); // ?arena: straight into the arena lobby
 }
 
+  // the shell shows from the first frame: the figure left, the title right (inside the IIFE — SHELL lives here)
+  try { if (!SHELL.page) afShellPage(afSession() ? 'home' : 'title'); } catch (e) { console.warn('[shell]', e); }
 })();
-{ try { if (!SHELL.page) afShellPage(afSession() ? 'home' : 'title'); } catch (e) { console.warn('[shell]', e); } }   // the shell shows from the first frame: the figure left, the title right

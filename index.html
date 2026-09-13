@@ -927,6 +927,14 @@
 </div>
 
 <button id="help-btn" title="Controls (?)">?</button>
+<script>
+  /* Where the backend lives. The Cloudflare Workers deploy serves this page and the rigs from the CDN
+     and nothing else — server/ is Node + better-sqlite3 + a stateful /coop relay, which Workers cannot
+     run. Uncomment and point these at the tunnel to switch accounts, careers and co-op back on; leave
+     them off and the arena still plays, with careers kept on the device. */
+  // window.BV_API  = 'https://api.bladevale.com';
+  // window.BV_COOP = 'wss://api.bladevale.com/coop';
+</script>
 <script src="vendor/three.min.js?v=r128"></script>
 <script src="sim/world-sim.js?v=7"></script>
 <script src="sim/terra.js?v=2"></script>

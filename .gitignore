@@ -31,3 +31,6 @@ server/run.log
 .claude/*.txt
 .claude/marker-test
 .claude/settings.local.json
+
+# the Cloudflare Workers upload, assembled by tools/build-site.js
+dist/

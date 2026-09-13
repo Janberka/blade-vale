@@ -1,0 +1,28 @@
+{
+  // Blade Vale on Cloudflare Workers — static assets only, no Worker script.
+  //
+  // The game client is pure static: one HTML page, the scripts, the three.js vendor build and the
+  // rigs. It is served from the CDN and needs no origin.
+  //
+  // The BACKEND DOES NOT RUN HERE. server/ is plain Node with better-sqlite3 (a native module) and a
+  // stateful, host-authoritative /coop WebSocket relay — neither of which Workers can execute. The
+  // API and the relay live behind a Cloudflare Tunnel; point the page at them by setting BV_API and
+  // BV_COOP in index.html. Without them the arena still plays, careers just stay on the device.
+  //
+  // "dist" is built by tools/build-site.js. It exists so the deploy uploads the client and NOTHING
+  // else: uploading the repo root sweeps in node_modules (workerd alone is 148 MiB, over the 25 MiB
+  // per-file limit) along with server/, the databases and the docs.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "blade-vale",
+  "compatibility_date": "2026-09-01",
+  "build": {
+    "command": "node tools/build-site.js"
+  },
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "404-page"
+  },
+  "observability": {
+    "enabled": true
+  }
+}

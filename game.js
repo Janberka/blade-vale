@@ -20774,6 +20774,7 @@ function afBoot(spec) {
   });
   const I = AF.locIn; I.atk = I.heavy = I.dodge = 0; I.block = false; AF.keys.clear();
   if (AF.me) { AF.cam.yaw = AF.me.yaw; AF.cam.pitch = 0.3; AF.me.seenAtk = AF.me.seenHeavy = AF.me.seenDodge = 0; }
+  else if (AF.role === 'guest') { console.warn('[arena] no seat for me in the roster', window.coop && window.coop.id, spec.roster.map(e => e.name + ':' + e.kind + ':' + e.peer)); setTimeout(() => { if (AF.on && !AF.me) afBanner('NO SEAT IN THIS FIGHT', 'the lobby had no place for you — you watch this one', 4); }, 3200); }   // (never silent: a spectator should know why he is one)
   AF.phase = 'countdown'; AF.countdown = AF_F.countdown; AF.t = 0; AF.over = false; AF.leaving = false; AF.reportP = null; AF.winner = -1; AF.standings = null; AF.events = []; AF._hc = 0; AF.last = 0; AF.hitstop = 0; AF.assignT = 0; trauma = 0; camKick.set(0, 0, 0); fovPunch = 0;
   AF.spec = { mode: 'orbit', target: null, fx: 0, fz: 0, touched: false };
   AF.orbit.theta = AF.me ? AF.me.yaw + Math.PI : 0.4; AF.roar = 0; AF.waveT = 0; AF.nextWave = 22 + Math.random() * 10;
@@ -20884,9 +20885,12 @@ function afResize(L) {
   const seated = [];                                        // keep every human, in seat order, re-seated into the new grid
   for (const row of L.slots) for (const s of row) if (s) seated.push(s);
   if (!seated.length) seated.push({ kind: 'host', name: L.host, peer: null, weapon: L.weapon });
-  L.slots = []; for (let t = 0; t < L.teams; t++) { const row = []; for (let s = 0; s < L.per; s++) row.push(null); L.slots.push(row); }
+  for (;;) {                                                // a grid too small for the humans grows until they all fit — a resize never loses a seated man
+    L.slots = []; for (let t = 0; t < L.teams; t++) { const row = []; for (let s = 0; s < L.per; s++) row.push(null); L.slots.push(row); }
+    let ok = true; for (const p of seated) if (!afPlace(L, p, p.pref)) { ok = false; break; }
+    if (ok || !afLobbyGrow(L)) break;
+  }
   if (L.role === 'host') afRollNpcMix(L);
-  for (const p of seated) afPlace(L, p, p.pref);
 }
 function afPlace(L, p, prefTeam) {                          // first free seat: the preferred team, else the team with the fewest humans
   const order = [];
@@ -20964,7 +20968,20 @@ function afBalanceXp(L) {
     if ((na - mean) ** 2 + (nb - mean) ** 2 < (tot[a.t] - mean) ** 2 + (tot[b.t] - mean) ** 2 - 1e-9) { tot[a.t] = na; tot[b.t] = nb; L.npcXp[a.t][a.i] = vb; L.npcXp[b.t][b.i] = va; }
   }
 }
-function afSeat(peer, name) { const L = AF.lobby; if (afFindSeat(peer)) return; afPlace(L, { kind: 'player', name: String(name || 'Ally').slice(0, 24), peer, weapon: 'sword' }); L.invites.set(name, 'joined'); }
+// ONE MORE SEAT for a human: another team if the house allows it, else one more a side. (The pits are 2–3 single seats.)
+function afLobbyGrow(L) { const LM = afLim(L); if (L.teams < LM.teamsMax) { L.teams++; return true; } if (L.per < LM.perMax) { L.per++; return true; } return false; }
+// A player who accepted is in the ROOM whether or not he has a seat — so a full house must grow, never drop him on the
+// floor. (2026-09-13, three in the pits: two teams of one, the third man "joined" with no seat, got the 'go' like
+// everyone, found no body of his own in the roster and watched the fight as a spectator nobody meant.)
+function afSeat(peer, name) {
+  const L = AF.lobby; if (afFindSeat(peer)) return true;
+  const p = { kind: 'player', name: String(name || 'Ally').slice(0, 24), peer, weapon: 'sword' };
+  if (!afPlace(L, p)) {
+    if (!afLobbyGrow(L)) { afLobbyMsg(p.name + ' joined, but the house is full — no seat for them.'); L.invites.set(name, 'no seat'); return false; }
+    afResize(L); afPlace(L, p);
+  }
+  L.invites.set(name, 'joined'); return true;
+}
 function afUnseat(peer) { const L = AF.lobby; for (const row of L.slots) for (let i = 0; i < row.length; i++) if (row[i] && row[i].peer === peer) { L.invites.delete(row[i].name); row[i] = null; } }
 function afFindSeat(peer) { for (const row of AF.lobby.slots) for (const s of row) if (s && s.peer === peer) return s; return null; }
 function afMoveSeat(peer, t) { const L = AF.lobby, s = afFindSeat(peer); if (!s || t < 0 || t >= L.teams || L.slots[t].indexOf(null) < 0) return; afUnseat(peer); afPlace(L, s, t); }
@@ -20998,7 +21015,9 @@ function afLobbyBroadcast() {
 function afLobbyApply(d) {                                   // guest: mirror the host's lobby
   const L = AF.lobby; if (!L || L.role !== 'guest') return;
   L.teams = d.teams; L.per = d.per; L.venue = d.venue === 'pit' ? 'pit' : 'colosseum'; L.host = d.host || L.host; L.slots = d.slots; L.time = d.time || 'day'; L.weather = d.weather || 'clear'; L.pit = d.pit || 'wide'; L.ground = d.ground || 'broken'; if (d.npcArch) L.npcArch = d.npcArch; if (d.npcXp) L.npcXp = d.npcXp; L.xp = d.xp || 'mixed';
-  const me = afFindSeat(window.coop.id); if (me) L.weapon = me.weapon || 'sword';
+  const me = afFindSeat(window.coop.id);
+  if (me) { L.weapon = me.weapon || 'sword'; if (L.noSeat) { L.noSeat = false; afLobbyMsg(''); } }
+  else if (!L.noSeat) { L.noSeat = true; afLobbyMsg('Every seat is taken — waiting for the host to make room.'); }   // (in the room, not in a seat: say so instead of showing a lobby you are not in)
   afLobbyRender();
 }
 function afLobbyRender() {

@@ -326,6 +326,7 @@
   #home-menu #home-arena-btn:hover { background: rgba(255,120,80,.3); box-shadow: 0 8px 24px rgba(255,110,60,.3); }
   #home-foot { font-size: 13px; color: #c8ffd6; }
   #home-foot button { cursor: pointer; background: none; border: none; color: #9fb2cc; text-decoration: underline; font-size: 13px; }
+  #home-foot label { cursor: pointer; color: #9fb2cc; } #home-foot input { vertical-align: -2px; margin: 0 3px 0 0; accent-color: #ffd34d; }
   /* the marketplace: tabs, and a picture card per ware (afThumb draws each from its own mesh) */
   .mk-tabs { position: sticky; top: -18px; z-index: 2; display: flex; gap: 6px; flex-wrap: wrap; padding: 8px 0 10px; margin-top: -8px; background: rgba(8,6,14,.97); }
   .mk-tabs button { cursor: pointer; padding: 8px 16px; border-radius: 8px; border: 1px solid rgba(255,207,91,.35); background: rgba(0,0,0,.3); color: #e9eef5; font: 700 13px system-ui; letter-spacing: 1px; text-transform: uppercase; touch-action: manipulation; }
@@ -800,7 +801,7 @@
           <button class="btn" id="home-ladder-btn" title="Every fighter by renown — players, and the vale's own men">🏆 Rankings</button>
           <button class="btn world-only" id="home-world-btn">Enter the Vale</button>
         </div>
-        <div id="home-foot">Signed in as <b id="home-name"></b> · <button id="home-logout">sign out</button></div>
+        <div id="home-foot">Signed in as <b id="home-name"></b> · <button id="home-logout">sign out</button> · <label title="During a fight: round trip, jitter, snap rate, the host's sim rate — bottom right"><input type="checkbox" id="home-net"> net readout</label></div>
         <div class="sfx-credit">Crowd sounds by Gregor Quendel (CC-BY 4.0) · bow shot by dorkster, from sounds by qubodup (CC-BY-SA 3.0) · more in assets/sfx/CREDITS.md</div>
       </div>
       <!-- the career sheet (the name card under the figure opens it) -->
@@ -998,6 +999,6 @@
 <script src="arena-items.js?v=3"></script>
 <script src="net-battle.js?v=5"></script>
 <script src="real-skin.js?v=1"></script>
-<script src="game.js?v=127"></script>
+<script src="game.js?v=128"></script>
 </body>
 </html>

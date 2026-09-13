@@ -847,8 +847,9 @@ new on the relay):
   sends 4–10 rows per snap instead of 18.
 * **The readout.** Guests ping the host once a second; the open HUD sheet (tap the card / Tab)
   shows round trip, jitter, snaps per second, bytes in, the host's sim rate, the delay, predicted
-  blows and the local frame rate; the host sees his sim rate, guests and bytes out. `?net` pins
-  the same line bottom-right; `BV.net()` returns the numbers.
+  blows and the local frame rate; the host sees his sim rate, guests and bytes out. The **net
+  readout** box on the home page (localStorage `bv-net`) pins the same line bottom-right during
+  fights; `BV.net()` returns the numbers. (No URL flags for settings: they live on the home page.)
 
 What this pass did **not** do, and why: binary frames (JSON rows are ~1.5× the bytes, not the
 bottleneck), a Durable Object per room, WebRTC or a dedicated sim server — those cost money or
@@ -881,7 +882,7 @@ BV.arenaHorses() / BV.arenaHorseHit(id, dmg)  // every horse's state; wound one 
 BV.arenaKill(idx)                             // fell a man (his horse goes loose)
 BV.arenaInvite(name) / BV.arenaAccept()       // send / accept a challenge without the UI
 BV.arenaNet()                                 // socket id, room, lobby seats, roster peers, go-acks
-BV.net()                                      // the wire: rtt, jit, snapHz, rxHz/txHz, hostHz, delay, extra, pred*, hist, clk (?net pins the line on screen)
+BV.net()                                      // the wire: rtt, jit, snapHz, rxHz/txHz, hostHz, delay, extra, pred*, hist, clk (the home page's 'net readout' box pins the line on screen)
 coop._drop()                                  // kill the socket as a phone would (it reconnects and resumes)
 ```
 

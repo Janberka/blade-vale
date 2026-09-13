@@ -16972,10 +16972,11 @@ function afNetStats(dt) {                                    // per frame: my ow
     n.txHz = ((c.txBytes || 0) - n.statTx) / n.statT; n.rxHz = ((c.rxBytes || 0) - n.statRx) / n.statT; n.snapHz = n.snaps / n.statT; n.snaps = 0; n.statTx = c.txBytes || 0; n.statRx = c.rxBytes || 0; n.statT = 0; afNetOverlay(); }
   if (n.pred.length) { const cut = rtNow - AF_NET.predWindow; let k = 0; while (k < n.pred.length && n.pred[k].t < cut) k++; if (k) { n.pred.splice(0, k); n.predMiss += k; } }   // a predicted blow the host never confirmed
 }
-function afNetOverlay() {                                    // ?net: a small fixed readout for phone tests
-  if (!/[?&]net\b/.test(location.search)) return;
-  let el = document.getElementById('af-net'); if (!el) { el = document.createElement('div'); el.id = 'af-net'; el.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:60;font:11px/1.3 ui-monospace,monospace;color:#e8def8;background:rgba(16,14,24,.7);padding:4px 7px;border-radius:5px;pointer-events:none;white-space:nowrap'; document.body.appendChild(el); }
-  el.textContent = afNetLine(); el.style.display = AF.on ? '' : 'none';
+function afNetOn() { try { return localStorage.getItem('bv-net') === '1'; } catch (e) { return false; } }   // the home page's 'net readout' box (no URL flags: settings live on the home page)
+function afNetOverlay() {                                    // a small fixed readout for phone tests, bottom right
+  let el = document.getElementById('af-net'); if (!el && !afNetOn()) return;
+  if (!el) { el = document.createElement('div'); el.id = 'af-net'; el.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:60;font:11px/1.3 ui-monospace,monospace;color:#e8def8;background:rgba(16,14,24,.7);padding:4px 7px;border-radius:5px;pointer-events:none;white-space:nowrap'; document.body.appendChild(el); }
+  el.textContent = afNetLine(); el.style.display = AF.on && afNetOn() ? '' : 'none';
 }
 function afSubstep(fn, dt) {                                 // the sim never takes a step longer than simDt: a dropped frame becomes several steps, not a slower fight
   const n = clamp(Math.ceil(dt / AF_NET.simDt - 1e-6), 1, 6), h = dt / n; for (let i = 0; i < n; i++) fn(h);
@@ -22026,6 +22027,7 @@ function afHomeResume() { AF.tryItem = null; afHomeRender(); }   // back on the 
   if (g('home-world-btn')) g('home-world-btn').onclick = () => { requestFullscreenSafe(); if (window.net && window.net.session) enterTheVale(); };
   g('home-char').onclick = () => { if (SHELL.page === 'career') afShellBack(); else { afHomeRender(); afShellPage('career'); } };   // the name card under the figure opens the sheet
   if (g('home-logout')) g('home-logout').onclick = () => window.net && window.net.logout();
+  if (g('home-net')) { g('home-net').checked = afNetOn(); g('home-net').onchange = e => { try { localStorage.setItem('bv-net', e.target.checked ? '1' : '0'); } catch (x) {} }; }   // the net readout during fights (afNetOverlay)
   g('shell-back').onclick = e => { e.stopPropagation(); afShellBack(); };
   g('shell-help').onclick = e => { e.stopPropagation(); afShellPage('help'); };
   const hb = g('help-btn'); if (hb) { hb.addEventListener('pointerdown', e => e.stopPropagation()); hb.addEventListener('click', e => { e.stopPropagation(); afShellPage('help'); }); }   // in the pit: the shell opens over the fight

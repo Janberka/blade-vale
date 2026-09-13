@@ -762,6 +762,16 @@ Bram is the same Bram fight after fight, and his record grows like anyone's.
   victory board, the lobby's seats and online list, the career sheet ("Your public profile"), the
   ladder rows — and one capturing click handler in `afWireHome` routes `[data-prof]`,
   `[data-act="ladder…"]` and `[data-act="career"]`. From the pit the page opens over the fight (Back = ← Fight).
+* **The vale's men fight among themselves** (`arena-sim.js`, shared by both backends): the Worker's
+  cron (`wrangler.jsonc` triggers, every 15 min → `scheduled` → `simulateRound`) and the Node server's
+  timer stage one or two bouts with no player in them — a roster from the NPC name pool (`NPC_GIVEN` ×
+  `NPC_BYNAMES` in `arena-items.js`, about six seats in ten to men who already have a record, so the
+  same Bram carries on), archetypes and skills rolled, and the outcome from a small strength model
+  (team power ∝ Σ arch × (0.55 + skill/100) × noise, winner by power³, losers all fall, a share of the
+  winners with them, every fallen man credited to an enemy, the star by the client's own score). It is
+  paid through `applyNpcs` like a reported fight, so the NPC ladder lives whether anyone is online.
+  Seeded (`sim-<ms>-<i>-<hex>`), so a seed replays. Local: `wrangler dev --test-scheduled` and
+  `curl http://127.0.0.1:8790/__scheduled`; Node: `arena.simulateRound(n)`.
 * **Links you can share**: `#profile/<kind>/<name>` and `#rankings` open the page at boot
   (`SHELL.bootHash` — the first page shown strips the hash; `afProfileOpen`/`afLadderOpen` set it
   with `replaceState`, leaving them clears it). Test hooks: `BV.profile(name, kind)`, `BV.ladder(scope, kind)`.

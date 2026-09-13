@@ -64,6 +64,7 @@ migrate();
 // seed every world's macro state and start the always-on heartbeat (advances inactive worlds)
 for (const w of db.prepare('SELECT id FROM worlds').all()) tick.seedWorld(w.id);
 setInterval(() => { try { tick.tickInactiveWorlds(); } catch (e) { console.error('tick error:', e.message); } }, tick.TICK_SECONDS * 1000);
+setInterval(() => { try { arena.simulateRound(1 + (Math.random() < 0.5 ? 1 : 0)); } catch (e) { console.error('arena sim error:', e.message); } }, 15 * 60 * 1000);   // the vale's men fight among themselves (worker: a cron)
 const PORT = process.env.BV_PORT || 8787;
 
 // ----- runtime feature flags: client-tunable knobs served at boot (GET /api/v1/config). Change them

@@ -11,6 +11,7 @@
 // Password hashes are PBKDF2-SHA256 through WebCrypto (Workers have no scrypt), so accounts made on the
 // Node server do not carry over — bladevale.com starts with a fresh ledger.
 import ARENA from '../arena-items.js';
+import SIM from '../arena-sim.js';
 const { ARENA_RANKS, ARENA_ITEMS, ARENA_SLOTS, ARENA_ACHIEVEMENTS, skillLevel, rankOf, rankInfo, renownOf, lockReason } = ARENA;
 
 const CORS = {
@@ -143,8 +144,7 @@ async function applyResult(db, reporter, body) {
   const npcs = Array.isArray(body.npcs) ? body.npcs.slice(0, 400).filter((n) => n && typeof n.name === 'string' && n.name.length >= 2 && n.name.length <= 40) : [];
   const size = players.length + npcs.length, venue = String(body.venue || 'colosseum').slice(0, 16);
   const done = new Set(); for (const r of (await q(db, 'SELECT kind, fighter FROM arena_bouts WHERE seed=?', seed).all()).results) done.add(r.kind + '|' + r.fighter);
-  const bout = (kind, name, p, won, draw) => q(db, 'INSERT OR IGNORE INTO arena_bouts(seed, kind, fighter, team, won, draw, kills, dmg, alive, star, venue, size) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
-    seed, kind, name, p.team | 0, won ? 1 : 0, draw ? 1 : 0, clamp(p.kills | 0, 0, 500), Math.round(clamp(+p.dmg || 0, 0, 1e5)), p.alive ? 1 : 0, p.star ? 1 : 0, venue, size);
+  const bout = boutStmt(db, seed, venue, size);
   const accts = new Map(), cs = new Map();
   for (const p of players) {
     const h = String(p.handle || ''); if (accts.has(h)) continue;
@@ -178,6 +178,20 @@ async function applyResult(db, reporter, body) {
   if (writes.length) await db.batch(writes);
   await applyNpcs(db, seed, winner, npcs, done, bout);
   return { ok: true, rewards };
+}
+const boutStmt = (db, seed, venue, size) => (kind, name, p, won, draw) => q(db, 'INSERT OR IGNORE INTO arena_bouts(seed, kind, fighter, team, won, draw, kills, dmg, alive, star, venue, size) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+  seed, kind, name, p.team | 0, won ? 1 : 0, draw ? 1 : 0, clamp(p.kills | 0, 0, 500), Math.round(clamp(+p.dmg || 0, 0, 1e5)), p.alive ? 1 : 0, p.star ? 1 : 0, venue, size);
+// THE VALE'S MEN FIGHT AMONG THEMSELVES: the cron (wrangler.jsonc triggers, every 15 min) stages a bout or two with no
+// player in it — arena-sim.js rolls the roster (known men first, so records carry on) and the outcome, and it is paid
+// through applyNpcs like a reported fight. So the ladder of the vale's men lives whether anyone is online or not.
+async function simulateRound(db, n) {
+  const known = (await q(db, 'SELECT name, arch, skill FROM npc_careers ORDER BY updated_at DESC LIMIT 200').all()).results, out = [];
+  for (let i = 0; i < n; i++) {
+    const f = SIM.simulateFight('sim-' + Date.now() + '-' + i + '-' + randomHex(3), known);
+    await applyNpcs(db, f.seed, f.winner, f.npcs, new Set(), boutStmt(db, f.seed, f.venue, f.size));
+    out.push({ seed: f.seed, venue: f.venue, teams: f.teams, per: f.per, winner: f.winner, star: (f.npcs.find((m) => m.star) || {}).name });
+  }
+  return out;
 }
 // the NPCs' side of the payout: XP as a player would earn (no gold — they have no purse), the record, the
 // archetype tally. Idempotent through arena_bouts; written in chunks of 40 men (D1 batches are not unbounded).
@@ -440,6 +454,7 @@ export class Relay {
 }
 
 export default {
+  async scheduled(event, env, ctx) { ctx.waitUntil(simulateRound(env.DB, 1 + (Math.random() < 0.5 ? 1 : 0))); },
   async fetch(request, env) {
     const url = new URL(request.url), p = url.pathname;
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });

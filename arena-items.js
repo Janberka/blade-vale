@@ -45,6 +45,10 @@
     black_night:    { slot: 'sword', name: 'Black Night',       unique: true, dmg: 1.12, desc: 'a black curve with a violet gleam' },
   };
   var ARENA_SLOTS = ['sword', 'armor', 'bow', 'horse', 'plume', 'trim'];
+  // THE VALE'S MEN — the NPC name pool. A name is an NPC's identity (his profile, his record), so the lobby, the
+  // world's warbands and the server's own simulated bouts all draw from this one list.
+  var NPC_GIVEN = ['Aldric','Bram','Cedwyn','Doran','Eadric','Falk','Garrec','Hale','Ivo','Joren','Kell','Lorne','Maddoc','Nael','Osric','Perrin','Quenn','Roderic','Sefton','Tomas','Ulf','Varin','Wend','Yorin','Ansel','Brand','Corin','Dunmar','Edra','Freya','Gerda','Halla','Ingrid','Jorah','Kara','Linnet','Mira','Nessa','Orla','Petra','Romilda','Sigrun','Thora','Ysolde'];
+  var NPC_BYNAMES = ['the Bold','the Quiet','Ironhand','the Younger','Oakheart','the Swift','Stonefist','the Grim','Redmane','the Tall','Hawkeye','the Patient','Coldbrook','the Stout','Wolfsbane','the Lucky','Greycloak','the Fierce','Longstride','the Sly','Brightblade','the Steady','Hardwin','the Wary','Blackbriar','Frostbeard','Stormcrow'];
   var ARENA_ACHIEVEMENTS = [                                 // [id, label, stat, threshold] — the milestones a profile lists
     ['first_blood', 'First blood', 'kills', 1], ['kills_10', '10 foes felled', 'kills', 10], ['kills_50', '50 foes felled', 'kills', 50], ['kills_200', '200 foes felled', 'kills', 200], ['kills_500', '500 foes felled', 'kills', 500],
     ['match_1', 'First fight', 'matches', 1], ['match_10', '10 fights', 'matches', 10], ['match_50', '50 fights', 'matches', 50], ['match_100', '100 fights', 'matches', 100],
@@ -77,6 +81,6 @@
     if ((career.gold | 0) < it.price) return 'needs ' + it.price + ' gold';
     return null;
   }
-  var api = { ARENA_RANKS: ARENA_RANKS, ARENA_ITEMS: ARENA_ITEMS, ARENA_SLOTS: ARENA_SLOTS, ARENA_ACHIEVEMENTS: ARENA_ACHIEVEMENTS, RENOWN: RENOWN, skillLevel: skillLevel, rankOf: rankOf, rankInfo: rankInfo, renownOf: renownOf, lockReason: lockReason };
+  var api = { ARENA_RANKS: ARENA_RANKS, ARENA_ITEMS: ARENA_ITEMS, ARENA_SLOTS: ARENA_SLOTS, ARENA_ACHIEVEMENTS: ARENA_ACHIEVEMENTS, RENOWN: RENOWN, NPC_GIVEN: NPC_GIVEN, NPC_BYNAMES: NPC_BYNAMES, skillLevel: skillLevel, rankOf: rankOf, rankInfo: rankInfo, renownOf: renownOf, lockReason: lockReason };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.ARENA_CAT = api;
 })(typeof window !== 'undefined' ? window : this);

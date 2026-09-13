@@ -33,6 +33,8 @@
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["Relay"] }
   ],
+  // the vale's men fight among themselves: a bout or two every quarter hour (worker/index.js scheduled → simulateRound)
+  "triggers": { "crons": ["*/15 * * * *"] },
   "observability": {
     "enabled": true
   }

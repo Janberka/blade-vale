@@ -4,6 +4,7 @@
 const { db } = require('./db');
 const { ARENA_RANKS, ARENA_ITEMS, ARENA_SLOTS, ARENA_ACHIEVEMENTS: ACHIEVEMENTS, skillLevel, rankOf, rankInfo, renownOf, lockReason } = require('../arena-items');
 
+const SIM = require('../arena-sim');
 const PVP_CUT = 0.08, PVP_CAP = 60;                       // a beaten player pays 8% of his purse (at most 60) to the winners
 
 // (statements are prepared on first use — index.js runs the migrations after this module loads)
@@ -58,8 +59,7 @@ function applyResult(reporterAcct, body) {
   if (!players.some(p => p.handle === reporterAcct.handle)) return { ok: false, error: 'not your fight' };   // only a player in the fight may report it
   const npcs = Array.isArray(body.npcs) ? body.npcs.slice(0, 400).filter(n => n && typeof n.name === 'string' && n.name.length >= 2 && n.name.length <= 40) : [];
   const size = players.length + npcs.length, venue = String(body.venue || 'colosseum').slice(0, 16);
-  const boutIns = Q('bout', 'INSERT OR IGNORE INTO arena_bouts(seed, kind, fighter, team, won, draw, kills, dmg, alive, star, venue, size) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)');
-  const bout = (kind, name, p, won, draw) => boutIns.run(seed, kind, name, p.team | 0, won ? 1 : 0, draw ? 1 : 0, clamp(p.kills | 0, 0, 500), Math.round(clamp(+p.dmg || 0, 0, 1e5)), p.alive ? 1 : 0, p.star ? 1 : 0, venue, size);
+  const bout = boutFn(seed, venue, size);
   const rewards = {};
   db.transaction(() => {
     const accts = new Map(); for (const p of players) { const a = findAcct.get(String(p.handle || '')); if (a && !paid.get(seed, a.id)) accts.set(p.handle, a); }
@@ -89,6 +89,18 @@ function applyResult(reporterAcct, body) {
     applyNpcs(seed, winner, npcs, bout);
   })();
   return { ok: true, rewards };
+}
+const boutFn = (seed, venue, size) => (kind, name, p, won, draw) => Q('bout', 'INSERT OR IGNORE INTO arena_bouts(seed, kind, fighter, team, won, draw, kills, dmg, alive, star, venue, size) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+  .run(seed, kind, name, p.team | 0, won ? 1 : 0, draw ? 1 : 0, clamp(p.kills | 0, 0, 500), Math.round(clamp(+p.dmg || 0, 0, 1e5)), p.alive ? 1 : 0, p.star ? 1 : 0, venue, size);
+// the vale's men fight among themselves (worker/index.js simulateRound is the twin): n bouts with no player in them
+function simulateRound(n) {
+  const known = db.prepare('SELECT name, arch, skill FROM npc_careers ORDER BY updated_at DESC LIMIT 200').all(), out = [];
+  for (let i = 0; i < n; i++) {
+    const f = SIM.simulateFight('sim-' + Date.now() + '-' + i + '-' + Math.random().toString(36).slice(2, 8), known);
+    db.transaction(() => applyNpcs(f.seed, f.winner, f.npcs, boutFn(f.seed, f.venue, f.size)))();
+    out.push({ seed: f.seed, venue: f.venue, teams: f.teams, per: f.per, winner: f.winner, star: (f.npcs.find(m => m.star) || {}).name });
+  }
+  return out;
 }
 // the vale's own men keep a record too (see worker/index.js applyNpcs — the same rules): XP as a player would earn,
 // wins, kills, stars, the archetype tally; idempotent through arena_bouts
@@ -155,4 +167,4 @@ function profile(name, kind) {
   p.recent = db.prepare('SELECT seed, team, won, draw, kills, dmg, alive, star, venue, size, created_at FROM arena_bouts WHERE kind=? AND fighter=? ORDER BY created_at DESC LIMIT 10').all(p.kind, p.name);
   return { ok: true, profile: p };
 }
-module.exports = { career, buy, equip, applyResult, profile, rankings, ACHIEVEMENTS };
+module.exports = { career, buy, equip, applyResult, profile, rankings, simulateRound, ACHIEVEMENTS };

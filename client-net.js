@@ -5,9 +5,9 @@
    flight by the time the player clicks "Enter the Vale". */
 (function () {
   'use strict';
-  // served by the game server itself (port 8787, or no port at all — a tunnel or a real host in front of it): the API
-  // is on the same origin. A plain static dev server (8099 / 8102) still talks to :8787 next door.
-  var SAME = location.port === '' || location.port === '8787';
+  // served by the game server itself (port 8787, wrangler dev on 8790, or no port at all — a tunnel or a real host in
+  // front of it): the API is on the same origin. A plain static dev server (8099 / 8102) still talks to :8787 next door.
+  var SAME = location.port === '' || location.port === '8787' || location.port === '8790';
   var ORIGIN = (typeof window !== 'undefined' && window.BV_API) ||           // set by the page when the API is on another host (the tunnel)
     (SAME && location.origin !== 'null' ? location.origin : location.protocol + '//' + (location.hostname || 'localhost') + ':8787');
   var BASE = String(ORIGIN).replace(/\/+$/, '') + '/api/v1';
@@ -241,6 +241,9 @@
   net.arenaBuy = function (item) { return jpost('/arena/buy', { item: item }); };
   net.arenaEquip = function (slot, item) { return jpost('/arena/equip', { slot: slot, item: item }); };
   net.arenaResult = function (result) { return jpost('/arena/result', result); };
+  // profiles + the ladder (public reads; the network scope is everyone who shared a pit with you)
+  net.arenaProfile = function (name, kind) { return jfetch('/arena/profile?name=' + encodeURIComponent(name) + (kind ? '&kind=' + encodeURIComponent(kind) : ''), { method: 'GET' }).catch(function () { return { ok: false, error: 'the war-net did not answer' }; }); };
+  net.arenaRankings = function (o) { o = o || {}; return jfetch('/arena/rankings?scope=' + (o.scope || 'global') + '&kind=' + (o.kind || 'player') + '&limit=' + (o.limit || 50) + '&offset=' + (o.offset || 0), { method: 'GET' }).catch(function () { return { ok: false, error: 'the war-net did not answer' }; }); };
 
   // ----- multiple characters per account, same map: adopt / switch / split / give -----
   net.charsList = [];   // last server roster [{charId, name, x, z, men, renown, active}]

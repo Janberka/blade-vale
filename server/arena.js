@@ -2,7 +2,7 @@
 // trophies, achievements, PvP purse and loot. The host reports a finished match ONCE (POST /arena/result)
 // and the server pays every player named in it; each player's client then reads its own career.
 const { db } = require('./db');
-const { ARENA_RANKS, ARENA_ITEMS, ARENA_SLOTS, ARENA_ACHIEVEMENTS: ACHIEVEMENTS, skillLevel, rankOf, rankInfo, lockReason } = require('../arena-items');
+const { ARENA_RANKS, ARENA_ITEMS, ARENA_SLOTS, ARENA_ACHIEVEMENTS: ACHIEVEMENTS, skillLevel, rankOf, rankInfo, renownOf, lockReason } = require('../arena-items');
 
 const PVP_CUT = 0.08, PVP_CAP = 60;                       // a beaten player pays 8% of his purse (at most 60) to the winners
 
@@ -15,10 +15,10 @@ function parse(r) {
     lastSeed: r.last_seed || null, lastReward: r.last_reward_json ? JSON.parse(r.last_reward_json) : null };
 }
 const SAVE_SQL = `UPDATE arena_careers SET xp=@xp, gold=@gold, trophies=@trophies, matches=@matches, wins=@wins, kills=@kills, deaths=@deaths, damage=@damage, stars=@stars,
-  items_json=@items, equipped_json=@equipped, skills_json=@skills, achievements_json=@achievements, last_seed=@lastSeed, last_reward_json=@lastReward, updated_at=unixepoch() WHERE account_id=@id`;
+  items_json=@items, equipped_json=@equipped, skills_json=@skills, achievements_json=@achievements, last_seed=@lastSeed, last_reward_json=@lastReward, renown=@renown, updated_at=unixepoch() WHERE account_id=@id`;
 function write(acctId, c) {
   Q('save', SAVE_SQL).run({ id: acctId, xp: c.xp | 0, gold: c.gold | 0, trophies: c.trophies | 0, matches: c.matches | 0, wins: c.wins | 0, kills: c.kills | 0, deaths: c.deaths | 0, damage: c.damage | 0, stars: c.stars | 0,
-    items: JSON.stringify(c.items), equipped: JSON.stringify(c.equipped), skills: JSON.stringify(c.skills), achievements: JSON.stringify(c.achievements), lastSeed: c.lastSeed, lastReward: c.lastReward ? JSON.stringify(c.lastReward) : null });
+    items: JSON.stringify(c.items), equipped: JSON.stringify(c.equipped), skills: JSON.stringify(c.skills), achievements: JSON.stringify(c.achievements), lastSeed: c.lastSeed, lastReward: c.lastReward ? JSON.stringify(c.lastReward) : null, renown: renownOf(c) });
 }
 // what the client sees
 function view(c, seed) {
@@ -26,7 +26,7 @@ function view(c, seed) {
   return { xp: c.xp, gold: c.gold, trophies: c.trophies, matches: c.matches, wins: c.wins, kills: c.kills, deaths: c.deaths, damage: c.damage, stars: c.stars,
     items: c.items, equipped: c.equipped, skills, achievements: c.achievements, rank: rankInfo(c.xp), lastSeed: c.lastSeed, lastReward: (!seed || c.lastSeed === String(seed)) ? c.lastReward : null };
 }
-function career(acctId, seed) { return view(parse(row(acctId)), seed); }
+function career(acctId, seed) { const c = parse(row(acctId)), v = view(c, seed); v.renown = renownOf(c); Object.assign(v, position('player', v.renown, c.matches)); return v; }
 
 function buy(acctId, id) {
   const c = parse(row(acctId)), why = lockReason(id, c);
@@ -56,6 +56,10 @@ function applyResult(reporterAcct, body) {
   const seed = String(body.seed || ''), winner = body.winner | 0, players = Array.isArray(body.players) ? body.players.slice(0, 64) : [];
   if (!seed || !players.length) return { ok: false, error: 'no result' };
   if (!players.some(p => p.handle === reporterAcct.handle)) return { ok: false, error: 'not your fight' };   // only a player in the fight may report it
+  const npcs = Array.isArray(body.npcs) ? body.npcs.slice(0, 400).filter(n => n && typeof n.name === 'string' && n.name.length >= 2 && n.name.length <= 40) : [];
+  const size = players.length + npcs.length, venue = String(body.venue || 'colosseum').slice(0, 16);
+  const boutIns = Q('bout', 'INSERT OR IGNORE INTO arena_bouts(seed, kind, fighter, team, won, draw, kills, dmg, alive, star, venue, size) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)');
+  const bout = (kind, name, p, won, draw) => boutIns.run(seed, kind, name, p.team | 0, won ? 1 : 0, draw ? 1 : 0, clamp(p.kills | 0, 0, 500), Math.round(clamp(+p.dmg || 0, 0, 1e5)), p.alive ? 1 : 0, p.star ? 1 : 0, venue, size);
   const rewards = {};
   db.transaction(() => {
     const accts = new Map(); for (const p of players) { const a = findAcct.get(String(p.handle || '')); if (a && !paid.get(seed, a.id)) accts.set(p.handle, a); }
@@ -80,9 +84,75 @@ function applyResult(reporterAcct, body) {
       const after = rankOf(c.xp); if (after > before) reward.rankUp = ARENA_RANKS[after][0];
       const earned = []; for (const [id, label, stat, at] of ACHIEVEMENTS) if (c[stat] >= at && c.achievements.indexOf(id) < 0) { c.achievements.push(id); earned.push(label); }
       if (earned.length) reward.achievements = earned;
-      c.lastSeed = seed; c.lastReward = reward; write(a.id, c); markPaid.run(seed, a.id); rewards[p.handle] = reward;
+      c.lastSeed = seed; c.lastReward = reward; write(a.id, c); markPaid.run(seed, a.id); bout('player', a.handle, p, won, draw); rewards[p.handle] = reward;
     }
+    applyNpcs(seed, winner, npcs, bout);
   })();
   return { ok: true, rewards };
 }
-module.exports = { career, buy, equip, applyResult, ACHIEVEMENTS };
+// the vale's own men keep a record too (see worker/index.js applyNpcs — the same rules): XP as a player would earn,
+// wins, kills, stars, the archetype tally; idempotent through arena_bouts
+const NPC_ARCHS = new Set(['swordsman', 'brute', 'duelist', 'guardsman', 'archer', 'rider']);
+const NPC_BLANK = { arch: 'swordsman', archs_json: '{}', skill: 50, xp: 0, matches: 0, wins: 0, kills: 0, deaths: 0, damage: 0, stars: 0 };
+function applyNpcs(seed, winner, npcs, bout) {
+  const has = Q('boutHas', "SELECT 1 FROM arena_bouts WHERE seed=? AND kind='npc' AND fighter=?"), get = Q('npcGet', 'SELECT * FROM npc_careers WHERE name=?');
+  const up = Q('npcUp', `INSERT INTO npc_careers(name, arch, archs_json, skill, xp, matches, wins, kills, deaths, damage, stars, renown) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+    ON CONFLICT(name) DO UPDATE SET arch=excluded.arch, archs_json=excluded.archs_json, skill=excluded.skill, xp=excluded.xp, matches=excluded.matches, wins=excluded.wins, kills=excluded.kills, deaths=excluded.deaths, damage=excluded.damage, stars=excluded.stars, renown=excluded.renown, updated_at=unixepoch()`);
+  const seen = new Set();
+  for (const n of npcs) {
+    if (seen.has(n.name) || has.get(seed, n.name)) continue; seen.add(n.name);
+    const r = get.get(n.name) || NPC_BLANK, won = (n.team | 0) === winner, draw = winner < 0, rw = rewardFor(n, won, draw);
+    const c = { xp: r.xp + rw.xp, matches: r.matches + 1, wins: r.wins + (won ? 1 : 0), kills: r.kills + clamp(n.kills | 0, 0, 500), deaths: r.deaths + (n.alive ? 0 : 1), damage: r.damage + Math.round(clamp(+n.dmg || 0, 0, 1e5)), stars: r.stars + (n.star ? 1 : 0) };
+    const arch = NPC_ARCHS.has(n.arch) ? n.arch : 'swordsman'; let archs = {}; try { archs = JSON.parse(r.archs_json || '{}'); } catch (e) {} archs[arch] = (archs[arch] | 0) + 1;
+    up.run(n.name, arch, JSON.stringify(archs), clamp(n.skill | 0, 0, 100), c.xp, c.matches, c.wins, c.kills, c.deaths, c.damage, c.stars, renownOf(c));
+    bout('npc', n.name, n, won, draw);
+  }
+}
+
+// ---- profiles + the ladder (the Worker's twin: see worker/index.js "profiles + the ladder") ----
+const npcTier = skill => skill >= 82 ? 'champion' : skill >= 60 ? 'veteran' : skill >= 35 ? 'soldier' : 'recruit';
+const LADDER = {
+  player: { from: 'FROM arena_careers c JOIN accounts a ON a.id=c.account_id', name: 'a.handle', cols: "a.handle AS name, 'player' AS kind, c.renown, c.xp, c.matches, c.wins, c.stars, c.kills, c.trophies", table: 'arena_careers' },
+  npc: { from: 'FROM npc_careers c', name: 'c.name', cols: "c.name, 'npc' AS kind, c.renown, c.xp, c.matches, c.wins, c.stars, c.kills, c.arch, c.skill", table: 'npc_careers' },
+};
+const ladderTitle = r => r.kind === 'player' ? rankInfo(r.xp).name : npcTier(r.skill) + ' ' + r.arch;
+function rankings(o) {
+  const kind = o.kind === 'npc' ? 'npc' : 'player', L = LADDER[kind], scope = o.scope === 'network' ? 'network' : 'global';
+  const lim = clamp(parseInt(o.limit, 10) || 50, 1, 200), off = Math.max(0, parseInt(o.offset, 10) || 0);
+  let where = 'WHERE c.matches > 0'; const args = [];
+  if (scope === 'network') {
+    if (!o.me) return { ok: false, error: 'sign in to see your network' };
+    where += ` AND ${L.name} IN (SELECT fighter FROM arena_bouts WHERE kind=? AND seed IN (SELECT seed FROM arena_bouts WHERE kind='player' AND fighter=?))`; args.push(kind, o.me);
+  }
+  const total = db.prepare(`SELECT COUNT(*) AS n ${L.from} ${where}`).get(...args).n;
+  const rows = db.prepare(`SELECT ${L.cols} ${L.from} ${where} ORDER BY c.renown DESC, c.wins DESC, name ASC LIMIT ? OFFSET ?`).all(...args, lim, off);
+  rows.forEach((r, i) => { r.pos = off + i + 1; r.title = ladderTitle(r); });
+  return { ok: true, kind, scope, total, rows };
+}
+function position(kind, renown, matches) {
+  const t = LADDER[kind].table, of = db.prepare(`SELECT COUNT(*) AS n FROM ${t} WHERE matches > 0`).get().n;
+  if (!(matches > 0)) return { position: null, of };
+  return { position: db.prepare(`SELECT COUNT(*) AS n FROM ${t} WHERE matches > 0 AND renown > ?`).get(renown).n + 1, of };
+}
+const BLANK_ROW = { xp: 0, gold: 0, trophies: 0, matches: 0, wins: 0, kills: 0, deaths: 0, damage: 0, stars: 0, items_json: '["wood_sword"]', equipped_json: '{"sword":"wood_sword"}', skills_json: '{}', achievements_json: '[]', last_seed: null, last_reward_json: null };
+function profile(name, kind) {
+  name = String(name || '').trim().slice(0, 64); if (!name) return { ok: false, error: 'who?' };
+  let p = null;
+  if (kind !== 'npc') {
+    const a = db.prepare('SELECT id, handle, created_at FROM accounts WHERE handle=? COLLATE NOCASE').get(name);
+    if (a) { const c = parse(db.prepare('SELECT * FROM arena_careers WHERE account_id=?').get(a.id) || BLANK_ROW);
+      const skills = {}; for (const k of ['sword', 'bow', 'riding']) skills[k] = { level: skillLevel(c.skills[k]) };
+      p = { name: a.handle, kind: 'player', rank: rankInfo(c.xp), title: rankInfo(c.xp).name, xp: c.xp, matches: c.matches, wins: c.wins, losses: Math.max(0, c.matches - c.wins), kills: c.kills, deaths: c.deaths, damage: c.damage, stars: c.stars, trophies: c.trophies,
+        skills, achievements: c.achievements, equipped: c.equipped, renown: renownOf(c), since: a.created_at }; }
+  }
+  if (!p && kind !== 'player') {
+    const r = db.prepare('SELECT * FROM npc_careers WHERE name=? COLLATE NOCASE').get(name);
+    if (r) { let archs = {}; try { archs = JSON.parse(r.archs_json || '{}'); } catch (e) {}
+      p = { name: r.name, kind: 'npc', arch: r.arch, archs, skill: r.skill, tier: npcTier(r.skill), title: npcTier(r.skill) + ' ' + r.arch, xp: r.xp, matches: r.matches, wins: r.wins, losses: Math.max(0, r.matches - r.wins), kills: r.kills, deaths: r.deaths, damage: r.damage, stars: r.stars, renown: r.renown, since: r.created_at, lastFought: r.updated_at }; }
+  }
+  if (!p) return { ok: false, error: 'no fighter of that name has stood in the pit' };
+  Object.assign(p, position(p.kind, p.renown, p.matches));
+  p.recent = db.prepare('SELECT seed, team, won, draw, kills, dmg, alive, star, venue, size, created_at FROM arena_bouts WHERE kind=? AND fighter=? ORDER BY created_at DESC LIMIT 10').all(p.kind, p.name);
+  return { ok: true, profile: p };
+}
+module.exports = { career, buy, equip, applyResult, profile, rankings, ACHIEVEMENTS };

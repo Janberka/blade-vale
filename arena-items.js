@@ -56,6 +56,17 @@
   function skillLevel(count) { return Math.floor(Math.sqrt(Math.max(0, count | 0) / 5)); }
   function rankOf(xp) { var i = 0; for (var k = 0; k < ARENA_RANKS.length; k++) if (xp >= ARENA_RANKS[k][1]) i = k; return i; }
   function rankInfo(xp) { var i = rankOf(xp), next = ARENA_RANKS[i + 1]; return { idx: i, name: ARENA_RANKS[i][0], next: next ? next[0] : null, nextAt: next ? next[1] : null }; }
+  // RENOWN — the one number the ladder sorts by, for players and the vale's own men alike. Everything a profile
+  // shows feeds it: XP, every fight (a win worth five losses), every star of the match, kills, trophies, the
+  // use-skill levels, and the damage dealt. The ladder position (#N among players, #N among the vale's men) is
+  // the rank the user sees; the XP titles above are the marketplace locks.
+  var RENOWN = { win: 25, loss: 5, star: 60, kill: 3, trophy: 6, skillLevel: 30, damage: 1 / 100 };
+  function renownOf(c) {
+    var sk = c.skills || {}, lv = 0, keys = ['sword', 'bow', 'riding'];
+    for (var i = 0; i < keys.length; i++) { var v = sk[keys[i]]; lv += (v && typeof v === 'object') ? (v.level | 0) : skillLevel(v); }
+    var wins = c.wins | 0, losses = Math.max(0, (c.matches | 0) - wins);
+    return Math.round((c.xp | 0) + RENOWN.win * wins + RENOWN.loss * losses + RENOWN.star * (c.stars | 0) + RENOWN.kill * (c.kills | 0) + RENOWN.trophy * (c.trophies | 0) + RENOWN.skillLevel * lv + RENOWN.damage * (c.damage | 0));
+  }
   // why an item can't be bought (null = it can)
   function lockReason(id, career) {
     var it = ARENA_ITEMS[id]; if (!it) return 'no such item';
@@ -66,6 +77,6 @@
     if ((career.gold | 0) < it.price) return 'needs ' + it.price + ' gold';
     return null;
   }
-  var api = { ARENA_RANKS: ARENA_RANKS, ARENA_ITEMS: ARENA_ITEMS, ARENA_SLOTS: ARENA_SLOTS, ARENA_ACHIEVEMENTS: ARENA_ACHIEVEMENTS, skillLevel: skillLevel, rankOf: rankOf, rankInfo: rankInfo, lockReason: lockReason };
+  var api = { ARENA_RANKS: ARENA_RANKS, ARENA_ITEMS: ARENA_ITEMS, ARENA_SLOTS: ARENA_SLOTS, ARENA_ACHIEVEMENTS: ARENA_ACHIEVEMENTS, RENOWN: RENOWN, skillLevel: skillLevel, rankOf: rankOf, rankInfo: rankInfo, renownOf: renownOf, lockReason: lockReason };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.ARENA_CAT = api;
 })(typeof window !== 'undefined' ? window : this);

@@ -1126,11 +1126,11 @@ function syncModelRigs() {
       W[i] = pw ? pw.clone().multiply(b.quaternion) : b.quaternion.clone(); }
     // the sword in his hand: the figure's own for the plain iron blade, the loadout's BUILT one for anything else
     // (the market sells fifteen — a falchion must look like a falchion on him); afDressGear stamps P.gearSword
-    const showGear = !!L.P.gearSword && !L.P.noModelSword, drawn = !!(L.P.sword && L.P.sword.visible);
-    if (L.mSword) L.mSword.visible = drawn && !showGear && !L.P.noModelSword;
-    if (L.P.shield) L.P.shield.visible = false;                                                  // (afMakeBody re-shows and rescales it; the figure's own shield is the one)
+    const vr = !!L.P.vrGear, showGear = vr || (!!L.P.gearSword && !L.P.noModelSword), drawn = !!(L.P.sword && L.P.sword.visible);   // (vrGear: the plastic steel rides the VR controllers, the figure's own is hidden — vrDress)
+    if (L.mSword) L.mSword.visible = !vr && drawn && !showGear && !L.P.noModelSword;
+    if (L.P.shield) L.P.shield.visible = vr ? !!L.P.vrShieldOn : false;                          // (afMakeBody re-shows and rescales it; the figure's own shield is the one)
     if (L.P.sword) L.P.sword.traverse(m => { if (m.isMesh && m.visible !== showGear) m.visible = showGear; });   // (afBuildSword rebuilds it on every gear pass)
-    if (L.mShield) L.mShield.visible = !L.P.noModelShield && !!(L.P.bow ? !L.P.bow.visible : true);
+    if (L.mShield) L.mShield.visible = !vr && !L.P.noModelShield && !!(L.P.bow ? !L.P.bow.visible : true);
   }
 }
 { const _r = renderer.render.bind(renderer); renderer.render = (s, c) => { if (MODEL_LIVE.length) syncModelRigs(); return _r(s, c); }; }
@@ -11704,6 +11704,7 @@ camera.lookAt(0, 1.6, 0);
 requestAnimationFrame(loop);
 
 addEventListener('resize', () => {
+  if (renderer.xr && renderer.xr.isPresenting) return;      // (XR owns the framebuffer and the projection)
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -16957,6 +16958,317 @@ const AF = {
 };
 BV.AF = AF;
 
+/* =====================================================================================================
+   VR — first-person arena fighting on a WebXR headset: the Quest's own browser at bladevale.com, or a PC
+   headset through Chrome/Edge (see VR.md). The sim is untouched. VR is one more way of filling AF.locIn
+   (the sticks walk, the head aims) plus ONE helper, vrStrike, that lands a physical swing through afDamage
+   — the same call afStrike makes — so blocks, guard breaks, poise, staggers, splats, popups, the career
+   ledger and the net events all come for free. While presenting the camera belongs to the headset: nothing
+   here writes it, and afCamera, the shake/kick/FOV punch, the post pipeline and the films are all bypassed
+   (the VR.on checks in afFrame, afJuice, afFinish, afBoot).
+   SCALE: a Vale fighter stands ~3.3 units, the player ~1.7 m. The rig (the group the camera and the hands
+   live in) is scaled so the player's own eye height lands on the fighter's eyes; everything under the rig
+   is authored in metres. YAW: the body faces where the head looks; a real step moves the body; a right-stick
+   flick snap-turns the rig (no smooth turning: it is the fastest way to make someone sick).
+   Hooks: BV.vrEnter, BV.vrExit, BV.vrStatus. ?xrshim loads a fake headset (xr-shim.js, never shipped).
+   ===================================================================================================== */
+const VR = {
+  on: false, supported: null, session: null, rig: null, scale: 1, eyeUser: 0, dressed: null, loop: false,
+  src: {}, grip: {}, ray: {}, headYaw: 0, snapArmed: true, dodgeWas: false, recWas: false, block: false, stick: 0,
+  swing: null, spd: 0, tip: new THREE.Vector3(), hilt: new THREE.Vector3(), prevTip: null, trailT: 0,
+  hud: null, ban: null, vig: null, vigK: 0, hudT: 0, banner: null, postWas: false, shadowWas: null, sword: null, shield: null,
+  swordPitch: (() => { try { return clamp(+localStorage.getItem('bv-vr-sword') || 0, -60, 60); } catch (e) { return 0; } })(),   // the blade's tilt off the controller's forward, degrees (right stick up/down tunes it)
+  q: { fbScale: 1.0, shadow: 1024 },                      // the headset budget: framebuffer scale, shadow map (the phone tier's 2048 PCFSoft is too much for a Quest at 72 Hz × 2 eyes)
+};
+BV.VR = VR;
+const VR_T = { swingMin: 3.2, swingFull: 8.5, heavyAt: 0.6, hitCd: 0.45, snap: Math.PI / 6, eyeWorld: 2.95, tipY: 1.68, capR: 0.55, capY0: 0.45, capY1: 3.2, reach: 6 };
+// the sword lies along the controller's forward (grip −Z, where the Touch's ring points); the shield is strapped across the
+// left forearm (grip +Z runs back along the forearm; the face looks out the back of the hand, −X on a left hand), point toward the fist
+const VR_SWORD = { pos: new THREE.Vector3(0, 0, 0) };
+const VR_SHIELD = { pos: new THREE.Vector3(-0.05, 0, 0.16), quat: new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(new THREE.Vector3(0, -1, 0), new THREE.Vector3(0, 0, 1), new THREE.Vector3(-1, 0, 0))) };
+if (/[?&]xrshim\b/.test(location.search)) { const s = document.createElement('script'); s.src = 'xr-shim.js?v=' + Date.now(); document.head.appendChild(s); }   // tests: a headset out of thin air (never cached)
+
+function vrSupported() {
+  if (VR.supported) return Promise.resolve(true);
+  if (!navigator.xr || !navigator.xr.isSessionSupported) return Promise.resolve(false);
+  return navigator.xr.isSessionSupported('immersive-vr').then(ok => (VR.supported = !!ok), () => false);
+}
+// the way in: a button over the pit (a session needs a click); shown when the browser has a headset and this is my sim (v1: host or solo)
+function vrButton() {
+  let el = document.getElementById('af-vr');
+  if (!el) {
+    el = document.createElement('button'); el.id = 'af-vr'; el.textContent = '🥽 Enter VR';
+    el.style.cssText = 'position:fixed;right:14px;bottom:14px;z-index:46;display:none;padding:11px 18px;border:0;border-radius:12px;background:#ffd34d;color:#1a1420;font:800 15px system-ui;box-shadow:0 4px 18px rgba(0,0,0,.5);cursor:pointer';
+    el.addEventListener('click', () => { vrEnter().catch(e => { console.warn('[vr]', e); afBanner('VR', 'the headset would not start: ' + ((e && e.message) || e), 3); }); });
+    document.body.appendChild(el);
+  }
+  vrSupported().then(ok => { el.style.display = ok && AF.on && !VR.on && AF.role !== 'guest' ? 'block' : 'none'; });
+}
+async function vrEnter() {
+  if (VR.on || !navigator.xr) return false;
+  const session = await navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor', 'bounded-floor'] });
+  await vrStart(session);
+  return true;
+}
+async function vrStart(session) {
+  VR.session = session;
+  renderer.xr.enabled = true;
+  renderer.xr.setReferenceSpaceType('local-floor');
+  try { renderer.xr.setFramebufferScaleFactor(VR.q.fbScale); } catch (e) {}
+  await renderer.xr.setSession(session);
+  if (!VR.rig) vrBuildRig();
+  const rig = VR.rig;
+  rig.add(camera); camera.position.set(0, 0, 0); camera.quaternion.identity(); camera.scale.setScalar(1);   // (three writes the camera from the headset from here on)
+  scene.add(rig);
+  VR.on = true; VR.scale = 1; VR.eyeUser = 0; VR.prevTip = null; VR.swing = null; VR.spd = 0; VR.block = false; VR.snapArmed = true; VR.banner = null; VR.vigK = 0; VR.hudT = 0;
+  VR.hud.visible = VR.ban.visible = VR.vig.visible = true;
+  VR.postWas = AF_POST.on; AF_POST.on = false;               // the post pipeline renders to its own targets: XR owns the framebuffer
+  VR.shadowWas = { size: sun.shadow.mapSize.x, type: renderer.shadowMap.type };
+  vrShadows(VR.q.shadow, THREE.PCFShadowMap);
+  trauma = 0; camKick.set(0, 0, 0); fovPunch = 0;
+  if (AF.on) { AF.introOff = true; AF.outroOff = true; if (AF.phase === 'intro' || AF.outro) afIntroSkip(); }   // you stand in the body from the first frame: no films, no sweep
+  session.addEventListener('end', vrEnd);
+  VR.loop = true; renderer.setAnimationLoop(vrLoop);          // the headset's clock drives the frame (afFrame's rAF chain lets go — see its tail)
+  const el = document.getElementById('af-vr'); if (el) el.style.display = 'none';
+  try { document.exitPointerLock && document.exitPointerLock(); } catch (e) {}
+  console.log('[vr] session started');
+}
+function vrLoop(now) { if (AF.on) afFrame(now, true); else renderer.render(scene, camera); }
+function vrEnd() {
+  if (!VR.on) return;
+  VR.on = false; VR.loop = false;
+  try { renderer.setAnimationLoop(null); } catch (e) {}
+  if (VR.dressed) vrUndress();
+  const rig = VR.rig; if (rig) { rig.remove(camera); scene.remove(rig); }
+  VR.hud.visible = VR.ban.visible = VR.vig.visible = false;
+  camera.position.set(0, 0, 0); camera.quaternion.identity(); camera.scale.setScalar(1); camera.aspect = window.innerWidth / Math.max(1, window.innerHeight); camera.fov = AF.on ? AF.fov : CAM_BASE_FOV; camera.updateProjectionMatrix();
+  renderer.xr.enabled = false;
+  try { renderer.setSize(window.innerWidth, window.innerHeight); } catch (e) {}
+  AF_POST.on = VR.postWas; if (AF_POST.on) AF_POST.w = 0;
+  if (VR.shadowWas) { vrShadows(VR.shadowWas.size, VR.shadowWas.type); VR.shadowWas = null; }
+  trauma = 0; camKick.set(0, 0, 0); fovPunch = 0;
+  VR.session = null; VR.src = {}; VR.grip = {}; VR.ray = {}; VR.swing = null; if (AF.me) AF.me.vrSwing = null;
+  const I = AF.locIn; I.mx = I.mz = 0; I.block = false;
+  vrButton();
+  requestAnimationFrame(loop);
+  console.log('[vr] session ended');
+}
+function vrShadows(size, type) {
+  try {
+    sun.shadow.mapSize.set(size, size); if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
+    if (renderer.shadowMap.type !== type) { renderer.shadowMap.type = type; scene.traverse(o => { if (o.material) { const ms = Array.isArray(o.material) ? o.material : [o.material]; for (const m of ms) m.needsUpdate = true; } }); }
+  } catch (e) {}
+}
+function vrBuildRig() {
+  const rig = new THREE.Group(); rig.name = 'vr-rig'; VR.rig = rig;
+  for (let i = 0; i < 2; i++) {
+    const ray = renderer.xr.getController(i), grip = renderer.xr.getControllerGrip(i);
+    rig.add(ray); rig.add(grip);
+    ray.addEventListener('connected', e => vrConnect(e.data, i, ray, grip));
+    ray.addEventListener('disconnected', () => { const h = grip.userData.hand; if (h) { delete VR.src[h]; delete VR.grip[h]; delete VR.ray[h]; } });
+  }
+  // head-locked: the strip under your eyes (hp, poise, clock, the count), the banners, and the comfort vignette
+  VR.hud = vrPanel(512, 128, 0.6, 0.15); VR.hud.position.set(0, -0.42, -1.3); camera.add(VR.hud);
+  VR.ban = vrPanel(1024, 256, 1.3, 0.325); VR.ban.position.set(0, 0.22, -1.7); camera.add(VR.ban);
+  { const c = document.createElement('canvas'); c.width = c.height = 256; const x = c.getContext('2d'), g = x.createRadialGradient(128, 128, 60, 128, 128, 128);
+    g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(0.55, 'rgba(0,0,0,0.6)'); g.addColorStop(1, 'rgba(0,0,0,1)'); x.fillStyle = g; x.fillRect(0, 0, 256, 256);
+    const m = new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), transparent: true, opacity: 0, depthTest: false, depthWrite: false, fog: false });
+    VR.vig = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 2.6), m); VR.vig.position.set(0, 0, -0.9); VR.vig.renderOrder = 998; VR.vig.frustumCulled = false; camera.add(VR.vig); }
+  VR.hud.visible = VR.ban.visible = VR.vig.visible = false;
+}
+function vrPanel(w, h, mw, mh) {
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  const tex = new THREE.CanvasTexture(cv); tex.minFilter = THREE.LinearFilter;
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(mw, mh), new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false, fog: false }));
+  m.renderOrder = 1000; m.frustumCulled = false; m.userData = { cv, ctx: cv.getContext('2d'), tex };
+  return m;
+}
+function vrConnect(src, i, ray, grip) {
+  let h = src.handedness; if (h !== 'left' && h !== 'right') h = i === 0 ? 'right' : 'left';   // (a handless source: the first is the sword hand)
+  VR.src[h] = src; VR.grip[h] = grip; VR.ray[h] = ray; grip.userData.hand = h;
+  if (VR.dressed) vrDress(VR.dressed, true);                  // the hands arrived after the body: hang the steel on them now
+}
+// the first-person body: no head or arms of its own (looking down you see your chest and legs, never the inside of a helmet);
+// the sword and the shield leave the rig's hands for the controllers. Every transform is remembered so the body can be dressed again.
+function vrDress(me, force) {
+  if (VR.dressed === me && !force) return;
+  if (VR.dressed && VR.dressed !== me) vrUndress();
+  VR.dressed = me;
+  const P = me.parts;
+  if (P.headPivot) P.headPivot.visible = false; if (P.shoulderL) P.shoulderL.visible = false; if (P.shoulderR) P.shoulderR.visible = false;
+  const hang = (obj, hand, pos, quat) => {
+    if (!obj) return;
+    if (!obj.userData.vrHome) obj.userData.vrHome = { parent: obj.parent, pos: obj.position.clone(), quat: obj.quaternion.clone(), scale: obj.scale.clone(), fixed: !!obj.userData.fixedGrip };
+    const g = VR.grip[hand]; if (!g) return;
+    g.add(obj); obj.position.copy(pos); if (quat) obj.quaternion.copy(quat); obj.userData.fixedGrip = true;   // (the wrist channel must not spin it)
+  };
+  hang(P.sword, 'right', VR_SWORD.pos, null); hang(P.shield, 'left', VR_SHIELD.pos, VR_SHIELD.quat);
+  VR.sword = P.sword || null; VR.shield = P.shield || null;
+  if (P.modelRig && !me.vrModel) {                           // the warrior figure over the rig: its head and arms collapse (a bone scaled to nothing), its own steel gives way to the plastic on the controllers (syncModelRigs reads vrGear)
+    const live = P.modelRig, R = MODEL_RIGS.get(me.group.userData.model), map = (R && R.spec.map) || {}, M = { bones: [], shieldVis: P.shield ? P.shield.visible : null };
+    for (const k of ['head', 'shoulderL', 'shoulderR']) { const b = live.inst.byName[map[k]]; if (b) { M.bones.push([b, b.scale.clone()]); b.scale.setScalar(0.001); } }
+    P.vrGear = true; P.vrShieldOn = !me.noShield; if (P.sword) P.sword.traverse(x => { if (x.isMesh) x.visible = true; }); if (P.shield) P.shield.visible = P.vrShieldOn;
+    me.vrModel = M;
+  }
+  vrFitHands(me); VR.prevTip = null; VR.spd = 0; VR.swing = null;   // (the jump from the body's hand to the controller is not a swing)
+  if (me.weapon === 'bow') { try { afSetWeapon(me, 'sword'); } catch (e) {} } me.canBow = false;   // v1: steel only
+}
+function vrUndress() {
+  const me = VR.dressed; if (!me) return; VR.dressed = null;
+  const P = me.parts; if (P.headPivot) P.headPivot.visible = true; if (P.shoulderL) P.shoulderL.visible = true; if (P.shoulderR) P.shoulderR.visible = true;
+  for (const obj of [P.sword, P.shield]) {
+    const H = obj && obj.userData.vrHome; if (!H) continue;
+    if (H.parent) H.parent.add(obj); obj.position.copy(H.pos); obj.quaternion.copy(H.quat); obj.scale.copy(H.scale); obj.userData.fixedGrip = H.fixed; delete obj.userData.vrHome;
+  }
+  if (me.vrModel) { const M = me.vrModel, P2 = me.parts; for (const [b, sc] of M.bones) b.scale.copy(sc); P2.vrGear = false; P2.vrShieldOn = false; if (P2.shield && M.shieldVis != null) P2.shield.visible = M.shieldVis; me.vrModel = null; }
+  VR.sword = VR.shield = null; me.vrSwing = null;
+}
+function vrFitHands(me) {                                   // the steel keeps its world size whatever the rig's scale; the blade's tilt is the player's
+  const k = (me.footScale || 1) / (VR.scale || 1);
+  if (VR.sword && VR.sword.userData.vrHome) { VR.sword.scale.copy(VR.sword.userData.vrHome.scale).multiplyScalar(k); VR.sword.rotation.set(-Math.PI / 2 + VR.swordPitch * Math.PI / 180, 0, 0); }
+  if (VR.shield && VR.shield.userData.vrHome) VR.shield.scale.copy(VR.shield.userData.vrHome.scale).multiplyScalar(k);
+}
+function vrSwordPitch(d) { VR.swordPitch = clamp(VR.swordPitch + d, -60, 60); try { localStorage.setItem('bv-vr-sword', String(Math.round(VR.swordPitch))); } catch (e) {} if (VR.dressed) vrFitHands(VR.dressed); }
+const vrPad = h => { const s = VR.src[h]; return (s && s.gamepad) || null; };
+const vrPressed = (pad, i) => !!(pad && pad.buttons && pad.buttons[i] && pad.buttons[i].pressed);
+const vrDz = v => Math.abs(v) < 0.15 ? 0 : v;
+function vrHaptic(h, k, ms) { try { const p = vrPad(h), a = p && p.hapticActuators && p.hapticActuators[0]; if (a && a.pulse) { const r = a.pulse(k, ms); if (r && r.catch) r.catch(() => {}); } } catch (e) {} }
+function vrHeadOffset(out) {                                // where the head stands, in world XZ, relative to the rig's origin (a real step in the room)
+  const rig = VR.rig, ry = rig.rotation.y, c = Math.cos(ry), sn = Math.sin(ry), cx = camera.position.x, cz = camera.position.z, s = VR.scale;
+  out.x = (c * cx + sn * cz) * s; out.z = (-sn * cx + c * cz) * s; return out;
+}
+function vrAnchor() {                                       // the rig follows the body so the head is exactly on the fighter, whatever the sim did to him (walls, shoves, knockback)
+  const me = AF.me, rig = VR.rig, off = vrHeadOffset(tmpV2);
+  rig.position.set(me.x - off.x, afY(me.x, me.z), me.z - off.z); rig.updateMatrixWorld(true);
+}
+function vrSnap(a) { VR.rig.rotation.y += a; if (AF.me) vrAnchor(); }
+// the input layer: runs after afReadLocalInput each fight frame, filling the same AF.locIn the sim already reads
+function vrInput(dt) {
+  const me = AF.me, I = AF.locIn, rig = VR.rig; if (!me || !rig) return;
+  camera.getWorldDirection(tmpV); VR.headYaw = Math.atan2(tmpV.x, tmpV.z);
+  I.yaw = VR.headYaw;                                        // the body faces where you look (afAimOf, the block facing test and the AI all read b.yaw)
+  if (!me.dead && !me.mounted) { const off = vrHeadOffset(tmpV2); me.x = rig.position.x + off.x; me.z = rig.position.z + off.z; }   // a real step moves the man
+  const L = vrPad('left'), R = vrPad('right');
+  let f = 0, sd = 0;
+  if (L) { sd = vrDz(L.axes[2] || 0); f = -vrDz(L.axes[3] || 0); }
+  const m = Math.hypot(f, sd); if (m > 1) { f /= m; sd /= m; }
+  const fx = Math.sin(I.yaw), fz = Math.cos(I.yaw), rx = -Math.cos(I.yaw), rz = Math.sin(I.yaw);
+  I.mx = fx * f + rx * sd; I.mz = fz * f + rz * sd; I.steer = null; I.thr = null; VR.stick = Math.min(1, m);
+  if (R) {
+    const x = R.axes[2] || 0;                                // a flick right turns you right, 30° at a time
+    if (VR.snapArmed && Math.abs(x) > 0.6) { VR.snapArmed = false; vrSnap(x > 0 ? -VR_T.snap : VR_T.snap); } else if (Math.abs(x) < 0.3) VR.snapArmed = true;
+    const y = -(R.axes[3] || 0); if (Math.abs(y) > 0.5) vrSwordPitch((y > 0 ? 1 : -1) * 40 * dt);   // …and up/down tilts the blade in your fist until it feels right
+  }
+  const dodge = vrPressed(L, 4) || vrPressed(R, 4);          // A / X: the roll (the sim's sidestep; the head is never rolled)
+  if (dodge && !VR.dodgeWas) { I.dodge++; I.rollDir = m > 0.2 ? Math.atan2(I.mx, I.mz) : null; } VR.dodgeWas = dodge;
+  const rec = vrPressed(L, 3) || vrPressed(R, 3);            // a stick click re-measures your height
+  if (rec && !VR.recWas) VR.eyeUser = 0; VR.recWas = rec;
+  VR.block = vrGuard() || vrPressed(L, 1); I.block = VR.block;
+  I.hold = false;                                            // no timed swings: the blade in your hand IS the attack (vrBlade)
+  if (me.weapon === 'bow') { try { afSetWeapon(me, 'sword'); } catch (e) {} }
+}
+function vrGuard() {                                        // the shield is up when it hangs between chest and eye height, forward of you, roughly where you look
+  const g = VR.grip.left; if (!g || !g.visible) return false;
+  g.getWorldPosition(tmpV); camera.getWorldPosition(tmpV2);
+  const s = VR.scale, dy = (tmpV2.y - tmpV.y) / s; if (dy < 0 || dy > 0.7) return false;
+  const dx = tmpV.x - tmpV2.x, dz = tmpV.z - tmpV2.z, dh = Math.hypot(dx, dz); if (dh / s < 0.12 || dh / s > 0.8) return false;
+  return (dx * Math.sin(VR.headYaw) + dz * Math.cos(VR.headYaw)) / dh > 0.5;
+}
+// the frame: after the sim, before the render — scale, anchor, the blade, comfort, the HUD
+function vrFrame(dt, gdt) {
+  const me = AF.me, rig = VR.rig; if (!rig) return;
+  if (!VR.eyeUser && camera.position.y > 0.8) {              // the first good pose: your eyes are this high; the fighter's are 2.95 units up
+    VR.eyeUser = camera.position.y; VR.scale = VR_T.eyeWorld * (me ? me.footScale || 1 : 1) / VR.eyeUser; rig.scale.setScalar(VR.scale);
+    if (VR.dressed) vrFitHands(VR.dressed);
+  }
+  if (me) { if (VR.dressed !== me) vrDress(me); vrAnchor(); }
+  else { rig.position.y = afY(rig.position.x, rig.position.z); rig.updateMatrixWorld(true); }
+  if (me && !me.dead && AF.phase === 'fight' && AF.role !== 'guest') vrBlade(gdt);
+  else { VR.swing = null; VR.prevTip = null; if (me) me.vrSwing = null; }
+  vrComfort(dt); vrHud(dt);
+  AF.hurt = Math.max(0, AF.hurt - dt * 1.6);
+}
+// BLADE TRACKING: the tip's speed (in the player's metres) says whether this is a swing and how loaded it is; a fast committed
+// swing maps onto the sim's light→heavy scale. While swinging the blade segment is tested against every foe's capsule.
+function vrBlade(dt) {
+  const me = AF.me, sw = VR.sword; if (!sw || !sw.visible || dt <= 0) { VR.prevTip = null; return; }
+  const s = VR.scale, tipY = VR_T.tipY * (me.weapon === 'longsword' ? 1.45 : 1);
+  VR.hilt.set(0, 0.2, 0); sw.localToWorld(VR.hilt); VR.tip.set(0, tipY, 0); sw.localToWorld(VR.tip);
+  if (!VR.prevTip) { VR.prevTip = VR.tip.clone(); return; }
+  const v = VR.tip.distanceTo(VR.prevTip) / s / dt; VR.prevTip.copy(VR.tip);
+  VR.spd = lerp(VR.spd, v, 0.45);
+  const k = clamp((VR.spd - VR_T.swingMin) / (VR_T.swingFull - VR_T.swingMin), 0, 1);
+  if (VR.spd > VR_T.swingMin) {
+    if (!VR.swing) { VR.swing = { k, hit: false, bow: false, heavy: false, wind: 0.12, t: 0, vr: true }; try { SFX.swing(VR.hilt); } catch (e) {} }
+    const S = VR.swing; S.k = Math.max(S.k, k); S.heavy = S.k >= VR_T.heavyAt; S.t += dt; me.vrSwing = S;   // (afThink reads vrSwing like a swing in the air: the NPCs get their guards up)
+    if ((VR.trailT -= dt) <= 0) { try { spawnTrail(me, tipY); } catch (e) {} VR.trailT = 0.08; }
+    vrStrike(me, S);
+  } else if (VR.swing) { VR.swing = null; me.vrSwing = null; }
+  for (const o of AF.bodies) if (o.vrHitT > 0) o.vrHitT -= dt;
+}
+function vrStrike(b, S) {                                   // afStrike minus the reach-and-cone test: the blade itself decides who is hit
+  const F = AF_F, w = S.k, shock = b.dmgMul || 1;
+  for (const o of AF.bodies) {
+    if (o.dead || o.team === b.team || o === b || o.vrHitT > 0) continue;
+    const [px, pz] = afHitPoint(o, b.x, b.z); if (Math.hypot(px - b.x, pz - b.z) > VR_T.reach) continue;
+    const sc = o.footScale || 1, gy = afY(o.x, o.z);
+    if (vrSegDist(VR.hilt, VR.tip, px, gy + VR_T.capY0 * sc, pz, gy + VR_T.capY1 * sc) > VR_T.capR * sc + 0.1) continue;
+    let dmg = (lerp(rand(F.light.dmg[0], F.light.dmg[1]), rand(F.heavy.dmg[0], F.heavy.dmg[1]), w) + (b.combo || 0) * 1.5) * shock;
+    const exec = o.stagger > 0; if (exec) dmg *= F.executeMul;   // a staggered foe is open: the execution lands for real
+    o.vrHitT = VR_T.hitCd; S.hit = true;
+    afDamage(o, dmg, b, S.heavy, exec, false, w);
+  }
+}
+function vrSegDist(a, b, x, y0, z, y1) {                    // closest distance between the blade (a→b) and a vertical axis (x, y0..y1, z)
+  const ux = b.x - a.x, uy = b.y - a.y, uz = b.z - a.z, vy = y1 - y0, wx = a.x - x, wy = a.y - y0, wz = a.z - z;
+  const A = ux * ux + uy * uy + uz * uz, B = uy * vy, C = vy * vy, D = ux * wx + uy * wy + uz * wz, E = vy * wy, den = A * C - B * B;
+  let s, t;
+  if (den < 1e-9) { s = 0; t = C > 0 ? clamp(E / C, 0, 1) : 0; } else { s = clamp((B * E - C * D) / den, 0, 1); t = (B * s + E) / C; if (t < 0) { t = 0; s = clamp(-D / A, 0, 1); } else if (t > 1) { t = 1; s = clamp((B - D) / A, 0, 1); } }
+  const px = a.x + ux * s - x, py = a.y + uy * s - (y0 + vy * t), pz = a.z + uz * s - z;
+  return Math.sqrt(px * px + py * py + pz * pz);
+}
+function vrComfort(dt) {                                    // the vignette closes in whenever the world moves you faster than you asked (a roll, a shove, a knockback)
+  const me = AF.me; let want = 0;
+  if (me && !me.dead) { const sp = Math.hypot(me.vx, me.vz), asked = VR.stick * AF_F.move * (me.moveMul || 1) + 0.6; want = clamp((sp - asked) / 8, 0, 0.85); }
+  VR.vigK = lerp(VR.vigK, want, clamp(dt * (want > VR.vigK ? 18 : 5), 0, 1));
+  VR.vig.material.opacity = VR.vigK; VR.vig.visible = VR.vigK > 0.01;
+}
+function vrHud(dt) {
+  if ((VR.hudT -= dt) > 0) return; VR.hudT = 1 / 12;
+  const me = AF.me, H = VR.hud.userData, c = H.ctx, W = H.cv.width, Hh = H.cv.height;
+  c.clearRect(0, 0, W, Hh);
+  c.fillStyle = 'rgba(12,9,20,.62)'; c.beginPath(); c.moveTo(14, 0); c.lineTo(W - 14, 0); c.quadraticCurveTo(W, 0, W, 14); c.lineTo(W, Hh - 14); c.quadraticCurveTo(W, Hh, W - 14, Hh); c.lineTo(14, Hh); c.quadraticCurveTo(0, Hh, 0, Hh - 14); c.lineTo(0, 14); c.quadraticCurveTo(0, 0, 14, 0); c.fill();
+  const tally = new Map(); for (const b of AF.bodies) { const t = tally.get(b.team) || 0; tally.set(b.team, t + (b.dead ? 0 : 1)); }
+  const rem = Math.max(0, AF_F.timeLimit * (AF.bodies.length > AF_LIM.heroCap ? 2 : 1) - AF.t), mm = Math.floor(rem / 60), ss = Math.floor(rem % 60);
+  c.font = '800 30px system-ui'; c.textBaseline = 'top'; let x = 18;
+  for (let t = 0; t < AF.cfg.teams; t++) { c.fillStyle = AF_TEAMS[t].col; const s = AF_TEAMS[t].name + ' ' + (tally.get(t) || 0); c.fillText(s, x, 12); x += c.measureText(s).width + 22; }
+  c.fillStyle = '#c9bfda'; c.textAlign = 'right'; c.fillText(AF.phase === 'countdown' ? 'ready…' : mm + ':' + (ss < 10 ? '0' : '') + ss, W - 18, 12); c.textAlign = 'left';
+  if (me) {
+    const hp = clamp(me.hp / me.maxHp, 0, 1), po = clamp(me.poise / me.maxPoise, 0, 1);
+    c.fillStyle = '#2a2438'; c.fillRect(18, 60, W - 36, 22); c.fillStyle = hp > 0.35 ? '#8fd08f' : '#ff6a5a'; c.fillRect(18, 60, (W - 36) * hp, 22);
+    c.fillStyle = '#2a2438'; c.fillRect(18, 92, W - 36, 10); c.fillStyle = '#ffd34d'; c.fillRect(18, 92, (W - 36) * po, 10);
+    c.font = '700 22px system-ui';
+    if (AF.over) { c.fillStyle = '#ffe089'; c.fillText('fight over · take the headset off for the results', 18, 106 - 4); }
+    else if (me.dead) { c.fillStyle = '#ff9a8a'; c.fillText('you fell — spectating', 18, 102); }
+    else if (VR.block) { c.fillStyle = '#ffe089'; c.textAlign = 'right'; c.fillText('GUARD', W - 18, 36); c.textAlign = 'left'; }
+  }
+  H.tex.needsUpdate = true;
+  const B = VR.banner, ban = VR.ban;
+  if (B && rtNow < B.until) {
+    const bc = ban.userData.ctx, bw = ban.userData.cv.width, bh = ban.userData.cv.height;
+    bc.clearRect(0, 0, bw, bh); bc.textAlign = 'center'; bc.textBaseline = 'top'; bc.shadowColor = 'rgba(0,0,0,.9)'; bc.shadowBlur = 18;
+    bc.font = '900 96px system-ui'; bc.fillStyle = '#ffe089'; bc.fillText(String(B.big).replace(/<[^>]*>/g, ''), bw / 2, 30);
+    if (B.sub) { bc.font = '600 34px system-ui'; bc.fillStyle = '#e8def8'; bc.fillText(String(B.sub).replace(/<[^>]*>/g, ''), bw / 2, 150); }
+    ban.userData.tex.needsUpdate = true; ban.visible = true;
+  } else ban.visible = false;
+}
+BV.vrEnter = () => vrEnter();
+BV.vrExit = () => { const s = VR.session; return s ? s.end() : Promise.resolve(); };
+BV.vrStatus = () => ({ on: VR.on, presenting: !!(renderer.xr && renderer.xr.isPresenting), scale: +VR.scale.toFixed(3), eyeUser: +VR.eyeUser.toFixed(2), headYaw: +VR.headYaw.toFixed(2), rigYaw: VR.rig ? +VR.rig.rotation.y.toFixed(2) : 0,
+  rig: VR.rig ? [+VR.rig.position.x.toFixed(2), +VR.rig.position.y.toFixed(2), +VR.rig.position.z.toFixed(2)] : null, hands: Object.keys(VR.src), dressed: !!VR.dressed, swordOn: !!(VR.sword && VR.sword.parent === VR.grip.right), shieldOn: !!(VR.shield && VR.shield.parent === VR.grip.left),
+  spd: +VR.spd.toFixed(2), swing: VR.swing ? { k: +VR.swing.k.toFixed(2), heavy: VR.swing.heavy, hit: VR.swing.hit } : null, block: VR.block, vig: +VR.vigK.toFixed(2), swordPitch: Math.round(VR.swordPitch),
+  tip: [+VR.tip.x.toFixed(2), +VR.tip.y.toFixed(2), +VR.tip.z.toFixed(2)], me: AF.me ? { x: +AF.me.x.toFixed(2), z: +AF.me.z.toFixed(2), yaw: +AF.me.yaw.toFixed(2), hp: Math.round(AF.me.hp) } : null, camLocal: [+camera.position.x.toFixed(2), +camera.position.y.toFixed(2), +camera.position.z.toFixed(2)] });
+
 // ---- the pit: a seeded, gently rolling floor inside a ring wall; the same on every client ----
 function afY(x, z) {
   const T = AF.terr; if (!T) return 0;
@@ -18286,7 +18598,7 @@ function afOutroBoard(V) {
     html += row('<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;border-bottom:1px solid rgba(255,255,255,.18);padding-bottom:3px"><b style="color:' + AF_TEAMS[t].col + ';font-size:1.1em">' + AF_TEAMS[t].name + (t === w ? ' ✦' : '') + '</b><span style="opacity:.8;font-size:.85em">' + alive + '/' + men.length + ' standing · ' + kills + ' kills · ' + Math.round(dealt) + ' dealt · ' + Math.round(taken) + ' taken</span></div>', 'af-ob-team');
     html += row('<div class="af-ob-grid" style="opacity:.55;font-size:.72em;letter-spacing:1px"><span>FIGHTER</span><span>KILLS</span><span>DEALT</span><span>TAKEN</span><span></span></div>');
     men.slice(0, cap).forEach(b => { const me = b === AF.me, star = b === M;
-      html += row('<div class="af-ob-grid' + (star ? ' af-ob-star' : '') + '"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (star ? '★ ' : '') + (me ? '<b>' + b.name + '</b> <i style="opacity:.6;font-size:.8em">you</i>' : b.name) + (b.kind === 'npc' && b.A ? ' <span style="opacity:.5;font-size:.78em">' + b.A.label + '</span>' : '') + '</span><span>' + (b.kills | 0) + '</span><span>' + Math.round(b.dmgDealt || 0) + '</span><span>' + Math.round(b.dmgTaken || 0) + '</span><span style="opacity:.75;font-size:.8em">' + (b.dead ? 'fallen' : 'standing') + '</span></div>'); });
+      html += row('<div class="af-ob-grid' + (star ? ' af-ob-star' : '') + '"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (star ? '★ ' : '') + (me ? '<b>' + afProfLink(b) + '</b> <i style="opacity:.6;font-size:.8em">you</i>' : afProfLink(b)) + (b.kind === 'npc' && b.A ? ' <span style="opacity:.5;font-size:.78em">' + b.A.label + '</span>' : '') + '</span><span>' + (b.kills | 0) + '</span><span>' + Math.round(b.dmgDealt || 0) + '</span><span>' + Math.round(b.dmgTaken || 0) + '</span><span style="opacity:.75;font-size:.8em">' + (b.dead ? 'fallen' : 'standing') + '</span></div>'); });
     if (men.length > cap) html += row('<div style="opacity:.55;font-size:.8em">… and ' + (men.length - cap) + ' more</div>');
   }
   el.innerHTML = html; el.style.display = '';
@@ -19123,6 +19435,7 @@ function afDamage(t, amt, from, heavy, exec, arrow, k) {   // heavy: cracks guar
 }
 // the screen juice: shake + hit-stop + a directional kick + FOV punch, scaled by the weight of the blow
 function afJuice(from, t, amt, heavy, blocked) {
+  if (VR.on) { if (from === AF.me) vrHaptic('right', blocked ? 0.35 : heavy ? 1 : 0.6, blocked ? 60 : 90); if (t === AF.me) { vrHaptic('left', 1, 140); vrHaptic('right', 0.6, 120); } return; }   // never shake a VR camera: the blow is felt in the hands instead
   const w = clamp(amt / 26, 0.5, 1.6);
   if (blocked) { addShake(0.08); return; }
   addShake((heavy ? FEEL.killShake : FEEL.hitShake) * w); AF.hitstop = Math.max(AF.hitstop, (heavy ? 0.07 : FEEL.hitStop) * w);
@@ -19598,7 +19911,7 @@ function afThink(b, dt) {
   const facingMe = ((b.x - t.x) * Math.sin(t.yaw) + (b.z - t.z) * Math.cos(t.yaw)) / d;
   if (t.mounted && !b.mounted && t.sp01 > 0.5 && d < 7 && facingMe > 0.6 && b.reactedTo !== t && Math.random() < b.skill * b.skill * 0.9) { b.reactedTo = t; I.dodge++; I.mx = tx; I.mz = tz; return; } // a charge is coming: roll out of its line
   // XP decides how early he SEES it: a green man never reads a raised arm, only the blade once it moves — and late
-  const sk01 = b.skill, swing = t.atk && !t.atk.hit && !t.atk.bow ? t.atk : null;
+  const sk01 = b.skill, swing = t.atk && !t.atk.hit && !t.atk.bow ? t.atk : (t.vrSwing && !t.vrSwing.hit ? t.vrSwing : null);   // (a VR player's fast blade reads as a swing in the air)
   // a man MID-CHAIN (a light landed, the next tap is coming) is as readable as a raised arm: a tapped light lands 0.06 s
   // after the press, too fast for anyone to see — but the rhythm of the chain isn't, and a soldier or better gets the
   // guard up for the second and third blow (this is what stops button-mashing from stun-locking him to death)
@@ -19609,7 +19922,7 @@ function afThink(b, dt) {
   if (incoming && d < 3.8 && facingMe > 0.3 && b.dodgeT <= 0 && b.reactedTo !== incoming && b.seenIncT >= lerp(0.42, 0.05, sk01)) {   // (not mid-roll: the roll IS the answer)
     b.reactedTo = incoming;
     const r = Math.random(), A = b.A || AF_ARCH.swordsman, sk = lerp(0.15, 1.15, sk01);
-    if (t.charge && t.charge.heavyPose || (t.atk && t.atk.heavy)) { if (r < (A.dodge * 1.3 + A.block * 0.2) * sk) I.dodge++; }   // a loaded blow: roll (a guardsman may still trust the shield)
+    if (t.charge && t.charge.heavyPose || (t.atk && t.atk.heavy) || (t.vrSwing && t.vrSwing.heavy)) { if (r < (A.dodge * 1.3 + A.block * 0.2) * sk) I.dodge++; }   // a loaded blow: roll (a guardsman may still trust the shield)
     else if (r < A.block * sk) b.holdBlock = ((t.atk ? t.atk.wind : t.charge ? Math.max(0.1, F.chargeMax - t.charge.t) : 0.3) + 0.25) * (sk01 < 0.5 ? 0.45 + Math.random() * 0.8 : 1);   // guard up until the blow should land (a green man drops it too soon; mid-chain: the next tap is ~0.3 s out)
     else if (r < (A.block + A.dodge) * sk) I.dodge++;
   }
@@ -19625,7 +19938,7 @@ function afThink(b, dt) {
     else if (b.feint === 2 && b.holdBlock <= 0) { b.feint = 0; afAiSwing(b, false); b.cd = 0.5; }
   }
   const reach = F.reach + (b.reachBonus || 0);
-  let open = t.stagger > 0 || (t.atk && t.atk.hit) || t.flinch > 0 || (t.clashT > 0 && t.clashAtk);   // reeling, staggered, locked on my guard, or in his follow-through: punish
+  let open = t.stagger > 0 || (t.atk && t.atk.hit) || (t.vrSwing && t.vrSwing.hit) || t.flinch > 0 || (t.clashT > 0 && t.clashAtk);   // reeling, staggered, locked on my guard, or in his follow-through: punish
   if (open) {                                                // …if he SPOTS it: a green man misses most openings, and is slow on the ones he sees
     if (!b.openSeen) { b.openSeen = true; b.openT = 0; b.openTake = Math.random() < lerp(0.15, 1, sk01); } else b.openT += dt;
     open = b.openTake && b.openT >= lerp(0.35, 0.04, sk01);
@@ -19758,12 +20071,14 @@ function afStandings() {
 function afStarOf() { const score = b => b.kills * 100 + (b.dmgDealt || 0) + (b.dead ? 0 : 150); let best = null; for (const b of AF.bodies) if (!best || score(b) > score(best)) best = b; return best; }
 function afReportResult() {                                // the host (or a solo fighter) tells the war-net how it went; the server pays every player in it
   if (!afSession() || !window.net || !window.net.arenaResult || AF.reported === AF.seed) return; AF.reported = AF.seed;
-  const best = afStarOf(), players = [];
-  for (const b of AF.bodies) { if (b.kind === 'npc') continue;
-    players.push({ handle: b.kind === 'host' ? afSession() : b.name, team: b.team, kills: b.kills, dmg: Math.round(b.dmgDealt || 0), alive: !b.dead, star: b === best, enemyPower: +(AF.teamPower ? AF.teamPower[b.team] : 1).toFixed(2),
+  const best = afStarOf(), players = [], npcs = [];
+  for (const b of AF.bodies) {
+    const pw = +(AF.teamPower ? AF.teamPower[b.team] : 1).toFixed(2);
+    if (b.kind === 'npc') { npcs.push({ name: b.name, team: b.team, kills: b.kills, dmg: Math.round(b.dmgDealt || 0), alive: !b.dead, star: b === best, arch: b.A ? b.A.label : 'swordsman', skill: b.xp | 0, enemyPower: pw }); continue; }   // the vale's men keep a record too (their profile)
+    players.push({ handle: b.kind === 'host' ? afSession() : b.name, team: b.team, kills: b.kills, dmg: Math.round(b.dmgDealt || 0), alive: !b.dead, star: b === best, enemyPower: pw,
       skills: { sword: b.swordHits | 0, bow: b.bowHits | 0, riding: Math.floor((b.rideT || 0) / 10) } }); }
   if (!players.length) return;
-  AF.reportP = window.net.arenaResult({ seed: String(AF.seed), winner: AF.winner, venue: AF.cfg.venue, players }).then(r => { AF.reward = r && r.ok ? (r.rewards[afSession()] || { error: 'no purse for you this time' }) : { error: (r && r.error) || 'the war-net kept no record of this fight' }; afEndRewards(); if (r && r.ok) afCareerLoad(); });
+  AF.reportP = window.net.arenaResult({ seed: String(AF.seed), winner: AF.winner, venue: AF.cfg.venue, players, npcs }).then(r => { AF.reward = r && r.ok ? (r.rewards[afSession()] || { error: 'no purse for you this time' }) : { error: (r && r.error) || 'the war-net kept no record of this fight' }; afEndRewards(); if (r && r.ok) afCareerLoad(); });
 }
 function afAwaitReward(tries) {                            // a guest: the host's report lands on the server a moment after the bell
   if (!afSession() || !window.net || !window.net.arenaCareer) return; tries = tries || 0;
@@ -19793,7 +20108,7 @@ function afFinish(winner, standings) {
   afBanner(winner < 0 ? 'DRAW' : winner === mine ? 'VICTORY' : AF_TEAMS[winner].name + ' WINS', winner === mine ? 'your team holds the pit' : winner < 0 ? 'the bell rang on a stalemate' : 'the pit belongs to them', 3.5);
   try { document.exitPointerLock && document.exitPointerLock(); } catch (e) {}
   afVictoryStart();                                          // the living freeze where they stand, the winners' blades go up (afVictoryBody)
-  if (!AF.leaving && !AF.hurry && !AF.outroOff && afOutroStart()) return;   // the film ends on the panel; skipped, hurried or off: the panel as before
+  if (!AF.leaving && !AF.hurry && !AF.outroOff && !VR.on && afOutroStart()) return;   // the film ends on the panel; skipped, hurried or off: the panel as before
   setTimeout(() => { if (!AF.leaving) afEndPanel(); }, 1600);
 }
 
@@ -19978,7 +20293,7 @@ function afFrame(now, noRaf) {
   let gdt = dt;                                              // hit-stop: the fight crawls for a few frames on impact; camera/FX stay real-time
   if (AF.hitstop > 0) { AF.hitstop -= dt; gdt = dt * 0.08; }
   if (AF.phase === 'countdown') { AF.countdown -= dt; if (AF.countdown <= 0) { AF.phase = 'fight'; afBanner('FIGHT', '', 1.0); afCrowdReact(false); } } // guests count too (the host's snapshot also flips it)
-  if (AF.me && !AF.me.dead && AF.phase === 'fight') afReadLocalInput(); else { const I = AF.locIn; I.mx = I.mz = 0; I.block = false; }
+  if (AF.me && !AF.me.dead && AF.phase === 'fight') { afReadLocalInput(); if (VR.on) vrInput(dt); } else { const I = AF.locIn; I.mx = I.mz = 0; I.block = false; }   // (VR: the head and the sticks fill the same struct)
   afGoResend(now);
   if (AF.phase === 'fight' || AF.phase === 'over') {
     if (AF.role === 'guest') afGuestTick(gdt);
@@ -20000,12 +20315,12 @@ function afFrame(now, noRaf) {
   afStepWeather(dt); afStepCrowd(dt);
   if (AF.me) player.pos.set(AF.me.x, 0, AF.me.z);            // the synth attenuates sounds toward the hero — in the pit that's your fighter
   if (TOUCH && window.updateTouchHud) window.updateTouchHud(); // the stick + ATK/HVY/BLOCK/DODGE set
-  afCamera(dt);
+  if (VR.on) vrFrame(dt, gdt); else afCamera(dt);      // (presenting: the headset owns the lens; vrFrame anchors the rig, tracks the blade, draws the HUD)
   if ((++AF._hc % 4) === 0) afUpdateHud();
   afChargeMeter();
   if (AF.motes) { AF.motes.position.x = Math.sin(rtNow * 0.13) * 3; AF.motes.position.z = Math.cos(rtNow * 0.11) * 3; AF.motes.position.y = Math.sin(rtNow * 0.21) * 0.8; AF.motes.rotation.y = rtNow * 0.01; }
-  if (AF_POST.on) afPostRender(); else renderer.render(scene, camera);
-  if (!noRaf) requestAnimationFrame(loop);
+  if (AF_POST.on && !VR.on) afPostRender(); else renderer.render(scene, camera);   // (XR owns the framebuffer: no post while presenting)
+  if (!noRaf && !VR.loop) requestAnimationFrame(loop);   // (in VR the headset's clock drives afFrame — vrLoop)
 }
 function afCamInPit() {                                   // the podium wall is solid stone now: a lens behind a man at the wall slides along it instead of through it
   const c = camera.position, d = Math.hypot(c.x, c.z), lim = AF_F.radius - 0.7; if (d > lim) { const k = lim / d; c.x *= k; c.z *= k; }
@@ -20326,6 +20641,7 @@ function afChargeMeter() {                                  // the load in your 
 }
 let _afBanT = null;
 function afBanner(big, sub, secs) {
+  if (VR.on) VR.banner = { big, sub: sub || '', until: rtNow + (secs || 1.5) };   // (the headset shows it on the head-locked panel)
   const el = document.getElementById('af-banner'); if (!el) return;
   el.innerHTML = '<div style="font:900 54px system-ui;letter-spacing:6px;color:#ffe089;text-shadow:0 4px 24px rgba(0,0,0,.8)">' + big + '</div>' + (sub ? '<div style="font:600 16px system-ui;color:#e8def8;text-shadow:0 2px 8px #000;margin-top:4px">' + sub + '</div>' : '');
   el.style.opacity = '1';
@@ -20341,9 +20657,9 @@ function afEndPanel() {
   if (!p) { p = document.createElement('div'); p.id = 'af-end'; p.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);min-width:340px;max-width:86vw;background:rgba(16,12,24,.95);border:1px solid #ffd34d;border-radius:14px;padding:20px 24px;z-index:60;color:#f3ead8;box-shadow:0 10px 40px rgba(0,0,0,.6);font-family:inherit;text-align:center'; document.body.appendChild(p); }
   const st = AF.standings || afStandings(), w = AF.winner, pit = AF.cfg.venue === 'pit', wName = w >= 0 && pit ? ((AF.bodies.find(b => b.team === w) || {}).name || AF_TEAMS[w].name) : (w >= 0 ? AF_TEAMS[w].name : '');
   p.innerHTML = '<h2 style="margin:0 0 4px;font-size:26px;color:#ffd34d">' + (w < 0 ? 'Draw' : wName + ' holds the pit') + '</h2>' +
-    '<div style="font-size:13px;opacity:.7;margin-bottom:8px">' + (AF.me && AF.me.team === w ? (pit ? 'You won.' : 'Your team won.') : AF.me ? (pit ? 'You fell.' : 'Your team fell.') : '') + (AF.starName ? ' · ★ Star of the match: <b>' + AF.starName + '</b>' : '') + '</div>' +
+    '<div style="font-size:13px;opacity:.7;margin-bottom:8px">' + (AF.me && AF.me.team === w ? (pit ? 'You won.' : 'Your team won.') : AF.me ? (pit ? 'You fell.' : 'Your team fell.') : '') + (AF.starName ? ' · ★ Star of the match: <b>' + afProfLink(AF.starName) + '</b>' : '') + '</div>' +
     (AF.me && afSession() ? '<div id="af-rewards" style="margin:0 0 10px;padding:8px 10px;border:1px solid #6b5e3a;border-radius:8px;background:rgba(255,211,77,.06);font-size:13px">' + afRewardHtml(AF.reward) + '</div>' : '') +
-    st.map((s, i) => '<div style="display:flex;justify-content:space-between;gap:16px;padding:6px 0;border-top:1px solid #3a3247;font-size:14px"><span><b style="color:' + AF_TEAMS[s.team].col + '">' + (i + 1) + '. ' + AF_TEAMS[s.team].name + '</b> <span style="opacity:.6;font-size:12px">' + (s.names.length ? s.names.join(', ') : 'all fallen') + '</span></span><span>' + s.alive + ' standing · ' + s.kills + ' kills</span></div>').join('') +
+    st.map((s, i) => '<div style="display:flex;justify-content:space-between;gap:16px;padding:6px 0;border-top:1px solid #3a3247;font-size:14px"><span><b style="color:' + AF_TEAMS[s.team].col + '">' + (i + 1) + '. ' + AF_TEAMS[s.team].name + '</b> <span style="opacity:.6;font-size:12px">' + (s.names.length ? s.names.map(n => afProfLink(n)).join(', ') : 'all fallen') + '</span></span><span>' + s.alive + ' standing · ' + s.kills + ' kills</span></div>').join('') +
     '<div style="display:flex;gap:10px;justify-content:center;margin-top:16px">' +
     (AF.role !== 'guest' ? '<button id="af-rematch" style="background:#3a6fd0;color:#fff;border:none;border-radius:8px;padding:9px 18px;cursor:pointer;font-weight:700">↻ Rematch</button>' : '<span style="font-size:12px;opacity:.7;align-self:center">waiting for the host…</span>') +
     '<button id="af-leave" style="background:#2a2233;color:#f3ead8;border:1px solid #6b5e7a;border-radius:8px;padding:9px 18px;cursor:pointer">Leave the pit</button></div>';
@@ -20365,6 +20681,7 @@ function afLeaveToMenu() {
 
 // ---- lifecycle ----
 function afClear() {
+  if (VR.dressed) vrUndress();                              // (the steel goes back into the body's hands before the body is disposed)
   for (const b of AF.bodies) { scene.remove(b.group); try { disposeGroup(b.group); } catch (e) {} if (b.tag) { scene.remove(b.tag); try { disposeGroup(b.tag); } catch (e) {} } }
   for (const a of AF.arrows) { scene.remove(a.g); try { disposeGroup(a.g); } catch (e) {} }
   for (const p of AF.props) { scene.remove(p); try { disposeGroup(p); } catch (e) {} }
@@ -20463,8 +20780,9 @@ function afBoot(spec) {
   AF.reward = null; AF.starName = null; AF.reported = null;
   afHud();
   AF.intro = null; AF.timeScale = 1;
-  if (!AF.introOff && !inPit) { AF.phase = 'intro'; try { afIntroStart(); } catch (e) { console.warn('[arena] intro', e); AF.intro = null; AF.phase = 'countdown'; } }   // the entrance: gates, the march in, the stars in slow motion
+  if (!AF.introOff && !inPit && !VR.on) { AF.phase = 'intro'; try { afIntroStart(); } catch (e) { console.warn('[arena] intro', e); AF.intro = null; AF.phase = 'countdown'; } }   // the entrance: gates, the march in, the stars in slow motion
   if (AF.phase !== 'intro') { if (inPit) afBanner('THE PITS', AF.bodies.length + ' in the ring — every man for himself', 2.6); else afBanner(AF.cfg.teams + ' TEAMS · ' + AF.cfg.per + ' EACH', AF.me ? 'you fight for ' + AF.me.teamDef.name + ' — steel yourself' : '', 2.6); }
+  vrButton();                                                // a headset in the browser: the way into the pit in first person
   if (AF.role === 'guest') afSend({ k: 'go-ack', seed: AF.seed });   // tell the host the start got here (it re-sends until we do)
   try { console.log('[arena]', JSON.stringify({ seed: AF.seed, teams: AF.cfg.teams, per: AF.cfg.per, role: AF.role, bodies: AF.bodies.length })); } catch (e) {}
 }
@@ -20711,7 +21029,7 @@ function afLobbyRender() {
     const td = AF_TEAMS[t], free = row.indexOf(null) >= 0, mine = !!me && row.indexOf(me) >= 0;
     const pw = L.npcXp ? Math.round(afTeamPower(L, t) / L.per) : 0;   // the team's average XP, a player counting as AF_PLAYER_XP
     return '<div class="al-team" style="--tc:' + td.col + '"><div class="al-tname"><span>' + td.name + (pw ? ' <i style="opacity:.6;font-weight:400;font-size:11px" title="average XP — a player counts as ' + AF_PLAYER_XP + '">avg ' + pw + 'xp</i>' : '') + '</span>' + (!host && free && !mine ? '<button data-team="' + t + '">join</button>' : '') + '</div>' +
-      (L.per > 8 ? row.filter(Boolean) : row).map(s => s ? '<div class="al-slot ' + (s === me ? 'you' : 'player') + '"><span>' + (s === me ? 'You' : s.name) + (s.away || (L.away && L.away.has(s.peer)) ? ' <i style="opacity:.6">· reconnecting…</i>' : '') + '</span><span class="al-tag">' + (s.weapon === 'bow' ? '🏹' : s.weapon === 'horse' ? '🐎' : '🗡') + (((s.gear && s.gear.rank) || s.rank) ? ' ' + ((s.gear && s.gear.rank) || s.rank) : '') + (s.kind === 'host' && s !== me ? ' host' : '') + '</span></div>'
+      (L.per > 8 ? row.filter(Boolean) : row).map(s => s ? '<div class="al-slot ' + (s === me ? 'you' : 'player') + '"><span>' + (s === me ? 'You' : afProfLink(s.name, 'player')) + (s.away || (L.away && L.away.has(s.peer)) ? ' <i style="opacity:.6">· reconnecting…</i>' : '') + '</span><span class="al-tag">' + (s.weapon === 'bow' ? '🏹' : s.weapon === 'horse' ? '🐎' : '🗡') + (((s.gear && s.gear.rank) || s.rank) ? ' ' + ((s.gear && s.gear.rank) || s.rank) : '') + (s.kind === 'host' && s !== me ? ' host' : '') + '</span></div>'
                         : null).map((html, i) => { if (html != null) return html; const xp = L.npcXp && L.npcXp[t] ? L.npcXp[t][i] : null;
                           return '<div class="al-slot npc"><span>' + ((L.npcArch && L.npcArch[t] && L.npcArch[t][i]) || 'swordsman') + (pit ? ' of the pits' : ' of the vale') + '</span><span class="al-tag">' + (xp != null ? xp + 'xp ' + afXpRank(xp) : 'npc') + '</span></div>'; }).join('') +
       (L.per > 8 ? '<div class="al-slot npc"><span>' + afMixSummary(L, t) + '</span><span class="al-tag">npc</span></div>' : '') + '</div>';
@@ -20727,7 +21045,7 @@ function afLobbyRender() {
     const seen = new Set(), rows = AF.online.filter(p => p.name !== L.host && !seen.has(p.name) && seen.add(p.name)); // one row per player, however many tabs they have open
     stat.textContent = rows.length + ' online · you are ' + L.host;
     list.innerHTML = rows.length ? rows.map(p => { const st = seatedNames.has(p.name) ? 'joined' : L.invites.get(p.name) || (p.busy ? 'in a fight' : '');
-      return '<div class="al-orow"><span><b>' + p.name + '</b> <span style="opacity:.6;font-size:12px">' + st + '</span></span><button data-inv="' + p.name + '"' + (st === 'joined' || st === 'invited…' ? ' disabled' : '') + '>Invite</button></div>'; }).join('')
+      return '<div class="al-orow"><span><b>' + afProfLink(p.name, 'player') + '</b> <span style="opacity:.6;font-size:12px">' + st + '</span></span><button data-inv="' + p.name + '"' + (st === 'joined' || st === 'invited…' ? ' disabled' : '') + '>Invite</button></div>'; }).join('')
       : '<span style="opacity:.7">Nobody else is online right now. Invite by name below, or fight the NPCs.</span>';
     for (const btn of list.querySelectorAll('button[data-inv]')) btn.onclick = () => afInvite(btn.getAttribute('data-inv'));
   }
@@ -21010,16 +21328,97 @@ function afMarketClose() { if (SHELL.page === 'market') afShellBack(); else { AF
 function afCareerSheetHtml(c) {
   if (!c || !window.ARENA_CAT) return '<div class="career-card" style="opacity:.7">' + (afSession() ? 'reaching the war-net…' : 'sign in to keep a career') + '</div>';
   const r = c.rank, lo = ARENA_CAT.ARENA_RANKS[r.idx][1], prog = r.nextAt ? Math.round((c.xp - lo) / (r.nextAt - lo) * 100) : 100;
+  const pos = c.position ? '<b>#' + c.position + '</b> of ' + c.of + ' players' : c.of != null ? 'unranked until your first fight' : '';
   return '<div class="career-card"><b>' + r.name + '</b> · ' + c.xp + ' XP' + (r.next ? ' · ' + r.next + ' at ' + r.nextAt : '') + ' <span class="career-bar"><span style="width:' + prog + '%"></span></span><br>' +
+    (c.renown != null ? '<span title="Renown = XP + 25 a win + 5 a loss + 60 a star of the match + 3 a kill + 6 a trophy + 30 a skill level + damage/100">Renown <b>' + c.renown.toLocaleString() + '</b></span>' + (pos ? ' · ' + pos : '') + ' · <button class="prof-btn" data-act="ladder">🏆 Rankings</button> <button class="prof-btn" data-prof="player|' + escHtml(afSession() || '') + '">👤 Your public profile</button><br>' : '') +
     '<b>' + c.gold + '</b> gold · 🏆 ' + c.trophies + ' trophies<br>' +
     c.matches + ' fights · ' + c.wins + ' won · ' + c.kills + ' kills · ' + c.deaths + ' deaths · ' + c.stars + '× star · ' + Math.round(c.damage) + ' damage<br>' +
     'skills: sword ' + c.skills.sword.level + ' · bow ' + c.skills.bow.level + ' · riding ' + c.skills.riding.level + '</div>' +
     '<h3>Achievements</h3><div class="career-ach">' + ARENA_CAT.ARENA_ACHIEVEMENTS.map(([id, label]) => '<span class="' + (c.achievements.includes(id) ? 'got' : '') + '">' + (c.achievements.includes(id) ? '🏅 ' : '') + label + '</span>').join('') + '</div>';
 }
+// ---- PROFILES + THE LADDER. Every fighter who has stood in a pit has a page — players and the vale's own men
+// alike (an NPC's name is his identity; the lobby draws from a fixed pool, so Bram is the same Bram every time).
+// The page shows the record and the fighter himself in his kit on the left; the ladder lists everyone by RENOWN
+// (renownOf in arena-items.js: XP, fights, wins, stars, kills, trophies, skill levels, damage), global or just
+// the people who have shared a pit with you. Any name in the game is a link (afProfLink → data-prof). ----
+function afProfLink(who, kind) {                            // a name as a link to its profile: a body, or a name (+ kind)
+  const name = typeof who === 'string' ? who : who.name; if (!kind) { const b = typeof who === 'string' ? AF.bodies.find(x => x.name === who) : who; kind = b ? (b.kind === 'npc' ? 'npc' : 'player') : ''; }
+  return '<span class="prof-link" data-prof="' + kind + '|' + escHtml(name) + '">' + escHtml(name) + '</span>';
+}
+function afProfileGear(p) {                                 // what the figure on the left wears: a player's loadout; one of the vale's men in the kit his skill earns
+  if (p.kind === 'player') return afGearClean(Object.assign({}, p.equipped || {}, { rank: p.rank ? p.rank.name : undefined }));
+  let h = 2166136261; for (const ch of p.name) h = Math.imul(h ^ ch.charCodeAt(0), 16777619);
+  return afGearClean(afNpcGear({ arch: p.arch }, p.skill | 0, _mulberry32(h >>> 0)));
+}
+function afProfileOpen(name, kind) {
+  if (!name) return; AF.profile = { name, kind: kind || '', data: null, err: null, gear: null };
+  if (SHELL.page !== 'profile') afShellPage('profile'); else afShellPage('profile', { replace: true });
+  afProfileRender();
+  try { history.replaceState(null, '', location.pathname + location.search + '#profile/' + (kind || 'any') + '/' + encodeURIComponent(name)); } catch (e) {}
+  if (!window.net || !window.net.arenaProfile) { AF.profile.err = 'the war-net is not reachable'; afProfileRender(); return; }
+  const P = AF.profile;
+  window.net.arenaProfile(name, kind || undefined).then(r => { if (AF.profile !== P) return;
+    if (r && r.ok) { P.data = r.profile; P.kind = r.profile.kind; P.name = r.profile.name; P.gear = afProfileGear(r.profile); } else P.err = (r && r.error) || 'the war-net did not answer';
+    afProfileRender(); if (SHELL.page === 'profile') { afShellPage('profile', { replace: true }); } });
+}
+function afAgo(ts) { const d = Math.max(0, Date.now() / 1000 - ts); return d < 90 ? 'just now' : d < 5400 ? Math.round(d / 60) + ' min ago' : d < 172800 ? Math.round(d / 3600) + ' h ago' : Math.round(d / 86400) + ' days ago'; }
+function afProfileRender() {
+  const el = document.getElementById('prof-body'), P = AF.profile; if (!el || !P) return;
+  const tile = (v, l) => '<div class="prof-tile"><b>' + v + '</b><span>' + l + '</span></div>';
+  if (!P.data) { el.innerHTML = '<div class="prof-head"><h2>' + escHtml(P.name) + '</h2><div class="prof-sub">' + (P.err ? '<span style="color:#ff9a9a">' + escHtml(P.err) + '</span>' : 'reaching the war-net…') + '</div></div>' + (P.err ? '<div class="prof-actions"><button class="prof-btn" data-act="ladder">🏆 Rankings</button></div>' : ''); return; }
+  const p = P.data, me = p.kind === 'player' && afSession() === p.name, npc = p.kind === 'npc';
+  const wr = p.matches ? Math.round(p.wins / p.matches * 100) : 0;
+  let html = '<div class="prof-head"><div class="prof-kind">' + (npc ? 'A fighter of the vale' : me ? 'Player · you' : 'Player') + '</div><h2>' + escHtml(p.name) + '</h2>' +
+    '<div class="prof-sub"><b>' + escHtml(p.title) + '</b>' + (npc ? ' · skill ' + p.skill : ' · ' + p.xp + ' XP') + ' · Renown <b>' + (p.renown | 0).toLocaleString() + '</b> · ' + (p.position ? '<b>#' + p.position + '</b> of ' + p.of + (npc ? ' of the vale\'s men' : ' players') : 'unranked — no fight yet') + '</div></div>';
+  html += '<div class="prof-grid">' + tile(p.matches, 'fights') + tile(p.wins, 'won') + tile(p.losses, 'lost') + tile(wr + '%', 'win rate') + tile('★ ' + p.stars, 'star of the match') + tile(p.kills, 'kills') + tile(p.deaths, 'deaths') + tile(Math.round(p.damage).toLocaleString(), 'damage dealt') + (npc ? '' : tile('🏆 ' + p.trophies, 'trophies')) + '</div>';
+  if (npc) { const A = Object.entries(p.archs || {}).sort((a, b) => b[1] - a[1]); html += '<h3>Fights as</h3><div class="prof-chips">' + (A.length ? A.map(([k, n]) => '<span class="got">' + escHtml(k) + ' × ' + n + '</span>').join('') : '<span>' + escHtml(p.arch) + '</span>') + '</div>'; }
+  else {
+    const I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}, eq = p.equipped || {}, worn = ['sword', 'armor', 'bow', 'horse', 'plume', 'trim'].filter(k => eq[k] && I[eq[k]]).map(k => '<span class="got">' + escHtml(I[eq[k]].name) + '</span>');
+    html += '<h3>Skills</h3><div class="prof-chips"><span class="got">sword ' + p.skills.sword.level + '</span><span class="got">bow ' + p.skills.bow.level + '</span><span class="got">riding ' + p.skills.riding.level + '</span></div>';
+    html += '<h3>Rides in with</h3><div class="prof-chips">' + (worn.length ? worn.join('') : '<span>bare hands</span>') + '</div>';
+    const got = (p.achievements || []); if (window.ARENA_CAT) html += '<h3>Achievements · ' + got.length + ' of ' + ARENA_CAT.ARENA_ACHIEVEMENTS.length + '</h3><div class="prof-chips">' + ARENA_CAT.ARENA_ACHIEVEMENTS.filter(([id]) => got.includes(id)).map(([, label]) => '<span class="got">🏅 ' + label + '</span>').join('') + (got.length ? '' : '<span>none yet</span>') + '</div>';
+  }
+  if (p.recent && p.recent.length) html += '<h3>Recent fights</h3><div class="prof-recent">' + p.recent.map(b => '<div class="prof-bout ' + (b.draw ? 'draw' : b.won ? 'won' : 'lost') + '"><b>' + (b.draw ? 'DRAW' : b.won ? 'WON' : 'LOST') + '</b><span>' + (b.venue === 'pit' ? 'the pits' : 'colosseum') + ' · ' + b.size + ' fighters</span><span>' + b.kills + ' kills · ' + Math.round(b.dmg) + ' dealt' + (b.star ? ' · ★ star' : '') + (b.alive ? '' : ' · fallen') + '</span><span class="prof-when">' + afAgo(b.created_at) + '</span></div>').join('') + '</div>';
+  html += '<div class="prof-foot">' + (p.since ? 'In the pit since ' + new Date(p.since * 1000).toLocaleDateString() : '') + (p.lastFought ? ' · last fought ' + afAgo(p.lastFought) : '') + '</div>';
+  html += '<div class="prof-actions"><button class="prof-btn" data-act="ladder' + (npc ? ':npc' : '') + '">🏆 Rankings</button>' + (me ? '<button class="prof-btn" data-act="career">Career &amp; stats</button>' : afSession() ? '<button class="prof-btn" data-act="ladder:network' + (npc ? ':npc' : '') + '">Your network</button>' : '') + '</div>';
+  el.innerHTML = html;
+}
+const LADDER = { scope: 'global', kind: 'player', rows: [], total: 0, err: null, loading: false };
+function afLadderOpen(scope, kind) {
+  if (scope) LADDER.scope = scope === 'network' && afSession() ? 'network' : 'global'; if (kind) LADDER.kind = kind === 'npc' ? 'npc' : 'player';
+  if (SHELL.page !== 'ladder') afShellPage('ladder');
+  try { history.replaceState(null, '', location.pathname + location.search + '#rankings'); } catch (e) {}
+  afLadderLoad(0);
+}
+function afLadderLoad(offset) {
+  LADDER.err = null; LADDER.loading = true; if (!offset) { LADDER.rows = []; LADDER.total = 0; } afLadderRender();
+  if (!window.net || !window.net.arenaRankings) { LADDER.loading = false; LADDER.err = 'the war-net is not reachable'; afLadderRender(); return; }
+  const want = { scope: LADDER.scope, kind: LADDER.kind, offset: offset | 0 };
+  window.net.arenaRankings({ scope: want.scope, kind: want.kind, limit: 50, offset: want.offset }).then(r => {
+    if (LADDER.scope !== want.scope || LADDER.kind !== want.kind) return; LADDER.loading = false;
+    if (r && r.ok) { LADDER.rows = want.offset ? LADDER.rows.concat(r.rows) : r.rows; LADDER.total = r.total; } else LADDER.err = (r && r.error) || 'the war-net did not answer';
+    afLadderRender(); });
+}
+function afLadderRender() {
+  const el = document.getElementById('lad-body'); if (!el) return;
+  const tab = (on, act, label) => '<button class="' + (on ? 'on' : '') + '" data-act="' + act + '">' + label + '</button>';
+  let html = '<div class="lad-tabs">' + tab(LADDER.kind === 'player', 'kind:player', 'Players') + tab(LADDER.kind === 'npc', 'kind:npc', 'The vale\'s men') + '<i></i>' + tab(LADDER.scope === 'global', 'scope:global', '🌍 Global') + (afSession() ? tab(LADDER.scope === 'network', 'scope:network', '👥 Your network') : '') + '</div>';
+  html += '<div class="lad-note">' + (LADDER.kind === 'npc' ? 'The vale\'s own fighters, ranked among themselves — they stand in every pit.' : LADDER.scope === 'network' ? 'Everyone who has shared a pit with you.' : 'Every player who has fought, by renown.') + (LADDER.total ? ' · ' + LADDER.total + (LADDER.kind === 'npc' ? ' fighters' : ' players') : '') + '</div>';
+  if (LADDER.err) html += '<div class="lad-empty" style="color:#ff9a9a">' + escHtml(LADDER.err) + '</div>';
+  else if (!LADDER.rows.length) html += '<div class="lad-empty">' + (LADDER.loading ? 'reaching the war-net…' : LADDER.scope === 'network' ? 'Nobody yet — fight once and everyone in that pit is here.' : 'Nobody has fought yet. Be the first name on the wall.') + '</div>';
+  else html += '<div class="lad-list">' + LADDER.rows.map(r => '<div class="lad-row' + (r.kind === 'player' && r.name === afSession() ? ' you' : '') + '" data-prof="' + r.kind + '|' + escHtml(r.name) + '"><span class="lad-pos">' + (r.pos <= 3 ? ['🥇', '🥈', '🥉'][r.pos - 1] : '#' + r.pos) + '</span><span class="lad-name"><b>' + escHtml(r.name) + '</b><i>' + escHtml(r.title) + '</i></span><span class="lad-ren" title="renown">' + (r.renown | 0).toLocaleString() + '</span><span class="lad-rec">' + r.matches + ' fights · ' + r.wins + ' won · ★ ' + r.stars + ' · ' + r.kills + ' kills</span></div>').join('') + '</div>';
+  if (LADDER.rows.length && LADDER.rows.length < LADDER.total) html += '<div class="lad-more"><button class="prof-btn" data-act="more"' + (LADDER.loading ? ' disabled' : '') + '>' + (LADDER.loading ? '…' : 'Show more') + '</button></div>';
+  html += '<div class="prof-foot">Renown = XP + 25 a win + 5 a loss + 60 a star of the match + 3 a kill + 6 a trophy + 30 a skill level + damage / 100</div>';
+  el.innerHTML = html;
+  for (const b of el.querySelectorAll('.lad-tabs button')) b.onclick = () => { const a = b.getAttribute('data-act').split(':'); if (a[0] === 'kind') LADDER.kind = a[1]; else LADDER.scope = a[1]; afLadderLoad(0); };
+  const more = el.querySelector('[data-act="more"]'); if (more) more.onclick = () => afLadderLoad(LADDER.rows.length);
+}
+BV.profile = (name, kind) => { afProfileOpen(name, kind); return AF.profile; };   // test: open a fighter's page
+BV.ladder = (scope, kind) => { afLadderOpen(scope, kind); return LADDER; };        // test: open the rankings
 // ---- THE SHELL: one layout for every screen outside the fight — the fighter on the left, the page on the right,
 // Back always in the same place, ? a page like any other. #start IS the shell (so everything that hid the title
 // screen still hides it); the pages are its .page children (afShellPage shows one). ----
-const SHELL = { page: null, stack: [], titles: { title: 'Blade Vale', home: 'Blade Vale', career: 'Career & stats', lobby: 'Arena Fights', market: 'Marketplace', help: 'Controls' } };
+const SHELL = { page: null, stack: [], bootHash: (typeof location !== 'undefined' && location.hash) || '', titles: { title: 'Blade Vale', home: 'Blade Vale', career: 'Career & stats', lobby: 'Arena Fights', market: 'Marketplace', help: 'Controls', profile: 'Fighter', ladder: 'Rankings' } };
 function afShellVisible() { const st = document.getElementById('start'); return !!(st && !st.classList.contains('hidden') && SHELL.page); }
 function afShellPage(name, o) {
   const st = document.getElementById('start'); if (!st || !document.getElementById('page-' + name)) return;
@@ -21032,13 +21431,18 @@ function afShellPage(name, o) {
   const hb = document.getElementById('shell-help'); if (hb) hb.style.visibility = name === 'help' ? 'hidden' : '';
   const card = document.getElementById('home-char'); if (card) { card.style.display = afSession() ? '' : 'none'; card.classList.toggle('on', name === 'career'); }
   const pg = document.getElementById('shell-page'); if (pg) pg.scrollTop = 0;
+  if (name !== 'profile' && name !== 'ladder' && /^#(profile|rankings)/.test(location.hash || '')) { try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {} }   // (a profile / the ladder is a link you can share; off it, the hash goes)
+  { const more = document.getElementById('home-char-more'); if (more) more.textContent = name === 'profile' ? '▸ your own career' : '▸ career & stats'; }
+  if (name === 'profile' && AF.profile) { const nm = document.getElementById('home-char-name'), sub = document.getElementById('home-char-sub'); if (nm) nm.textContent = AF.profile.name; if (sub) sub.textContent = AF.profile.kind === 'npc' ? 'a fighter of the vale' : 'player'; }
+  else afHomeCard();
   afShellFigure(); afPreviewRun();
 }
 function afShellFigure() {                                  // the figure on the left — for a guest too, in the free kit
   const slot = document.getElementById('home-preview-slot'); if (!slot || !window.ARENA_CAT) return;
   const el = afPreviewEl(); if (el.parentNode !== slot) slot.appendChild(el);
-  const pal = (AF.lobby && afHostSeat() ? AF_TEAMS[AF.lobby.slots.findIndex(r => r.includes(afHostSeat()))] : AF_TEAMS[0]) || AF_TEAMS[0];
-  const gear = afPreviewGear(); if (!AF.preview.rig || JSON.stringify(AF.preview.gear) !== JSON.stringify(afGearClean(gear))) afPreviewSet(gear, pal.pal, AF.preview.mounted);
+  const prof = SHELL.page === 'profile' && AF.profile && AF.profile.gear;   // on a fighter's page the figure is that fighter, in his own kit
+  const pal = prof ? (AF.profile.kind === 'npc' ? AF_TEAMS[1] : AF_TEAMS[0]) : (AF.lobby && afHostSeat() ? AF_TEAMS[AF.lobby.slots.findIndex(r => r.includes(afHostSeat()))] : AF_TEAMS[0]) || AF_TEAMS[0];
+  const gear = prof ? AF.profile.gear : afPreviewGear(); if (!AF.preview.rig || JSON.stringify(AF.preview.gear) !== JSON.stringify(afGearClean(gear)) || AF.preview.pal !== pal.pal) afPreviewSet(gear, pal.pal, prof ? !!gear.horse : AF.preview.mounted);
   AF.preview.W = 0; afPreviewPose(0.3);
 }
 function afShellBack() {
@@ -21052,11 +21456,15 @@ function afShellBack() {
 }
 function afShellHide() { const st = document.getElementById('start'); if (st) st.classList.add('hidden'); SHELL.page = null; SHELL.stack.length = 0; }   // (the pit: whatever page was up is forgotten — a ? in the fight starts a fresh trail, and Back goes to the fight)
 function afHomeVisible() { return afShellVisible(); }
+function afHomeCard() {                                    // the name card under the figure: you (on a fighter's page afShellPage writes him instead)
+  const c = AF.career, nm = document.getElementById('home-char-name'), sub = document.getElementById('home-char-sub');
+  if (nm) nm.textContent = afSession() || '';
+  if (sub) sub.innerHTML = c ? '<b>' + c.rank.name + '</b>' + (c.position ? ' · <b>#' + c.position + '</b>' : '') + ' · <b>' + c.gold + '</b> gold · 🏆 ' + c.trophies + (c.rank.next ? ' · ' + (c.rank.nextAt - c.xp) + ' XP to ' + c.rank.next : '') : (window.net && window.net.arenaCareer ? 'reaching the war-net…' : 'no career yet');
+}
 function afHomeRender() {
   const c = AF.career, g = id => document.getElementById(id);
-  const nm = g('home-char-name'), sub = g('home-char-sub'), body = g('home-stats-body');
-  if (nm) nm.textContent = afSession() || '';
-  if (sub) sub.innerHTML = c ? '<b>' + c.rank.name + '</b> · <b>' + c.gold + '</b> gold · 🏆 ' + c.trophies + (c.rank.next ? ' · ' + (c.rank.nextAt - c.xp) + ' XP to ' + c.rank.next : '') : (window.net && window.net.arenaCareer ? 'reaching the war-net…' : 'no career yet');
+  const body = g('home-stats-body');
+  if (!(SHELL.page === 'profile' && AF.profile)) afHomeCard();
   if (body) body.innerHTML = afCareerSheetHtml(c);
   if (afShellVisible()) { afShellFigure(); afPreviewRun(); }
 }
@@ -21071,6 +21479,16 @@ function afHomeResume() { AF.tryItem = null; afHomeRender(); }   // back on the 
   const g = id => document.getElementById(id); if (!g('shell-page')) return;
   g('home-arena-btn').onclick = () => { SFX.init && SFX.init(); afOpenLobby('host'); };
   g('home-market-btn').onclick = () => { SFX.init && SFX.init(); afMarketOpen(); };
+  if (g('home-ladder-btn')) g('home-ladder-btn').onclick = () => afLadderOpen('global');
+  if (g('title-ladder-btn')) g('title-ladder-btn').onclick = () => afLadderOpen('global');
+  // any name anywhere is a link to its profile (data-prof="kind|name"); the profile/career buttons ride the same handler
+  document.addEventListener('click', e => {
+    const t = e.target && e.target.closest ? e.target.closest('[data-prof],[data-act="ladder"],[data-act^="ladder:"],[data-act="career"]') : null; if (!t) return;
+    const prof = t.getAttribute('data-prof'), act = t.getAttribute('data-act');
+    if (prof) { const i = prof.indexOf('|'); e.stopPropagation(); afProfileOpen(prof.slice(i + 1), prof.slice(0, i) || undefined); }
+    else if (act === 'career') { e.stopPropagation(); afHomeRender(); afShellPage('career'); }
+    else if (act && act.startsWith('ladder')) { const a = act.split(':'); e.stopPropagation(); afLadderOpen(a.includes('network') ? 'network' : 'global', a.includes('npc') ? 'npc' : 'player'); }
+  }, true);
   if (g('home-world-btn')) g('home-world-btn').onclick = () => { requestFullscreenSafe(); if (window.net && window.net.session) enterTheVale(); };
   g('home-char').onclick = () => { if (SHELL.page === 'career') afShellBack(); else { afHomeRender(); afShellPage('career'); } };   // the name card under the figure opens the sheet
   if (g('home-logout')) g('home-logout').onclick = () => window.net && window.net.logout();
@@ -21276,5 +21694,8 @@ if (window.BV_BATTLE || (_editQ && _editQ.has('battle'))) {
 }
 
   // the shell shows from the first frame: the figure left, the title right (inside the IIFE — SHELL lives here)
-  try { if (!SHELL.page) afShellPage(afSession() ? 'home' : 'title'); } catch (e) { console.warn('[shell]', e); }
+  try { const h = SHELL.bootHash, pm = h.match(/^#profile\/([^/]+)\/(.+)$/);   // shared links: #profile/<kind>/<name>, #rankings (SHELL.bootHash: the first page shown strips it)
+    if (!SHELL.page) afShellPage(afSession() ? 'home' : 'title');
+    if (pm) afProfileOpen(decodeURIComponent(pm[2]), pm[1] === 'any' ? undefined : pm[1]); else if (/^#rankings/.test(h)) afLadderOpen('global');
+  } catch (e) { console.warn('[shell]', e); }
 })();

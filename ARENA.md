@@ -728,6 +728,44 @@ Not built yet from the design note: daily/weekly quests, a seasonal battle pass,
 matchmaking. Guests' loadouts are trusted as sent (sanitised against the catalogue, not verified
 against their account) — fine for the beta.
 
+### Profiles and the ladder
+
+Every fighter who has stood in a pit has a page you can visit — players **and the vale's own men**.
+An NPC's identity is his name: the lobby draws from a fixed pool (`GIVEN_NAMES` × `BYNAMES`), so
+Bram is the same Bram fight after fight, and his record grows like anyone's.
+
+* **Storage**: players in `arena_careers` (+ a `renown` column), NPCs in `npc_careers` (name,
+  last archetype, `archs_json` tally, last lobby skill, xp, matches, wins, kills, deaths, damage,
+  stars), and `arena_bouts` — one row per fighter per fight (`seed, kind, fighter`) that feeds a
+  profile's recent fights, the network ladder and the NPC payout's idempotency. Schema in
+  `worker/schema.sql` (D1, applied by hand) and `server/migrations/016_arena_profiles.sql` (Node).
+* **The report** (`afReportResult`) now carries `npcs: [{name, team, kills, dmg, alive, star,
+  arch, skill, enemyPower}]` next to `players`; the server (`applyNpcs`) pays NPCs XP by the same
+  `rewardFor` (no gold — they have no purse) and writes their record in chunks of 40.
+* **Renown** (`renownOf` in `arena-items.js`, one formula for both kinds) is what the ladder sorts by:
+  XP + 25 a win + 5 a loss + 60 a star of the match + 3 a kill + 6 a trophy + 30 a use-skill level +
+  damage/100. Stored on every save; the **position** (#N of M) is `COUNT(renown > yours) + 1` among
+  fighters with at least one match — players rank among players, NPCs among NPCs (they stand in
+  every pit, so one list would be all NPCs).
+* **API** (public reads, before the sign-in gate): `GET /arena/profile?name=&kind=player|npc` (kind
+  optional — a player first, then an NPC; `COLLATE NOCASE`) → `{profile}` with the record, skills /
+  loadout / achievements (players) or archetype tally (NPCs), `position`, `of` and the last ten
+  bouts — never gold or the inventory. `GET /arena/rankings?kind=player|npc&scope=global|network&limit=&offset=`
+  → `{rows:[{pos, name, kind, title, renown, matches, wins, stars, kills}], total}`; `network` needs a
+  signed-in reader and is everyone who shared a seed with you in `arena_bouts`. Your own
+  `/arena/career` carries `renown`, `position`, `of` as well (the name card shows `#N`).
+* **Client**: shell pages `profile` (`afProfileOpen(name, kind)` / `afProfileRender`; the figure on
+  the left is *that* fighter — a player's `equipped`, an NPC in `afNpcGear` seeded from his name,
+  in the crimson cloth) and `ladder` (`afLadderOpen(scope, kind)`: Players / The vale's men ×
+  Global / Your network, 50 a page, you highlighted). **Every name is a link**: `afProfLink(body |
+  name, kind)` renders `<span class="prof-link" data-prof="kind|name">` — the end panel, the
+  victory board, the lobby's seats and online list, the career sheet ("Your public profile"), the
+  ladder rows — and one capturing click handler in `afWireHome` routes `[data-prof]`,
+  `[data-act="ladder…"]` and `[data-act="career"]`. From the pit the page opens over the fight (Back = ← Fight).
+* **Links you can share**: `#profile/<kind>/<name>` and `#rankings` open the page at boot
+  (`SHELL.bootHash` — the first page shown strips the hash; `afProfileOpen`/`afLadderOpen` set it
+  with `replaceState`, leaving them clears it). Test hooks: `BV.profile(name, kind)`, `BV.ladder(scope, kind)`.
+
 ### Network model
 
 Host-authoritative over the `/coop` relay. The host runs the sim and broadcasts a 20 Hz snapshot

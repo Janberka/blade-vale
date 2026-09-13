@@ -274,6 +274,52 @@
   .career-ach { display: flex; gap: 5px; flex-wrap: wrap; }
   .career-ach span { font-size: 11px; padding: 3px 8px; border-radius: 12px; border: 1px solid #3a3247; opacity: .45; }
   .career-ach span.got { border-color: #ffd34d; color: #ffe089; opacity: 1; }
+  /* profiles + the ladder */
+  .prof-link { cursor: pointer; text-decoration: underline dotted rgba(255,211,77,.55); text-underline-offset: 2px; }
+  .prof-link:hover { color: #ffe089; text-decoration-color: #ffe089; }
+  .prof-btn { cursor: pointer; padding: 6px 12px; border-radius: 7px; border: 1px solid rgba(255,207,91,.5); background: rgba(255,180,80,.14); color: #ffe2a8; font: 700 12px system-ui; touch-action: manipulation; }
+  .prof-btn:hover { background: rgba(255,180,80,.3); }
+  .prof-btn:disabled { opacity: .5; cursor: default; }
+  #title-ladder-btn { cursor: pointer; background: none; border: none; color: #9fb2cc; text-decoration: underline; font-size: 13px; }
+  #prof-body, #lad-body { width: min(680px, 100%); color: #e8def8; font-size: 13px; line-height: 1.5; }
+  .prof-head { padding-bottom: 10px; border-bottom: 1px solid #3a3247; }
+  .prof-kind { font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: #9fb2cc; }
+  .prof-head h2 { margin: 2px 0 4px; font-size: 30px; letter-spacing: 2px; color: #ffe089; text-transform: none; }
+  .prof-sub { font-size: 13px; color: #ffe2a8; }
+  .prof-sub b { color: #ffd34d; }
+  .prof-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; margin: 12px 0 4px; }
+  .prof-tile { padding: 8px 10px; border: 1px solid rgba(255,207,91,.25); border-radius: 10px; background: rgba(0,0,0,.3); display: flex; flex-direction: column; }
+  .prof-tile b { font-size: 20px; color: #ffe089; line-height: 1.15; }
+  .prof-tile span { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: #c9bfda; }
+  #prof-body h3, #lad-body h3 { margin: 14px 0 6px; color: #ffe2a8; letter-spacing: 1px; font-size: 13px; }
+  .prof-chips { display: flex; gap: 5px; flex-wrap: wrap; }
+  .prof-chips span { font-size: 11px; padding: 3px 8px; border-radius: 12px; border: 1px solid #3a3247; opacity: .55; }
+  .prof-chips span.got { border-color: #ffd34d; color: #ffe089; opacity: 1; }
+  .prof-recent { display: flex; flex-direction: column; gap: 4px; }
+  .prof-bout { display: grid; grid-template-columns: 52px 1fr 1fr auto; gap: 10px; align-items: center; padding: 5px 8px; border-radius: 8px; background: rgba(255,255,255,.04); font-size: 12px; }
+  .prof-bout b { font-size: 11px; letter-spacing: 1px; }
+  .prof-bout.won b { color: #9fe6a0; } .prof-bout.lost b { color: #ff9a9a; } .prof-bout.draw b { color: #c9bfda; }
+  .prof-when { opacity: .55; white-space: nowrap; }
+  .prof-foot { margin-top: 14px; font-size: 11px; opacity: .5; line-height: 1.5; }
+  .prof-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .lad-tabs { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+  .lad-tabs i { flex: 1; }
+  .lad-tabs button { cursor: pointer; padding: 7px 14px; border-radius: 8px; border: 1px solid rgba(255,207,91,.35); background: rgba(0,0,0,.3); color: #e9eef5; font: 700 12px system-ui; letter-spacing: 1px; text-transform: uppercase; touch-action: manipulation; }
+  .lad-tabs button.on { background: rgba(255,180,80,.32); border-color: #ffcf5b; color: #ffe2a8; }
+  .lad-note { font-size: 12px; color: #c9bfda; margin-bottom: 8px; }
+  .lad-empty { padding: 18px 0; opacity: .7; }
+  .lad-list { display: flex; flex-direction: column; gap: 4px; }
+  .lad-row { cursor: pointer; display: grid; grid-template-columns: 44px 1fr auto; grid-template-areas: "pos name ren" "pos rec rec"; column-gap: 10px; align-items: center; padding: 7px 10px; border-radius: 10px; border: 1px solid #3a3247; background: rgba(0,0,0,.3); }
+  .lad-row:hover { border-color: rgba(255,207,91,.6); }
+  .lad-row.you { border-color: #ffd34d; background: rgba(255,211,77,.1); }
+  .lad-pos { grid-area: pos; font-size: 16px; font-weight: 800; color: #ffd34d; text-align: center; }
+  .lad-name { grid-area: name; display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+  .lad-name b { color: #f3ead8; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lad-name i { font-size: 11px; color: #9fb2cc; font-style: normal; letter-spacing: 1px; text-transform: uppercase; white-space: nowrap; }
+  .lad-ren { grid-area: ren; font-weight: 800; color: #ffe089; font-size: 15px; }
+  .lad-rec { grid-area: rec; font-size: 11px; color: #c9bfda; }
+  .lad-more { display: flex; justify-content: center; margin-top: 10px; }
+  @media (max-width: 600px) { .prof-bout { grid-template-columns: 46px 1fr auto; } .prof-bout span:nth-child(3) { display: none; } }
   #home-menu { display: flex; flex-direction: column; gap: 12px; width: min(360px, 90%); }
   #home-menu .btn { width: 100%; font-size: 18px; padding: 14px 20px; margin: 0; }
   #home-menu #home-arena-btn { border-color: #ff8a5b; color: #ffd0b8; background: rgba(255,120,80,.12); font-size: 20px; }
@@ -728,6 +774,7 @@
           <button class="btn" id="arena-btn" title="Pick teams, invite players, fill the rest with NPCs, and fight in the pit">⚔ Enter the Arena</button>
           <button class="btn hidden world-only" id="start-btn">Enter the Vale</button>
         </div>
+        <button id="title-ladder-btn" class="arena-only">🏆 See the rankings</button>
   <div id="auth-box">
     <div id="auth-form">
       <input id="auth-user" placeholder="username" maxlength="24" autocomplete="username">
@@ -750,6 +797,7 @@
         <div id="home-menu">
           <button class="btn" id="home-arena-btn">⚔ Enter the Arena</button>
           <button class="btn" id="home-market-btn">🏪 Marketplace</button>
+          <button class="btn" id="home-ladder-btn" title="Every fighter by renown — players, and the vale's own men">🏆 Rankings</button>
           <button class="btn world-only" id="home-world-btn">Enter the Vale</button>
         </div>
         <div id="home-foot">Signed in as <b id="home-name"></b> · <button id="home-logout">sign out</button></div>
@@ -785,6 +833,10 @@
     <button class="btn" id="al-start">Start Fight</button>
   </div>
 </div>
+      <!-- a fighter's page — player or one of the vale's men (afProfileRender fills it; the figure on the left is him) -->
+      <div class="page wide" id="page-profile"><div id="prof-body"></div></div>
+      <!-- the ladder: everyone by renown, global or your network (afLadderRender) -->
+      <div class="page wide" id="page-ladder"><div id="lad-body"></div></div>
       <!-- the marketplace (afMarketRender fills it) -->
       <div class="page wide" id="page-market"><div id="af-market"></div></div>
       <!-- the key map -->
@@ -946,6 +998,6 @@
 <script src="arena-items.js?v=3"></script>
 <script src="net-battle.js?v=5"></script>
 <script src="real-skin.js?v=1"></script>
-<script src="game.js?v=116"></script>
+<script src="game.js?v=120"></script>
 </body>
 </html>

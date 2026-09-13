@@ -220,6 +220,9 @@ const server = http.createServer(async (req, res) => {
 
     // ----- the ARENA CAREER (signed-in accounts only: the handle is the seat name the host reports) -----
     if (p.startsWith('/api/v1/arena/')) {
+      // public reads: a fighter's profile (player or NPC) and the ladder; the network scope needs a signed-in reader
+      if (req.method === 'GET' && p === '/api/v1/arena/profile') return send(res, 200, arena.profile(url.searchParams.get('name'), url.searchParams.get('kind')));
+      if (req.method === 'GET' && p === '/api/v1/arena/rankings') return send(res, 200, arena.rankings({ scope: url.searchParams.get('scope'), kind: url.searchParams.get('kind'), limit: url.searchParams.get('limit'), offset: url.searchParams.get('offset'), me: acct && acct.pass_hash ? acct.handle : null }));
       if (!acct || !acct.pass_hash) return send(res, 401, { ok: false, error: 'sign in to keep an arena career' });
       if (req.method === 'GET' && p === '/api/v1/arena/career') return send(res, 200, { ok: true, career: arena.career(acct.id, url.searchParams.get('seed')) });
       if (req.method === 'POST' && p === '/api/v1/arena/buy') { const b = await readBody(req); return send(res, 200, arena.buy(acct.id, String(b.item || ''))); }

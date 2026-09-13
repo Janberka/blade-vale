@@ -813,6 +813,8 @@ network, so the arena survives it instead of treating a drop as leaving:
 Caveat: the host runs the simulation, so if the **host's** phone backgrounds the page, the browser
 throttles it and the fight freezes for everyone until they come back.
 
+A guest in a **headset** (`VR.md`) sends `{k:'vrhit', i, w, heavy}` when his blade touches a man — the host checks reach and a per-target cooldown and lands it as his blow — and his `{k:'in'}` carries `px, pz` (where his head walked him), believed within three units.
+
 Lobby messages (`{k:'lobby'}` host→guests, `{k:'team'}` / `{k:'weapon'}` guest→host,
 `{k:'invite-declined'}` via `dm`) ride the same room.
 

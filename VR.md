@@ -1,28 +1,32 @@
 # Blade Vale VR — first-person arena fighting on a WebXR headset
 
-Status: **BUILT, v1 (2026-09-13)** — solo / host fights, swordsman only. Verified end to end against a fake
-headset in the browser (`?xrshim`); not yet felt on real hardware. The original plan (Rift, six phases) is
-kept at the bottom; what follows is what exists.
+Status: **BUILT, v1.1 (2026-09-13)** — the headset goes on at the title screen and stays on: home, the lobby,
+a challenge and the end of the fight are a **panel in the headset** with a laser pointer, and guests fight in VR too
+(their blade hits go to the host as `vrhit`, their room-scale position rides in the input record). Verified end to end
+against a fake headset in the browser (`?xrshim`), host and guest; not yet felt on real hardware. The original plan
+(Rift, six phases) is kept at the bottom.
 
 ## 1. Try it on a Quest
 
 bladevale.com is https, and the Quest's own browser has WebXR, so nothing is installed:
 
-1. Put the headset on, open the **Browser**, go to `https://bladevale.com`, sign in, **Enter the Arena**.
-2. Set up a fight (a solo one vs NPCs is fine; the **pits** venue is the safest first try — small, dark,
-   few bodies) and start it.
-3. A **🥽 Enter VR** button appears bottom-right once the pit has booted. Tap it. The browser goes
-   immersive; the entrance film and the countdown sweep are skipped and you are standing in your fighter.
-4. The headset's own system gesture ends the session; the fight carries on on the flat screen from the
-   same body.
+1. Put the headset on, open the **Browser**, go to `https://bladevale.com`, sign in on the flat page (typing is
+   still a flat-screen job), and tap **🥽 Enter VR** — it sits bottom-right on every screen, title included.
+2. You stand in a dark hall with a **panel** in front of you: point the right controller at it, squeeze the trigger.
+   **Enter the Arena** opens the lobby on the panel — venue, teams, fighters a side, the seats, who is online with an
+   Invite button each, Start Fight. A challenge from a friend arrives on the panel too, Accept / Decline.
+3. Start (or the host's start, if you were invited): the panel goes, the entrance film and the countdown sweep are
+   skipped, and you are standing in your fighter. The **pits** venue is the safest first try — small, dark, few bodies.
+4. At the bell the panel comes back with the result, the purse when it lands, the standings, **Rematch** (host) and
+   **Leave the pit** — which tears the pit down in place and puts you back in the hall, headset still on.
+5. The headset's own system gesture ends the session at any point; the flat screen carries on from the same state.
 
 A PC headset works the same way from Chrome/Edge on Windows with the Oculus/SteamVR OpenXR runtime
 active, at `https://bladevale.com` (or `http://localhost:8787` from the node server; a LAN IP over plain
 http will NOT expose WebXR).
 
-**Not yet true in v1:** the bow (archers are forced to the sword), horses, joining a friend's fight as a
-guest in VR (the button is hidden for guests: hits are a sim-side call, so v1 is host/solo only), the end
-panel in-headset (a banner says the fight is over; take the headset off for the results).
+**Not yet true:** the bow (archers are forced to the sword), horses, the marketplace / profiles / ladder in the
+headset (flat screen), typing (sign in on the flat page first), a guest's blade seen moving by the others.
 
 ## 2. How it plays
 
@@ -67,6 +71,35 @@ banner for what `afBanner` says (FIGHT, VICTORY…). NPCs read a fast blade as a
   or make the pits the VR venue.
 - **Hooks:** `BV.vrEnter()`, `BV.vrExit()`, `BV.vrStatus()`; `BV.VR` is the live state.
 
+### The menus in the headset (`VR MENUS` in game.js, after the VR section)
+
+- **One panel, four pages.** `vrMenuPage()` reads the same state the DOM shows: a fight that is over → `end`; no
+  fight and `AF.invite` → `invite`; `AF.lobby` → `lobby`; else `home`. During a fight the panel is hidden.
+  `vrMenuDraw()` paints the page on a 1024×768 canvas (`vrPanel`, 1.28 × 0.96 m in the rig's metres, so it is the
+  same size in the hall and in the pit) at 12 Hz; every button is a rect in `VRM.items` with an action name.
+- **The pointer.** A line down the right controller's ray space (`VR.ray.right`), a dot where it meets the panel
+  (`THREE.Raycaster` against the panel mesh, the hit's `uv`), trigger (`buttons[0]`) edge = click →
+  `vrMenuAct(act)`, which calls exactly what the DOM buttons call: `afOpenLobby('host')`, `afSetVenue`,
+  the teams / per bump, `afInvite(name)`, `afStartFight`, `afShellBack` (leave lobby), `afAcceptInvite` /
+  `afDeclineInvite`, `afRematch`, and `vrLeavePit`.
+- **Placement.** `vrMenuPlace()` puts the panel 1.5 m in front of the eyes at eye height, facing you, from the
+  first real head pose (before it the head sits on the floor); it comes round again after a snap turn or when you
+  look more than ~60° away.
+- **The hall.** Outside a fight the scene's boot-time clutter is hidden (as `afBoot` does at the first bell), the
+  background goes dark and `VRM.hall` — a floor disc and a torch-coloured light — is shown; the rig stands at the
+  origin. A fight hides the hall; `vrLeavePit` shows it again.
+- **Leaving without a reload.** `afLeaveToMenu` reloads the page, and a reload ends the XR session, so in VR
+  `vrLeavePit` tears the pit down in place: `coop.leave()`, `afClear()`, the arena flags reset, the shell back on
+  home / title, the crowd bed silenced, the hall back.
+- **Guests.** The Enter VR button no longer hides for guests. A guest's `vrBlade` runs like the host's, but
+  `vrStrike` sends `{k:'vrhit', i, w, heavy}` instead of calling `afDamage`; the host (`afOnFightMsg`) checks the
+  guest's body is his and alive, the target is a living foe within `VR_T.reach` + a stride, and a per-target
+  cooldown (`VR_T.hitCd`), then lands it as the guest's blow — the hit event brings the popup, sparks and haptics
+  back. A VR guest's `{k:'in'}` also carries `px, pz` (where the head walked him); the host believes it within
+  three units, and the guest's own body skips the snapshot's soft correction (only a real disagreement snaps).
+- **Hooks.** `BV.vrMenu()` reads the panel (page, visible, items, pointer uv); `BV.vrMenu('start')` presses a
+  button by name; `BV.VRM` is the live state.
+
 ## 4. Testing without a headset
 
 `?xrshim` loads `xr-shim.js` (repo root, deliberately not in `tools/build-site.js`'s allowlist, so it
@@ -91,10 +124,9 @@ Stereo frames were read back from the canvas and checked as images.
 3. Arm IK so the figure's arms reach the controllers (they are collapsed now; looking down shows chest
    and legs only).
 4. Sword-on-sword parry with a clang and both hands buzzing; shield bash.
-5. Guests in VR: a `vrhit` message the host validates (range, cooldown) and applies.
-6. Hand transforms in the snapshot so the others see your blade move.
-7. The bow: two-hand draw feeding the existing arrow sim.
-8. The lobby and the end panel in-headset (a laser pointer on a DOM-in-scene panel).
+5. Hand transforms in the snapshot so the others see your blade move.
+6. The bow: two-hand draw feeding the existing arrow sim.
+7. The marketplace on the panel (cards, try-on, buy), and a way to sign in without the flat screen.
 
 ---
 

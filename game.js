@@ -11401,6 +11401,7 @@ function updateDbgHud() {
 let last = performance.now();
 let frameNo = 0;
 function loop(now) {
+  if (VR.loop) return;                  // a headset is presenting: its own clock drives every frame (vrLoop), and a second render here would fight the XR framebuffer
   if (AF.on) return afFrame(now);       // arena fights: the pit runs its own sim/net/camera (see ARENA FIGHTS)
   if (BATTLE.on) return battleFrame(now); // battle-editor mode: two armies fighting in a valley, own sim + orbit
   if (MARCH.on) return marchFrame(now);  // march-editor mode: two hosts patrol real towns/roads — tune how they WALK
@@ -16997,11 +16998,11 @@ function vrButton() {
   let el = document.getElementById('af-vr');
   if (!el) {
     el = document.createElement('button'); el.id = 'af-vr'; el.textContent = '🥽 Enter VR';
-    el.style.cssText = 'position:fixed;right:14px;bottom:14px;z-index:46;display:none;padding:11px 18px;border:0;border-radius:12px;background:#ffd34d;color:#1a1420;font:800 15px system-ui;box-shadow:0 4px 18px rgba(0,0,0,.5);cursor:pointer';
+    el.style.cssText = 'position:fixed;right:14px;bottom:14px;z-index:70;display:none;padding:11px 18px;border:0;border-radius:12px;background:#ffd34d;color:#1a1420;font:800 15px system-ui;box-shadow:0 4px 18px rgba(0,0,0,.5);cursor:pointer';
     el.addEventListener('click', () => { vrEnter().catch(e => { console.warn('[vr]', e); afBanner('VR', 'the headset would not start: ' + ((e && e.message) || e), 3); }); });
     document.body.appendChild(el);
   }
-  vrSupported().then(ok => { el.style.display = ok && AF.on && !VR.on && AF.role !== 'guest' ? 'block' : 'none'; });
+  vrSupported().then(ok => { el.style.display = ok && !VR.on ? 'block' : 'none'; });   // everywhere: the title, the lobby, the pit — host, guest or alone (the menus are on a panel in the headset, see VR MENUS)
 }
 async function vrEnter() {
   if (VR.on || !navigator.xr) return false;
@@ -17019,6 +17020,7 @@ async function vrStart(session) {
   const rig = VR.rig;
   rig.add(camera); camera.position.set(0, 0, 0); camera.quaternion.identity(); camera.scale.setScalar(1);   // (three writes the camera from the headset from here on)
   scene.add(rig);
+  vrMenuBuild(); VRM.fresh = true; VRM.last = 0; if (!AF.on) vrMenuHall(true);   // (put on at the menus: the hall and the panel; in a fight: the pit as it is)
   VR.on = true; VR.scale = 1; VR.eyeUser = 0; VR.prevTip = null; VR.swing = null; VR.spd = 0; VR.block = false; VR.snapArmed = true; VR.banner = null; VR.vigK = 0; VR.hudT = 0;
   VR.hud.visible = VR.ban.visible = VR.vig.visible = true;
   VR.postWas = AF_POST.on; AF_POST.on = false;               // the post pipeline renders to its own targets: XR owns the framebuffer
@@ -17032,13 +17034,19 @@ async function vrStart(session) {
   try { document.exitPointerLock && document.exitPointerLock(); } catch (e) {}
   console.log('[vr] session started');
 }
-function vrLoop(now) { if (AF.on) afFrame(now, true); else renderer.render(scene, camera); }
+function vrLoop(now) {
+  if (AF.on) { afFrame(now, true); return; }
+  const dt = clamp((now - (VRM.last || now)) / 1000, 0, 0.05); VRM.last = now; rtNow = now / 1000;   // the menus: the hall, the panel, the pointer — no sim
+  VR.hud.visible = false; if (VR.rig) { VR.rig.position.y = 0; VR.rig.updateMatrixWorld(true); }
+  vrMenuFrame(dt); renderer.render(scene, camera);
+}
 function vrEnd() {
   if (!VR.on) return;
   VR.on = false; VR.loop = false;
   try { renderer.setAnimationLoop(null); } catch (e) {}
   if (VR.dressed) vrUndress();
   const rig = VR.rig; if (rig) { rig.remove(camera); scene.remove(rig); }
+  if (VRM.hall) VRM.hall.visible = false; if (VRM.panel) VRM.panel.visible = false; if (VRM.ptr) VRM.ptr.visible = false; if (VRM.dot) VRM.dot.visible = false;
   VR.hud.visible = VR.ban.visible = VR.vig.visible = false;
   camera.position.set(0, 0, 0); camera.quaternion.identity(); camera.scale.setScalar(1); camera.aspect = window.innerWidth / Math.max(1, window.innerHeight); camera.fov = AF.on ? AF.fov : CAM_BASE_FOV; camera.updateProjectionMatrix();
   renderer.xr.enabled = false;
@@ -17140,7 +17148,7 @@ function vrAnchor() {                                       // the rig follows t
   const me = AF.me, rig = VR.rig, off = vrHeadOffset(tmpV2);
   rig.position.set(me.x - off.x, afY(me.x, me.z), me.z - off.z); rig.updateMatrixWorld(true);
 }
-function vrSnap(a) { VR.rig.rotation.y += a; if (AF.me) vrAnchor(); }
+function vrSnap(a) { VR.rig.rotation.y += a; if (AF.me) vrAnchor(); VRM.fresh = true; }   // (the panel, if up, comes round with you)
 // the input layer: runs after afReadLocalInput each fight frame, filling the same AF.locIn the sim already reads
 function vrInput(dt) {
   const me = AF.me, I = AF.locIn, rig = VR.rig; if (!me || !rig) return;
@@ -17182,9 +17190,9 @@ function vrFrame(dt, gdt) {
   }
   if (me) { if (VR.dressed !== me) vrDress(me); vrAnchor(); }
   else { rig.position.y = afY(rig.position.x, rig.position.z); rig.updateMatrixWorld(true); }
-  if (me && !me.dead && AF.phase === 'fight' && AF.role !== 'guest') vrBlade(gdt);
+  if (me && !me.dead && AF.phase === 'fight') vrBlade(gdt);   // (a guest's blade too: his hits go to the host as 'vrhit', see vrStrike)
   else { VR.swing = null; VR.prevTip = null; if (me) me.vrSwing = null; }
-  vrComfort(dt); vrHud(dt);
+  VR.hud.visible = true; vrComfort(dt); vrHud(dt); vrMenuFrame(dt);   // (the panel shows itself again at the bell: the results, rematch, leave)
   AF.hurt = Math.max(0, AF.hurt - dt * 1.6);
 }
 // BLADE TRACKING: the tip's speed (in the player's metres) says whether this is a swing and how loaded it is; a fast committed
@@ -17215,6 +17223,9 @@ function vrStrike(b, S) {                                   // afStrike minus th
     let dmg = (lerp(rand(F.light.dmg[0], F.light.dmg[1]), rand(F.heavy.dmg[0], F.heavy.dmg[1]), w) + (b.combo || 0) * 1.5) * shock;
     const exec = o.stagger > 0; if (exec) dmg *= F.executeMul;   // a staggered foe is open: the execution lands for real
     o.vrHitT = VR_T.hitCd; S.hit = true;
+    if (AF.role === 'guest') {                             // not my sim: the host lands it (afOnFightMsg 'vrhit' checks reach and cooldown) and its hit event brings the popup, the sparks and the haptics back
+      afSend({ k: 'vrhit', i: o.idx, w: +w.toFixed(2), heavy: S.heavy ? 1 : 0 }); vrHaptic('right', 0.25, 30); continue;
+    }
     afDamage(o, dmg, b, S.heavy, exec, false, w);
   }
 }
@@ -17247,7 +17258,7 @@ function vrHud(dt) {
     c.fillStyle = '#2a2438'; c.fillRect(18, 60, W - 36, 22); c.fillStyle = hp > 0.35 ? '#8fd08f' : '#ff6a5a'; c.fillRect(18, 60, (W - 36) * hp, 22);
     c.fillStyle = '#2a2438'; c.fillRect(18, 92, W - 36, 10); c.fillStyle = '#ffd34d'; c.fillRect(18, 92, (W - 36) * po, 10);
     c.font = '700 22px system-ui';
-    if (AF.over) { c.fillStyle = '#ffe089'; c.fillText('fight over · take the headset off for the results', 18, 106 - 4); }
+    if (AF.over) { c.fillStyle = '#ffe089'; c.fillText('fight over — the results are on the panel', 18, 106 - 4); }
     else if (me.dead) { c.fillStyle = '#ff9a8a'; c.fillText('you fell — spectating', 18, 102); }
     else if (VR.block) { c.fillStyle = '#ffe089'; c.textAlign = 'right'; c.fillText('GUARD', W - 18, 36); c.textAlign = 'left'; }
   }
@@ -17261,7 +17272,162 @@ function vrHud(dt) {
     ban.userData.tex.needsUpdate = true; ban.visible = true;
   } else ban.visible = false;
 }
+// ---- VR MENUS: the shell in the headset (2026-09-13). The DOM is invisible while presenting, so home, the lobby, a
+// challenge and the end of the fight are drawn on a canvas panel from the same state the DOM shows (AF.lobby, AF.invite,
+// AF.online, AF.standings, AF.reward) and its buttons call the same functions the DOM buttons do. Point with the right
+// hand, squeeze the trigger. The whole evening — set up, fight, results, again — without taking the headset off. ----
+const VRM = { panel: null, ptr: null, dot: null, hall: null, items: [], uv: null, trigWas: false, t: 0, last: 0, yaw: 0, fresh: true };
+const VRM_PX = [1024, 768], VRM_M = [1.28, 0.96], VRM_DIST = 1.5;   // canvas px; metres in the rig (before the rig's scale); how far in front of the eyes
+const _vrRc = new THREE.Raycaster();
+function vrMenuBuild() {
+  if (VRM.panel) return;
+  const p = vrPanel(VRM_PX[0], VRM_PX[1], VRM_M[0], VRM_M[1]); p.renderOrder = 999; p.visible = false; VR.rig.add(p); VRM.panel = p;
+  const ln = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)]), new THREE.LineBasicMaterial({ color: 0xffe089, transparent: true, opacity: 0.85, depthTest: false, fog: false }));
+  ln.renderOrder = 1001; ln.frustumCulled = false; ln.visible = false; VRM.ptr = ln;
+  const dot = new THREE.Mesh(new THREE.CircleGeometry(0.012, 16), new THREE.MeshBasicMaterial({ color: 0xffe089, depthTest: false, fog: false })); dot.renderOrder = 1002; dot.frustumCulled = false; dot.visible = false; VR.rig.add(dot); VRM.dot = dot;
+}
+// THE HALL: outside a fight the headset stands in a dark, torchlit room with nothing but the panel — not the title screen's
+// boot-time clutter (afBoot strips that at the first bell; here it goes when the headset goes on, the same way)
+function vrMenuHall(on) {
+  if (!VRM.hall) {
+    const g = new THREE.Group(); g.name = 'vr-hall';
+    const fl = new THREE.Mesh(new THREE.CircleGeometry(40, 48), new THREE.MeshLambertMaterial({ color: 0x2a2320 })); fl.rotation.x = -Math.PI / 2; fl.receiveShadow = false; g.add(fl);
+    const lt = new THREE.PointLight(0xffb070, 1.1, 60); lt.position.set(0, 6, 0); g.add(lt);
+    VRM.hall = g; scene.add(g);
+  }
+  if (on) { for (const c of scene.children.slice()) if (!c.isLight && c !== VR.rig && c !== VRM.hall) c.visible = false; scene.background = new THREE.Color(0x0b0812); if (VR.rig) { VR.rig.position.set(0, 0, 0); VR.rig.rotation.y = 0; } }
+  VRM.hall.visible = !!on;
+}
+function vrMenuPage() { if (AF.on) return AF.over ? 'end' : null; if (AF.invite) return 'invite'; if (AF.lobby) return 'lobby'; return 'home'; }
+function vrMenuPlace() {                                    // in front of the eyes, at eye height, facing you — in the rig's metres, so it is the same size in the hall and in the pit
+  const p = VRM.panel, rig = VR.rig; if (!p || !rig) return;
+  camera.getWorldDirection(tmpV); const ly = Math.atan2(tmpV.x, tmpV.z) - rig.rotation.y, c = camera.position;
+  p.position.set(c.x + Math.sin(ly) * VRM_DIST, Math.max(0.7, c.y - 0.12), c.z + Math.cos(ly) * VRM_DIST);
+  camera.getWorldPosition(tmpV2); rig.updateMatrixWorld(true); p.lookAt(tmpV2); VRM.yaw = ly; VRM.t = 0;
+}
+function vrRR(c, x, y, w, h, r) { c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r); c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath(); }
+function vrMenuDraw() {
+  const p = VRM.panel; if (!p) return; const c = p.userData.ctx, W = VRM_PX[0], H = VRM_PX[1], page = vrMenuPage(); VRM.items = [];
+  c.clearRect(0, 0, W, H); c.fillStyle = 'rgba(14,10,22,.94)'; vrRR(c, 0, 0, W, H, 30); c.fill(); c.lineWidth = 4; c.strokeStyle = '#ffd34d'; vrRR(c, 2, 2, W - 4, H - 4, 28); c.stroke();
+  c.textBaseline = 'top';
+  const uv = VRM.uv, hx = uv ? uv.x * W : -1, hy = uv ? (1 - uv.y) * H : -1;
+  const T = (s, x, y, font, col, al) => { c.font = font; c.fillStyle = col || '#f3ead8'; c.textAlign = al || 'left'; c.fillText(String(s), x, y); c.textAlign = 'left'; };
+  const B = (label, x, y, w, h, act, o) => {                 // a button: hovered under the pointer, dimmed when it can't be pressed
+    o = o || {}; const hov = !o.off && hx >= x && hx < x + w && hy >= y && hy < y + h; if (!o.off) VRM.items.push({ x, y, w, h, act });
+    c.fillStyle = o.off ? 'rgba(255,255,255,.05)' : hov ? (o.col || '#ffd34d') : (o.bg || 'rgba(255,211,77,.14)'); vrRR(c, x, y, w, h, 14); c.fill();
+    c.lineWidth = 2; c.strokeStyle = o.off ? '#4a4258' : (o.col || '#ffd34d'); vrRR(c, x, y, w, h, 14); c.stroke();
+    const fs = o.fs || 26; T(label, x + w / 2, y + h / 2 - fs * 0.58, '800 ' + fs + 'px system-ui', o.off ? '#8a8298' : hov ? '#1a1420' : '#ffe9a8', 'center');
+  };
+  if (page === 'home') {
+    T('BLADE VALE', W / 2, 70, '900 72px system-ui', '#ffd34d', 'center'); T('Arena Fights', W / 2, 152, '600 30px system-ui', '#c9bfda', 'center');
+    const u = afSession();
+    T(u ? 'Signed in as ' + u : 'Not signed in — sign in on the flat screen to invite friends. The vale\'s men will still fight you.', W / 2, 212, '500 24px system-ui', '#e8def8', 'center');
+    B('⚔ Enter the Arena', 262, 300, 500, 90, 'arena', { fs: 34 });
+    B('Exit VR', 362, 430, 300, 70, 'exit', { bg: 'rgba(255,255,255,.08)', col: '#c9bfda' });
+    T('The marketplace, profiles and the ladder stay on the flat screen for now.', W / 2, 560, '500 22px system-ui', '#8a8298', 'center');
+  } else if (page === 'invite') {
+    const m = AF.invite, cfg = m.cfg || {}, pit = cfg.venue === 'pit';
+    T('⚔ CHALLENGE', W / 2, 70, '900 56px system-ui', '#ffd34d', 'center');
+    T((m.name || 'Someone') + (pit ? ' calls you down to the pits' : ' challenges you to an arena fight'), W / 2, 160, '700 32px system-ui', '#f3ead8', 'center');
+    T(pit ? (cfg.teams || '?') + ' in the ring, every man for himself' : (cfg.teams || '?') + ' teams × ' + (cfg.per || '?') + ' fighters', W / 2, 215, '500 26px system-ui', '#c9bfda', 'center');
+    B('Accept', 180, 330, 300, 90, 'accept', { fs: 32 }); B('Decline', 544, 330, 300, 90, 'decline', { bg: 'rgba(255,255,255,.08)', col: '#c9bfda', fs: 32 });
+  } else if (page === 'lobby') {
+    const L = AF.lobby, host = L.role === 'host', pit = L.venue === 'pit', LM = afLim(L), ON = 'rgba(255,211,77,.45)';
+    T(host ? 'YOUR LOBBY' : 'LOBBY · ' + L.host, 40, 30, '900 40px system-ui', '#ffd34d');
+    T('Venue', 40, 108, '700 24px system-ui', '#c9bfda');
+    B('🏛 Colosseum', 200, 96, 250, 54, 'venue:colosseum', { fs: 22, off: !host, bg: pit ? undefined : ON }); B('🕯 The Pits', 470, 96, 250, 54, 'venue:pit', { fs: 22, off: !host, bg: pit ? ON : undefined });
+    T('Teams', 40, 176, '700 24px system-ui', '#c9bfda'); B('−', 200, 164, 64, 54, 'teams:-1', { off: !host || L.teams <= LM.teamsMin }); T(L.teams, 300, 170, '800 34px system-ui', '#fff', 'center'); B('+', 336, 164, 64, 54, 'teams:1', { off: !host || L.teams >= LM.teamsMax });
+    if (!pit) { T('Per team', 470, 176, '700 24px system-ui', '#c9bfda'); B('−', 620, 164, 64, 54, 'per:-1', { off: !host || L.per <= LM.perMin }); T(L.per, 720, 170, '800 34px system-ui', '#fff', 'center'); B('+', 756, 164, 64, 54, 'per:1', { off: !host || L.per >= LM.perMax }); }
+    let y = 244;
+    for (let t = 0; t < L.teams && y < 420; t++, y += 36) { const names = (L.slots[t] || []).map(s => s ? s.name + (s.kind === 'host' ? ' (host)' : '') : 'fighter of the vale'); T(AF_TEAMS[t].name, 40, y, '800 24px system-ui', AF_TEAMS[t].col); T(names.join(' · ').slice(0, 64), 220, y, '500 24px system-ui', '#e8def8'); }
+    if (host) {
+      T('Players online', 40, 440, '700 22px system-ui', '#9fd6ff');
+      let yy = 476, n = 0;
+      for (const o of AF.online) { if (n++ >= 3) break; const st = L.invites.get(o.name); T(o.name + (o.busy ? ' · in a fight' : ''), 40, yy + 10, '500 24px system-ui', '#e8def8'); B(st === 'joined' ? 'joined' : st === 'declined' ? 'declined' : st === 'no seat' ? 'no seat' : st ? 'invited…' : 'Invite', 330, yy, 180, 46, 'invite:' + o.name, { fs: 20, off: !!st || !!o.busy }); yy += 54; }
+      if (!AF.online.length) T(afSession() ? 'nobody else is on the war-net' : 'sign in on the flat screen to invite friends', 40, 480, '500 22px system-ui', '#8a8298');
+      B('Start Fight', 560, 560, 400, 84, 'start', { fs: 32 });
+    } else T('Waiting for ' + L.host + ' to start the fight…', 40, 460, '600 26px system-ui', '#c9bfda');
+    const msg = (document.getElementById('al-msg') || {}).textContent || ''; if (msg) T(msg.slice(0, 78), 40, 690, '500 22px system-ui', '#ffe089');
+    B(host ? 'Leave lobby' : 'Leave', 560, 660, 400, 64, 'leave-lobby', { bg: 'rgba(255,255,255,.08)', col: '#c9bfda', fs: 24 });
+  } else if (page === 'end') {
+    const st = AF.standings || afStandings(), w = AF.winner, pit = AF.cfg.venue === 'pit', mine = AF.me ? AF.me.team : -1;
+    const wName = w >= 0 && pit ? ((AF.bodies.find(b => b.team === w) || {}).name || AF_TEAMS[w].name) : (w >= 0 ? AF_TEAMS[w].name : '');
+    T(w < 0 ? 'DRAW' : wName + ' holds the pit', W / 2, 46, '900 46px system-ui', '#ffd34d', 'center');
+    T((AF.me ? (mine === w ? (pit ? 'You won.' : 'Your team won.') : (pit ? 'You fell.' : 'Your team fell.')) : '') + (AF.starName ? '   ★ Star of the match: ' + AF.starName : ''), W / 2, 112, '600 28px system-ui', '#e8def8', 'center');
+    if (AF.me && afSession()) {
+      const r = AF.reward;
+      if (!r) T('tallying the purse…', W / 2, 168, '500 26px system-ui', '#8a8298', 'center');
+      else if (r.error) T(r.error, W / 2, 168, '500 24px system-ui', '#8a8298', 'center');
+      else { T('+' + r.xp + ' XP  ·  +' + r.gold + ' gold' + (r.trophies ? '  ·  +' + r.trophies + ' 🏆' : ''), W / 2, 164, '800 32px system-ui', '#ffe089', 'center');
+        const more = [r.star ? '★ Star of the match — the purse is half again' : '', r.rankUp ? 'Rank up — you are now ' + r.rankUp : '', r.loot ? '✦ Loot: ' + afItemName(r.loot) + ' — yours, and already worn' : ''].filter(Boolean);
+        more.forEach((s, i) => T(s, W / 2, 210 + i * 30, '600 22px system-ui', '#ffd34d', 'center')); }
+    }
+    let y = 320;
+    st.slice(0, 5).forEach((s, i) => { T((i + 1) + '. ' + AF_TEAMS[s.team].name, 80, y, '800 26px system-ui', AF_TEAMS[s.team].col); T((s.names || []).slice(0, 4).join(', '), 330, y, '500 24px system-ui', '#c9bfda'); T((s.alive || 0) + ' standing · ' + (s.kills || 0) + ' kills', 944, y, '500 24px system-ui', '#e8def8', 'right'); y += 40; });
+    if (AF.role !== 'guest') B('↻ Rematch', 150, 620, 340, 84, 'rematch', { fs: 30 }); else T('the host may call a rematch', 320, 650, '500 22px system-ui', '#8a8298', 'center');
+    B('Leave the pit', 534, 620, 340, 84, 'leave-pit', { bg: 'rgba(255,255,255,.08)', col: '#c9bfda', fs: 28 });
+  }
+  p.userData.tex.needsUpdate = true;
+}
+function vrLobbyBump(key, d) {                              // (the DOM's bump lives in afWireLobbyUi's closure)
+  const L = AF.lobby; if (!L || L.role !== 'host') return; const LM = afLim(L), lim = key === 'teams' ? [LM.teamsMin, LM.teamsMax] : [LM.perMin, LM.perMax];
+  L[key] = clamp(L[key] + d, lim[0], lim[1]); afResize(L); afLobbyRender(); afLobbyBroadcast();
+}
+function vrMenuAct(act) {
+  try {
+    if (act === 'arena') afOpenLobby('host');
+    else if (act === 'exit') { if (VR.session) VR.session.end(); }
+    else if (act === 'accept') afAcceptInvite();
+    else if (act === 'decline') afDeclineInvite();
+    else if (act.startsWith('venue:')) { const L = AF.lobby; if (L && L.role === 'host' && afSetVenue(L, act.slice(6))) { afLobbyRender(); afLobbyBroadcast(); } }
+    else if (act.startsWith('teams:')) vrLobbyBump('teams', +act.slice(6));
+    else if (act.startsWith('per:')) vrLobbyBump('per', +act.slice(4));
+    else if (act.startsWith('invite:')) afInvite(act.slice(7));
+    else if (act === 'start') { try { SFX.init && SFX.init(); } catch (e) {} afStartFight(); }
+    else if (act === 'leave-lobby') afShellBack();
+    else if (act === 'rematch') { const ep = document.getElementById('af-end'); if (ep) ep.style.display = 'none'; afRematch(); }
+    else if (act === 'leave-pit') vrLeavePit();
+  } catch (e) { console.warn('[vr] menu', act, e); }
+  vrHaptic('right', 0.3, 30); VRM.t = 0;
+}
+// afLeaveToMenu reloads the page, and a reload ends the headset session: in VR the pit is torn down in place instead
+function vrLeavePit() {
+  try {
+    try { if (window.coop && window.coop.connected) window.coop.leave(); } catch (e) {}
+    AF.leaving = true; afClear(); AF.on = false; AF.over = false; AF.phase = 'lobby'; AF.role = 'solo'; AF.roster = []; AF.goSpec = null; AF.lobby = null; AF.me = null; AF.inputs.clear(); AF.leaving = false; AF.reward = null; AF.victory = null;
+    try { SFX.bed('murmur_loop', 0); SFX.bed('crowd_loop', 0); } catch (e) {}
+    afCloseLobbyUi(); afShellPage(afSession() ? 'home' : 'title'); try { afHomeResume(); } catch (e) {}
+    vrMenuHall(true); VRM.fresh = true;
+  } catch (e) { console.warn('[vr] leave', e); afLeaveToMenu(); }
+}
+function vrMenuFrame(dt) {
+  const p = VRM.panel; if (!p) return;
+  const page = vrMenuPage();
+  if (!page) { if (p.visible) { p.visible = false; VRM.dot.visible = false; VRM.ptr.visible = false; } VRM.shown = false; VRM.trigWas = true; VRM.uv = null; return; }
+  if (!VRM.shown) { VRM.shown = true; VRM.fresh = true; }
+  if (VRM.fresh) { if (camera.position.y < 0.5) { p.visible = false; return; } VRM.fresh = false; vrMenuPlace(); }   // (placed from the first real head pose — before it the head sits on the floor)
+  if (!p.visible) p.visible = true;
+  camera.getWorldDirection(tmpV); if (Math.abs(angleDelta(Math.atan2(tmpV.x, tmpV.z) - VR.rig.rotation.y, VRM.yaw)) > 1.1) vrMenuPlace();   // turned well away from it: it comes round to you
+  const hand = VR.ray.right ? 'right' : VR.ray.left ? 'left' : null, ray = hand && VR.ray[hand]; let uv = null;
+  if (ray) {
+    if (VRM.ptr.parent !== ray) ray.add(VRM.ptr); VRM.ptr.visible = true;
+    ray.updateMatrixWorld(true); p.updateMatrixWorld(true);
+    _vrRc.ray.origin.setFromMatrixPosition(ray.matrixWorld); _vrRc.ray.direction.set(0, 0, -1).transformDirection(ray.matrixWorld);
+    const hit = _vrRc.intersectObject(p, false)[0];
+    if (hit && hit.uv) { uv = hit.uv; VRM.ptr.scale.z = Math.max(0.05, -ray.worldToLocal(tmpV.copy(hit.point)).z); VRM.dot.position.copy(VR.rig.worldToLocal(tmpV.copy(hit.point))); VRM.dot.quaternion.copy(p.quaternion); VRM.dot.visible = true; }
+    else { VRM.ptr.scale.z = 2; VRM.dot.visible = false; }
+    const trig = vrPressed(vrPad(hand), 0);
+    if (trig && !VRM.trigWas && uv) { const x = uv.x * VRM_PX[0], y = (1 - uv.y) * VRM_PX[1]; const it = VRM.items.find(i => x >= i.x && x < i.x + i.w && y >= i.y && y < i.y + i.h); if (it) vrMenuAct(it.act); }
+    VRM.trigWas = trig;
+  } else { VRM.dot.visible = false; }
+  VRM.uv = uv;
+  if ((VRM.t -= dt) <= 0) { VRM.t = 1 / 12; vrMenuDraw(); }
+}
+BV.vrMenu = (act) => { if (act) vrMenuAct(String(act)); return { page: vrMenuPage(), visible: !!(VRM.panel && VRM.panel.visible), items: VRM.items.map(i => i.act), uv: VRM.uv ? [+VRM.uv.x.toFixed(3), +VRM.uv.y.toFixed(3)] : null }; };   // tests: read the panel, press a button by name
 BV.vrEnter = () => vrEnter();
+try { vrButton(); } catch (e) {}                             // the button is there from the title screen on (a headset in the browser shows it; nothing else does)
+setTimeout(() => { try { vrButton(); } catch (e) {} }, 2500);   // (a runtime that announces itself late — the test shim, some PC runtimes — gets a second look)
+BV.VRM = VRM;
 BV.vrExit = () => { const s = VR.session; return s ? s.end() : Promise.resolve(); };
 BV.vrStatus = () => ({ on: VR.on, presenting: !!(renderer.xr && renderer.xr.isPresenting), scale: +VR.scale.toFixed(3), eyeUser: +VR.eyeUser.toFixed(2), headYaw: +VR.headYaw.toFixed(2), rigYaw: VR.rig ? +VR.rig.rotation.y.toFixed(2) : 0,
   rig: VR.rig ? [+VR.rig.position.x.toFixed(2), +VR.rig.position.y.toFixed(2), +VR.rig.position.z.toFixed(2)] : null, hands: Object.keys(VR.src), dressed: !!VR.dressed, swordOn: !!(VR.sword && VR.sword.parent === VR.grip.right), shieldOn: !!(VR.shield && VR.shield.parent === VR.grip.left),
@@ -20166,7 +20332,7 @@ function afApplySnap(s) {
       if (code === 8 && !b.dead) afKill(b, null, true);
       if (code === 5) b.flinch = Math.max(b.flinch, 0.12); else if (code === 11) b.stagger = Math.max(b.stagger, 0.2); else if (code === 13) b.downT = Math.max(b.downT || 0, 0.3);
       const ex = x - b.x, ez = z - b.z, ed = Math.hypot(ex, ez);
-      if (ed > 4) { b.x = x; b.z = z; } else { b.x += ex * 0.25; b.z += ez * 0.25; }
+      if (ed > 4) { b.x = x; b.z = z; } else if (!VR.on) { b.x += ex * 0.25; b.z += ez * 0.25; }   // (in a headset the host believes my position — see 'in' px/pz — so no nudging of the head: only a real disagreement snaps)
       continue;
     }
     if (b.mounted && row[9] != null) b.taim = row[9] / 100;   // the rider's twist in the saddle
@@ -20230,7 +20396,7 @@ function afNetTick(dt) {
     AF.events = [];
     AF.inAcc += dt; if (AF.inAcc < AF_NET.inDt) return; AF.inAcc = 0;
     const I = AF.locIn;
-    afSend({ k: 'in', mx: +I.mx.toFixed(2), mz: +I.mz.toFixed(2), yaw: +I.yaw.toFixed(3), st: I.steer == null ? null : +I.steer.toFixed(2), th: I.thr == null ? null : +I.thr.toFixed(2), hy: AF.me && AF.me.mounted ? +AF.me.yaw.toFixed(3) : null, atk: I.atk, heavy: I.heavy, dodge: I.dodge, roll: I.rollDir == null ? null : +I.rollDir.toFixed(2), block: I.block ? 1 : 0, hold: I.hold ? 1 : 0, swap: I.swap });
+    afSend({ k: 'in', mx: +I.mx.toFixed(2), mz: +I.mz.toFixed(2), yaw: +I.yaw.toFixed(3), st: I.steer == null ? null : +I.steer.toFixed(2), th: I.thr == null ? null : +I.thr.toFixed(2), hy: AF.me && AF.me.mounted ? +AF.me.yaw.toFixed(3) : null, atk: I.atk, heavy: I.heavy, dodge: I.dodge, roll: I.rollDir == null ? null : +I.rollDir.toFixed(2), block: I.block ? 1 : 0, hold: I.hold ? 1 : 0, swap: I.swap, px: VR.on && AF.me && !AF.me.dead ? +AF.me.x.toFixed(2) : undefined, pz: VR.on && AF.me && !AF.me.dead ? +AF.me.z.toFixed(2) : undefined });   // (VR: where my head walked me)
   } else AF.events = [];
 }
 // the START must reach every player: a phone that was switching apps (or asleep on a dead socket) when the host
@@ -20253,8 +20419,17 @@ function afOnFightMsg(m) {
     else if (AF.over) afSend({ k: 'over', winner: AF.winner, standings: AF.standings, star: AF.starName, ledger: afLedger() }, m.from); // they missed the final bell
     return;
   }
+  if (AF.role === 'host' && d.k === 'vrhit') {               // a guest's blade in VR: his controller says it touched a man; the sim checks that it could have, then lands it as his blow
+    const b = AF.bodies.find(x => x.peer === m.from), o = AF.bodies[d.i | 0], w = clamp(+d.w || 0, 0, 1);
+    if (!b || b.dead || b.ctrl !== 'input' || !o || o.dead || o.team === b.team || o === b || AF.phase !== 'fight') return;
+    const [px, pz] = afHitPoint(o, b.x, b.z); if (Math.hypot(px - b.x, pz - b.z) > VR_T.reach + 1.5) return;   // (his copy and mine may differ by a step)
+    b.vrCd = b.vrCd || new Map(); if ((b.vrCd.get(o.idx) || 0) > AF.t) return; b.vrCd.set(o.idx, AF.t + VR_T.hitCd);
+    const F = AF_F, exec = o.stagger > 0; let dmg = (lerp(rand(F.light.dmg[0], F.light.dmg[1]), rand(F.heavy.dmg[0], F.heavy.dmg[1]), w) + (b.combo || 0) * 1.5) * (b.dmgMul || 1); if (exec) dmg *= F.executeMul;
+    afDamage(o, dmg, b, !!d.heavy, exec, false, w); return;
+  }
   if (AF.role === 'host' && d.k === 'in') {
     let inp = AF.inputs.get(m.from);
+    if (d.px != null) { const hb = AF.bodies.find(x => x.peer === m.from); if (hb && !hb.dead && !hb.mounted && Math.hypot(+d.px - hb.x, +d.pz - hb.z) < 3) { hb.x = +d.px; hb.z = +d.pz; } }   // a guest in a headset: a real step in his room moved his man — his position is believed within a stride (the sim's walls and press still apply)
     if (!inp) { inp = afFreshInput(); AF.inputs.set(m.from, inp); const b = AF.bodies.find(x => x.peer === m.from); if (b) b.inp = inp; }
     inp.mx = +d.mx || 0; inp.mz = +d.mz || 0; inp.yaw = +d.yaw || 0; inp.steer = d.st == null ? null : +d.st || 0; inp.thr = d.th == null ? null : +d.th || 0;
     if (d.hy != null) { const hb = inp.body && inp.body.peer === m.from ? inp.body : (inp.body = AF.bodies.find(x => x.peer === m.from)); if (hb && hb.mounted && !hb.dead) hb.yaw = angleLerp(hb.yaw, +d.hy || 0, 0.7); } // a horse's heading is steered, not aimed: the rider's own screen owns it, or the two copies drift apart
@@ -20705,7 +20880,7 @@ function afBoot(spec) {
   { const pv = AF.cfg.pit; AF_F.radius = inPit ? AF_PIT.r : typeof pv === 'number' ? pv : (AF_PITS[pv] || AF_PITS.wide); }
   if (first) {
     try { setBattleDressing(false); } catch (e) {}
-    for (const c of scene.children.slice()) { if (!c.isLight) c.visible = false; } // strip the boot-time world clutter
+    for (const c of scene.children.slice()) { if (!c.isLight && c !== VR.rig) c.visible = false; } // strip the boot-time world clutter (never the headset's rig: the fight may start from the panel)
     scene.background = new THREE.Color(0xe9dfd0);
     const hudEl = document.getElementById('hud'); if (hudEl) hudEl.classList.add('hidden');
     document.querySelectorAll('.overlay').forEach(o => o.classList.add('hidden')); afShellHide();

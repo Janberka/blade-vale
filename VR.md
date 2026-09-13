@@ -28,8 +28,8 @@ A PC headset works the same way from Chrome/Edge on Windows with the Oculus/Stea
 active, at `https://bladevale.com` (or `http://localhost:8787` from the node server; a LAN IP over plain
 http will NOT expose WebXR).
 
-**Not yet true:** the bow (archers are forced to the sword), horses, a guest's blade seen moving by the others,
-the market's picture cards (the panel lists wares as rows; the try-on shows on the figure beside the panel).
+**Not yet true:** a guest's blade seen moving by the others, the market's picture cards (the panel lists wares as
+rows; the try-on shows on the figure beside the panel), the string pulled back on the bow as you draw.
 
 ## 2. How it plays
 
@@ -41,6 +41,9 @@ the market's picture cards (the panel lists wares as rows; the try-on shows on t
 | right stick left/right | 30° snap turn (no smooth turning) |
 | right stick up/down | tilt the blade in your fist (saved on the device, `bv-vr-sword`) |
 | A / X | roll (`I.dodge`, the sim's i-frames; the head is never rolled) |
+| Y / B | sword ↔ bow (an archer only: the class rule from the lobby, `afSetWeapon`; through `I.swap`, so a guest's host swaps too) |
+| the bow (`vrBow`): squeeze the right trigger with the string hand near the bow hand, pull back, let go | a draw — its weight is how far the hands came apart (`VR_BOWT`); the arrow flies from the string hand toward the bow hand through `afShoot` (aim assist and the archer's own scatter); a guest sends `vrshot` and the host shoots for him |
+| ride in on a horse (the lobby's class row) | the sim's `afRide` with the head as the reins (the horse turns toward where you look, the left stick is the pace); the rig sits `VR_BOWT.saddle` higher; a real step does not move a mounted man |
 | stick click | re-measure your eye height |
 | swing the sword fast | a strike: tip speed ≥ 3.2 m/s is a swing, ≥ 8.5 m/s a fully loaded one (`k`), heavy from `k ≥ 0.6`; the blade segment is tested against every foe's capsule and lands through `afDamage` with `afStrike`'s damage formula. One hit per target per 0.45 s. |
 | hold the shield up | guard: shield hand between chest and eye height, in front of you, within ~60° of where you look — or squeeze the left grip. `I.block` → the usual facing test in `afDamage`. |
@@ -104,6 +107,9 @@ banner for what `afBanner` says (FIGHT, VICTORY…). NPCs read a fast blade as a
 - **Leaving without a reload.** `afLeaveToMenu` reloads the page, and a reload ends the XR session, so while
   presenting `afLeaveToMenu` itself calls `vrLeavePit`, which tears the pit down in place: `coop.leave()`, `afClear()`, the arena flags reset, the shell back on
   home / title, the crowd bed silenced, the hall back.
+- **The class row on the panel's lobby page** (sword / bow / horse, locked until owned, hidden in the pits) calls
+  `afLobbyWeapon`, the same function the DOM's buttons call; the bow hangs on the left grip next to the shield
+  (`VR_BOW.pre` turns makeBow's hand-frame rotation into the grip's), `afSetWeapon` shows one or the other.
 - **Guests.** The Enter VR button no longer hides for guests. A guest's `vrBlade` runs like the host's, but
   `vrStrike` sends `{k:'vrhit', i, w, heavy}` instead of calling `afDamage`; the host (`afOnFightMsg`) checks the
   guest's body is his and alive, the target is a living foe within `VR_T.reach` + a stride, and a per-target

@@ -16986,6 +16986,11 @@ const VR_T = { swingMin: 3.2, swingFull: 8.5, heavyAt: 0.6, hitCd: 0.45, snap: M
 // left forearm (grip +Z runs back along the forearm; the face looks out the back of the hand, −X on a left hand), point toward the fist
 const VR_SWORD = { pos: new THREE.Vector3(0, 0, 0) };
 const VR_SHIELD = { pos: new THREE.Vector3(-0.05, 0, 0.16), quat: new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(new THREE.Vector3(0, -1, 0), new THREE.Vector3(0, 0, 1), new THREE.Vector3(-1, 0, 0))) };
+// the bow in the left fist: makeBow is turned for the rig's hand (limbs along hand z, belly along hand (x−y)/√2); on the
+// grip the limbs must stand along +Y and the belly face −Z (forward), so this rotation is put in front of the bow's own
+const VR_BOW = { pos: new THREE.Vector3(0, 0, 0), pre: (() => { const a = new THREE.Vector3(0, 0, 1), b = new THREE.Vector3(1, -1, 0).normalize(), c = a.clone().cross(b), A = new THREE.Vector3(0, 1, 0), B = new THREE.Vector3(0, 0, -1), C = A.clone().cross(B);
+  const M1 = new THREE.Matrix4().makeBasis(a, b, c), M2 = new THREE.Matrix4().makeBasis(A, B, C); return new THREE.Quaternion().setFromRotationMatrix(M2.multiply(M1.transpose())); })() };
+const VR_BOWT = { near: 0.35, slack: 0.12, full: 0.5, cd: 0.45, saddle: 1.0 };   // a draw starts with the string hand within `near` m of the bow hand; k = (hands apart − slack) / full; the rider's eyes sit `saddle` units higher
 if (/[?&]xrshim\b/.test(location.search)) { const s = document.createElement('script'); s.src = 'xr-shim.js?v=' + Date.now(); document.head.appendChild(s); }   // tests: a headset out of thin air (never cached)
 
 function vrSupported() {
@@ -17103,37 +17108,37 @@ function vrDress(me, force) {
   VR.dressed = me;
   const P = me.parts;
   if (P.headPivot) P.headPivot.visible = false; if (P.shoulderL) P.shoulderL.visible = false; if (P.shoulderR) P.shoulderR.visible = false;
-  const hang = (obj, hand, pos, quat) => {
+  const hang = (obj, hand, pos, quat, pre) => {
     if (!obj) return;
     if (!obj.userData.vrHome) obj.userData.vrHome = { parent: obj.parent, pos: obj.position.clone(), quat: obj.quaternion.clone(), scale: obj.scale.clone(), fixed: !!obj.userData.fixedGrip };
     const g = VR.grip[hand]; if (!g) return;
-    g.add(obj); obj.position.copy(pos); if (quat) obj.quaternion.copy(quat); obj.userData.fixedGrip = true;   // (the wrist channel must not spin it)
+    g.add(obj); obj.position.copy(pos); if (quat) obj.quaternion.copy(quat); else if (pre) obj.quaternion.copy(pre).multiply(obj.userData.vrHome.quat); obj.userData.fixedGrip = true;   // (the wrist channel must not spin it)
   };
-  hang(P.sword, 'right', VR_SWORD.pos, null); hang(P.shield, 'left', VR_SHIELD.pos, VR_SHIELD.quat);
-  VR.sword = P.sword || null; VR.shield = P.shield || null;
+  hang(P.sword, 'right', VR_SWORD.pos, null); hang(P.shield, 'left', VR_SHIELD.pos, VR_SHIELD.quat); hang(P.bow, 'left', VR_BOW.pos, null, VR_BOW.pre);   // (an archer: the bow and the shield share the left fist; afSetWeapon shows one)
+  VR.sword = P.sword || null; VR.shield = P.shield || null; VR.bow = P.bow || null;
   if (P.modelRig && !me.vrModel) {                           // the warrior figure over the rig: its head and arms collapse (a bone scaled to nothing), its own steel gives way to the plastic on the controllers (syncModelRigs reads vrGear)
     const live = P.modelRig, R = MODEL_RIGS.get(me.group.userData.model), map = (R && R.spec.map) || {}, M = { bones: [], shieldVis: P.shield ? P.shield.visible : null };
     for (const k of ['head', 'shoulderL', 'shoulderR']) { const b = live.inst.byName[map[k]]; if (b) { M.bones.push([b, b.scale.clone()]); b.scale.setScalar(0.001); } }
     P.vrGear = true; P.vrShieldOn = !me.noShield; if (P.sword) P.sword.traverse(x => { if (x.isMesh) x.visible = true; }); if (P.shield) P.shield.visible = P.vrShieldOn;
     me.vrModel = M;
   }
-  vrFitHands(me); VR.prevTip = null; VR.spd = 0; VR.swing = null;   // (the jump from the body's hand to the controller is not a swing)
-  if (me.weapon === 'bow') { try { afSetWeapon(me, 'sword'); } catch (e) {} } me.canBow = false;   // v1: steel only
+  vrFitHands(me); VR.prevTip = null; VR.spd = 0; VR.swing = null; VR.draw = null;   // (the jump from the body's hand to the controller is not a swing)
 }
 function vrUndress() {
   const me = VR.dressed; if (!me) return; VR.dressed = null;
   const P = me.parts; if (P.headPivot) P.headPivot.visible = true; if (P.shoulderL) P.shoulderL.visible = true; if (P.shoulderR) P.shoulderR.visible = true;
-  for (const obj of [P.sword, P.shield]) {
+  for (const obj of [P.sword, P.shield, P.bow]) {
     const H = obj && obj.userData.vrHome; if (!H) continue;
     if (H.parent) H.parent.add(obj); obj.position.copy(H.pos); obj.quaternion.copy(H.quat); obj.scale.copy(H.scale); obj.userData.fixedGrip = H.fixed; delete obj.userData.vrHome;
   }
   if (me.vrModel) { const M = me.vrModel, P2 = me.parts; for (const [b, sc] of M.bones) b.scale.copy(sc); P2.vrGear = false; P2.vrShieldOn = false; if (P2.shield && M.shieldVis != null) P2.shield.visible = M.shieldVis; me.vrModel = null; }
-  VR.sword = VR.shield = null; me.vrSwing = null;
+  VR.sword = VR.shield = VR.bow = null; me.vrSwing = null; me.vrDraw = 0; VR.draw = null;
 }
 function vrFitHands(me) {                                   // the steel keeps its world size whatever the rig's scale; the blade's tilt is the player's
   const k = (me.footScale || 1) / (VR.scale || 1);
   if (VR.sword && VR.sword.userData.vrHome) { VR.sword.scale.copy(VR.sword.userData.vrHome.scale).multiplyScalar(k); VR.sword.rotation.set(-Math.PI / 2 + VR.swordPitch * Math.PI / 180, 0, 0); }
   if (VR.shield && VR.shield.userData.vrHome) VR.shield.scale.copy(VR.shield.userData.vrHome.scale).multiplyScalar(k);
+  if (VR.bow && VR.bow.userData.vrHome) VR.bow.scale.copy(VR.bow.userData.vrHome.scale).multiplyScalar(k);
 }
 function vrSwordPitch(d) { VR.swordPitch = clamp(VR.swordPitch + d, -60, 60); try { localStorage.setItem('bv-vr-sword', String(Math.round(VR.swordPitch))); } catch (e) {} if (VR.dressed) vrFitHands(VR.dressed); }
 const vrPad = h => { const s = VR.src[h]; return (s && s.gamepad) || null; };
@@ -17146,7 +17151,7 @@ function vrHeadOffset(out) {                                // where the head st
 }
 function vrAnchor() {                                       // the rig follows the body so the head is exactly on the fighter, whatever the sim did to him (walls, shoves, knockback)
   const me = AF.me, rig = VR.rig, off = vrHeadOffset(tmpV2);
-  rig.position.set(me.x - off.x, afY(me.x, me.z), me.z - off.z); rig.updateMatrixWorld(true);
+  rig.position.set(me.x - off.x, afY(me.x, me.z) + (me.mounted ? VR_BOWT.saddle * (me.footScale || 1) : 0), me.z - off.z); rig.updateMatrixWorld(true);   // (in the saddle the eyes ride a horse higher)
 }
 function vrSnap(a) { VR.rig.rotation.y += a; if (AF.me) vrAnchor(); VRM.fresh = true; }   // (the panel, if up, comes round with you)
 // the input layer: runs after afReadLocalInput each fight frame, filling the same AF.locIn the sim already reads
@@ -17170,9 +17175,10 @@ function vrInput(dt) {
   if (dodge && !VR.dodgeWas) { I.dodge++; I.rollDir = m > 0.2 ? Math.atan2(I.mx, I.mz) : null; } VR.dodgeWas = dodge;
   const rec = vrPressed(L, 3) || vrPressed(R, 3);            // a stick click re-measures your height
   if (rec && !VR.recWas) VR.eyeUser = 0; VR.recWas = rec;
-  VR.block = vrGuard() || vrPressed(L, 1); I.block = VR.block;
-  I.hold = false;                                            // no timed swings: the blade in your hand IS the attack (vrBlade)
-  if (me.weapon === 'bow') { try { afSetWeapon(me, 'sword'); } catch (e) {} }
+  VR.block = me.weapon !== 'bow' && (vrGuard() || vrPressed(L, 1)); I.block = VR.block;
+  I.hold = false;                                            // no timed swings: the blade in your hand IS the attack (vrBlade); the bow is drawn by hand (vrBow)
+  const sw = vrPressed(L, 5) || vrPressed(R, 5);            // Y / B: sword ↔ bow (an archer only — afSetWeapon keeps the class rule; through the input record, so a guest's host swaps too)
+  if (sw && !VR.swapWas) I.swap++; VR.swapWas = sw;
 }
 function vrGuard() {                                        // the shield is up when it hangs between chest and eye height, forward of you, roughly where you look
   const g = VR.grip.left; if (!g || !g.visible) return false;
@@ -17190,8 +17196,8 @@ function vrFrame(dt, gdt) {
   }
   if (me) { if (VR.dressed !== me) vrDress(me); vrAnchor(); }
   else { rig.position.y = afY(rig.position.x, rig.position.z); rig.updateMatrixWorld(true); }
-  if (me && !me.dead && AF.phase === 'fight') vrBlade(gdt);   // (a guest's blade too: his hits go to the host as 'vrhit', see vrStrike)
-  else { VR.swing = null; VR.prevTip = null; if (me) me.vrSwing = null; }
+  if (me && !me.dead && AF.phase === 'fight') { if (me.weapon === 'bow') { vrBow(dt); VR.swing = null; VR.prevTip = null; me.vrSwing = null; } else { vrBlade(gdt); VR.draw = null; me.vrDraw = 0; } }   // (a guest's blade and bow too: 'vrhit' / 'vrshot' go to the host)
+  else { VR.swing = null; VR.prevTip = null; VR.draw = null; if (me) { me.vrSwing = null; me.vrDraw = 0; } }
   VR.hud.visible = true; vrComfort(dt); vrHud(dt); vrMenuFrame(dt);   // (the panel shows itself again at the bell: the results, rematch, leave)
   AF.hurt = Math.max(0, AF.hurt - dt * 1.6);
 }
@@ -17229,6 +17235,27 @@ function vrStrike(b, S) {                                   // afStrike minus th
     afDamage(o, dmg, b, S.heavy, exec, false, w);
   }
 }
+// THE BOW: held in the left fist (afSetWeapon shows it), drawn by the right — squeeze the right trigger with the string
+// hand near the bow hand, pull back, let go. The draw's weight is how far the hands came apart; the arrow flies from the
+// string hand toward the bow hand (the sim's afShoot, with its aim assist and the archer's own scatter). A guest's shot
+// goes to the host as 'vrshot'.
+function vrBow(dt) {
+  const me = AF.me, gl = VR.grip.left, gr = VR.grip.right, R = vrPad('right'); if (!gl || !gr || !R) { VR.draw = null; me.vrDraw = 0; return; }
+  gl.getWorldPosition(tmpV); gr.getWorldPosition(tmpV2); const s = VR.scale || 1, d = tmpV.distanceTo(tmpV2) / s, trig = vrPressed(R, 0);
+  if (VR.bowCd > 0) VR.bowCd -= dt;
+  if (!VR.draw) { if (trig && !VR.bowTrigWas && d < VR_BOWT.near && !(VR.bowCd > 0) && !(me.swapT > 0)) { VR.draw = { k: 0, t: 0 }; vrHaptic('right', 0.2, 20); } }   // (swapT / bowCd start undefined: "not > 0", never "<= 0")
+  else {
+    const D = VR.draw; D.k = clamp((d - VR_BOWT.slack) / VR_BOWT.full, 0, 1); D.t += dt;
+    if (!trig) { VR.draw = null; if (D.k > 0.15) { const yaw = Math.atan2(tmpV.x - tmpV2.x, tmpV.z - tmpV2.z); VR.bowCd = VR_BOWT.cd; vrLoose(me, yaw, D.k); } }
+  }
+  VR.bowTrigWas = trig; me.vrDraw = VR.draw ? VR.draw.k : 0;
+}
+function vrLoose(me, yaw, k) {
+  if (me.mounted) me.aimYaw = yaw; else me.yaw = yaw;        // (a rider aims from the saddle; the horse holds its line)
+  if (AF.role === 'guest') { afSend({ k: 'vrshot', yaw: +yaw.toFixed(3), w: +k.toFixed(2) }); }
+  else if (!afShoot(me, k)) return;
+  try { SFX.bow(me.group.position); } catch (e) {} vrHaptic('right', 0.7, 70); vrHaptic('left', 0.35, 50);
+}
 function vrSegDist(a, b, x, y0, z, y1) {                    // closest distance between the blade (a→b) and a vertical axis (x, y0..y1, z)
   const ux = b.x - a.x, uy = b.y - a.y, uz = b.z - a.z, vy = y1 - y0, wx = a.x - x, wy = a.y - y0, wz = a.z - z;
   const A = ux * ux + uy * uy + uz * uz, B = uy * vy, C = vy * vy, D = ux * wx + uy * wy + uz * wz, E = vy * wy, den = A * C - B * B;
@@ -17261,6 +17288,7 @@ function vrHud(dt) {
     if (AF.over) { c.fillStyle = '#ffe089'; c.fillText('fight over — the results are on the panel', 18, 106 - 4); }
     else if (me.dead) { c.fillStyle = '#ff9a8a'; c.fillText('you fell — spectating', 18, 102); }
     else if (VR.block) { c.fillStyle = '#ffe089'; c.textAlign = 'right'; c.fillText('GUARD', W - 18, 36); c.textAlign = 'left'; }
+    else if (me.vrDraw > 0) { c.fillStyle = '#ffe089'; c.textAlign = 'right'; c.fillText('DRAW ' + Math.round(me.vrDraw * 100) + '%', W - 18, 36); c.textAlign = 'left'; }
   }
   H.tex.needsUpdate = true;
   const B = VR.banner, ban = VR.ban;
@@ -17472,6 +17500,13 @@ function vrMenuDraw() {
     T('Teams', 40, 176, '700 24px system-ui', '#c9bfda'); B('−', 200, 164, 64, 54, 'teams:-1', { off: !host || L.teams <= LM.teamsMin }); T(L.teams, 300, 170, '800 34px system-ui', '#fff', 'center'); B('+', 336, 164, 64, 54, 'teams:1', { off: !host || L.teams >= LM.teamsMax });
     if (!pit) { T('Per team', 470, 176, '700 24px system-ui', '#c9bfda'); B('−', 620, 164, 64, 54, 'per:-1', { off: !host || L.per <= LM.perMin }); T(L.per, 720, 170, '800 34px system-ui', '#fff', 'center'); B('+', 756, 164, 64, 54, 'per:1', { off: !host || L.per >= LM.perMax }); }
     let y = 244;
+    if (!pit) {                                            // your class: sword / bow / horse (the pits are swords only) — a bow or a horse must be owned
+      const gs = afGearStats(afGear()), cur = L.weapon || 'sword';
+      T('You ride in with', 40, 240, '700 24px system-ui', '#c9bfda');
+      B('⚔ Sword', 260, 228, 150, 48, 'wpn:sword', { fs: 20, bg: cur === 'sword' ? ON : undefined }); B(gs.bow ? '🏹 Bow' : '🔒 Bow', 424, 228, 150, 48, 'wpn:bow', { fs: 20, bg: cur === 'bow' ? ON : undefined, off: !gs.bow }); B(gs.horse ? '🐎 Horse' : '🔒 Horse', 588, 228, 150, 48, 'wpn:horse', { fs: 20, bg: cur === 'horse' ? ON : undefined, off: !gs.horse });
+      if (!gs.bow || !gs.horse) T('the market sells ' + (!gs.bow && !gs.horse ? 'bows and horses' : !gs.bow ? 'bows' : 'horses'), 756, 240, '500 18px system-ui', '#8a8298', 'left', 230);
+      y = 296;
+    }
     for (let t = 0; t < L.teams && y < 420; t++, y += 36) { const names = (L.slots[t] || []).map(s => s ? s.name + (s.kind === 'host' ? ' (host)' : '') : 'fighter of the vale'); T(AF_TEAMS[t].name, 40, y, '800 24px system-ui', AF_TEAMS[t].col); T(names.join(' · '), 220, y, '500 24px system-ui', '#e8def8', 'left', 760); }
     if (host) {
       T('Players online', 40, 440, '700 22px system-ui', '#9fd6ff');
@@ -17557,6 +17592,7 @@ function vrMenuAct(act) {
     else if (A[0] === 'teams') vrLobbyBump('teams', +A[1]);
     else if (A[0] === 'per') vrLobbyBump('per', +A[1]);
     else if (A[0] === 'invite') afInvite(act.slice(7));
+    else if (A[0] === 'wpn') afLobbyWeapon(A[1]);
     else if (act === 'start') { try { SFX.init && SFX.init(); } catch (e) {} afStartFight(); }
     else if (act === 'leave-lobby') afShellBack();
     else if (act === 'rematch') { const ep = document.getElementById('af-end'); if (ep) ep.style.display = 'none'; afRematch(); }
@@ -20601,6 +20637,12 @@ function afOnFightMsg(m) {
     const F = AF_F, exec = o.stagger > 0; let dmg = (lerp(rand(F.light.dmg[0], F.light.dmg[1]), rand(F.heavy.dmg[0], F.heavy.dmg[1]), w) + (b.combo || 0) * 1.5) * (b.dmgMul || 1); if (exec) dmg *= F.executeMul;
     afDamage(o, dmg, b, !!d.heavy, exec, false, w); return;
   }
+  if (AF.role === 'host' && d.k === 'vrshot') {              // a guest's bow in VR: he drew and let go; the sim shoots for him (aim assist, scatter, the arrow event for everyone)
+    const b = AF.bodies.find(x => x.peer === m.from); if (!b || b.dead || b.ctrl !== 'input' || b.weapon !== 'bow' || !b.canBow || AF.phase !== 'fight') return;
+    if ((b.vrShotT || 0) > AF.t) return; b.vrShotT = AF.t + VR_BOWT.cd * 0.8;
+    const yaw = +d.yaw || 0; if (b.mounted) b.aimYaw = yaw; else b.yaw = yaw;
+    afShoot(b, clamp(+d.w || 0, 0, 1)); return;
+  }
   if (AF.role === 'host' && d.k === 'in') {
     let inp = AF.inputs.get(m.from);
     if (d.px != null) { const hb = AF.bodies.find(x => x.peer === m.from); if (hb && !hb.dead && !hb.mounted && Math.hypot(+d.px - hb.x, +d.pz - hb.z) < 3) { hb.x = +d.px; hb.z = +d.pz; } }   // a guest in a headset: a real step in his room moved his man — his position is believed within a stride (the sim's walls and press still apply)
@@ -21913,6 +21955,13 @@ function afMarketRender() {
   if (pg) pg.scrollTop = keepScroll;
   for (const b of p.querySelectorAll('#af-market-right [data-act]')) b.onclick = e => { e.stopPropagation(); afMarketAct(b.getAttribute('data-act'), b.tagName === 'BUTTON' ? b : null); };
 }
+// WHAT YOU RIDE IN WITH: sword, bow or horse — the class rule (an archer carries a bow and a sword, a swordsman or a
+// rider no bow); a bow or a horse must be owned. The host's seat carries it; a guest tells the host. The DOM's
+// buttons and the headset's panel both come here.
+function afLobbyWeapon(w) {
+  const L = AF.lobby; if (!L) return; const gs = afGearStats(afGear()); if ((w === 'bow' && !gs.bow) || (w === 'horse' && !gs.horse)) { afLobbyMsg('You have no ' + w + ' — the marketplace sells them.'); return; } L.weapon = w;
+  if (L.role === 'host') { const s = afHostSeat(); if (s) s.weapon = w; afLobbyRender(); afLobbyBroadcast(); } else { if (window.coop) window.coop.send({ k: 'weapon', w }); afLobbyRender(); }
+}
 (function afWireLobbyUi() {
   const g = id => document.getElementById(id);
   if (!g('page-lobby')) return;
@@ -21922,8 +21971,7 @@ function afMarketRender() {
   g('al-per-minus').onclick = () => bump('per', -1); g('al-per-plus').onclick = () => bump('per', 1);
   if (g('al-per-minus10')) g('al-per-minus10').onclick = () => bump('per', -10); if (g('al-per-plus10')) g('al-per-plus10').onclick = () => bump('per', 10);
   const setOpt = (key, v) => { const L = AF.lobby; if (!L || L.role !== 'host') return; L[key] = v; afLobbyRender(); afLobbyBroadcast(); };
-  const wpn = w => { const L = AF.lobby; if (!L) return; const gs = afGearStats(afGear()); if ((w === 'bow' && !gs.bow) || (w === 'horse' && !gs.horse)) { afLobbyMsg('You have no ' + w + ' — the marketplace sells them.'); return; } L.weapon = w;
-    if (L.role === 'host') { const s = afHostSeat(); if (s) s.weapon = w; afLobbyRender(); afLobbyBroadcast(); } else { if (window.coop) window.coop.send({ k: 'weapon', w }); afLobbyRender(); } };
+  const wpn = afLobbyWeapon;                              // (shared with the headset's panel — VR MENUS)
   g('al-wpn-sword').onclick = () => wpn('sword'); g('al-wpn-bow').onclick = () => wpn('bow'); if (g('al-wpn-horse')) g('al-wpn-horse').onclick = () => wpn('horse');
   for (const pt of ['cosy', 'wide', 'vast', 'colossal']) { const el = g('al-pit-' + pt); if (el) el.onclick = () => setOpt('pit', pt); }
   for (const v of ['colosseum', 'pit']) { const el = g('al-venue-' + v); if (el) el.onclick = () => { const L = AF.lobby; if (!L || L.role !== 'host') return; if (afSetVenue(L, v)) afLobbyMsg(''); afLobbyRender(); afLobbyBroadcast(); }; }

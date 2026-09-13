@@ -17,6 +17,7 @@
     connected: false, id: null, room: null, isHost: false, peers: [],
     url: defaultUrl(), handlers: {}, name: null, acct: null,
     lastRoom: null, resuming: false, lastMsgAt: 0,          // the room we were in (asked back on reconnect), and when we last heard anything
+    txBytes: 0, rxBytes: 0,                                 // what went over the wire (the arena's net readout — afNetStats)
   };
   var ws = null, helloResolve = null;
 
@@ -24,7 +25,7 @@
   // type keeps a LIST of handlers; each one guards on its own state and ignores what isn't its business
   coop.on = function (type, fn) { (coop.handlers[type] = coop.handlers[type] || []).push(fn); return coop; };
   function emit(type, m) { var hs = coop.handlers[type] || []; for (var i = 0; i < hs.length; i++) { try { hs[i](m); } catch (e) { /* a handler bug must not kill the socket */ } } }
-  function raw(o) { if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify(o)); return true; } catch (e) {} } return false; }
+  function raw(o) { if (ws && ws.readyState === 1) { try { var s = JSON.stringify(o); ws.send(s); coop.txBytes += s.length; return true; } catch (e) {} } return false; }
 
   // shared-world play is the prerequisite for co-op (you need to share a world to meet other players)
   coop.available = function () { return !!(window.net && window.net.sharedWorld); };
@@ -52,7 +53,7 @@
       ws.onopen = function () { raw(hello); };
       ws.onmessage = function (ev) {
         var m; try { m = JSON.parse(ev.data); } catch (e) { return; }
-        coop.lastMsgAt = Date.now();
+        coop.lastMsgAt = Date.now(); coop.rxBytes += (ev.data && ev.data.length) || 0;
         switch (m.t) {
           case 'hello-ok': { var reopened = !!coop.everConnected && !coop.connected; coop.connected = true; coop.everConnected = true; coop.id = m.id; retryMs = 1500; finish(true); if (reopened) emit('reconnect', m); break; } // a re-hello on a live socket is NOT a reconnect
           case 'hosting': coop.room = coop.lastRoom = m.room; coop.isHost = true; emit('hosting', m); break;

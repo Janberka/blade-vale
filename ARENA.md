@@ -778,10 +778,11 @@ Bram is the same Bram fight after fight, and his record grows like anyone's.
 
 ### Network model
 
-Host-authoritative over the `/coop` relay. The host runs the sim and broadcasts a 20 Hz snapshot
+Host-authoritative over the `/coop` relay. The host runs the sim and broadcasts a snapshot
 (`{k:'snap'}`: per body position, yaw, hp, animation state code, plus `hit` / `kill` / `arrow`
-events). Guests send their input record at 20 Hz (`{k:'in'}`), drive their **own** body locally
-so movement never waits for the round trip (softly corrected toward the host's truth), and
+events) at 30 Hz in a small room (≤ 12 bodies) and 20 Hz above. Guests send their input record
+at the same rate (`{k:'in'}`, addressed to the host alone), drive their **own** body locally
+so movement never waits for the round trip (reconciled against the host's truth), and
 interpolate everyone else. Every client builds the identical pit from the shared `seed` + roster
 in the `{k:'go'}` message, so bodies are addressed by roster index. If a guest leaves for good, an
 NPC takes over their fighter; if the host leaves, the fight ends for everyone.
@@ -813,6 +814,46 @@ network, so the arena survives it instead of treating a drop as leaving:
 Caveat: the host runs the simulation, so if the **host's** phone backgrounds the page, the browser
 throttles it and the fight freezes for everyone until they come back.
 
+**The wire** (the 2026-09-13 smoothing pass — `AF_NET` in `game.js`; all of it client-side, nothing
+new on the relay):
+
+* **Sub-stepped sim.** `afSubstep` never lets the host's sim take a step longer than 1/60 s: a
+  dropped frame becomes several steps, not a slower fight (the frame dt is clamped at 0.1 s). The
+  host's own hit-stop no longer slows the shared sim (guests used to see the world freeze on every
+  blow the host landed); his shake, kick and FOV punch stay.
+* **Button edges go out at once.** A press, release, roll or swap is sent the frame it happens
+  (`afNetTick` compares a signature of the buttons); only the sticks wait for the tick.
+* **Interpolation buffer.** Every remote body keeps its last rows with the host's time (`b.buf`).
+  Guests estimate the host's clock (`afRenderTime`: the offset is held at the least-delayed row and
+  let down slowly) and draw each body `delay` in the past between two rows (`afInterp`), where
+  `delay` = 1.5 row intervals + 2 × jitter, grown while rows keep arriving too late
+  (`n.extra`), and longer for a body that comes at half rate (`b.rowDt`, a running minimum of
+  its gaps, eased into `b.dly`). Past the newest row a body carries its speed on for 150 ms, then
+  holds. Nothing chases the latest row any more, so bunched packets no longer rubber-band.
+* **Reconciliation with a memory.** The host's word on a guest's own position is a round trip old,
+  so it is held against the closest point of the guest's recent path (`n.hist`) inside a jitter
+  window around that moment, not against where he is now (a running man used to be dragged back a
+  stride on every row). If he was ever there, nothing is corrected; a disagreement under 4 m is
+  eased out a quarter per row; one past 4 m that lasts 150 ms snaps him over.
+* **Predicted blows.** A guest's swing runs the host's reach-and-cone test locally against the men
+  as drawn (`afPredictStrike`): sparks, the clang or the thud, hit-stop and the kick play at once,
+  and a foe drawn blocking gets a clang. The host's `hit` event is matched to it (`afPredicted`)
+  so only the damage number is news; a blow the host never confirms within 0.6 s counts as a miss
+  in the readout (`pred ok/all`).
+* **Lean snapshots.** Rows are 7 numbers (8 for a rider); kills and the weapon in hand ride a
+  separate `m` list only when they change, with a full refresh every 2 s for late joiners; a dead
+  man gets one row when he falls, then only the refresh; above 16 bodies the NPC rank and file go
+  out on alternate snaps (10 Hz), the men with a player behind them every time. A 9-a-side fight
+  sends 4–10 rows per snap instead of 18.
+* **The readout.** Guests ping the host once a second; the open HUD sheet (tap the card / Tab)
+  shows round trip, jitter, snaps per second, bytes in, the host's sim rate, the delay, predicted
+  blows and the local frame rate; the host sees his sim rate, guests and bytes out. `?net` pins
+  the same line bottom-right; `BV.net()` returns the numbers.
+
+What this pass did **not** do, and why: binary frames (JSON rows are ~1.5× the bytes, not the
+bottleneck), a Durable Object per room, WebRTC or a dedicated sim server — those cost money or
+weeks; see the measurements first. Loose horses still use the old lerp toward the latest row.
+
 A guest in a **headset** (`VR.md`) sends `{k:'vrhit', i, w, heavy}` when his blade touches a man — the host checks reach and a per-target cooldown and lands it as his blow — and his `{k:'in'}` carries `px, pz` (where his head walked him), believed within three units.
 
 Lobby messages (`{k:'lobby'}` host→guests, `{k:'team'}` / `{k:'weapon'}` guest→host,
@@ -840,6 +881,7 @@ BV.arenaHorses() / BV.arenaHorseHit(id, dmg)  // every horse's state; wound one 
 BV.arenaKill(idx)                             // fell a man (his horse goes loose)
 BV.arenaInvite(name) / BV.arenaAccept()       // send / accept a challenge without the UI
 BV.arenaNet()                                 // socket id, room, lobby seats, roster peers, go-acks
+BV.net()                                      // the wire: rtt, jit, snapHz, rxHz/txHz, hostHz, delay, extra, pred*, hist, clk (?net pins the line on screen)
 coop._drop()                                  // kill the socket as a phone would (it reconnects and resumes)
 ```
 

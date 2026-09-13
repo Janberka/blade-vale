@@ -16943,7 +16943,43 @@ function afXpRank(xp) { return xp >= 82 ? 'champion' : xp >= 60 ? 'veteran' : xp
 const AF_PITS = { cosy: 34, wide: 50, vast: 68, colossal: 100 }; // the ring's radius by lobby choice (radius is set per boot; a big roster grows it)
 function afPitFor(pit, per) { const need = 26 + per * 0.9; let best = pit; for (const k of ['cosy', 'wide', 'vast', 'colossal']) { if (AF_PITS[k] >= Math.max(need, AF_PITS[pit] || 0)) { best = k; break; } best = k; } return AF_PITS[best] >= need ? best : Math.ceil(need / 10) * 10; } // a legion-sized roster (200 a side) outgrows every named tier — it just gets a bigger number                          // hold the attack to load it: a full hold (chargeMax s) is a heavy; past heavyAt it cracks guards
 const AF_TEAM_HEX = AF_TEAMS.map(t => parseInt(t.col.slice(1), 16));
-const AF_NET = { snapDt: 1 / 20, inDt: 1 / 20 };
+// THE WIRE (2026-09-13): snapshots at 30 Hz for a small room (≤ smallRoom bodies), 20 Hz above; inputs likewise, and a
+// button edge (press, release, roll, swap) goes out at once instead of waiting for the next tick. The host sub-steps
+// its sim at ≤ simDt so a slow phone still runs the fight in real time. Guests draw everyone else `interp` s in the
+// past out of a buffer of timed rows (see afInterp), and a guest's own blows are PREDICTED (afPredictStrike).
+// Every `metaDt` the host re-sends what changes rarely (kills, weapon, the dead) so a late joiner catches up.
+const AF_NET = { snapDt: 1 / 20, inDt: 1 / 20, simDt: 1 / 60, smallRoom: 12, interp: 0.1, metaDt: 2.0, pingDt: 1.0, halfRateAbove: 16, predWindow: 0.6 };
+function afNetReset() {
+  const small = AF.bodies.length <= AF_NET.smallRoom; AF_NET.snapDt = small ? 1 / 30 : 1 / 20; AF_NET.inDt = small ? 1 / 30 : 1 / 20;
+  const c = window.coop || {};
+  AF.net = { rtt: 0, jit: 0, pings: 0, hostHz: 0, fps: 0, snaps: 0, snapHz: 0, snapAt: 0, rows: 0, snapNo: 0, metaAt: -1e9, inSig: '', pingAcc: 0, pred: [], predN: 0, predOk: 0, predMiss: 0,
+    clk: null, delay: AF_NET.interp, extra: 0, lateN: 0, frames: 0, lateFrac: 0, farT0: 0, hist: [], tx0: c.txBytes || 0, rx0: c.rxBytes || 0, tx: 0, rx: 0, txHz: 0, rxHz: 0, statT: 0, statTx: c.txBytes || 0, statRx: c.rxBytes || 0 };
+  for (const b of AF.bodies) { b.buf = []; b.rowDt = 0; b.rowAt = 0; b.dly = null; b.sentMeta = ''; b.sentDead = false; }
+}
+// one line of the wire for the sheet / the ?net overlay
+function afNetLine() {
+  const n = AF.net; if (!n) return '';
+  if (AF.role === 'guest') return 'net ' + Math.round(n.rtt) + ' ms ±' + Math.round(n.jit) + ' · snaps ' + n.snapHz.toFixed(0) + '/s · ' + (n.rxHz / 1024).toFixed(1) + ' KB/s in · host ' + Math.round(n.hostHz) + ' Hz · delay ' + Math.round(n.delay * 1000) + ' ms' + (n.predN ? ' · pred ' + n.predOk + '/' + n.predN : '') + ' · me ' + Math.round(n.fps) + ' fps';
+  if (AF.role === 'host') return 'host · sim ' + Math.round(n.fps) + ' Hz · ' + AF.inputs.size + ' guest' + (AF.inputs.size === 1 ? '' : 's') + ' · ' + (n.txHz / 1024).toFixed(1) + ' KB/s out · ' + n.rows + ' rows/snap';
+  return 'solo · ' + Math.round(n.fps) + ' fps';
+}
+function afNetStats(dt) {                                    // per frame: my own frame rate and the bytes on the wire (net-battle.js counts them)
+  const n = AF.net; if (!n) return; const c = window.coop || {};
+  n.fps = lerp(n.fps || 60, 1 / Math.max(dt, 1e-3), 0.05);
+  n.frames++;
+  n.statT += dt; if (n.statT >= 1) {
+    if (AF.role === 'guest' && n.frames) { const late = n.lateN / n.frames; n.extra = late > 0.05 ? Math.min(0.25, (n.extra || 0) + 0.02) : Math.max(0, (n.extra || 0) - 0.005); n.lateFrac = late; } n.lateN = 0; n.frames = 0;   // rows arriving after their draw time: buy more delay, give it back slowly
+    n.txHz = ((c.txBytes || 0) - n.statTx) / n.statT; n.rxHz = ((c.rxBytes || 0) - n.statRx) / n.statT; n.snapHz = n.snaps / n.statT; n.snaps = 0; n.statTx = c.txBytes || 0; n.statRx = c.rxBytes || 0; n.statT = 0; afNetOverlay(); }
+  if (n.pred.length) { const cut = rtNow - AF_NET.predWindow; let k = 0; while (k < n.pred.length && n.pred[k].t < cut) k++; if (k) { n.pred.splice(0, k); n.predMiss += k; } }   // a predicted blow the host never confirmed
+}
+function afNetOverlay() {                                    // ?net: a small fixed readout for phone tests
+  if (!/[?&]net\b/.test(location.search)) return;
+  let el = document.getElementById('af-net'); if (!el) { el = document.createElement('div'); el.id = 'af-net'; el.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:60;font:11px/1.3 ui-monospace,monospace;color:#e8def8;background:rgba(16,14,24,.7);padding:4px 7px;border-radius:5px;pointer-events:none;white-space:nowrap'; document.body.appendChild(el); }
+  el.textContent = afNetLine(); el.style.display = AF.on ? '' : 'none';
+}
+function afSubstep(fn, dt) {                                 // the sim never takes a step longer than simDt: a dropped frame becomes several steps, not a slower fight
+  const n = clamp(Math.ceil(dt / AF_NET.simDt - 1e-6), 1, 6), h = dt / n; for (let i = 0; i < n; i++) fn(h);
+}
 const AF = {
   on: false, role: 'solo',                 // 'solo' (no peers) | 'host' | 'guest'
   phase: 'lobby',                          // 'lobby' | 'countdown' | 'fight' | 'over'
@@ -17604,7 +17640,7 @@ function vrMenuAct(act) {
 // (afLeaveToMenu itself calls this first while presenting, so every "back to the menu" path stays in the headset)
 function vrLeavePit() {
   try { if (window.coop && window.coop.connected) window.coop.leave(); } catch (e) {}
-  AF.leaving = true; afClear(); AF.on = false; AF.over = false; AF.phase = 'lobby'; AF.role = 'solo'; AF.roster = []; AF.goSpec = null; AF.lobby = null; AF.me = null; AF.inputs.clear(); AF.leaving = false; AF.reward = null; AF.victory = null;
+  AF.leaving = true; afClear(); AF.on = false; AF.over = false; AF.phase = 'lobby'; AF.role = 'solo'; AF.hostPeer = null; AF.roster = []; AF.goSpec = null; AF.lobby = null; AF.me = null; AF.inputs.clear(); AF.leaving = false; AF.reward = null; AF.victory = null;
   try { SFX.bed('murmur_loop', 0); SFX.bed('crowd_loop', 0); } catch (e) {}
   afCloseLobbyUi(); afShellPage(afSession() ? 'home' : 'title'); try { afHomeResume(); } catch (e) {}
   vrMenuHall(true); VRM.fresh = true;
@@ -19600,7 +19636,7 @@ function afDrive(b, dt, sim) {
         try { spawnSlashArc(b.group.position, afAimOf(b), mv, 1 + 0.6 * (a.k || 0), col); spawnTrail(b, 1.7, col); } catch (e) {}
         if (b === AF.me) addShake(0.09 + 0.07 * (a.k || 0));
         try { SFX.swing(b.group.position); } catch (e) {}
-        if (sim) afStrike(b, a.heavy, a.k || 0);
+        if (sim) afStrike(b, a.heavy, a.k || 0); else if (b === AF.me && AF.role === 'guest') afPredictStrike(b, a.heavy, a.k || 0);   // (a guest feels his blow now; the host's word follows)
       }
     }
     const total = a.wind + a.strike + a.rec;
@@ -20489,15 +20525,15 @@ function afFinish(winner, standings) {
 
 // ---- guest side: drive my own body, interpolate everyone else, apply the host's truth ----
 function afGuestTick(dt) {
+  const rt = afRenderTime();
   for (const b of AF.bodies) {
     if (b.dead) { afStepDead(b, dt); continue; }
     if (AF.over && AF.victory) { afVictoryBody(b, dt); continue; }   // after the bell everyone holds his spot (the host's states are stale by then)
     if (b === AF.me && !b.dead) { afDrive(b, dt, false); continue; }
     if (!b.remoteSeen) { afCommit(b, dt); continue; }
-    const k = clamp(dt * 14, 0, 1), ox = b.x, oz = b.z;
-    b.x = lerp(b.x, b.tx, k); b.z = lerp(b.z, b.tz, k);
-    b.yaw = angleLerp(b.yaw, b.tyaw, k);
-    b.moving = b.tstate === 1 || (b.mounted && Math.hypot(b.tx - b.x, b.tz - b.z) > 0.3);
+    const ox = b.x, oz = b.z;
+    afInterp(b, rt);                                         // everyone else is drawn a beat in the past, between two of the host's rows — no chasing, no rubber
+    b.moving = b.tstate === 1 || (b.mounted && Math.hypot(b.x - ox, b.z - oz) > 0.3 * dt);
     if (b.mounted) { b.rsp = lerp(b.rsp || 0, Math.hypot(b.x - ox, b.z - oz) / Math.max(dt, 1e-3), clamp(dt * 6, 0, 1)); b.sp01 = clamp(b.rsp / (AF_F.move * AF_F.horseSpeed), 0, 1); }
     afApplyRemotePose(b, dt);
     afCommit(b, dt);
@@ -20505,6 +20541,50 @@ function afGuestTick(dt) {
   for (const h of AF.horses) afStepHorse(h, dt, false);
   afHorseTags();
   afStepArrows(dt, false);
+}
+// THE HOST'S CLOCK, as seen from here: off = host time − my time, kept at the LEAST-delayed row (the max) and let
+// down slowly so a stall on the host's side is followed. Everyone else is drawn at host time − delay, where delay
+// covers a row interval and a half plus twice the jitter; a body that comes at half rate gets its own, longer one.
+function afRenderTime() {
+  const n = AF.net, now = performance.now() / 1000; if (!n || !n.clk) return -1;
+  n.delay = clamp(Math.max(AF_NET.snapDt * 1.5, AF_NET.snapDt + 2 * n.jit / 1000) + (n.extra || 0), AF_NET.interp * 0.6, 0.4);   // (extra: grown while rows keep coming too late to draw between — afNetStats)
+  return now + n.clk.off;                                    // (host time now; each body takes its own delay off it — afInterp)
+}
+function afInterp(b, rt) {
+  const buf = b.buf; if (!buf || !buf.length) return;
+  if (rt < 0) { const B = buf[buf.length - 1]; b.x = B.x; b.z = B.z; b.yaw = B.yaw; b.tstate = B.s; b.tmove = B.mv; b.taim = B.aim; return; }   // (no clock yet: the newest row as it is)
+  const want = Math.max(AF.net.delay, (b.rowDt || 0) * 1.5); b.dly = b.dly == null ? want : lerp(b.dly, want, 0.05);   // (a half-rate body sits further back, so there is always a pair to draw between; the change eases in, never steps)
+  const t = rt - b.dly;
+  let i = buf.length - 1; while (i > 0 && buf[i - 1].t > t) i--;
+  const B = buf[i], A = i > 0 ? buf[i - 1] : null;
+  if (!A || t >= B.t) {                                     // past the newest row: carry its speed on for a little, then hold
+    if (A && t > B.t + 0.02 && b.rowDt <= AF_NET.snapDt * 1.4) AF.net.lateN++;   // (a full-rate body with no row to draw toward: the delay is too short for this link)
+    let x = B.x, z = B.z; if (A && t > B.t) { const span = B.t - A.t, ext = Math.min(t - B.t, 0.15); if (span > 1e-3 && ext > 0) { x += (B.x - A.x) / span * ext; z += (B.z - A.z) / span * ext; } }
+    b.x = x; b.z = z; b.yaw = B.yaw; b.tstate = B.s; b.tmove = B.mv; b.taim = B.aim; return;
+  }
+  const u = clamp((t - A.t) / Math.max(B.t - A.t, 1e-3), 0, 1);
+  b.x = lerp(A.x, B.x, u); b.z = lerp(A.z, B.z, u); b.yaw = angleLerp(A.yaw, B.yaw, u);
+  b.tstate = A.s; b.tmove = A.mv; b.taim = A.aim;          // (the state that began at A holds until B's moment comes round)
+}
+// a guest's own blow, felt at once: the same reach-and-cone test the host runs, against the men as drawn here. The sparks,
+// the clang or the thud, the shake and the kick play now; the host's word (the 'hit' event, with the number) follows and
+// is matched to this so nothing plays twice. A blow the host never confirms counts as a miss in the readout (pred a/b).
+function afPredictStrike(b, heavy, k) {
+  const F = AF_F, n = AF.net, w = k || 0, reach = (lerp(F.reach, F.reach * 1.25, w) + (b.mounted ? F.horseReach : 0) + (b.reachBonus || 0)) * 0.95, ay = afAimOf(b), fdx = Math.sin(ay), fdz = Math.cos(ay), cone = lerp(F.cone, 0.1, w);
+  for (const o of AF.bodies) {
+    if (o.dead || o.team === b.team || o === b || !o.remoteSeen || o.tstate === 7 || o.tstate === 8) continue;   // (a rolling man has his i-frames — the host will say 'dodge')
+    const [px, pz] = afHitPoint(o, b.x, b.z), dx = px - b.x, dz = pz - b.z, dd = Math.hypot(dx, dz); if (dd > reach) continue;
+    if ((dx * fdx + dz * fdz) / (dd || 1) < cone) continue;
+    const facing = (-dx * Math.sin(o.yaw) - dz * Math.cos(o.yaw)) / (dd || 1), blocked = o.tstate === 6 && facing > 0.15 ? (heavy ? 2 : 1) : 0;
+    tmpV.set(o.x, afY(o.x, o.z) + 1.3, o.z);
+    if (blocked) { afSparks(tmpV, 0xffdf6b, 6); try { SFX.clang(o.group.position, blocked === 2); } catch (e) {} }
+    else { afSparks(tmpV, 0xff5a3c, 8); try { SFX.hit(o.group.position, !!heavy); } catch (e) {} o.hitT = 0.25; o.hitSide = Math.sign(-dx * Math.cos(o.yaw) + dz * Math.sin(o.yaw)) || 1; o.flashT = 0.07; afSplat(o.x, o.z, heavy ? 1.1 : 0.7); }
+    afJuice(b, o, heavy ? 22 : 12, heavy, blocked);
+    n.pred.push({ i: o.idx, t: rtNow }); n.predN++;
+  }
+}
+function afPredicted(i) {                                    // the host confirmed a blow on body i: was it already felt here?
+  const n = AF.net; if (!n) return false; const k = n.pred.findIndex(p => p.i === i); if (k < 0) return false; n.pred.splice(k, 1); n.predOk++; return true;
 }
 function afApplyRemotePose(b, dt) {
   const s = b.tstate, mv = AF_MOVES[b.tmove] || 'slashR';
@@ -20532,22 +20612,46 @@ function afApplyRemotePose(b, dt) {
 function afApplySnap(s) {
   if (s.ph === 'fight' && (AF.phase === 'countdown' || AF.phase === 'intro')) { if (AF.phase === 'intro') afIntroEnd(); AF.phase = 'fight'; AF.countdown = 0; afBanner('FIGHT', '', 1.0); afCrowdReact(false); }   // the host's bell rang while we were still watching the entrance
   AF.t = s.t || AF.t;
+  const n = AF.net, nowS = performance.now() / 1000, st = +s.t || 0;
+  if (n) {                                                   // the host's clock (afRenderTime) and the snap rate
+    n.snaps++; const off = st - nowS;
+    if (!n.clk) n.clk = { off };
+    else if (off > n.clk.off) n.clk.off = lerp(n.clk.off, off, 0.5);           // a row that came quicker: the truer clock
+    else if (off < n.clk.off - 0.25) n.clk.off = off;                           // the host stalled: follow at once
+    else n.clk.off -= 0.004;                                                    // …else let the estimate down slowly (~80 ms/s) so drift is followed
+  }
+  for (const row of s.m || []) { const b = AF.bodies[row[0]]; if (!b) continue; b.kills = row[1] || 0; if (b !== AF.me) { const w = row[2] ? 'bow' : 'sword'; if (b.weapon !== w) afSetWeapon(b, w); } }   // the slow things: kills, the weapon in hand
   for (const row of s.b || []) {
     const b = AF.bodies[row[0]]; if (!b) continue;
     const x = row[1] / 100, z = row[2] / 100, yaw = row[3] / 100, hp = row[4], code = row[5];
-    b.kills = row[7] || 0;
-    if (b !== AF.me && row[8] != null) { const w = row[8] ? 'bow' : 'sword'; if (b.weapon !== w) afSetWeapon(b, w); }
     if (b === AF.me) {                                       // my body: the host owns hp/death/stuns; position is softly corrected
       b.hp = hp;
       if (code === 8 && !b.dead) afKill(b, null, true);
       if (code === 5) b.flinch = Math.max(b.flinch, 0.12); else if (code === 11) b.stagger = Math.max(b.stagger, 0.2); else if (code === 13) b.downT = Math.max(b.downT || 0, 0.3);
-      const ex = x - b.x, ez = z - b.z, ed = Math.hypot(ex, ez);
-      if (ed > 4) { b.x = x; b.z = z; } else if (!VR.on) { b.x += ex * 0.25; b.z += ez * 0.25; }   // (in a headset the host believes my position — see 'in' px/pz — so no nudging of the head: only a real disagreement snaps)
+      // the host's word is a round trip old: compare it with where I WAS then (hist), not where I am now — a running
+      // man used to be dragged back a stride every row, because his own copy was always ahead of the host's
+      // …and a round trip is never exact (jitter), so the host's spot is held against the CLOSEST point of my path inside a
+      // window around that moment: if I was ever there, there is nothing to correct. Only a disagreement that stays past
+      // 4 m for three rows running (a wall, a shove, a teleport) snaps me over; smaller ones are eased out a quarter at a time.
+      let hx = b.x, hz = b.z;
+      if (n && n.rtt > 0 && n.hist.length) {
+        const H = n.hist, tNow = performance.now(), lo = tNow - n.rtt - Math.min(350, n.jit + 120), hi = tNow - n.rtt + Math.min(350, n.jit + 60);
+        let best = -1, bd = Infinity;
+        for (let j = H.length - 1; j >= 0; j--) { const h = H[j]; if (h.t > hi) continue; if (h.t < lo) break; const d = Math.hypot(x - h.x, z - h.z); if (d < bd) { bd = d; best = j; } }
+        if (best < 0) { best = H.length - 1; while (best > 0 && H[best].t > tNow - n.rtt) best--; }
+        hx = H[best].x; hz = H[best].z;
+      }
+      const ex = x - hx, ez = z - hz, ed = Math.hypot(ex, ez);
+      const tN = performance.now(); if (n) { if (ed > 4) { if (!n.farT0) n.farT0 = tN; } else n.farT0 = 0; }   // (a burst of late rows in one frame is one piece of evidence, not three: the disagreement must LAST)
+      if (ed > 4 && (!n || tN - n.farT0 > 150)) { b.x += ex; b.z += ez; if (n) n.farT0 = 0; } else if (ed <= 4 && !VR.on) { b.x += ex * 0.25; b.z += ez * 0.25; }   // (in a headset the host believes my position — see 'in' px/pz — so no nudging of the head: only a real disagreement snaps)
       continue;
     }
-    if (b.mounted && row[9] != null) b.taim = row[9] / 100;   // the rider's twist in the saddle
     if (!b.remoteSeen) { b.remoteSeen = true; b.x = x; b.z = z; b.yaw = yaw; }
-    b.tx = x; b.tz = z; b.tyaw = yaw; b.tstate = code; b.tmove = row[6] || 0; b.hp = hp;
+    b.tstate = code; b.tmove = row[6] || 0; b.hp = hp;
+    if (!b.buf) b.buf = [];
+    if (b.rowAt) { const gap = st - b.rowAt; b.rowDt = b.rowDt ? Math.min(gap, b.rowDt * 1.02 + 0.001) : gap; } b.rowAt = st;   // (a running MIN of the gaps: a stall must not read as a slower body — only a rate that stays slower creeps it up)
+    b.buf.push({ t: st, x, z, yaw, s: code, mv: row[6] || 0, aim: row[7] != null ? row[7] / 100 : 0 }); if (b.buf.length > 24) b.buf.shift();
+    if (b.mounted) b.taim = row[7] != null ? row[7] / 100 : 0;   // the rider's twist in the saddle
     if (code === 8 && !b.dead) { if (b.mounted && b.horse) afDismount(b, false, true); b.dead = true; b.deadT = 0; b.hp = 0; b.rollAng = 0; b.flashT = 0; b.flashWhite = false; b.tinted = false; setTint(b.parts, null); }
   }
   for (const row of s.h || []) {                             // the horses: who is in which saddle is the host's word
@@ -20563,12 +20667,12 @@ function afApplySnap(s) {
 function afApplyEvent(ev) {
   const b = AF.bodies[ev.i];
   if (ev.k === 'hit' && b) {
-    const by = AF.bodies[ev.by];
+    const by = AF.bodies[ev.by], felt = by === AF.me && afPredicted(ev.i);   // (felt: my own blow, already played when I swung — only the number is news)
     tmpV.set(b.x, afY(b.x, b.z) + 1.3, b.z);
-    if (ev.b) { afSparks(tmpV, 0xffdf6b, 6); afPopup(b.group.position, ev.b === 2 ? 'GUARD BREAK' : 'block', ev.b === 2 ? '#ffb347' : '#ffe089'); try { SFX.clang(b.group.position, ev.b === 2); } catch (e) {} }
-    else { afSparks(tmpV, 0xff5a3c, 8); afPopup(b.group.position, String(ev.d), ev.h ? '#ffd27a' : '#ff7d6f'); try { SFX.hit(b.group.position, !!ev.h); } catch (e) {}
-      if (by) { b.hitT = 0.25; b.hitSide = Math.sign((by.x - b.x) * Math.cos(b.yaw) - (by.z - b.z) * Math.sin(b.yaw)) || 1; } b.flashT = 0.07; if (b === AF.me) AF.hurt = Math.min(1, AF.hurt + (ev.h ? 0.9 : 0.55)); afSplat(b.x, b.z, ev.h ? 1.1 : 0.7); }
-    if (by && (by === AF.me || b === AF.me)) afJuice(by, b, ev.d, !!ev.h, ev.b);   // my blow / my wound: the guest feels it too
+    if (ev.b) { if (!felt) { afSparks(tmpV, 0xffdf6b, 6); try { SFX.clang(b.group.position, ev.b === 2); } catch (e) {} } afPopup(b.group.position, ev.b === 2 ? 'GUARD BREAK' : 'block', ev.b === 2 ? '#ffb347' : '#ffe089'); }
+    else { if (!felt) { afSparks(tmpV, 0xff5a3c, 8); try { SFX.hit(b.group.position, !!ev.h); } catch (e) {} } afPopup(b.group.position, String(ev.d), ev.h ? '#ffd27a' : '#ff7d6f');
+      if (by) { b.hitT = 0.25; b.hitSide = Math.sign((by.x - b.x) * Math.cos(b.yaw) - (by.z - b.z) * Math.sin(b.yaw)) || 1; } b.flashT = 0.07; if (b === AF.me) AF.hurt = Math.min(1, AF.hurt + (ev.h ? 0.9 : 0.55)); if (!felt) afSplat(b.x, b.z, ev.h ? 1.1 : 0.7); }
+    if (by && (by === AF.me || b === AF.me) && !felt) afJuice(by, b, ev.d, !!ev.h, ev.b);   // my blow / my wound: the guest feels it too
   } else if (ev.k === 'kill' && b) {
     const by = AF.bodies[ev.by];
     afLogLine((by ? by.name + ' fells ' : '') + b.name, b.teamDef.col);
@@ -20597,16 +20701,29 @@ function afSend(d, to) { if (window.coop && window.coop.connected) window.coop.s
 function afNetTick(dt) {
   if (AF.role === 'host') {
     AF.snapAcc += dt; if (AF.snapAcc < AF_NET.snapDt) return; AF.snapAcc = 0;
-    const rows = [];
-    for (const b of AF.bodies) rows.push([b.idx, Math.round(b.x * 100), Math.round(b.z * 100), Math.round(b.yaw * 100), Math.round(b.hp), afStateCode(b), b.dodgeT > 0 ? Math.round((b.rollRel || 0) * 100) : b.atk ? b.atk.move : b.charge ? (b.charge.heavyPose ? 3 : b.chargeMove) : 0, b.kills, b.weapon === 'bow' ? 1 : 0, b.mounted ? Math.round(angleDelta(b.yaw, afAimOf(b)) * 100) : 0]);
+    const n = AF.net, snapNo = ++n.snapNo, full = AF.t - n.metaAt >= AF_NET.metaDt, half = AF.bodies.length > AF_NET.halfRateAbove;   // full: the slow-changing things for everyone (a late joiner needs them)
+    if (full) n.metaAt = AF.t;
+    const rows = [], meta = [];
+    for (const b of AF.bodies) {
+      if (b.dead) { if (b.sentDead && !full) continue; b.sentDead = true; }   // a corpse: one row when he falls, then only with the full refresh
+      else { b.sentDead = false; if (half && b.ctrl === 'ai' && !full && ((b.idx + snapNo) & 1)) continue; }   // the rank and file of a big fight go out on alternate snaps (10 Hz) — the men with a player behind them every time
+      const row = [b.idx, Math.round(b.x * 100), Math.round(b.z * 100), Math.round(b.yaw * 100), Math.round(b.hp), afStateCode(b), b.dodgeT > 0 ? Math.round((b.rollRel || 0) * 100) : b.atk ? b.atk.move : b.charge ? (b.charge.heavyPose ? 3 : b.chargeMove) : 0];
+      if (b.mounted) row.push(Math.round(angleDelta(b.yaw, afAimOf(b)) * 100));   // (a rider's twist in the saddle rides an 8th slot)
+      rows.push(row);
+      const mk = b.kills + (b.weapon === 'bow' ? 'b' : 's'); if (full || mk !== b.sentMeta) { b.sentMeta = mk; meta.push([b.idx, b.kills, b.weapon === 'bow' ? 1 : 0]); }
+    }
+    n.rows = rows.length;
     const hs = AF.horses.map(h => [h.id, Math.round(h.x * 100), Math.round(h.z * 100), Math.round(h.yaw * 100), Math.round(h.hp), h.rider ? h.rider.idx : -1, h.dead ? 1 : 0]);
-    afSend({ k: 'snap', t: +AF.t.toFixed(2), ph: AF.phase, b: rows, h: hs, ev: AF.events });
+    const snap = { k: 'snap', t: +AF.t.toFixed(3), ph: AF.phase, b: rows, h: hs, ev: AF.events }; if (meta.length) snap.m = meta;
+    afSend(snap);
     AF.events = [];
   } else if (AF.role === 'guest') {
     AF.events = [];
-    AF.inAcc += dt; if (AF.inAcc < AF_NET.inDt) return; AF.inAcc = 0;
-    const I = AF.locIn;
-    afSend({ k: 'in', mx: +I.mx.toFixed(2), mz: +I.mz.toFixed(2), yaw: +I.yaw.toFixed(3), st: I.steer == null ? null : +I.steer.toFixed(2), th: I.thr == null ? null : +I.thr.toFixed(2), hy: AF.me && AF.me.mounted ? +AF.me.yaw.toFixed(3) : null, atk: I.atk, heavy: I.heavy, dodge: I.dodge, roll: I.rollDir == null ? null : +I.rollDir.toFixed(2), block: I.block ? 1 : 0, hold: I.hold ? 1 : 0, swap: I.swap, px: VR.on && AF.me && !AF.me.dead ? +AF.me.x.toFixed(2) : undefined, pz: VR.on && AF.me && !AF.me.dead ? +AF.me.z.toFixed(2) : undefined });   // (VR: where my head walked me)
+    const I = AF.locIn, n = AF.net;
+    n.pingAcc += dt; if (n.pingAcc >= AF_NET.pingDt) { n.pingAcc = 0; afSend({ k: 'ping', t: performance.now() }, AF.hostPeer || undefined); }
+    const sig = I.atk + '|' + I.dodge + '|' + I.swap + '|' + (I.hold ? 1 : 0) + (I.block ? 1 : 0);   // a button edge goes out NOW; the sticks ride the tick
+    AF.inAcc += dt; if (sig === n.inSig && AF.inAcc < AF_NET.inDt) return; AF.inAcc = 0; n.inSig = sig;
+    afSend({ k: 'in', mx: +I.mx.toFixed(2), mz: +I.mz.toFixed(2), yaw: +I.yaw.toFixed(3), st: I.steer == null ? null : +I.steer.toFixed(2), th: I.thr == null ? null : +I.thr.toFixed(2), hy: AF.me && AF.me.mounted ? +AF.me.yaw.toFixed(3) : null, atk: I.atk, heavy: I.heavy, dodge: I.dodge, roll: I.rollDir == null ? null : +I.rollDir.toFixed(2), block: I.block ? 1 : 0, hold: I.hold ? 1 : 0, swap: I.swap, px: VR.on && AF.me && !AF.me.dead ? +AF.me.x.toFixed(2) : undefined, pz: VR.on && AF.me && !AF.me.dead ? +AF.me.z.toFixed(2) : undefined }, AF.hostPeer || undefined);   // (VR: where my head walked me) — to the host alone: the other guests have no use for my sticks
   } else AF.events = [];
 }
 // the START must reach every player: a phone that was switching apps (or asleep on a dead socket) when the host
@@ -20622,6 +20739,8 @@ function afGoResend(now) {
 }
 function afOnFightMsg(m) {
   const d = m.data; if (!d) return;
+  if (AF.role === 'host' && d.k === 'ping') { afSend({ k: 'pong', t: d.t, hz: Math.round(AF.net ? AF.net.fps : 0) }, m.from); return; }   // the guest's clock comes straight back with my sim rate
+  if (AF.role === 'guest' && d.k === 'pong') { const n = AF.net; if (!n) return; const r = performance.now() - (+d.t || 0); if (r < 0 || r > 5000) return; n.jit = n.pings ? lerp(n.jit, Math.abs(r - n.rtt), 0.2) : 0; n.rtt = n.pings ? lerp(n.rtt, r, 0.25) : r; n.pings++; n.hostHz = +d.hz || 0; return; }
   if (AF.role === 'host' && (d.k === 'go-ack' || d.k === 'lobby-req' || d.k === 'rejoin')) {
     const e = AF.roster.find(x => x.kind === 'player' && x.peer === m.from); if (!e) return;     // (not one of this fight's players)
     if (d.k === 'go-ack') { if ((d.seed >>> 0) === AF.seed && AF.goAcks) AF.goAcks.add(m.from); return; }
@@ -20653,9 +20772,9 @@ function afOnFightMsg(m) {
     // hold or swap; guests could walk and turn but none of their blows landed. Keep the buttons on their own line.)
     inp.atk = d.atk | 0; inp.heavy = d.heavy | 0; if ((d.dodge | 0) !== inp.dodge) inp.rollDir = d.roll == null ? null : +d.roll; inp.dodge = d.dodge | 0; inp.block = !!d.block; inp.hold = !!d.hold; inp.swap = d.swap | 0;
   } else if (AF.role === 'guest') {
-    if (d.k === 'snap') afApplySnap(d);
+    if (d.k === 'snap') { AF.hostPeer = m.from; afApplySnap(d); }
     else if (d.k === 'over' && !AF.over) { AF.starName = d.star || null; if (d.ledger) d.ledger.forEach((r, i) => { const b = AF.bodies[i]; if (b) { b.kills = r[0]; b.dmgDealt = r[1]; b.dmgTaken = r[2]; } }); afFinish(d.winner, d.standings); }
-    else if (d.k === 'go') { if ((d.seed >>> 0) === AF.seed) afSend({ k: 'go-ack', seed: AF.seed }); else afBoot(d); } // a re-sent start we already run: just ack it; else a rematch
+    else if (d.k === 'go') { AF.hostPeer = m.from; if ((d.seed >>> 0) === AF.seed) afSend({ k: 'go-ack', seed: AF.seed }, m.from); else afBoot(d); } // a re-sent start we already run: just ack it; else a rematch
   }
 }
 // a guest's link dropped: the relay HOLDS their seat for a while. Their fighter keeps fighting on its own until
@@ -20681,16 +20800,17 @@ function afPeerLeftFight(id) {
 
 // ---- frame ----
 function afFrame(now, noRaf) {
-  const dt = clamp((now - (AF.last || now)) / 1000, 0, 0.05); AF.last = now; // never negative: a stale clock must not run the fight backwards
+  const rawDt = (now - (AF.last || now)) / 1000, dt = clamp(rawDt, 0, 0.1); AF.last = now; // never negative: a stale clock must not run the fight backwards (≤ 0.1 s: afSubstep keeps each sim step short)
   rtNow = now / 1000;
+  afNetStats(Math.max(rawDt, 1e-3));
   let gdt = dt;                                              // hit-stop: the fight crawls for a few frames on impact; camera/FX stay real-time
-  if (AF.hitstop > 0) { AF.hitstop -= dt; gdt = dt * 0.08; }
+  if (AF.hitstop > 0) { AF.hitstop -= dt; if (AF.role !== 'host') gdt = dt * 0.08; }   // (a host with guests never freezes the SHARED sim on his own blows — the shake, the kick and the FOV punch stay)
   if (AF.phase === 'countdown') { AF.countdown -= dt; if (AF.countdown <= 0) { AF.phase = 'fight'; afBanner('FIGHT', '', 1.0); afCrowdReact(false); } } // guests count too (the host's snapshot also flips it)
   if (AF.me && !AF.me.dead && AF.phase === 'fight') { afReadLocalInput(); if (VR.on) vrInput(dt); } else { const I = AF.locIn; I.mx = I.mz = 0; I.block = false; }   // (VR: the head and the sticks fill the same struct)
   afGoResend(now);
   if (AF.phase === 'fight' || AF.phase === 'over') {
-    if (AF.role === 'guest') afGuestTick(gdt);
-    else afTick(gdt);
+    if (AF.role === 'guest') { afSubstep(afGuestTick, gdt); if (AF.me && AF.net) { const H = AF.net.hist; H.push({ t: now, x: AF.me.x, z: AF.me.z }); if (H.length > 120) H.shift(); } }   // (hist: where I was, for the host's late word on my position — afApplySnap)
+    else afSubstep(afTick, gdt);
     afNetTick(dt);
   } else if (AF.phase === 'countdown') {
     for (const b of AF.bodies) { restLegs(b.parts, dt, true); setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.3); afCommit(b, dt); }
@@ -21019,6 +21139,7 @@ function afUpdateHud(force) {
     if (b) {
       html += '<div style="display:flex;justify-content:space-between;gap:12px;margin-top:8px;padding-top:6px;border-top:1px solid #3a3247"><b style="color:' + b.teamDef.col + '">' + b.name + '</b><span style="color:#c9bfda">' + b.kills + ' kill' + (b.kills === 1 ? '' : 's') + (b.dead ? ' · fallen' : '') + '</span></div>' + bar(7);
     } else html += '<div style="font-size:11px;color:#9a90ab;margin-top:6px">spectating</div>';
+    if (AF.net) html += '<div style="font-size:10px;color:#9a90ab;margin-top:6px;white-space:nowrap">' + afNetLine() + '</div>';   // the wire (guests: round trip, jitter, the host's rate; host: the sim rate and bytes out)
   }
   const body = document.getElementById('af-hud-body');
   if (body && (force || body._html !== html)) { body.innerHTML = html; body._html = html; }
@@ -21167,7 +21288,7 @@ function afBoot(spec) {
   const I = AF.locIn; I.atk = I.heavy = I.dodge = 0; I.block = false; AF.keys.clear();
   if (AF.me) { AF.cam.yaw = AF.me.yaw; AF.cam.pitch = 0.3; AF.me.seenAtk = AF.me.seenHeavy = AF.me.seenDodge = 0; }
   else if (AF.role === 'guest') { console.warn('[arena] no seat for me in the roster', window.coop && window.coop.id, spec.roster.map(e => e.name + ':' + e.kind + ':' + e.peer)); setTimeout(() => { if (AF.on && !AF.me) afBanner('NO SEAT IN THIS FIGHT', 'the lobby had no place for you — you watch this one', 4); }, 3200); }   // (never silent: a spectator should know why he is one)
-  AF.phase = 'countdown'; AF.countdown = AF_F.countdown; AF.t = 0; AF.over = false; AF.leaving = false; AF.reportP = null; AF.winner = -1; AF.standings = null; AF.events = []; AF._hc = 0; AF.last = 0; AF.hitstop = 0; AF.assignT = 0; trauma = 0; camKick.set(0, 0, 0); fovPunch = 0;
+  AF.phase = 'countdown'; AF.countdown = AF_F.countdown; AF.t = 0; AF.over = false; AF.leaving = false; AF.reportP = null; AF.winner = -1; AF.standings = null; AF.events = []; AF._hc = 0; AF.last = 0; AF.hitstop = 0; AF.assignT = 0; afNetReset(); trauma = 0; camKick.set(0, 0, 0); fovPunch = 0;
   AF.spec = { mode: 'orbit', target: null, fx: 0, fz: 0, touched: false };
   AF.orbit.theta = AF.me ? AF.me.yaw + Math.PI : 0.4; AF.roar = 0; AF.waveT = 0; AF.nextWave = 22 + Math.random() * 10;
   AF.teams = null; if (AF.role !== 'guest') afPlanTeams();   // the captains draw up their lines (the sim runs here)
@@ -21243,7 +21364,7 @@ function afNetWire() {
     const d = m.data; if (!d) return;
     if (AF.on) { afOnFightMsg(m); return; }
     if (!AF.lobby) return;
-    if (AF.lobby.role === 'guest') { if (d.k === 'lobby') afLobbyApply(d); else if (d.k === 'go') { AF.role = 'guest'; afCloseLobbyUi(); afMarketClose(); afBoot(d); } }
+    if (AF.lobby.role === 'guest') { if (d.k === 'lobby') afLobbyApply(d); else if (d.k === 'go') { AF.role = 'guest'; AF.hostPeer = m.from; afCloseLobbyUi(); afMarketClose(); afBoot(d); } }
     else if (AF.lobby.role === 'host') {
       if (d.k === 'team') { afMoveSeat(m.from, d.t | 0); afLobbyRender(); afLobbyBroadcast(); }
       else if (d.k === 'weapon') { const s = afFindSeat(m.from); if (s) { const gs = afGearStats(afGearClean(s.gear)); s.weapon = AF.lobby.venue === 'pit' ? 'sword' : d.w === 'bow' && gs.bow ? 'bow' : d.w === 'horse' && gs.horse ? 'horse' : 'sword'; afLobbyRender(); afLobbyBroadcast(); } }   // (only what he owns — and only a sword in the pits)
@@ -22058,6 +22179,7 @@ BV.arenaShot = (w = 1280, h = 720) => {              // headless: render one fra
   renderer.setPixelRatio(pr); renderer.setSize(sz.x, sz.y, false); camera.aspect = sz.x / Math.max(1, sz.y); camera.updateProjectionMatrix(); if (AF_POST.on) AF_POST.w = 0;
   return url;
 };
+BV.net = () => AF.net;                                       // the wire's numbers (afNetLine renders them)
 BV.arenaPump = (frames = 60, dt = 1 / 60) => { for (let i = 0; i < frames; i++) afFrame((AF.last || performance.now()) + dt * 1000, true); return BV.arenaStatus(); }; // headless: run whole frames (sim + net + camera) without rAF
 
 // Boot. ?edit=<kind> (or window.BV_EDIT) opens the object editor; otherwise show the sign-in gate

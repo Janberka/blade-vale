@@ -51,3 +51,15 @@ not cel-shade it. No faces: the helm is the identity.
 
 Build it through `buildHumanoid` (or `buildCavalry`, which seats the same rig). Do not hand-roll
 another figure — it will not carry the signatures, and it will not take gear.
+
+## Experiments
+
+A day of work toward a realistic soldier (scanned figures skinned or warped onto this rig, a physically based
+materials pass, cut armour plates) is written up in `CHARACTER_EXPERIMENTS.md`. All of it is off by default; the
+knight above is still the game's fighter.
+
+## Hands (2026-09-12)
+The warrior's finger bones are unmapped, and an unmapped bone keeps the BIND pose — where the fingers lie open, so a
+fist round a hilt showed splayed fingers. `instanceModelRig` now gives every bone under a hand (`swordHand`, `bowHand`
+in rig.json) the file's own stance, a closed grip. Keep it that way for any new rig: save the model gripping.
+

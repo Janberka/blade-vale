@@ -2,6 +2,8 @@
 
 Read `VISION.md` first for the *why*. This is the *what's actually true*, including the gaps. Nothing here is polished for a candidate; it's the map you'd want before reviewing the code.
 
+> **Strategy change, 2026-09-12:** the product is now **Arena Fights** (`ARENA.md`), and the open world described below is *parked* — still in the build, hidden from the title screen behind `?world`, to return later as the arena's expansion (`ROADMAP.md` → *Parked: the open world*). Everything in this brief about worldgen, the tick, warfare and diplomacy remains true; it is simply not what is being worked on. The arena-side state (real-mesh fighters, the Colosseum, careers, the relay's reconnect story) is in `ARENA.md`, `CHARACTERS.md` and the arena sections of `ROADMAP.md`.
+
 ## What's real today (verified in the repo)
 - **~36,000 lines of JS**, zero art assets. Whole client loads in ~2MB; everything is procedurally generated.
 - **Deterministic worldgen kernel** — `sim/terra.js` (~70k), plus `sim/settle.js` and `server/roads.js`. Byte-identical client/server **on the same engine**. Chunks generate on first visit, persist in SQLite (`server/chunks.js`), served in batches. Worldgen version is stamped on every stored chunk, and stale-kernel chunks regenerate lazily in place — a kernel math bump needs no DB wipe.

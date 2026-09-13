@@ -1,6 +1,7 @@
 # Blade Vale — Arena Fights
 
-A second way into the game from the title screen: **⚔ Arena Fights**. You choose how many
+**The way into the game** (since 2026-09-12 the title screen offers only **⚔ Enter the Arena**;
+the open world is parked behind `?world` — see `VISION.md`). You choose how many
 teams fight and how many fighters each team has, invite players who are online, and every
 seat nobody takes is filled by an NPC fighter. Everyone drops into a walled pit; the last team
 standing wins.
@@ -13,8 +14,12 @@ Companion docs: `BATTLES.md` (the army-scale battle system this reuses primitive
 ## 1. Playing
 
 1. Sign in (or not — without an account you can still fight NPCs, you just can't invite anyone).
-2. Title screen → **⚔ Arena Fights**.
-3. In the lobby: **Teams** (2–6), **Fighters per team** (1–200; « » step by ten), what **you ride in with** (sword, bow, or a horse — everyone carries sword and bow), the **Pit** (cosy / wide / vast / colossal — it keeps growing past colossal to fit a legion-sized roster), **Hour** (day / dusk / night), **Sky** (clear / rain) and the **Ground** (sand / hills / rocks / broken — the terrain of the pit).
+2. Title screen → **⚔ Enter the Arena**. Signed in, the title screen is the **home**: your fighter stands on the
+   left at ease (the market's preview, wearing what you own; click the name card under him and the career
+   sheet — record, skills, achievements — takes the right pane, ← Menu brings the menu back), the menu on
+   the right (Enter the Arena, Marketplace; Enter the Vale with `?world`). `#home` in `index.html`, `afHomeOpen` / `afHomeRender` / `afCareerSheetHtml` in `game.js`. The
+   market itself sells wares only now.
+3. In the lobby: **Teams** (2–6), **Fighters per team** (1–200; « » step by ten), what **you ride in with** (sword, bow, or a horse — the class rule: an archer carries a bow *and* a sword, a swordsman or a rider carries no bow), the **Pit** (cosy / wide / vast / colossal — it keeps growing past colossal to fit a legion-sized roster), **Hour** (day / dusk / night), **Sky** (clear / rain) and the **Ground** (sand / hills / rocks / broken — the terrain of the pit).
    The team cards show every seat: you, invited players who accepted, and *fighter of the vale*
    (an NPC) for each empty seat.
 4. **Players online** lists everyone connected to the war-net right now. **Invite** sends them
@@ -27,7 +32,9 @@ vale — and can **Accept** or **Decline**. Accepting from inside the vale bring
 the title screen and straight into your lobby. Guests can switch to any team with a free seat
 and pick their own weapon; only the host changes the team layout and sends invitations.
 
-`?arena` in the URL opens the lobby immediately.
+`?arena` in the URL opens the lobby immediately. `?world` (or `localStorage['bv-world']='1'`)
+shows the hidden **Enter the Vale** button and the open-world title copy again (`WORLD_ON` in `game.js`,
+`body.world` / `.world-only` / `.arena-only` in `index.html`).
 
 ### Controls
 
@@ -37,11 +44,11 @@ and pick their own weapon; only the host changes the team layout and sends invit
 | Aim | mouse (click the pit to lock the cursor) | drag the right half of the screen |
 | Attack: **hold to load, release to swing** — a tap is a quick light (three chain into a combo), a full hold is a heavy that cracks a raised guard; the bow draws the same way | hold / release left click | hold / release ATK |
 | Block (hold; 85% less damage from the front) | Shift or right click | BLOCK |
-| Swap sword-and-shield ↔ bow (everyone carries both) | F | SWAP |
+| Swap sword-and-shield ↔ bow (archers only — a swordsman or rider has no bow, and the SWAP button is hidden) | F | SWAP |
 
 On touch, the thumb that holds ATK or BLOCK also aims: press, drag to turn, release to swing where you
 face (the other thumb is on the stick, so there is no third finger).
-| Roll left / right (invulnerable for most of the roll; you come up still facing your man) | Q / E, or Space toward the side you're moving | ◀ ROLL / ROLL ▶ |
+| Roll — forward, back, either side or anything between (invulnerable for most of it; you come up still facing your man) | Space rolls the way you're moving (a side if you stand still); Q / E are always the sides | double-tap the stick, then push the way you want to go |
 
 When you fall you spectate: drag to orbit the pit, wheel to zoom. The fight ends when one
 team is left standing, or after 3 minutes (most fighters standing, then most health, wins).
@@ -75,6 +82,22 @@ flinch, a raised guard eats 85% from the front, a heavy on a guard is a *guard b
 poise runs out the fighter is **staggered** for 1.2 s — any hit on a staggered fighter is an
 **execution** (2.2× damage). Arrows only chip poise lightly.
 
+**The chain has an end** (2026-09-12, after the pits were "super easy even against veterans": tapping
+the button stun-locked anyone to death — a tapped light lands 0.06 s after the press, every hit cancelled
+the other man's swing and flinched him, the next tap chained before he recovered, and three lights broke
+poise for a 2.2× execution). The light chain is **three blows** (`comboMax`): the next chains at ¾ of the
+follow-through (`chainAt`, ~0.37 s hit to hit — a hair longer than the 0.32 s flinch, so a man who reads
+the chain can get his guard up for the second), the **third** swings wide with twice the follow-through
+(`comboRest`) and nothing queues behind it, then a 0.35 s breath (`comboCd`) before a tap counts again.
+Three lights **chip** a guard (14 poise each, 42 of 45) and never stagger by themselves; a heavy on the
+chipped guard breaks it. A blow that lands breaks the chain the victim was cutting. A light's knock is a
+nudge (3), a heavy's a shove (14). The flinch (0.32 s) outlasts the light's recovery (0.28 s), so whoever
+lands the blow keeps the initiative instead of being punished for it. Measured headless (a scripted
+button-masher vs veteran NPCs in the pit): before, the masher killed a 174-hp champion guardsman in
+4.8 s taking one swing in return; after, he loses four fights in six and wins the other two with under
+20 hp left, while a scripted player who blocks the swing, rolls the heavy and loads a heavy into a raised
+guard still wins three in four. Rookies (`green`) still fall to a masher — the pits are for rookies.
+
 **The NPC brain** is a pack director (`afAssignTargets`, every 0.3 s): each NPC claims a foe,
 closest first, a victim accepts at most **two** committed attackers, the overflow spreads to another
 foe with a free slot, and only when every duel is full does a man *wait* — circling to a slot in his
@@ -107,21 +130,85 @@ fell; blood soaks into the sand (`afSplat`) at every wound and stays for the rou
 The set (`afBuildGround` / `afBuildWall` / `afBuildSky`, all seeded so every client builds the same
 pit): a gradient sky dome, warm key light with a cool fill, filmic tone mapping, full-resolution
 rendering with 2048² sun shadows over the whole ring (on phones too — the pit is small enough), sand
-with patches and a trampled middle, a stone ring wall with rope posts, three tiers of timber stands
-with a crowd, banner poles in the fighting teams' colours, and torches (lit on the desktop tier).
-Pennant strings sag between the poles with little flags in the fighting colours, the sun hangs in
-the sky as a soft disc, dust motes drift over the sand, and pebbles and a snapped blade or two lie
-about. These renderer settings apply only while the arena runs; leaving the pit reloads the page.
+with patches and a trampled middle, and the **amphitheatre** (below). The sun hangs in the sky as a
+soft disc, dust motes drift over the sand, and pebbles and a snapped blade or two lie about. These
+renderer settings apply only while the arena runs; leaving the pit reloads the page.
+
+**The amphitheatre** (`afBuildWall`, after the Flavian one; `AF_AMPH` holds the plan, `afAmphH` the levels, which
+all hang off the podium's height). Radially from the sand: a 10 m **podium wall** (three knights tall — the old one
+was 2 m) of rusticated courses with recessed joints on a plinth, pilasters with iron torch brackets (six lit) and
+capitals, a frieze with gilt studs, a cornice and a balustrade; the teams' drapes hang over the balustrade above
+their gates; against it on the sand, either side of every gate, a marble **colossus** on a stepped plinth with a bronze
+shield and a raised blade (the gate guardians — `colossus` rock records with a collision circle, drawn by
+`afBuildPitClutter`). Behind it the podium walkway with the dignitaries, **bronze figures** with gilt blades along its
+edge between the aisles (`afStatue` builds every statue in the house, at any scale), and the **imperial box** (a marble dais, gilded columns,
+a crimson canopy, a throne, two robed figures) midway between the first two gates; then two **maenianae** of five
+stone rows split by a praecinctio, cut by stair aisles every ~21 m with dark **vomitoria** under the upper rows and
+doors out of the top gallery; the **gallery** itself, a colonnade under a tiled roof with the teams' long drapes on
+the wall behind; the **attic** with a parapet of robed statues and the masts of the **velarium** — striped sails roped to
+a ring over the seats, two bays of cloth to one of sky, shading the stands and leaving the sand in the sun. Outside,
+three storeys of **arcades** (piers, spandrels, arch rings and keystones, engaged columns with Tuscan / Ionic /
+Corinthian capitals, statues in the upper arches) and a pilastered attic hung with bronze shields. The gate tunnels
+run under the seating. **Ruins** lie on the grass round the building (`afBuildRuins`, 11–16 sites: broken colonnades
+with a lintel still up, a lone arch, wall stubs, a toppled statue, in a belt 4–13 m out from the wall; and, when
+`assets/ruins-pack.json` has loaded, the user's *Ancient Ruins* pack — four rocks, a fallen building's shell, and one
+giant runic **sword** standing on its point far out at the imperial box's bearing, alone, for the entrance film). The pack was exported from its USDZ with `ModelIO` and its textures baked to vertex colours
+(`assets/ruins-pack-export.swift`, then `BV`-free node compaction to `assets/ruins-pack.json`, ~48 KB), so it needs no
+texture at run time; the plants in it are alpha-cut cards and were left out.
+
+Everything but the crowd bakes into **two vertex-coloured meshes** (`afMesher`: boxes, cylinders, extruded arch
+shapes and lathes transformed on the CPU into one flat-shaded buffer — the seating bowl is a single lathe profile;
+`afArchTop(d)` gives the bowl's height at a radius for the cameras). The **crowd** (2 400 seated and standing for a
+cosy pit, ~4 300 colossal, capped by `AF_AMPH.crowdCap`) is four `InstancedMesh`es — bodies with per-instance colours
+(partisan near each team's gate, whites and purples on the podium, drab in the gallery), heads, arms and the flags
+one in eight holds — and moves in its **vertex shader** (`afCrowdMat` / `AF_CROWD_U`): the same restless bob, leap on a
+roar and Mexican wave the old per-body step did, plus arms that rise with the roar and flags that flutter. **The pit itself is crowded too** (`afGenTerrain` → `afBuildPitClutter`, on every Ground, most on bare sand via
+`AF_GROUNDS.clutter`): broken columns (a few still whole), fallen drums, wall stubs, a toppled statue, a building's
+shell from the pack (three collision circles under one mesh), and barrels and crates in clusters — all of them rock
+records with a kind, so the men, horses, arrows, marks and cameras treat them exactly like stones — plus dressing
+nobody walks round (`T.deco`: spears in the sand, dropped shields in the nearest team's colour, bones, planks, fallen
+Vale helms, a cart wheel, stakes with pennants). Muster grounds and gate corridors stay clear. The pit's boulders and
+scree are the pack's rocks fitted to their circles (`afBuildRocksPack`). Cameras:
+follow lenses stay inside the sand (`afCamInPit` — the wall is solid now), the free camera rides over the seats
+(`afCamOverBuilding`), the countdown sweep starts over the lower rows under the sails, and the intro's *stands* shot
+is taken from the balustrade. The ground under the ring is flat (`afY`'s bowl now begins beyond the outer wall). Test
+hooks: `BV.arenaCam` (place the lens), `BV.renderInfo` (a frame's draw calls / triangles), `BV.ruinPreview` (the pack's
+pieces in a row), `BV.arena({time, weather, pit, ground})`.
 
 **Post-processing** (`afPostInit` / `afPostRender`, three core only — no addon library): the scene
 renders to a target, a bright pass + separable blur at quarter resolution makes a bloom that lifts the
 torches, sparks, blade trails and the sun, and a composite adds a vignette, a touch of contrast and
 saturation, and a red flush at the edges when you are hit (pulsing when you are near death).
 
+**The Pits** (lobby *Venue*: 🏛 Colosseum / 🕯 The Pits; `AF_PIT` holds the plan, `afBuildPitHouse` the
+house, `afApplyPitLight` the light): an illegal fighting cellar under the tanners' quarter — the small,
+shady counterpart to the Colosseum where rookies cut their teeth. Picking it shrinks the lobby: two or
+three **fighters**, one a side (every man for himself), **swords only** (no room to draw a bow, no door
+a horse fits through — bow/horse are hidden, every seat rides in with a sword, the body's `canBow` is
+off), foes default to *green*, and the size / hour / sky / ground rows disappear (it is always night
+underground on bare sand). NPCs are rolled one a side from the four foot classes (`AF_PIT.arch`) so the
+two foes differ. The venue travels in the go spec (`venue: 'pit'`), the lobby broadcast, the beacon and
+the invite (`calls you down to the pits`); `afSetVenue` switches a lobby and restores the Colosseum's
+per/foes on the way back; `afLim(L)` gives the seat limits for either house. The house itself: a sunken
+ring of sand `AF_PIT.r` (11) wide behind three courses of rough stone and a plank cap, the patrons'
+flagstone floor a chest height (`lip` 2.4) above it behind a timber rail, six braziers on the lip and
+eight brackets on the brick (all `AF.torches`, lit by the night table and damped by `userData.lightK`),
+barrels, crates and straw against the walls, a bookmaker's table with the strongbox by the stair's black
+doorway (skulls on spikes either side), an iron candle-wheel on chains over the sand with the lantern key
+light under it, a beamed plank roof three men up (in a second, non-casting mesh so the near-vertical sun
+that stands in for the wheel still throws body shadows), and four rings of dark-cloaked patrons in the
+same instanced vertex-shader crowd as the Colosseum (`afBuildCrowdMeshes`). No gates, no tunnels, no
+entrance film — the bell just rings under a `THE PITS` banner. The cameras know the room: the free lens
+stays under the beams, over the patrons and inside the walls (`afCamOverBuilding`), the countdown sweep
+starts under the roof, `afArchTop` is flat. The end panel names the fighter, not the team (`Ysolde holds
+the pit`, *You won.*). The result report carries `venue` (the server ignores it for now — a pit fight
+pays like a small Colosseum fight). Cost: ~55k tris and ~80 draw calls with three fighters. Test:
+`BV.arena({ venue: 'pit', teams: 3, intro: false, start: true })`.
+
 **The entrance** (`afIntroStart` / `afIntroStep` / `afIntroCamera`, phase `intro` before `countdown`): a
 procedural cinematic staged after the Zucchabar scene in *Gladiator*, about 20 s for two teams. Every team has a
 **gate and a tunnel** in the ring wall behind its muster point (`afBuildGates`: pillars, a lintel, two plank doors on
-hinge pivots, a roofed corridor out through a gap in the stands with a black mouth at the far end, torches on its
+hinge pivots, a roofed corridor out under the seating with a black mouth at the far end, torches on its
 walls, sun through the door slats while it is shut and a wash of light when it opens). The **stars** of each team
 (`afPickStars`: the two highest-XP fighters, a player only if nobody outranks them; one star below three a side)
 take the front rank's middle — they swap muster points with whoever held them — and the team waits in the tunnel
@@ -132,7 +219,16 @@ gates swing open to a horn, a creak and the roar, low from the sand → the star
 my tunnel → a crane up over the whole pit → over my star's shoulder at the enemy line. Meanwhile the columns march
 in (`afIntroBody`: down the tunnel, then each man to his own muster point; a star raises his blade on arrival),
 and at the end everyone snaps to his point under a blink of black, the gates close behind them and the countdown
-sweep takes over. **Six acts, a bill per fight** (`AF_ACTS` / `AF_ACT_DIRECTORS` / `afIntroCompose`): every
+sweep takes over. Before any act, in the Colosseum, an **establishing shot** (`L.outside`, captioned THE COLOSSEUM):
+eight seconds, low on the grass outside my gate's bearing among the ruins, sweeping along the facade with the
+statues in the arches sliding past, then a crane up the facade, over the masts and the sails, and down into the bowl.
+Half the time (a coin from the seed, when the ruins pack placed the giant sword) it opens on the **sword** instead:
+the blade alone against grass and sky, seen from the house's side; the lens circles it until the house rises behind
+the blade, and the circle flows straight into the sweep: the sweep begins where the circle ends and its radius, height
+and gaze blend over during its first seconds while the lens keeps moving at the same pace — no cut, no stop, no push-in
+(11.6 s in all). The sword stands far out at the imperial box's bearing (`AF.sword`, recorded by `afBuildRuins`; radius the
+lesser of wall + 30 m and 2.45 R) with nothing within 30 m of it; the other ruins hug the wall (4–13 m out), inside
+the sweep's radius, so the lens passes them and never through them. **Six acts, a bill per fight** (`AF_ACTS` / `AF_ACT_DIRECTORS` / `afIntroCompose`): every
 *team* is dealt its own entrance style from the seed — a different one from the other teams' where the roster
 allows, and for your own team never the one this device saw last (`localStorage['bv-intro-last']`) — so one fight
 might open with Azure's champion walking out alone and Crimson's cavalry lapping the ring. The acts: *the pen* (the
@@ -154,6 +250,27 @@ first `fight` snapshot arrives is snapped forward. Skip with Space / Enter / Esc
 URL (or `BV.arena({ intro: false })`) turns it off. Test hooks: `BV.arenaIntro()` reads it, `BV.arenaIntro(n)` jumps
 to shot n, `BV.arenaIntro({ advance: secs })` steps it, `BV.arenaIntro('skip')`.
 
+**The victory** (`afVictoryStart` / `afVictoryBody` / `afOutroCompose`, phase `over`): when the last man falls the
+pit freezes where it stands. Every fighter still on his feet keeps the spot he held at the bell — `afVictoryBody`
+drives the living for the whole `over` phase, on the host and on every guest alike, so nobody is left mid-swing and a
+guest never replays the host's stale states — and the **winners put their swords up** (`rally`, each a beat after
+the last with a pump of the blade now and then; an archer sheathes the bow first, it is the sword that goes up; the
+beaten who are still standing come to rest). Then a short film, `AF.outro`, a shot list like the entrance's: **the
+star of the match** low and close as the steel goes up (a fallen star: the sand where he lies), **the line** — a slow
+circle round the star with his men behind him (or, if the star fell, the winner nearest the middle of them), **the
+crowd** — the lens rides the rim of the bowl for five seconds with the tiers rising ahead of it while the house is on
+its feet (a wave runs with it; in the cellar it rides the ring among the patrons), and **the crane** back down onto the
+sand and the man holding it. The subject sits in the **left third** of the frame (`afOutroShift`: a lens shift via
+`camera.setViewOffset`, cleared when the film ends; portrait screens shift up instead) and the **board** fills the
+right (`afOutroBoard`, in the letterbox overlay): the result and the star, then every team's tally — standing, kills,
+damage dealt and taken — and its men row by row (kills / dealt / taken / standing or fallen, the star in gold, you in
+bold; past 24 a side the top eight of each and a count of the rest), the rows sliding in one after another. Guests
+get the numbers from the host's `over` message (`ledger`: kills, dealt, taken per body index — `dmgTaken` is kept on
+the target in `afDamage`). Letterboxed with captions, ~15 s, skippable (the button, space / enter / escape), then
+the end panel. `?nooutro` (or `BV.arena({ outro: false })`) drops the film — the poses stay; ⏭ *Skip to the end*
+and *Leave* never run it. Test hooks: `BV.arenaOutro()` reads it, `BV.arenaOutro(n)` jumps to shot n,
+`BV.arenaOutro({ advance: secs })` steps it (sim included), `BV.arenaOutro('skip')`. Durations in `AF_OUTRO.shots`.
+
 **Camera**: during the countdown the camera sweeps from high over the pit down onto your shoulder,
 the lens widens slightly on a run, and the field-fight shake / kick / FOV punch land on your hits.
 Strikes use an ease-out-back so the blade whips past the mark and settles; every hit puts a white
@@ -164,6 +281,47 @@ coils into the heavy windup; releasing swings with a weight `k` = hold time / `c
 arc, knockback, poise damage, the lunge and the slash arc all scale with `k`; past `heavyAt` the blow is
 a heavy (cracks guards, resets the combo). A HUD meter under your fighter shows the load and turns red
 at the heavy line. NPCs load their swings the same way, so a long visible hold is a heavy you can roll from.
+
+**The HUD** (`afHud` / `afUpdateHud`): the sand stays clear. One small card top-left reads `AZURE 3 / CRIMSON 1 · 2:14`
+(your team underlined, a fallen team dimmed) with your health as a thin bar under it; nothing else sits on
+screen but the load meter and, once you are down, the spectator bar. A tap on the card (Tab on a keyboard,
+also under pointer lock) opens the full sheet — the captain's order, every team's standing/total, your name
+and kills, and the **lens** slider (`AF.fovUser`, 40–100°, `[` / `]` on a keyboard, kept in
+`localStorage['bv-fov']`; a run still widens it a touch). The open/closed state is kept in `bv-hud-open`.
+On touch, a **pinch** on the sand zooms the way the wheel does on a desk: while you stand both fingers must
+be on the right half (the left thumb is the stick) and it ends the drag-look; dead or spectating, anywhere.
+Controls are written nowhere else: the title screen, the home, the lobby and the pit share one small **?**
+top-right (`#help-btn` → `#help` key map in index.html, desktop and touch sections; `?` opens it, Esc or
+Close shuts it, `BV.help(true|false)` in tests). The kill log sits under the ? at top 44 px.
+
+**The shell** (`afShellPage` / `afShellBack` / `SHELL`): every screen outside the fight uses ONE layout — the
+fighter on the left (`#shell-left`: the preview figure, and the name card for a signed-in player), the page on the
+right (`#shell-right`: a bar with **Back** always in the same place, the page title, the **?**; then the scrolling
+page). `#start` IS the shell, so everything that used to hide the title screen still hides it. Pages are its
+`.page` children: `title` (guest: pitch, Enter the Arena, sign-in), `home` (menu), `career`, `lobby` (Arena Fights),
+`market`, `help` (the key map — a page, not a modal). Back walks a stack (help over the market goes back to the
+market; leaving the lobby drops its trail and leaves the war-net room); in the pit the fixed **?** opens the help page
+over the fight and Back returns to it. Test hook `BV.shell()`.
+
+**The home figure** (`afPreviewFloor` / `afPreviewClick` / `afPreviewPickup`): on the signed-in home he stands
+empty-handed, breathing hard, with his sword planted in the sand before him (tip buried, `modelPropGeo` lifts the
+figure's own sword and shield meshes out as plain props) and the shield leaning on the blade. A tap on either (no
+drag) turns him to it, he stoops (`POSES.pickR` / `pickL`, a knee crouch) and rises holding it; the market always
+shows him armed, and what he has not taken up is back in the sand when you return. Picking is forgiving: the ray's
+distance to the blade's axis, the shield's box. Test hook `BV.previewPick('sword'|'shield')`.
+
+**The marketplace page**: five tabs (Swords · Armor · Bows · Horses · Uniques, `AF.marketTab`), one at a time, a
+picture card per ware — the image is the ware's own mesh shot by a small offscreen orthographic lens (`afThumb`:
+swords/trims via `afBuildSword`, plumes a capsule, horses `buildCavalry` minus the rider, bows off a shared figure's
+hand, armour a bust of the shared warrior figure tinted — that one waits for the model), cached in `AF.thumbs` as data
+URLs. A card is a try-on; its foot is the price / Buy / Wear / worn / a lock. Text is one short stat line.
+
+**Gear on the warrior figure** (`afDressGear` + `syncModelRigs`): the figure's own sword is the plain iron one; any
+other sword (or a blade trim) sets `parts.gearSword` and the BUILT sword (`afBuildSword`) shows in his hand instead —
+a falchion looks like a falchion, in the market and in the pit. The sculpted armour is one mesh, tinted by the piece
+worn (`AF_LOOK.armor[x].torso`, gold for the champion; rig.json `meshes.armor`). A bought plume rides the head bone
+on the helmet's crown (rig.json `plumeY`). The planted home sword follows the loadout too (built swords sink past
+their tip and are clipped at the sand plane).
 
 **The captain** (`afPlanTeams` / `afCaptainThink`): each team's NPCs are organised, not a mob. At the
 bell the captain reads his roster and draws a formation — guardsmen centre-front, swordsmen and brutes
@@ -201,9 +359,40 @@ The brain as first tuned plays at about **90**. XP sets:
 * **Whether he spots an opening.** Stagger, flinch, a blade lock or a follow-through: he takes one
   15% of the time at XP 0, rising to 100%, and he is slower to react.
 * **The breath between blows.** About 1.3 s for a recruit, down to about 0.2 s for a champion.
+* **He reads the chain.** A tapped light can't be seen coming, but the rhythm of a chain can: from XP 45
+  a man mid-chain (a light landed, the next tap coming) is an *incoming* like a raised arm, and he blocks
+  or rolls for the second and third blow by his archetype's odds. A man reeling, locked on his guard or
+  resting after a finisher throws no next blow — that is when he strikes instead.
+* **He chains too.** A light that lands on a reeling foe is followed by the next of the same three-blow
+  chain with odds rising with XP; the third has the same long follow-through and rest a player's has.
+* **He decides when he can.** Reeling, staggered, locked in a blade clash, mid-roll or ridden down, nothing
+  is decided (the press used to expire before the hands were free — and the pause after it still ran, which
+  is why a champion under a chain of blows swung once in a long while). A guard he raised drops the moment
+  he commits to a blow, a cancelled load lets go of the hold, and a light is a *tap* as quick as a player's
+  (a 0.06 s hold was three frames slower: every race for the first blow went to the mouse). After a full
+  chain of the foe's, a veteran answers with the **heavy** — the guard that meets it breaks. He strikes from
+  the edge of reach (the lunge covers the last pace); a recruit walks onto the blade.
+* **The brute loads through the jabs.** His heavy is armoured from the first frame of the load
+  (`AF_ARCH.brute.armour`): a chain doesn't cancel it, the blow comes anyway.
 * **Skill habits.** How much he circles, whether he cracks a raised guard, whether a duelist
   feints, whether a guardsman re-raises his shield, and whether he retreats when hurt.
-* **Archers.** Aim scatter shrinks and target lead grows with XP.
+* **The class rule.** Who carries what is the archetype's `bow` flag (`AF_ARCH`, on the body as `b.canBow`): only
+  the **archer** carries a bow, and he carries a sword too (steel when a foe is at his face, the bow again once
+  clear). A **swordsman**, brute, duelist, guardsman or **rider** carries no bow at all — `afSetWeapon` refuses the
+  swap, the player gets a "no bow" popup, and the SWAP touch button is hidden. An archer who takes a loose horse
+  (walk into it — `afMountCheck`) **shoots from the saddle**: the arrow leaves from saddle height, the rider's aim
+  twist points it, a draw holds the horse to a canter (no gallop while loading). NPC archers who mount become
+  **horse archers** (`afHorseArcher`): they never charge home but ride a ring round their mark `AF_TACT.hbNear`–`hbFar`
+  (9–16) out at `hbPace` throttle, loosing across their own line all the way round, opening the ring when a foe
+  closes and drawing steel (the cavalry cycle) only when he is at the stirrup.
+* **Archers.** The bow is a skill (`AF_BOW`, `afBowSk`): a full draw takes 2.4 s for a recruit and 0.55 s for a
+  master (`afDrawSecs`), the arrow wanders by skill, range and how far it was drawn (`afBowScatter` — measured
+  at 20 paces on a standing man: a recruit lands about 1 in 16, a middling archer half, the very experienced 4 in 5,
+  a master nearly all), a recruit fumbles the nock between shots, and target lead grows with XP. An under-drawn
+  arrow is slow and weak. A player's bow skill is the career's `skills.bow.level` (carried in the gear as `bowLv`,
+  `AF_BOW.masterLv` = 6 is a master); the draw meter fills at his own pace. An NPC never looses at a stone: the arc
+  is tested before the draw and again at release (`afShotBlocker`, `afArcherLoose`); with no line he sidesteps for
+  one, or, holding a place in the line, waits. The aim assist prefers a foe with a clear line.
 * **Damage.** A mild factor from ×0.85 to ×1.05.
 
 The lobby's **Foes** row picks the band:
@@ -244,7 +433,7 @@ These rules make that possible:
   to 0.04 s, which made a machine-gun of jabs.
 * **Heavy armour.** A blow loaded past the heavy windup rides through a light hit; you take the
   wound, but your swing still lands.
-* **A player is the hero.** Players get ×1.6 poise (four jabs to stagger, not three) and a 0.78 s
+* **A player is the hero.** Players get ×1.6 poise (a whole chain chips well under half of it) and a 0.78 s
   stagger instead of 1.2 s.
 * **One blade at a time.** Only one NPC under XP 60 actively presses a player; the others circle
   and wait for an opening.
@@ -321,10 +510,14 @@ so (`downT`), and costs the horse only a little way — a deep block still stops
 is shouldered aside, not ridden down. A guardsman bracing his shield toward the horse is the one thing
 that stops it dead (BRACED). A horse at speed is never shoved back by the man it hits.
 
-**The roll** (`afRollPose`): a dodge is a sideways shoulder roll — a full turn about the body's forward axis,
-tucked into a ball and pivoted about its middle, the feet swinging over and landing on the far side. It goes
-left or right (Q / E, the two touch buttons, or Space toward the side the stick leans) and never changes your
-facing. NPCs roll away from the side the danger comes from. The side rides the state code so guests see it.
+**The roll** (`afRollPose`): a dodge is a full tumble along its heading — over the shoulder for a sideways
+roll, head over heels forward or back — tucked into a ball and pivoted about its middle, the feet swinging over
+and landing on the far side. It never changes your facing. A player rolls the way he asks: Space (or the
+stick's **double-tap-and-push** on touch) takes the direction he is moving or pushing, Q / E force a side; the
+heading goes over the wire as a world angle (`locIn.rollDir`, null = the way you move) so host and guest agree.
+NPCs always roll to a side, away from the danger (a roll along their line of advance would carry them onto the
+blade). The heading relative to the facing (`rollRel`) rides the snapshot's move slot for state 7 so guests
+draw the same tumble.
 
 **Riding controls** (players): on horseback the stick is the reins. Left and right turn the horse,
 up and down set the pace (A/D and W/S on a keyboard); it no longer points the horse at a spot on
@@ -588,6 +781,7 @@ camera juice uses the game's shared `FEEL` numbers.
 BV.arena({ teams: 3, per: 2, start: true })   // open the lobby (optionally start at once)
 BV.arenaStatus()                              // phase, roster, every body's hp/state/position
 BV.arenaStep(steps, dt)                       // headless sim ticks (no render)
+BV.arenaOutro(cmd)                            // the end-game film: read / jump to shot n / { advance } / 'skip'
 BV.arenaPump(frames, dt)                      // whole frames incl. network + camera, without rAF
 BV.arenaInput({ atk: n })                     // poke the local input record
 BV.arena({ xp: 'green', npcXp, arch })       // test overrides: XP band, per-seat XP, one archetype for all
@@ -598,3 +792,25 @@ BV.arenaInvite(name) / BV.arenaAccept()       // send / accept a challenge witho
 BV.arenaNet()                                 // socket id, room, lobby seats, roster peers, go-acks
 coop._drop()                                  // kill the socket as a phone would (it reconnects and resumes)
 ```
+
+## Running it, and opening it to the world
+
+One process serves everything — the page, the `/api/v1` routes and the `/coop` relay — on one port, from the repo:
+
+    cd ~/Documents/GitHub/blade-vale && node server/index.js
+
+Open http://localhost:8787 (or the Mac's LAN address, port 8787, on a phone). The database is `server/play.db`
+(accounts, careers, worlds; `BV_DB=` overrides; `BV_PORT=` the port). The server does not hot-reload: restart it
+after a server-side change. The client uses the page's own origin for the API and the relay when the page came
+from the game server or something in front of it (no port, or 8787); a plain static dev server on 8099/8102 still
+talks to `:8787` next door.
+
+Without buying a server: keep the Mac awake and put a free tunnel in front of that one port —
+
+    brew install cloudflared
+    cloudflared tunnel --url http://localhost:8787
+
+prints a public `https://…trycloudflare.com` address that carries the page, the API and the websocket relay.
+The address changes every run; a free Cloudflare account plus a domain you own gives a fixed one (`cloudflared
+tunnel create …`). Anything that reaches that address reaches the Mac, so keep the play DB backed up.
+

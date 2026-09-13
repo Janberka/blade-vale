@@ -1,17 +1,20 @@
 # Blade Vale VR — first-person arena fighting on a WebXR headset
 
-Status: **BUILT, v1.1 (2026-09-13)** — the headset goes on at the title screen and stays on: home, the lobby,
-a challenge and the end of the fight are a **panel in the headset** with a laser pointer, and guests fight in VR too
-(their blade hits go to the host as `vrhit`, their room-scale position rides in the input record). Verified end to end
-against a fake headset in the browser (`?xrshim`), host and guest; not yet felt on real hardware. The original plan
-(Rift, six phases) is kept at the bottom.
+Status: **BUILT, v1.2 (2026-09-13) — VR FIRST.** The headset goes on at the title screen and nothing sends you back
+to the flat screen: home, **sign-in with an on-panel keyboard**, the **marketplace** (try on, buy, wear, take off),
+your **career**, the **rankings**, any fighter's **profile**, the controls, the lobby, a challenge and the end of the
+fight are one **panel in the headset** with a laser pointer; your fighter stands beside it in what you own. Guests
+fight in VR too (`vrhit`, `px/pz`). Sign-in / sign-out and leaving a pit happen in place (no page reload — a reload
+would end the session). Verified end to end against a fake headset (`?xrshim`), host and guest; not yet felt on real
+hardware. The original plan (Rift, six phases) is kept at the bottom.
 
 ## 1. Try it on a Quest
 
 bladevale.com is https, and the Quest's own browser has WebXR, so nothing is installed:
 
-1. Put the headset on, open the **Browser**, go to `https://bladevale.com`, sign in on the flat page (typing is
-   still a flat-screen job), and tap **🥽 Enter VR** — it sits bottom-right on every screen, title included.
+1. Put the headset on, open the **Browser**, go to `https://bladevale.com` and tap **🥽 Enter VR** — it sits
+   bottom-right on every screen, title included. Not signed in? **Sign in / Create account** on the panel: a keyboard
+   under the fields, point and squeeze.
 2. You stand in a dark hall with a **panel** in front of you: point the right controller at it, squeeze the trigger.
    **Enter the Arena** opens the lobby on the panel — venue, teams, fighters a side, the seats, who is online with an
    Invite button each, Start Fight. A challenge from a friend arrives on the panel too, Accept / Decline.
@@ -25,8 +28,8 @@ A PC headset works the same way from Chrome/Edge on Windows with the Oculus/Stea
 active, at `https://bladevale.com` (or `http://localhost:8787` from the node server; a LAN IP over plain
 http will NOT expose WebXR).
 
-**Not yet true:** the bow (archers are forced to the sword), horses, the marketplace / profiles / ladder in the
-headset (flat screen), typing (sign in on the flat page first), a guest's blade seen moving by the others.
+**Not yet true:** the bow (archers are forced to the sword), horses, a guest's blade seen moving by the others,
+the market's picture cards (the panel lists wares as rows; the try-on shows on the figure beside the panel).
 
 ## 2. How it plays
 
@@ -73,8 +76,18 @@ banner for what `afBanner` says (FIGHT, VICTORY…). NPCs read a fast blade as a
 
 ### The menus in the headset (`VR MENUS` in game.js, after the VR section)
 
-- **One panel, four pages.** `vrMenuPage()` reads the same state the DOM shows: a fight that is over → `end`; no
-  fight and `AF.invite` → `invite`; `AF.lobby` → `lobby`; else `home`. During a fight the panel is hidden.
+- **One panel, every page.** `vrMenuPage()` reads the same state the DOM shows: a fight that is over → `end`; no
+  fight and `AF.invite` → `invite`; `VRM.signin` → `signin`; `AF.lobby` → `lobby`; `SHELL.page` market / career /
+  ladder / profile / help → that page; else `home`. During a fight the panel is hidden. The sub-pages are opened
+  through the DOM's own functions (`afMarketOpen`, `afLadderOpen`, `afProfileOpen`, `afShellPage('career')`) and
+  read their data where the DOM does (`AF.career`, `LADDER`, `AF.profile`, `ARENA_CAT`); Back is `afShellBack`.
+- **Sign-in in place.** `client-net.js`: `net.login / register(u, p, stay)` and `net.logout(stay)` — with `stay`
+  the session (and the player token) change in place instead of reloading the page; `vrSignedIn` then runs what
+  the reload used to: the auth gate, the home, presence on the war-net, the career. The keyboard is `VRM_KEYS`
+  (digits, letters, `- _ . @`), shift, space, backspace, next/done.
+- **Your fighter in the hall** (`vrHallFigure`): built like the market's preview (`buildHumanoid` →
+  `afWearModel` → `afDressGear`) from `afPreviewGear()` (what you own, with the piece you are trying on), or a
+  profile's `gear`; half size, because the hall is in the player's metres; rebuilt when the gear changes.
   `vrMenuDraw()` paints the page on a 1024×768 canvas (`vrPanel`, 1.28 × 0.96 m in the rig's metres, so it is the
   same size in the hall and in the pit) at 12 Hz; every button is a rect in `VRM.items` with an action name.
 - **The pointer.** A line down the right controller's ray space (`VR.ray.right`), a dot where it meets the panel
@@ -88,8 +101,8 @@ banner for what `afBanner` says (FIGHT, VICTORY…). NPCs read a fast blade as a
 - **The hall.** Outside a fight the scene's boot-time clutter is hidden (as `afBoot` does at the first bell), the
   background goes dark and `VRM.hall` — a floor disc and a torch-coloured light — is shown; the rig stands at the
   origin. A fight hides the hall; `vrLeavePit` shows it again.
-- **Leaving without a reload.** `afLeaveToMenu` reloads the page, and a reload ends the XR session, so in VR
-  `vrLeavePit` tears the pit down in place: `coop.leave()`, `afClear()`, the arena flags reset, the shell back on
+- **Leaving without a reload.** `afLeaveToMenu` reloads the page, and a reload ends the XR session, so while
+  presenting `afLeaveToMenu` itself calls `vrLeavePit`, which tears the pit down in place: `coop.leave()`, `afClear()`, the arena flags reset, the shell back on
   home / title, the crowd bed silenced, the hall back.
 - **Guests.** The Enter VR button no longer hides for guests. A guest's `vrBlade` runs like the host's, but
   `vrStrike` sends `{k:'vrhit', i, w, heavy}` instead of calling `afDamage`; the host (`afOnFightMsg`) checks the
@@ -126,7 +139,7 @@ Stereo frames were read back from the canvas and checked as images.
 4. Sword-on-sword parry with a clang and both hands buzzing; shield bash.
 5. Hand transforms in the snapshot so the others see your blade move.
 6. The bow: two-hand draw feeding the existing arrow sim.
-7. The marketplace on the panel (cards, try-on, buy), and a way to sign in without the flat screen.
+7. The market's picture cards on the panel; the bow and the horse tried on in the hall.
 
 ---
 

@@ -17272,12 +17272,17 @@ function vrHud(dt) {
     ban.userData.tex.needsUpdate = true; ban.visible = true;
   } else ban.visible = false;
 }
-// ---- VR MENUS: the shell in the headset (2026-09-13). The DOM is invisible while presenting, so home, the lobby, a
-// challenge and the end of the fight are drawn on a canvas panel from the same state the DOM shows (AF.lobby, AF.invite,
-// AF.online, AF.standings, AF.reward) and its buttons call the same functions the DOM buttons do. Point with the right
-// hand, squeeze the trigger. The whole evening — set up, fight, results, again — without taking the headset off. ----
-const VRM = { panel: null, ptr: null, dot: null, hall: null, items: [], uv: null, trigWas: false, t: 0, last: 0, yaw: 0, fresh: true };
+// ---- VR MENUS: the shell in the headset (2026-09-13). The DOM is invisible while presenting, so every page outside
+// the fight — home, sign-in, the marketplace, your career, the rankings, a fighter's profile, the lobby, a challenge,
+// the end of the fight — is drawn on a canvas panel from the same state the DOM shows (SHELL.page, AF.lobby, AF.invite,
+// AF.career, LADDER, AF.profile, AF.standings, AF.reward) and its buttons call the same functions the DOM buttons do.
+// Point with the right hand, squeeze the trigger. VR FIRST: once the headset is on, nothing sends you back to the flat
+// screen — sign-in and sign-out happen in place (client-net's `stay`), leaving a pit tears it down in place, and your
+// fighter stands beside the panel in what you own. ----
+const VRM = { panel: null, ptr: null, dot: null, hall: null, fig: null, items: [], uv: null, trigWas: false, t: 0, last: 0, yaw: 0, fresh: true, shown: false,
+  signin: false, kb: { field: 'user', user: '', pass: '', shift: false, msg: '', busy: false }, mkPg: 0, mkTab: null, ladPg: 0 };
 const VRM_PX = [1024, 768], VRM_M = [1.28, 0.96], VRM_DIST = 1.5;   // canvas px; metres in the rig (before the rig's scale); how far in front of the eyes
+const VRM_KEYS = ['1234567890', 'qwertyuiop', 'asdfghjkl', 'zxcvbnm', '-_.@'];   // the on-panel keyboard (a username, a password: letters, digits, the few symbols a name takes)
 const _vrRc = new THREE.Raycaster();
 function vrMenuBuild() {
   if (VRM.panel) return;
@@ -17286,86 +17291,214 @@ function vrMenuBuild() {
   ln.renderOrder = 1001; ln.frustumCulled = false; ln.visible = false; VRM.ptr = ln;
   const dot = new THREE.Mesh(new THREE.CircleGeometry(0.012, 16), new THREE.MeshBasicMaterial({ color: 0xffe089, depthTest: false, fog: false })); dot.renderOrder = 1002; dot.frustumCulled = false; dot.visible = false; VR.rig.add(dot); VRM.dot = dot;
 }
-// THE HALL: outside a fight the headset stands in a dark, torchlit room with nothing but the panel — not the title screen's
-// boot-time clutter (afBoot strips that at the first bell; here it goes when the headset goes on, the same way)
+// THE HALL: outside a fight the headset stands in a dark, torchlit room with the panel and your fighter — not the title
+// screen's boot-time clutter (afBoot strips that at the first bell; here it goes when the headset goes on, the same way)
 function vrMenuHall(on) {
   if (!VRM.hall) {
     const g = new THREE.Group(); g.name = 'vr-hall';
     const fl = new THREE.Mesh(new THREE.CircleGeometry(40, 48), new THREE.MeshLambertMaterial({ color: 0x2a2320 })); fl.rotation.x = -Math.PI / 2; fl.receiveShadow = false; g.add(fl);
     const lt = new THREE.PointLight(0xffb070, 1.1, 60); lt.position.set(0, 6, 0); g.add(lt);
+    const key = new THREE.PointLight(0xfff0d8, 0.9, 20); key.position.set(-2.5, 3.5, 1.5); g.add(key);   // (a warm key on the figure's face)
     VRM.hall = g; scene.add(g);
   }
   if (on) { for (const c of scene.children.slice()) if (!c.isLight && c !== VR.rig && c !== VRM.hall) c.visible = false; scene.background = new THREE.Color(0x0b0812); if (VR.rig) { VR.rig.position.set(0, 0, 0); VR.rig.rotation.y = 0; } }
   VRM.hall.visible = !!on;
 }
-function vrMenuPage() { if (AF.on) return AF.over ? 'end' : null; if (AF.invite) return 'invite'; if (AF.lobby) return 'lobby'; return 'home'; }
+function vrMenuPage() {
+  if (AF.on) return AF.over ? 'end' : null;
+  if (AF.invite) return 'invite';
+  if (VRM.signin) return 'signin';
+  if (AF.lobby) return 'lobby';
+  const sp = SHELL.page; if (sp === 'market' || sp === 'career' || sp === 'ladder' || sp === 'profile' || sp === 'help') return sp;
+  return 'home';
+}
 function vrMenuPlace() {                                    // in front of the eyes, at eye height, facing you — in the rig's metres, so it is the same size in the hall and in the pit
   const p = VRM.panel, rig = VR.rig; if (!p || !rig) return;
   camera.getWorldDirection(tmpV); const ly = Math.atan2(tmpV.x, tmpV.z) - rig.rotation.y, c = camera.position;
   p.position.set(c.x + Math.sin(ly) * VRM_DIST, Math.max(0.7, c.y - 0.12), c.z + Math.cos(ly) * VRM_DIST);
   camera.getWorldPosition(tmpV2); rig.updateMatrixWorld(true); p.lookAt(tmpV2); VRM.yaw = ly; VRM.t = 0;
 }
+// YOUR FIGHTER IN THE HALL: beside the panel, in what you own — or what you are trying on; on a profile page, that
+// fighter in his kit. Built like the marketplace's preview (buildHumanoid → afWearModel → afDressGear), half size
+// because the hall is in the player's metres (a Vale knight is 3.3 units; the rig has no scale outside a fight).
+function vrHallFigure(dt) {
+  const page = vrMenuPage(), want = !!(VRM.hall && VRM.hall.visible && page && page !== 'end' && window.ARENA_CAT && typeof buildHumanoid === 'function');
+  const F = VRM.fig; if (!want) { if (F) F.group.visible = false; return; }
+  let gear, pal = AF_TEAMS[0].pal, showBow = false, who = '';
+  if (page === 'profile' && AF.profile && AF.profile.gear) { gear = AF.profile.gear; who = AF.profile.name; pal = AF_TEAMS[AF.profile.kind === 'npc' ? 1 : 0].pal; }
+  else { gear = afGearClean(afPreviewGear()); const t = AF.tryItem && ARENA_CAT.ARENA_ITEMS[AF.tryItem]; showBow = !!(t && t.slot === 'bow'); }
+  const key = JSON.stringify([gear, who, showBow, !!BV.modelReady]);
+  if (!F || F.key !== key) {
+    if (F) { VRM.hall.remove(F.group); try { disposeGroup(F.group); } catch (e) {} VRM.fig = null; }
+    try {
+      const G = afGearStats(gear), r = buildHumanoid(pal, 1, 'sword', { hero: true, both: true, plume: G.plume != null ? G.plume : AF_TEAM_HEX[0] }), parts = r.parts, group = r.group || r;
+      afWearModel({ group, parts }, pal); afDressGear(parts, gear, pal);
+      if (parts.shield) parts.shield.visible = !showBow; if (parts.bow) parts.bow.visible = showBow; if (parts.sword) parts.sword.visible = !showBow;
+      const anim = makeAnimator(parts); setPose(anim, showBow ? 'aimBow' : page === 'market' ? 'guard' : 'relax', 0.01); updateAnimator(anim, 1); restLegs(parts, 1, page === 'market' || showBow);
+      group.scale.setScalar(0.5); group.position.set(-1.35, 0, -2.1); group.rotation.y = Math.atan2(1.35, 2.1);   // (half a knight = a man; to the left of the panel, turned to you)
+      VRM.fig = { group, parts, anim, key, t: 0, yaw0: group.rotation.y }; VRM.hall.add(group);
+      if (typeof MODEL_ON !== 'undefined' && MODEL_ON && !BV.modelReady && BV.modelLoad) BV.modelLoad.then(() => { if (VRM.fig && VRM.fig.key === key) VRM.fig.key = ''; });   // the warrior arrives later: build him again in it
+    } catch (e) { console.warn('[vr] figure', e); VRM.fig = { group: new THREE.Group(), key, anim: null, t: 0, yaw0: 0 }; VRM.hall.add(VRM.fig.group); }
+  }
+  const G2 = VRM.fig; G2.group.visible = true; G2.t += dt; if (G2.anim) updateAnimator(G2.anim, dt); G2.group.rotation.y = G2.yaw0 + Math.sin(G2.t * 0.6) * 0.04;   // (a slow sway: a man at ease, not a statue)
+}
 function vrRR(c, x, y, w, h, r) { c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r); c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath(); }
 function vrMenuDraw() {
   const p = VRM.panel; if (!p) return; const c = p.userData.ctx, W = VRM_PX[0], H = VRM_PX[1], page = vrMenuPage(); VRM.items = [];
   c.clearRect(0, 0, W, H); c.fillStyle = 'rgba(14,10,22,.94)'; vrRR(c, 0, 0, W, H, 30); c.fill(); c.lineWidth = 4; c.strokeStyle = '#ffd34d'; vrRR(c, 2, 2, W - 4, H - 4, 28); c.stroke();
   c.textBaseline = 'top';
-  const uv = VRM.uv, hx = uv ? uv.x * W : -1, hy = uv ? (1 - uv.y) * H : -1;
-  const T = (s, x, y, font, col, al) => { c.font = font; c.fillStyle = col || '#f3ead8'; c.textAlign = al || 'left'; c.fillText(String(s), x, y); c.textAlign = 'left'; };
+  const uv = VRM.uv, hx = uv ? uv.x * W : -1, hy = uv ? (1 - uv.y) * H : -1, ON = 'rgba(255,211,77,.45)', DIM = { bg: 'rgba(255,255,255,.08)', col: '#c9bfda' };
+  const T = (s, x, y, font, col, al, maxW) => { c.font = font; c.fillStyle = col || '#f3ead8'; c.textAlign = al || 'left'; let str = String(s == null ? '' : s); if (maxW) while (str.length > 2 && c.measureText(str).width > maxW) str = str.slice(0, -2) + '…'; c.fillText(str, x, y); c.textAlign = 'left'; };
   const B = (label, x, y, w, h, act, o) => {                 // a button: hovered under the pointer, dimmed when it can't be pressed
     o = o || {}; const hov = !o.off && hx >= x && hx < x + w && hy >= y && hy < y + h; if (!o.off) VRM.items.push({ x, y, w, h, act });
-    c.fillStyle = o.off ? 'rgba(255,255,255,.05)' : hov ? (o.col || '#ffd34d') : (o.bg || 'rgba(255,211,77,.14)'); vrRR(c, x, y, w, h, 14); c.fill();
-    c.lineWidth = 2; c.strokeStyle = o.off ? '#4a4258' : (o.col || '#ffd34d'); vrRR(c, x, y, w, h, 14); c.stroke();
-    const fs = o.fs || 26; T(label, x + w / 2, y + h / 2 - fs * 0.58, '800 ' + fs + 'px system-ui', o.off ? '#8a8298' : hov ? '#1a1420' : '#ffe9a8', 'center');
+    c.fillStyle = o.off ? 'rgba(255,255,255,.05)' : hov ? (o.col || '#ffd34d') : (o.bg || 'rgba(255,211,77,.14)'); vrRR(c, x, y, w, h, o.r || 14); c.fill();
+    c.lineWidth = 2; c.strokeStyle = o.off ? '#4a4258' : (o.col || '#ffd34d'); vrRR(c, x, y, w, h, o.r || 14); c.stroke();
+    const fs = o.fs || 26; T(label, x + w / 2, y + h / 2 - fs * 0.58, '800 ' + fs + 'px system-ui', o.off ? '#8a8298' : hov ? '#1a1420' : '#ffe9a8', 'center', w - 12);
   };
+  const back = (label) => B(label || '‹ Back', 800, 690, 190, 54, 'back', { fs: 22, ...DIM });
+  const I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}, u = afSession();
   if (page === 'home') {
-    T('BLADE VALE', W / 2, 70, '900 72px system-ui', '#ffd34d', 'center'); T('Arena Fights', W / 2, 152, '600 30px system-ui', '#c9bfda', 'center');
-    const u = afSession();
-    T(u ? 'Signed in as ' + u : 'Not signed in — sign in on the flat screen to invite friends. The vale\'s men will still fight you.', W / 2, 212, '500 24px system-ui', '#e8def8', 'center');
-    B('⚔ Enter the Arena', 262, 300, 500, 90, 'arena', { fs: 34 });
-    B('Exit VR', 362, 430, 300, 70, 'exit', { bg: 'rgba(255,255,255,.08)', col: '#c9bfda' });
-    T('The marketplace, profiles and the ladder stay on the flat screen for now.', W / 2, 560, '500 22px system-ui', '#8a8298', 'center');
+    T('BLADE VALE', W / 2, 54, '900 72px system-ui', '#ffd34d', 'center'); T('Arena Fights', W / 2, 136, '600 30px system-ui', '#c9bfda', 'center');
+    const cr = AF.career;
+    T(u ? 'Signed in as ' + u + (cr ? '  ·  ' + cr.rank.name + '  ·  ' + cr.gold + ' gold  ·  🏆 ' + cr.trophies : '') : 'Not signed in — the vale\'s men will fight you; sign in to keep a career and invite friends', W / 2, 190, '500 24px system-ui', '#e8def8', 'center', W - 80);
+    B('⚔ Enter the Arena', 112, 260, 800, 92, 'arena', { fs: 36 });
+    B('🛒 Marketplace', 112, 376, 388, 74, 'market', { fs: 28 }); B('🏆 Rankings', 524, 376, 388, 74, 'ladder', { fs: 28 });
+    if (u) { B('📜 My career', 112, 468, 388, 74, 'career', { fs: 28 }); B('Sign out', 524, 468, 388, 74, 'signout', { fs: 24, ...DIM }); }
+    else { B('🔑 Sign in / Create account', 112, 468, 800, 74, 'signin', { fs: 28 }); }
+    B('Exit VR', 362, 600, 300, 60, 'exit', { fs: 22, ...DIM });
+  } else if (page === 'signin') {
+    const K = VRM.kb;
+    T('SIGN IN', 40, 28, '900 40px system-ui', '#ffd34d'); T('or create an account — the same name keeps your career, gear and invitations', 40, 78, '500 21px system-ui', '#c9bfda', 'left', 700);
+    const field = (label, key, y) => { const on = K.field === key, v = key === 'pass' ? '•'.repeat(K.pass.length) : K.user; if (on) VRM.items.push({ x: 40, y, w: 600, h: 58, act: 'field:' + key }); else VRM.items.push({ x: 40, y, w: 600, h: 58, act: 'field:' + key });
+      c.fillStyle = 'rgba(0,0,0,.45)'; vrRR(c, 40, y, 600, 58, 10); c.fill(); c.lineWidth = on ? 3 : 1.5; c.strokeStyle = on ? '#ffd34d' : '#6b5e7a'; vrRR(c, 40, y, 600, 58, 10); c.stroke();
+      T(label, 56, y - 24, '700 18px system-ui', '#9fb2cc'); T(v + (on && Math.floor(rtNow * 2) % 2 ? '|' : ''), 56, y + 14, '600 28px system-ui', '#f3ead8', 'left', 570); };
+    field('Username', 'user', 136); field('Password', 'pass', 230);
+    B('Sign in', 670, 136, 300, 58, 'auth:login', { fs: 24, off: K.busy }); B('Create account', 670, 230, 300, 58, 'auth:register', { fs: 22, off: K.busy });
+    if (K.msg) T(K.msg, 40, 300, '600 22px system-ui', K.bad ? '#ff9a9a' : '#ffe089', 'left', 930);
+    // the keyboard
+    const kw = 88, kh = 60, gap = 8; let y = 340;
+    for (const row of VRM_KEYS) { const x0 = (W - (row.length * (kw + gap) - gap)) / 2; [...row].forEach((ch, i) => B(K.shift ? ch.toUpperCase() : ch, x0 + i * (kw + gap), y, kw, kh, 'key:' + ch, { fs: 26, r: 10 })); y += kh + gap; }
+    B(K.shift ? '⇧ SHIFT' : '⇧ shift', 60, y, 170, kh, 'key:SHIFT', { fs: 20, r: 10, bg: K.shift ? ON : undefined }); B('space', 250, y, 320, kh, 'key:SP', { fs: 20, r: 10 }); B('⌫', 590, y, 120, kh, 'key:BS', { fs: 26, r: 10 }); B(K.field === 'user' ? 'next ⇥' : 'done ⏎', 730, y, 234, kh, 'key:NEXT', { fs: 20, r: 10 });
+    B('‹ Back', 40, 690, 190, 54, 'back', { fs: 22, ...DIM });
+  } else if (page === 'market') {
+    const cr = AF.career, TABS = [['sword', 'Swords'], ['armor', 'Armor'], ['bow', 'Bows'], ['horse', 'Horses'], ['unique', 'Uniques']]; if (!AF.marketTab) AF.marketTab = 'sword'; const tab = AF.marketTab; if (VRM.mkTab !== tab) { VRM.mkTab = tab; VRM.mkPg = 0; }
+    T('MARKETPLACE', 40, 24, '900 40px system-ui', '#ffd34d');
+    T(cr ? cr.rank.name + '  ·  ' + cr.gold + ' gold  ·  🏆 ' + cr.trophies : u ? 'reaching the war-net…' : 'sign in to buy — until then the pit lends plain gear', 400, 34, '600 24px system-ui', '#ffe2a8', 'left', 580);
+    TABS.forEach(([k, l], i) => B(l, 40 + i * 190, 84, 180, 46, 'mk:tab:' + k, { fs: 20, bg: tab === k ? ON : undefined }));
+    const statOf = it => [it.dmg ? '×' + it.dmg + ' dmg' : '', it.reach ? (it.reach > 0 ? '+' : '') + it.reach + ' reach' : '', it.hp ? (it.slot === 'horse' ? it.hp + ' hp' : '+' + it.hp + ' hp') : '', it.poise ? '+' + it.poise + ' poise' : '', it.move ? Math.round(it.move * 100) + '% speed' : '', it.speed && it.speed !== 1 ? '×' + it.speed + ' pace' : ''].filter(Boolean).join(' · ');
+    const ids = Object.keys(I).filter(id => tab === 'unique' ? I[id].unique : I[id].slot === tab && !I[id].unique), PER = 6, pages = Math.max(1, Math.ceil(ids.length / PER)); VRM.mkPg = clamp(VRM.mkPg, 0, pages - 1);
+    let y = 146;
+    for (const id of ids.slice(VRM.mkPg * PER, VRM.mkPg * PER + PER)) {
+      const it = I[id], owned = !!(cr && cr.items.includes(id)), eq = cr ? cr.equipped[it.slot] === id : (!it.unique && AF_GEAR_FREE[it.slot] === id), trying = AF.tryItem === id, why = it.unique ? null : (cr ? ARENA_CAT.lockReason(id, cr) : 'sign in');
+      c.fillStyle = trying ? 'rgba(255,211,77,.10)' : 'rgba(255,255,255,.03)'; vrRR(c, 40, y, 944, 68, 10); c.fill();
+      T(it.name, 56, y + 8, '800 24px system-ui', eq ? '#ffe089' : '#f3ead8', 'left', 330); T(statOf(it), 56, y + 40, '500 17px system-ui', '#9fb2cc', 'left', 330);
+      T(eq ? 'worn' : owned ? 'yours' : it.unique ? 'loot only' : why === 'sign in' ? it.price + ' g' : why ? '🔒 ' + why : it.price + ' g', 400, y + 22, '600 20px system-ui', eq ? '#ffe089' : why && !owned ? '#ff9a8a' : '#c9bfda', 'left', 260);
+      B(trying ? 'trying' : 'Try on', 672, y + 10, 120, 48, 'mk:try:' + id, { fs: 18, r: 10, bg: trying ? ON : undefined });
+      if (owned && !eq) B('Wear', 806, y + 10, 170, 48, 'mk:equip:' + it.slot + ':' + id, { fs: 20, r: 10 });
+      else if (!owned && !it.unique && cr && !why) B('Buy ' + it.price + ' g', 806, y + 10, 170, 48, 'mk:buy:' + id, { fs: 20, r: 10 });
+      y += 78;
+    }
+    B('‹', 40, 622, 70, 50, 'mk:pg:-1', { fs: 26, r: 10, off: VRM.mkPg <= 0 }); T((VRM.mkPg + 1) + ' / ' + pages, 155, 634, '600 22px system-ui', '#c9bfda', 'center'); B('›', 200, 622, 70, 50, 'mk:pg:1', { fs: 26, r: 10, off: VRM.mkPg >= pages - 1 });
+    if (tab !== 'sword' && tab !== 'unique' && cr && cr.equipped[tab]) B('take off ' + (I[cr.equipped[tab]] || {}).name, 300, 622, 330, 50, 'mk:unequip:' + tab, { fs: 18, r: 10, ...DIM });
+    const m = AF.marketMsg; if (m) T(m.t, 40, 700, '600 20px system-ui', m.bad ? '#ff9a9a' : '#ffe089', 'left', 740);
+    back();
+  } else if (page === 'career') {
+    const cr = AF.career;
+    T('CAREER & STATS', 40, 24, '900 40px system-ui', '#ffd34d');
+    if (!cr) T(u ? 'reaching the war-net…' : 'sign in to keep a career', 40, 100, '600 26px system-ui', '#c9bfda');
+    else {
+      const r = cr.rank, lo = ARENA_CAT.ARENA_RANKS[r.idx][1], prog = r.nextAt ? clamp((cr.xp - lo) / (r.nextAt - lo), 0, 1) : 1;
+      T(u, 40, 84, '800 34px system-ui', '#f3ead8'); T(r.name + '  ·  ' + cr.xp + ' XP' + (r.next ? '  ·  ' + r.next + ' at ' + r.nextAt : ''), 40, 130, '600 24px system-ui', '#ffe2a8');
+      c.fillStyle = '#2a2438'; vrRR(c, 40, 166, 600, 14, 7); c.fill(); c.fillStyle = '#ffd34d'; vrRR(c, 40, 166, Math.max(14, 600 * prog), 14, 7); c.fill();
+      T('Renown ' + (cr.renown | 0).toLocaleString() + (cr.position ? '  ·  #' + cr.position + ' of ' + cr.of + ' players' : cr.of != null ? '  ·  unranked until your first fight' : ''), 40, 196, '600 24px system-ui', '#c9bfda');
+      T(cr.gold + ' gold  ·  🏆 ' + cr.trophies + ' trophies', 40, 236, '700 26px system-ui', '#ffe089');
+      T(cr.matches + ' fights  ·  ' + cr.wins + ' won  ·  ' + cr.kills + ' kills  ·  ' + cr.deaths + ' deaths  ·  ' + cr.stars + '× star  ·  ' + Math.round(cr.damage).toLocaleString() + ' damage', 40, 280, '500 22px system-ui', '#e8def8', 'left', 940);
+      T('skills:  sword ' + cr.skills.sword.level + '  ·  bow ' + cr.skills.bow.level + '  ·  riding ' + cr.skills.riding.level, 40, 316, '500 22px system-ui', '#e8def8');
+      const eq = cr.equipped || {}, worn = ['sword', 'armor', 'bow', 'horse'].filter(k => eq[k] && I[eq[k]]).map(k => I[eq[k]].name); T('rides in with:  ' + (worn.length ? worn.join(', ') : 'bare hands'), 40, 352, '500 22px system-ui', '#e8def8', 'left', 940);
+      const got = ARENA_CAT.ARENA_ACHIEVEMENTS.filter(([id]) => cr.achievements.includes(id)); T('Achievements · ' + got.length + ' of ' + ARENA_CAT.ARENA_ACHIEVEMENTS.length, 40, 404, '700 22px system-ui', '#9fd6ff');
+      got.slice(0, 10).forEach(([, label], i) => T('🏅 ' + label, 40 + (i % 2) * 470, 440 + Math.floor(i / 2) * 32, '500 21px system-ui', '#ffe2a8', 'left', 450));
+    }
+    B('🏆 Rankings', 40, 690, 220, 54, 'ladder', { fs: 22 }); if (u) B('My public profile', 280, 690, 260, 54, 'prof:player|' + u, { fs: 20 }); back();
+  } else if (page === 'ladder') {
+    T('RANKINGS', 40, 24, '900 40px system-ui', '#ffd34d');
+    B('Players', 320, 30, 170, 46, 'lad:kind:player', { fs: 20, bg: LADDER.kind === 'player' ? ON : undefined }); B('The vale\'s men', 500, 30, 200, 46, 'lad:kind:npc', { fs: 20, bg: LADDER.kind === 'npc' ? ON : undefined });
+    B('🌍 Global', 740, 30, 120, 46, 'lad:scope:global', { fs: 18, bg: LADDER.scope === 'global' ? ON : undefined }); if (u) B('Network', 870, 30, 114, 46, 'lad:scope:network', { fs: 18, bg: LADDER.scope === 'network' ? ON : undefined });
+    const PER = 10, rows = LADDER.rows, pages = Math.max(1, Math.ceil(rows.length / PER)); VRM.ladPg = clamp(VRM.ladPg, 0, pages - 1);
+    if (LADDER.err) T(LADDER.err, 40, 120, '600 24px system-ui', '#ff9a9a');
+    else if (!rows.length) T(LADDER.loading ? 'reaching the war-net…' : LADDER.scope === 'network' ? 'Nobody yet — fight once and everyone in that pit is here.' : 'Nobody has fought yet.', 40, 120, '600 24px system-ui', '#c9bfda');
+    let y = 96;
+    for (const r of rows.slice(VRM.ladPg * PER, VRM.ladPg * PER + PER)) {
+      const me = r.kind === 'player' && r.name === u; VRM.items.push({ x: 40, y, w: 944, h: 50, act: 'prof:' + r.kind + '|' + r.name });
+      const hov = hx >= 40 && hx < 984 && hy >= y && hy < y + 50; c.fillStyle = hov ? 'rgba(255,211,77,.22)' : me ? 'rgba(255,211,77,.10)' : 'rgba(255,255,255,.03)'; vrRR(c, 40, y, 944, 50, 8); c.fill();
+      T(r.pos <= 3 ? ['🥇', '🥈', '🥉'][r.pos - 1] : '#' + r.pos, 56, y + 12, '800 22px system-ui', '#ffe089'); T(r.name, 130, y + 12, '800 24px system-ui', me ? '#ffd34d' : '#f3ead8', 'left', 300); T(r.title || '', 440, y + 14, '500 20px system-ui', '#c9bfda', 'left', 180);
+      T((r.renown | 0).toLocaleString() + ' renown', 780, y + 14, '600 20px system-ui', '#ffe2a8', 'right'); T(r.matches + ' fights · ' + r.wins + ' won · ★ ' + r.stars, 970, y + 14, '500 18px system-ui', '#9fb2cc', 'right');
+      y += 56;
+    }
+    B('‹', 40, 690, 70, 54, 'lad:pg:-1', { fs: 26, r: 10, off: VRM.ladPg <= 0 }); T((VRM.ladPg + 1) + ' / ' + pages, 155, 704, '600 22px system-ui', '#c9bfda', 'center'); B('›', 200, 690, 70, 54, 'lad:pg:1', { fs: 26, r: 10, off: VRM.ladPg >= pages - 1 });
+    if (rows.length && rows.length < LADDER.total) B(LADDER.loading ? '…' : 'more', 300, 690, 140, 54, 'lad:more', { fs: 20, r: 10, off: LADDER.loading });
+    back();
+  } else if (page === 'profile') {
+    const P = AF.profile, d = P && P.data;
+    if (!d) { T(P ? P.name : '', 40, 30, '900 40px system-ui', '#ffd34d'); T(P && P.err ? P.err : 'reaching the war-net…', 40, 100, '600 24px system-ui', P && P.err ? '#ff9a9a' : '#c9bfda'); }
+    else {
+      const npc = d.kind === 'npc', me = !npc && u === d.name, wr = d.matches ? Math.round(d.wins / d.matches * 100) : 0;
+      T(npc ? 'A FIGHTER OF THE VALE' : me ? 'PLAYER · YOU' : 'PLAYER', 40, 24, '700 18px system-ui', '#9fb2cc'); T(d.name, 40, 48, '900 44px system-ui', '#ffd34d', 'left', 700);
+      T(d.title + (npc ? '  ·  skill ' + d.skill : '  ·  ' + d.xp + ' XP') + '  ·  Renown ' + (d.renown | 0).toLocaleString() + '  ·  ' + (d.position ? '#' + d.position + ' of ' + d.of : 'unranked'), 40, 104, '600 22px system-ui', '#ffe2a8', 'left', 940);
+      const tiles = [[d.matches, 'fights'], [d.wins, 'won'], [d.losses, 'lost'], [wr + '%', 'win rate'], ['★ ' + d.stars, 'star'], [d.kills, 'kills'], [d.deaths, 'deaths'], [Math.round(d.damage).toLocaleString(), 'damage']];
+      tiles.forEach(([v, l], i) => { const x = 40 + (i % 4) * 236, yy = 150 + Math.floor(i / 4) * 86; c.fillStyle = 'rgba(255,255,255,.04)'; vrRR(c, x, yy, 224, 74, 10); c.fill(); T(v, x + 112, yy + 10, '800 28px system-ui', '#f3ead8', 'center'); T(l, x + 112, yy + 46, '500 17px system-ui', '#9fb2cc', 'center'); });
+      if (npc) { const A = Object.entries(d.archs || {}).sort((a, b) => b[1] - a[1]); T('Fights as:  ' + (A.length ? A.map(([k, n]) => k + ' × ' + n).join('  ·  ') : d.arch), 40, 336, '500 22px system-ui', '#e8def8', 'left', 940); }
+      else { const eq = d.equipped || {}, worn = ['sword', 'armor', 'bow', 'horse', 'plume', 'trim'].filter(k => eq[k] && I[eq[k]]).map(k => I[eq[k]].name);
+        T('skills:  sword ' + d.skills.sword.level + '  ·  bow ' + d.skills.bow.level + '  ·  riding ' + d.skills.riding.level, 40, 336, '500 22px system-ui', '#e8def8'); T('rides in with:  ' + (worn.length ? worn.join(', ') : 'bare hands'), 40, 368, '500 22px system-ui', '#e8def8', 'left', 940); }
+      if (d.recent && d.recent.length) { T('Recent fights', 40, 416, '700 22px system-ui', '#9fd6ff'); d.recent.slice(0, 5).forEach((b, i) => T((b.draw ? 'DRAW' : b.won ? 'WON' : 'LOST') + '  ·  ' + (b.venue === 'pit' ? 'the pits' : 'colosseum') + '  ·  ' + b.size + ' fighters' + (b.at ? '  ·  ' + afAgo(b.at) : ''), 40, 450 + i * 30, '500 21px system-ui', b.draw ? '#c9bfda' : b.won ? '#8fd08f' : '#ff9a8a', 'left', 940)); }
+      T((d.since ? 'In the pit since ' + new Date(d.since * 1000).toLocaleDateString() : '') + (d.lastFought ? '  ·  last fought ' + afAgo(d.lastFought) : ''), 40, 640, '500 19px system-ui', '#8a8298', 'left', 940);
+    }
+    B('🏆 Rankings', 40, 690, 220, 54, 'ladder' + (d && d.kind === 'npc' ? ':npc' : ''), { fs: 22 }); back();
+  } else if (page === 'help') {
+    T('IN THE HEADSET', 40, 24, '900 40px system-ui', '#ffd34d');
+    const L = ['Point the right hand at the panel and squeeze the trigger to press a button.', 'Left stick: walk. Right stick left / right: turn 30°. Right stick up / down: tilt the blade in your fist.', 'Swing the sword to strike — a fast full swing is a heavy blow that cracks a raised guard.', 'Hold the shield up before your chest to guard (or squeeze the left grip). Guard the blow, then answer.', 'A or X: roll. Click a stick: re-measure your height.', 'A real step in the room moves your fighter. The vignette closes in when the pit throws you.', 'Poise: light hits chip it, a heavy on a guard breaks it, at zero you are staggered — and open.', 'The headset\'s own gesture ends the session; the flat screen carries on from the same place.'];
+    L.forEach((s, i) => T('• ' + s, 40, 96 + i * 54, '500 22px system-ui', '#e8def8', 'left', 940));
+    back();
   } else if (page === 'invite') {
     const m = AF.invite, cfg = m.cfg || {}, pit = cfg.venue === 'pit';
     T('⚔ CHALLENGE', W / 2, 70, '900 56px system-ui', '#ffd34d', 'center');
-    T((m.name || 'Someone') + (pit ? ' calls you down to the pits' : ' challenges you to an arena fight'), W / 2, 160, '700 32px system-ui', '#f3ead8', 'center');
+    T((m.name || 'Someone') + (pit ? ' calls you down to the pits' : ' challenges you to an arena fight'), W / 2, 160, '700 32px system-ui', '#f3ead8', 'center', W - 80);
     T(pit ? (cfg.teams || '?') + ' in the ring, every man for himself' : (cfg.teams || '?') + ' teams × ' + (cfg.per || '?') + ' fighters', W / 2, 215, '500 26px system-ui', '#c9bfda', 'center');
-    B('Accept', 180, 330, 300, 90, 'accept', { fs: 32 }); B('Decline', 544, 330, 300, 90, 'decline', { bg: 'rgba(255,255,255,.08)', col: '#c9bfda', fs: 32 });
+    B('Accept', 180, 330, 300, 90, 'accept', { fs: 32 }); B('Decline', 544, 330, 300, 90, 'decline', { fs: 32, ...DIM });
   } else if (page === 'lobby') {
-    const L = AF.lobby, host = L.role === 'host', pit = L.venue === 'pit', LM = afLim(L), ON = 'rgba(255,211,77,.45)';
-    T(host ? 'YOUR LOBBY' : 'LOBBY · ' + L.host, 40, 30, '900 40px system-ui', '#ffd34d');
+    const L = AF.lobby, host = L.role === 'host', pit = L.venue === 'pit', LM = afLim(L);
+    T(host ? 'YOUR LOBBY' : 'LOBBY · ' + L.host, 40, 30, '900 40px system-ui', '#ffd34d', 'left', 700);
     T('Venue', 40, 108, '700 24px system-ui', '#c9bfda');
     B('🏛 Colosseum', 200, 96, 250, 54, 'venue:colosseum', { fs: 22, off: !host, bg: pit ? undefined : ON }); B('🕯 The Pits', 470, 96, 250, 54, 'venue:pit', { fs: 22, off: !host, bg: pit ? ON : undefined });
     T('Teams', 40, 176, '700 24px system-ui', '#c9bfda'); B('−', 200, 164, 64, 54, 'teams:-1', { off: !host || L.teams <= LM.teamsMin }); T(L.teams, 300, 170, '800 34px system-ui', '#fff', 'center'); B('+', 336, 164, 64, 54, 'teams:1', { off: !host || L.teams >= LM.teamsMax });
     if (!pit) { T('Per team', 470, 176, '700 24px system-ui', '#c9bfda'); B('−', 620, 164, 64, 54, 'per:-1', { off: !host || L.per <= LM.perMin }); T(L.per, 720, 170, '800 34px system-ui', '#fff', 'center'); B('+', 756, 164, 64, 54, 'per:1', { off: !host || L.per >= LM.perMax }); }
     let y = 244;
-    for (let t = 0; t < L.teams && y < 420; t++, y += 36) { const names = (L.slots[t] || []).map(s => s ? s.name + (s.kind === 'host' ? ' (host)' : '') : 'fighter of the vale'); T(AF_TEAMS[t].name, 40, y, '800 24px system-ui', AF_TEAMS[t].col); T(names.join(' · ').slice(0, 64), 220, y, '500 24px system-ui', '#e8def8'); }
+    for (let t = 0; t < L.teams && y < 420; t++, y += 36) { const names = (L.slots[t] || []).map(s => s ? s.name + (s.kind === 'host' ? ' (host)' : '') : 'fighter of the vale'); T(AF_TEAMS[t].name, 40, y, '800 24px system-ui', AF_TEAMS[t].col); T(names.join(' · '), 220, y, '500 24px system-ui', '#e8def8', 'left', 760); }
     if (host) {
       T('Players online', 40, 440, '700 22px system-ui', '#9fd6ff');
       let yy = 476, n = 0;
-      for (const o of AF.online) { if (n++ >= 3) break; const st = L.invites.get(o.name); T(o.name + (o.busy ? ' · in a fight' : ''), 40, yy + 10, '500 24px system-ui', '#e8def8'); B(st === 'joined' ? 'joined' : st === 'declined' ? 'declined' : st === 'no seat' ? 'no seat' : st ? 'invited…' : 'Invite', 330, yy, 180, 46, 'invite:' + o.name, { fs: 20, off: !!st || !!o.busy }); yy += 54; }
-      if (!AF.online.length) T(afSession() ? 'nobody else is on the war-net' : 'sign in on the flat screen to invite friends', 40, 480, '500 22px system-ui', '#8a8298');
+      for (const o of AF.online) { if (n++ >= 3) break; const st = L.invites.get(o.name); T(o.name + (o.busy ? ' · in a fight' : ''), 40, yy + 10, '500 24px system-ui', '#e8def8', 'left', 280); B(st === 'joined' ? 'joined' : st === 'declined' ? 'declined' : st === 'no seat' ? 'no seat' : st ? 'invited…' : 'Invite', 330, yy, 180, 46, 'invite:' + o.name, { fs: 20, off: !!st || !!o.busy }); yy += 54; }
+      if (!AF.online.length) T(u ? 'nobody else is on the war-net' : 'sign in to invite friends', 40, 480, '500 22px system-ui', '#8a8298');
       B('Start Fight', 560, 560, 400, 84, 'start', { fs: 32 });
-    } else T('Waiting for ' + L.host + ' to start the fight…', 40, 460, '600 26px system-ui', '#c9bfda');
-    const msg = (document.getElementById('al-msg') || {}).textContent || ''; if (msg) T(msg.slice(0, 78), 40, 690, '500 22px system-ui', '#ffe089');
-    B(host ? 'Leave lobby' : 'Leave', 560, 660, 400, 64, 'leave-lobby', { bg: 'rgba(255,255,255,.08)', col: '#c9bfda', fs: 24 });
+    } else T('Waiting for ' + L.host + ' to start the fight…', 40, 460, '600 26px system-ui', '#c9bfda', 'left', 940);
+    const msg = (document.getElementById('al-msg') || {}).textContent || ''; if (msg) T(msg, 40, 690, '500 22px system-ui', '#ffe089', 'left', 500);
+    B('🛒 Market', 560, 660, 190, 64, 'market', { fs: 22, ...DIM }); B(host ? 'Leave lobby' : 'Leave', 770, 660, 190, 64, 'leave-lobby', { fs: 22, ...DIM });
   } else if (page === 'end') {
     const st = AF.standings || afStandings(), w = AF.winner, pit = AF.cfg.venue === 'pit', mine = AF.me ? AF.me.team : -1;
     const wName = w >= 0 && pit ? ((AF.bodies.find(b => b.team === w) || {}).name || AF_TEAMS[w].name) : (w >= 0 ? AF_TEAMS[w].name : '');
-    T(w < 0 ? 'DRAW' : wName + ' holds the pit', W / 2, 46, '900 46px system-ui', '#ffd34d', 'center');
-    T((AF.me ? (mine === w ? (pit ? 'You won.' : 'Your team won.') : (pit ? 'You fell.' : 'Your team fell.')) : '') + (AF.starName ? '   ★ Star of the match: ' + AF.starName : ''), W / 2, 112, '600 28px system-ui', '#e8def8', 'center');
-    if (AF.me && afSession()) {
+    T(w < 0 ? 'DRAW' : wName + ' holds the pit', W / 2, 46, '900 46px system-ui', '#ffd34d', 'center', W - 60);
+    T((AF.me ? (mine === w ? (pit ? 'You won.' : 'Your team won.') : (pit ? 'You fell.' : 'Your team fell.')) : '') + (AF.starName ? '   ★ Star of the match: ' + AF.starName : ''), W / 2, 112, '600 28px system-ui', '#e8def8', 'center', W - 60);
+    if (AF.me && u) {
       const r = AF.reward;
       if (!r) T('tallying the purse…', W / 2, 168, '500 26px system-ui', '#8a8298', 'center');
-      else if (r.error) T(r.error, W / 2, 168, '500 24px system-ui', '#8a8298', 'center');
+      else if (r.error) T(r.error, W / 2, 168, '500 24px system-ui', '#8a8298', 'center', W - 60);
       else { T('+' + r.xp + ' XP  ·  +' + r.gold + ' gold' + (r.trophies ? '  ·  +' + r.trophies + ' 🏆' : ''), W / 2, 164, '800 32px system-ui', '#ffe089', 'center');
         const more = [r.star ? '★ Star of the match — the purse is half again' : '', r.rankUp ? 'Rank up — you are now ' + r.rankUp : '', r.loot ? '✦ Loot: ' + afItemName(r.loot) + ' — yours, and already worn' : ''].filter(Boolean);
-        more.forEach((s, i) => T(s, W / 2, 210 + i * 30, '600 22px system-ui', '#ffd34d', 'center')); }
+        more.forEach((s, i) => T(s, W / 2, 210 + i * 30, '600 22px system-ui', '#ffd34d', 'center', W - 60)); }
     }
     let y = 320;
-    st.slice(0, 5).forEach((s, i) => { T((i + 1) + '. ' + AF_TEAMS[s.team].name, 80, y, '800 26px system-ui', AF_TEAMS[s.team].col); T((s.names || []).slice(0, 4).join(', '), 330, y, '500 24px system-ui', '#c9bfda'); T((s.alive || 0) + ' standing · ' + (s.kills || 0) + ' kills', 944, y, '500 24px system-ui', '#e8def8', 'right'); y += 40; });
+    st.slice(0, 5).forEach((s, i) => { T((i + 1) + '. ' + AF_TEAMS[s.team].name, 80, y, '800 26px system-ui', AF_TEAMS[s.team].col); T((s.names || []).slice(0, 4).join(', '), 330, y, '500 24px system-ui', '#c9bfda', 'left', 560); T((s.alive || 0) + ' standing · ' + (s.kills || 0) + ' kills', 944, y, '500 24px system-ui', '#e8def8', 'right'); y += 40; });
     if (AF.role !== 'guest') B('↻ Rematch', 150, 620, 340, 84, 'rematch', { fs: 30 }); else T('the host may call a rematch', 320, 650, '500 22px system-ui', '#8a8298', 'center');
-    B('Leave the pit', 534, 620, 340, 84, 'leave-pit', { bg: 'rgba(255,255,255,.08)', col: '#c9bfda', fs: 28 });
+    B('Leave the pit', 534, 620, 340, 84, 'leave-pit', { fs: 28, ...DIM });
   }
   p.userData.tex.needsUpdate = true;
 }
@@ -17373,16 +17506,57 @@ function vrLobbyBump(key, d) {                              // (the DOM's bump l
   const L = AF.lobby; if (!L || L.role !== 'host') return; const LM = afLim(L), lim = key === 'teams' ? [LM.teamsMin, LM.teamsMax] : [LM.perMin, LM.perMax];
   L[key] = clamp(L[key] + d, lim[0], lim[1]); afResize(L); afLobbyRender(); afLobbyBroadcast();
 }
+// SIGN IN WITHOUT LEAVING: client-net's login/register with `stay` set the session in place instead of reloading the page
+// (a reload ends the XR session); then the same hooks the reload would have run — the auth gate, the home, presence on the war-net.
+function vrSignedIn(username) {
+  VRM.signin = false; VRM.kb.user = VRM.kb.pass = ''; VRM.kb.msg = ''; VRM.kb.busy = false;
+  try { refreshAuthGate(); } catch (e) { try { afHomeOpen(username); } catch (e2) {} }
+  try { afTitlePresence(); } catch (e) {} try { afCareerLoad(); } catch (e) {}
+  afBanner('WELCOME', username, 2);
+}
+function vrSignOut() {
+  try { if (window.coop) window.coop.close(); } catch (e) {}
+  try { if (AF.whoTimer) { clearInterval(AF.whoTimer); AF.whoTimer = null; } } catch (e) {}
+  AF.career = null; AF.lobby = null; AF.invite = null; AF.marketOpen = false; AF.tryItem = null;
+  if (window.net && window.net.logout) window.net.logout(true);
+  try { refreshAuthGate(); } catch (e) {} SHELL.stack.length = 0; try { afShellPage('title'); } catch (e) {}
+}
+function vrKey(k) {
+  const K = VRM.kb, put = ch => { if (K.field === 'pass') { if (K.pass.length < 64) K.pass += ch; } else if (K.user.length < 24) K.user += ch; };
+  if (k === 'SHIFT') K.shift = !K.shift;
+  else if (k === 'BS') { if (K.field === 'pass') K.pass = K.pass.slice(0, -1); else K.user = K.user.slice(0, -1); }
+  else if (k === 'SP') { if (K.field === 'pass') put(' '); }
+  else if (k === 'NEXT') { if (K.field === 'user') K.field = 'pass'; else vrAuth('login'); }
+  else { put(K.shift ? k.toUpperCase() : k); K.shift = false; }
+}
+function vrAuth(kind) {
+  const K = VRM.kb, u = K.user.trim(); if (!u) { K.msg = 'enter a username'; K.bad = true; return; } if (!window.net || !window.net.login) { K.msg = 'the war-net is not reachable'; K.bad = true; return; }
+  K.msg = 'one moment…'; K.bad = false; K.busy = true;
+  (kind === 'register' ? window.net.register : window.net.login)(u, K.pass, true).then(r => { K.busy = false; if (r && r.ok) vrSignedIn(r.username || u); else { K.msg = (r && r.error) || 'failed'; K.bad = true; } VRM.t = 0; });
+}
 function vrMenuAct(act) {
   try {
+    const A = act.split(':');
     if (act === 'arena') afOpenLobby('host');
     else if (act === 'exit') { if (VR.session) VR.session.end(); }
     else if (act === 'accept') afAcceptInvite();
     else if (act === 'decline') afDeclineInvite();
-    else if (act.startsWith('venue:')) { const L = AF.lobby; if (L && L.role === 'host' && afSetVenue(L, act.slice(6))) { afLobbyRender(); afLobbyBroadcast(); } }
-    else if (act.startsWith('teams:')) vrLobbyBump('teams', +act.slice(6));
-    else if (act.startsWith('per:')) vrLobbyBump('per', +act.slice(4));
-    else if (act.startsWith('invite:')) afInvite(act.slice(7));
+    else if (act === 'back') { if (VRM.signin) { VRM.signin = false; VRM.kb.msg = ''; } else afShellBack(); }
+    else if (act === 'market') afMarketOpen();
+    else if (act === 'career') { afHomeRender(); afShellPage('career'); }
+    else if (A[0] === 'ladder') { afLadderOpen(A.includes('network') ? 'network' : 'global', A.includes('npc') ? 'npc' : 'player'); VRM.ladPg = 0; }
+    else if (A[0] === 'prof') { const s = act.slice(5), i = s.indexOf('|'); afProfileOpen(s.slice(i + 1), s.slice(0, i) || undefined); }
+    else if (act === 'signin') { VRM.signin = true; VRM.kb.field = 'user'; VRM.kb.msg = ''; }
+    else if (act === 'signout') vrSignOut();
+    else if (A[0] === 'field') VRM.kb.field = A[1];
+    else if (A[0] === 'key') vrKey(act.slice(4));
+    else if (A[0] === 'auth') vrAuth(A[1]);
+    else if (A[0] === 'mk') { if (A[1] === 'tab') { AF.marketTab = A[2]; VRM.mkPg = 0; afMarketRender(); } else if (A[1] === 'pg') VRM.mkPg += +A[2]; else if (A[1] === 'try') afMarketAct('try:' + A[2]); else if (A[1] === 'buy') afMarketAct('buy:' + A[2]); else if (A[1] === 'equip') afMarketAct('equip:' + A[2] + ':' + A[3]); else if (A[1] === 'unequip') afMarketAct('unequip:' + A[2]); }
+    else if (A[0] === 'lad') { if (A[1] === 'kind') { LADDER.kind = A[2]; VRM.ladPg = 0; afLadderLoad(0); } else if (A[1] === 'scope') { LADDER.scope = A[2]; VRM.ladPg = 0; afLadderLoad(0); } else if (A[1] === 'pg') VRM.ladPg += +A[2]; else if (A[1] === 'more') afLadderLoad(LADDER.rows.length); }
+    else if (A[0] === 'venue') { const L = AF.lobby; if (L && L.role === 'host' && afSetVenue(L, A[1])) { afLobbyRender(); afLobbyBroadcast(); } }
+    else if (A[0] === 'teams') vrLobbyBump('teams', +A[1]);
+    else if (A[0] === 'per') vrLobbyBump('per', +A[1]);
+    else if (A[0] === 'invite') afInvite(act.slice(7));
     else if (act === 'start') { try { SFX.init && SFX.init(); } catch (e) {} afStartFight(); }
     else if (act === 'leave-lobby') afShellBack();
     else if (act === 'rematch') { const ep = document.getElementById('af-end'); if (ep) ep.style.display = 'none'; afRematch(); }
@@ -17391,19 +17565,18 @@ function vrMenuAct(act) {
   vrHaptic('right', 0.3, 30); VRM.t = 0;
 }
 // afLeaveToMenu reloads the page, and a reload ends the headset session: in VR the pit is torn down in place instead
+// (afLeaveToMenu itself calls this first while presenting, so every "back to the menu" path stays in the headset)
 function vrLeavePit() {
-  try {
-    try { if (window.coop && window.coop.connected) window.coop.leave(); } catch (e) {}
-    AF.leaving = true; afClear(); AF.on = false; AF.over = false; AF.phase = 'lobby'; AF.role = 'solo'; AF.roster = []; AF.goSpec = null; AF.lobby = null; AF.me = null; AF.inputs.clear(); AF.leaving = false; AF.reward = null; AF.victory = null;
-    try { SFX.bed('murmur_loop', 0); SFX.bed('crowd_loop', 0); } catch (e) {}
-    afCloseLobbyUi(); afShellPage(afSession() ? 'home' : 'title'); try { afHomeResume(); } catch (e) {}
-    vrMenuHall(true); VRM.fresh = true;
-  } catch (e) { console.warn('[vr] leave', e); afLeaveToMenu(); }
+  try { if (window.coop && window.coop.connected) window.coop.leave(); } catch (e) {}
+  AF.leaving = true; afClear(); AF.on = false; AF.over = false; AF.phase = 'lobby'; AF.role = 'solo'; AF.roster = []; AF.goSpec = null; AF.lobby = null; AF.me = null; AF.inputs.clear(); AF.leaving = false; AF.reward = null; AF.victory = null;
+  try { SFX.bed('murmur_loop', 0); SFX.bed('crowd_loop', 0); } catch (e) {}
+  afCloseLobbyUi(); afShellPage(afSession() ? 'home' : 'title'); try { afHomeResume(); } catch (e) {}
+  vrMenuHall(true); VRM.fresh = true;
 }
 function vrMenuFrame(dt) {
   const p = VRM.panel; if (!p) return;
   const page = vrMenuPage();
-  if (!page) { if (p.visible) { p.visible = false; VRM.dot.visible = false; VRM.ptr.visible = false; } VRM.shown = false; VRM.trigWas = true; VRM.uv = null; return; }
+  if (!page) { if (p.visible) { p.visible = false; VRM.dot.visible = false; VRM.ptr.visible = false; } VRM.shown = false; VRM.trigWas = true; VRM.uv = null; vrHallFigure(dt); return; }
   if (!VRM.shown) { VRM.shown = true; VRM.fresh = true; }
   if (VRM.fresh) { if (camera.position.y < 0.5) { p.visible = false; return; } VRM.fresh = false; vrMenuPlace(); }   // (placed from the first real head pose — before it the head sits on the floor)
   if (!p.visible) p.visible = true;
@@ -17421,9 +17594,10 @@ function vrMenuFrame(dt) {
     VRM.trigWas = trig;
   } else { VRM.dot.visible = false; }
   VRM.uv = uv;
-  if ((VRM.t -= dt) <= 0) { VRM.t = 1 / 12; vrMenuDraw(); }
+  vrHallFigure(dt);
+  if ((VRM.t -= dt) <= 0) { VRM.t = page === 'signin' ? 1 / 4 : 1 / 12; vrMenuDraw(); }
 }
-BV.vrMenu = (act) => { if (act) vrMenuAct(String(act)); return { page: vrMenuPage(), visible: !!(VRM.panel && VRM.panel.visible), items: VRM.items.map(i => i.act), uv: VRM.uv ? [+VRM.uv.x.toFixed(3), +VRM.uv.y.toFixed(3)] : null }; };   // tests: read the panel, press a button by name
+BV.vrMenu = (act) => { if (act) vrMenuAct(String(act)); return { page: vrMenuPage(), visible: !!(VRM.panel && VRM.panel.visible), items: VRM.items.map(i => i.act), uv: VRM.uv ? [+VRM.uv.x.toFixed(3), +VRM.uv.y.toFixed(3)] : null, kb: { field: VRM.kb.field, user: VRM.kb.user, passLen: VRM.kb.pass.length, msg: VRM.kb.msg }, figure: !!(VRM.fig && VRM.fig.group.visible) }; };   // tests: read the panel, press a button by name
 BV.vrEnter = () => vrEnter();
 try { vrButton(); } catch (e) {}                             // the button is there from the title screen on (a headset in the browser shows it; nothing else does)
 setTimeout(() => { try { vrButton(); } catch (e) {} }, 2500);   // (a runtime that announces itself late — the test shim, some PC runtimes — gets a second look)
@@ -20850,6 +21024,7 @@ function afRematch() {
   afBoot(spec);
 }
 function afLeaveToMenu() {
+  if (VR.on && !AF._vrLeaveFailed) { try { vrLeavePit(); return; } catch (e) { console.warn('[vr] leave in place failed — reloading', e); AF._vrLeaveFailed = true; } }   // VR FIRST: presenting, the pit is torn down in place (a reload would end the headset session)
   { const tw = document.getElementById('tb-weapon'); if (tw) tw.style.display = ''; }   // (the world's SWAP button comes back)
   if (PBR_ON) setEnvMap(ENV_DEFAULT);                     // the overworld sky is back in the steel
   try { if (window.coop && window.coop.connected) window.coop.leave(); } catch (e) {}

@@ -45,7 +45,7 @@
   // Multiplayer needs a DISTINCT token per person, else everyone collapses into one account and
   // nobody sees anybody. Priority: signed-in session → ?p=<name> (readable, assignable) → a name
   // set earlier on this device → a per-device random id when in shared mode → 'local'.
-  var PLAYER_TOKEN = (function () {
+  function playerToken() {                                  // (named: a sign-out in place recomputes it — VR.md)
     try {
       if (SESSION && SESSION.token) return SESSION.token;
       var m = /[?&]p=([^&#]+)/.exec(location.search);
@@ -59,7 +59,8 @@
       }
       return 'local';
     } catch (e) { return 'local'; }
-  })();
+  }
+  var PLAYER_TOKEN = playerToken();
   net.token = PLAYER_TOKEN;
   net.sharedWorld = SHARED;
   net.srvWorld = SRV;
@@ -223,18 +224,19 @@
       .then(function (r) { return r.json(); })
       .catch(function () { return { ok: false, error: 'server unreachable' }; });
   }
-  function authCall(path, username, password) {
+  function authCall(path, username, password, stay) {   // stay: set the session in place and do NOT reload (a headset session would end with the page — VR.md)
     return jpost(path, { username: username, password: password }).then(function (r) {
       if (r && r.ok && r.token) {
         try { localStorage.setItem('bv-session', JSON.stringify({ token: r.token, username: r.username })); } catch (e) {}
-        location.reload();
+        if (stay) { SESSION = { token: r.token, username: r.username }; net.session = SESSION; PLAYER_TOKEN = r.token; }
+        else location.reload();
       }
       return r;
     });
   }
-  net.register = function (u, p) { return authCall('/auth/register', u, p); };
-  net.login = function (u, p) { return authCall('/auth/login', u, p); };
-  net.logout = function () { try { localStorage.removeItem('bv-session'); } catch (e) {} location.reload(); };
+  net.register = function (u, p, stay) { return authCall('/auth/register', u, p, stay); };
+  net.login = function (u, p, stay) { return authCall('/auth/login', u, p, stay); };
+  net.logout = function (stay) { try { localStorage.removeItem('bv-session'); } catch (e) {} if (stay) { SESSION = null; net.session = null; PLAYER_TOKEN = playerToken(); return; } location.reload(); };
 
   // ----- the arena career: XP, gold, ranks, the marketplace (signed-in accounts) -----
   net.arenaCareer = function (seed) { return jfetch('/arena/career' + (seed != null ? '?seed=' + encodeURIComponent(seed) : ''), { method: 'GET' }).then(function (r) { return r && r.career; }).catch(function () { return null; }); };

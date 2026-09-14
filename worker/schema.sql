@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS arena_careers (
   last_seed TEXT,
   last_reward_json TEXT,
   renown INTEGER NOT NULL DEFAULT 0,     -- renownOf(career): the ladder key (added 2026-09-13; on an older DB: ALTER TABLE arena_careers ADD COLUMN renown INTEGER NOT NULL DEFAULT 0)
+  meta_json TEXT NOT NULL DEFAULT '{}',  -- bests, rival, pity, the hook counters (added 2026-09-14; see the block at the end)
   updated_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
 CREATE INDEX IF NOT EXISTS ix_careers_renown ON arena_careers(renown DESC);
@@ -96,3 +97,27 @@ CREATE TABLE IF NOT EXISTS arena_bouts (
   PRIMARY KEY (seed, kind, fighter)
 );
 CREATE INDEX IF NOT EXISTS ix_bouts_fighter ON arena_bouts(kind, fighter, created_at DESC);
+
+-- THE HOOKS (2026-09-14): personal bests, the rival, loot pity and the counters behind the new achievements ride in
+-- one JSON blob on the career (meta_json — see worker/index.js metaOf); the champion's belt is one row; the bout of
+-- the day keeps a board per UTC day. On an older DB: ALTER TABLE arena_careers ADD COLUMN meta_json TEXT NOT NULL DEFAULT '{}'
+CREATE TABLE IF NOT EXISTS arena_belt (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  holder TEXT,                              -- the player's handle (players only — the vale's men have their own ladder)
+  renown INTEGER NOT NULL DEFAULT 0,        -- the holder's renown when he last fought (take it by passing this)
+  since INTEGER NOT NULL DEFAULT (unixepoch()),
+  defenses INTEGER NOT NULL DEFAULT 0       -- wins while holding it
+);
+CREATE TABLE IF NOT EXISTS arena_daily (
+  day TEXT NOT NULL,                        -- YYYY-MM-DD (UTC) — the bout is dailyOf(day) in arena-items.js
+  fighter TEXT NOT NULL,                    -- the player's handle
+  score INTEGER NOT NULL DEFAULT 0,         -- the best of his tries (dailyScore)
+  kills INTEGER NOT NULL DEFAULT 0,
+  dmg INTEGER NOT NULL DEFAULT 0,
+  alive INTEGER NOT NULL DEFAULT 0,
+  won INTEGER NOT NULL DEFAULT 0,
+  tries INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  PRIMARY KEY (day, fighter)
+);
+CREATE INDEX IF NOT EXISTS ix_daily_board ON arena_daily(day, score DESC);

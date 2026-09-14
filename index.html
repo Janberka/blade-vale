@@ -312,6 +312,25 @@
   .lad-row { cursor: pointer; display: grid; grid-template-columns: 44px 1fr auto; grid-template-areas: "pos name ren" "pos rec rec"; column-gap: 10px; align-items: center; padding: 7px 10px; border-radius: 10px; border: 1px solid #3a3247; background: rgba(0,0,0,.3); }
   .lad-row:hover { border-color: rgba(255,207,91,.6); }
   .lad-row.you { border-color: #ffd34d; background: rgba(255,211,77,.1); }
+  .lad-belt { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: #ffd34d; border: 1px solid rgba(255,211,77,.6); border-radius: 10px; padding: 1px 6px; margin-left: 6px; vertical-align: middle; }
+  /* the home's news: since you were away, the belt, the rival, the next rank */
+  #home-news { width: min(360px, 90%); font-size: 13px; line-height: 1.5; padding: 8px 12px; border: 1px solid rgba(255,207,91,.3); border-radius: 10px; background: rgba(0,0,0,.3); text-align: left; }
+  #home-news b { color: #ffd34d; }
+  /* the hall of trophies */
+  .hall-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+  .hall-card { position: relative; padding: 10px 10px 10px 30px; border: 1px solid #3a3247; border-radius: 10px; background: rgba(0,0,0,.3); opacity: .5; display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
+  .hall-card.got { opacity: 1; border-color: rgba(255,207,91,.6); }
+  .hall-card b { color: #ffe089; }
+  .hall-card i { opacity: .75; font-size: 11px; }
+  .hall-card em { font-style: normal; font-size: 10px; letter-spacing: 1px; text-transform: uppercase; opacity: .7; }
+  .hall-card .prof-btn { align-self: flex-start; margin-top: 3px; }
+  .hall-swatch { position: absolute; left: 10px; top: 12px; width: 12px; height: 12px; border-radius: 50%; border: 1px solid rgba(255,255,255,.3); }
+  .hall-ach { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 6px; }
+  .hall-a { display: grid; grid-template-columns: 1fr auto; column-gap: 8px; align-items: center; padding: 6px 10px; border: 1px solid #3a3247; border-radius: 10px; background: rgba(0,0,0,.3); font-size: 12px; opacity: .7; }
+  .hall-a.got { opacity: 1; border-color: rgba(255,207,91,.6); color: #ffe089; }
+  .hall-a i { font-size: 11px; opacity: .7; font-style: normal; }
+  .hall-bar { grid-column: 1 / -1; display: block; height: 4px; border-radius: 2px; background: #2a2438; overflow: hidden; margin-top: 4px; }
+  .hall-bar span { display: block; height: 100%; background: #ffd34d; }
   .lad-pos { grid-area: pos; font-size: 16px; font-weight: 800; color: #ffd34d; text-align: center; }
   .lad-name { grid-area: name; display: flex; gap: 8px; align-items: baseline; min-width: 0; }
   .lad-name b { color: #f3ead8; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -775,6 +794,7 @@
           <button class="btn" id="arena-btn" title="Pick teams, invite players, fill the rest with NPCs, and fight in the pit">⚔ Enter the Arena</button>
           <button class="btn hidden world-only" id="start-btn">Enter the Vale</button>
         </div>
+        <button id="title-daily-btn" class="arena-only" title="One fight the whole vale fights today — the same men, the same sand, a board of its own">📅 Bout of the day</button>
         <button id="title-ladder-btn" class="arena-only">🏆 See the rankings</button>
   <div id="auth-box">
     <div id="auth-form">
@@ -798,9 +818,12 @@
         <div id="home-menu">
           <button class="btn" id="home-arena-btn">⚔ Enter the Arena</button>
           <button class="btn" id="home-market-btn">🏪 Marketplace</button>
+          <button class="btn" id="home-daily-btn" title="One fight the whole vale fights today — the same men, the same sand, a board of its own">📅 Bout of the day</button>
           <button class="btn" id="home-ladder-btn" title="Every fighter by renown — players, and the vale's own men">🏆 Rankings</button>
+          <button class="btn" id="home-hall-btn" title="Your uniques, the champion's belt, your rival, your bests, every achievement and the road to it">🏛 Hall of trophies</button>
           <button class="btn world-only" id="home-world-btn">Enter the Vale</button>
         </div>
+        <div id="home-news" style="display:none"></div>
         <div id="home-foot">Signed in as <b id="home-name"></b> · <button id="home-logout">sign out</button> · <label title="During a fight: round trip, jitter, snap rate, the host's sim rate — bottom right"><input type="checkbox" id="home-net"> net readout</label></div>
         <div class="sfx-credit">Crowd sounds by Gregor Quendel (CC-BY 4.0) · bow shot by dorkster, from sounds by qubodup (CC-BY-SA 3.0) · more in assets/sfx/CREDITS.md</div>
       </div>
@@ -822,6 +845,8 @@
     <div class="wp-row" id="al-row-wx"><span>Sky</span><div class="al-wpn"><button id="al-wx-clear" class="on">Clear</button><button id="al-wx-rain">🌧 Rain</button></div></div>
     <div class="wp-row" id="al-row-ground"><span>Ground</span><div class="al-wpn"><button id="al-gr-sand">Sand</button><button id="al-gr-hills">⛰ Hills</button><button id="al-gr-rocks">🪨 Rocks</button><button id="al-gr-broken" class="on">Broken</button></div></div>
     <div class="wp-row"><span>Foes</span><div class="al-wpn"><button id="al-xp-green">🐣 Green</button><button id="al-xp-mixed" class="on">⚔ Mixed</button><button id="al-xp-veteran">💀 Veteran</button></div></div>
+    <div class="wp-row hidden" id="al-row-wager" title="Gold on the fight: every signed-in player in the pit stakes the same"><span>Wager</span><div class="al-wpn"><button id="al-wager-0" class="on">None</button><button id="al-wager-25">25</button><button id="al-wager-50">50</button><button id="al-wager-100">100</button><button id="al-wager-200">200</button></div></div>
+    <div id="al-wager-note" class="al-sub" style="font-size:12px;opacity:.8"></div>
   </div>
   <div id="al-teams"></div>
   <div id="al-online">
@@ -838,6 +863,10 @@
       <div class="page wide" id="page-profile"><div id="prof-body"></div></div>
       <!-- the ladder: everyone by renown, global or your network (afLadderRender) -->
       <div class="page wide" id="page-ladder"><div id="lad-body"></div></div>
+      <!-- the bout of the day: one fight for the whole vale, and its board (afDailyRender) -->
+      <div class="page wide" id="page-daily"><div id="daily-body"></div></div>
+      <!-- the hall of trophies: uniques, the belt, the rival, bests, achievements with the road to each (afHallRender) -->
+      <div class="page wide" id="page-hall"><div id="hall-body"></div></div>
       <!-- the marketplace (afMarketRender fills it) -->
       <div class="page wide" id="page-market"><div id="af-market"></div></div>
       <!-- the key map -->
@@ -995,10 +1024,10 @@
 <script src="sim/terra.js?v=2"></script>
 <script src="sim/settle.js?v=1"></script>
 <script src="sim/battle.js?v=1"></script>
-<script src="client-net.js?v=10"></script>
-<script src="arena-items.js?v=3"></script>
+<script src="client-net.js?v=11"></script>
+<script src="arena-items.js?v=4"></script>
 <script src="net-battle.js?v=5"></script>
 <script src="real-skin.js?v=1"></script>
-<script src="game.js?v=128"></script>
+<script src="game.js?v=129"></script>
 </body>
 </html>

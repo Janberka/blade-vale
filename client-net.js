@@ -245,6 +245,7 @@
   net.arenaResult = function (result) { return jpost('/arena/result', result); };
   // profiles + the ladder (public reads; the network scope is everyone who shared a pit with you)
   net.arenaProfile = function (name, kind) { return jfetch('/arena/profile?name=' + encodeURIComponent(name) + (kind ? '&kind=' + encodeURIComponent(kind) : ''), { method: 'GET' }).catch(function () { return { ok: false, error: 'the war-net did not answer' }; }); };
+  net.arenaDaily = function () { return jfetch('/arena/daily', { method: 'GET' }).catch(function () { return { ok: false, error: 'the war-net did not answer' }; }); };   // the bout of the day and its board
   net.arenaRankings = function (o) { o = o || {}; return jfetch('/arena/rankings?scope=' + (o.scope || 'global') + '&kind=' + (o.kind || 'player') + '&limit=' + (o.limit || 50) + '&offset=' + (o.offset || 0), { method: 'GET' }).catch(function () { return { ok: false, error: 'the war-net did not answer' }; }); };
 
   // ----- multiple characters per account, same map: adopt / switch / split / give -----

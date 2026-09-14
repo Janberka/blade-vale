@@ -2,7 +2,7 @@
 // trophies, achievements, PvP purse and loot. The host reports a finished match ONCE (POST /arena/result)
 // and the server pays every player named in it; each player's client then reads its own career.
 const { db } = require('./db');
-const { ARENA_RANKS, ARENA_ITEMS, ARENA_SLOTS, ARENA_ACHIEVEMENTS: ACHIEVEMENTS, skillLevel, rankOf, rankInfo, renownOf, lockReason } = require('../arena-items');
+const { ARENA_RANKS, ARENA_ITEMS, ARENA_SLOTS, ARENA_ACHIEVEMENTS: ACHIEVEMENTS, ARENA_BESTS, PITY_AT, WAGERS, skillLevel, rankOf, rankInfo, renownOf, lockReason, statOf, uniqueChance, rivalBonus, dayKey, dailyOf, dailyScore } = require('../arena-items');
 
 const SIM = require('../arena-sim');
 const PVP_CUT = 0.08, PVP_CAP = 60;                       // a beaten player pays 8% of his purse (at most 60) to the winners
@@ -13,21 +13,25 @@ function row(acctId) { const get = Q('get', 'SELECT * FROM arena_careers WHERE a
 function parse(r) {
   return { xp: r.xp, gold: r.gold, trophies: r.trophies, matches: r.matches, wins: r.wins, kills: r.kills, deaths: r.deaths, damage: r.damage, stars: r.stars,
     items: JSON.parse(r.items_json || '[]'), equipped: JSON.parse(r.equipped_json || '{}'), skills: JSON.parse(r.skills_json || '{}'), achievements: JSON.parse(r.achievements_json || '[]'),
-    lastSeed: r.last_seed || null, lastReward: r.last_reward_json ? JSON.parse(r.last_reward_json) : null };
+    lastSeed: r.last_seed || null, lastReward: r.last_reward_json ? JSON.parse(r.last_reward_json) : null, meta: metaOf(r.meta_json) };
 }
+// THE HOOKS' blob (worker/index.js metaOf is the twin): bests, the rival, loot pity, the counters behind the newer achievements
+function metaOf(txt) { let m = {}; try { m = JSON.parse(txt || '{}') || {}; } catch (e) {} if (!m.bests) m.bests = {}; m.pity = m.pity | 0; return m; }
 const SAVE_SQL = `UPDATE arena_careers SET xp=@xp, gold=@gold, trophies=@trophies, matches=@matches, wins=@wins, kills=@kills, deaths=@deaths, damage=@damage, stars=@stars,
-  items_json=@items, equipped_json=@equipped, skills_json=@skills, achievements_json=@achievements, last_seed=@lastSeed, last_reward_json=@lastReward, renown=@renown, updated_at=unixepoch() WHERE account_id=@id`;
+  items_json=@items, equipped_json=@equipped, skills_json=@skills, achievements_json=@achievements, last_seed=@lastSeed, last_reward_json=@lastReward, renown=@renown, meta_json=@meta, updated_at=unixepoch() WHERE account_id=@id`;
 function write(acctId, c) {
   Q('save', SAVE_SQL).run({ id: acctId, xp: c.xp | 0, gold: c.gold | 0, trophies: c.trophies | 0, matches: c.matches | 0, wins: c.wins | 0, kills: c.kills | 0, deaths: c.deaths | 0, damage: c.damage | 0, stars: c.stars | 0,
-    items: JSON.stringify(c.items), equipped: JSON.stringify(c.equipped), skills: JSON.stringify(c.skills), achievements: JSON.stringify(c.achievements), lastSeed: c.lastSeed, lastReward: c.lastReward ? JSON.stringify(c.lastReward) : null, renown: renownOf(c) });
+    items: JSON.stringify(c.items), equipped: JSON.stringify(c.equipped), skills: JSON.stringify(c.skills), achievements: JSON.stringify(c.achievements), lastSeed: c.lastSeed, lastReward: c.lastReward ? JSON.stringify(c.lastReward) : null, renown: renownOf(c), meta: JSON.stringify(c.meta || {}) });
 }
 // what the client sees
 function view(c, seed) {
-  const skills = {}; for (const k of ['sword', 'bow', 'riding']) skills[k] = { count: c.skills[k] | 0, level: skillLevel(c.skills[k]) };
+  const skills = {}; for (const k of ['sword', 'bow', 'riding']) skills[k] = { count: c.skills[k] | 0, level: skillLevel(c.skills[k]) }; const m = c.meta || metaOf('{}');
   return { xp: c.xp, gold: c.gold, trophies: c.trophies, matches: c.matches, wins: c.wins, kills: c.kills, deaths: c.deaths, damage: c.damage, stars: c.stars,
-    items: c.items, equipped: c.equipped, skills, achievements: c.achievements, rank: rankInfo(c.xp), lastSeed: c.lastSeed, lastReward: (!seed || c.lastSeed === String(seed)) ? c.lastReward : null };
+    items: c.items, equipped: c.equipped, skills, achievements: c.achievements, rank: rankInfo(c.xp), lastSeed: c.lastSeed, lastReward: (!seed || c.lastSeed === String(seed)) ? c.lastReward : null,
+    meta: { bests: m.bests || {}, rival: m.rival || null, pity: m.pity | 0, pityAt: PITY_AT, rivalsBeaten: m.rivalsBeaten | 0, dailies: m.dailies | 0, dailyTops: m.dailyTops | 0, belts: m.belts | 0 } };
 }
-function career(acctId, seed) { const c = parse(row(acctId)), v = view(c, seed); v.renown = renownOf(c); Object.assign(v, position('player', v.renown, c.matches)); return v; }
+function beltRow() { return db.prepare('SELECT holder, renown, since, defenses FROM arena_belt WHERE id=1').get() || { holder: null, renown: 0, since: 0, defenses: 0 }; }
+function career(acctId, seed) { const c = parse(row(acctId)), v = view(c, seed); v.renown = renownOf(c); Object.assign(v, position('player', v.renown, c.matches)); v.belt = beltRow(); return v; }
 
 function buy(acctId, id) {
   const c = parse(row(acctId)), why = lockReason(id, c);
@@ -68,22 +72,50 @@ function applyResult(reporterAcct, body) {
     const teams = new Set(players.map(p => p.team | 0)), winners = players.filter(p => (p.team | 0) === winner && accts.has(p.handle)), losers = players.filter(p => (p.team | 0) !== winner && accts.has(p.handle));
     let pot = 0; const pvp = winner >= 0 && teams.size >= 2 && winners.length && losers.length; const paidCut = {};
     if (pvp) for (const p of losers) { const c = cs.get(p.handle), cut = Math.min(PVP_CAP, Math.floor(c.gold * PVP_CUT)); c.gold -= cut; pot += cut; paidCut[p.handle] = cut; }
+    const wager = WAGERS.indexOf(body.wager | 0) > 0 ? body.wager | 0 : 0, daily = dailyDayOf(body.daily, seed);
+    const belt = beltRow(); let beltHolder = belt.holder, beltRenown = belt.renown | 0;
     for (const p of players) {
       const a = accts.get(p.handle); if (!a) continue; const c = cs.get(p.handle), won = (p.team | 0) === winner, draw = winner < 0;
-      const r = rewardFor(p, won, draw), before = rankOf(c.xp);
+      const r = rewardFor(p, won, draw), before = rankOf(c.xp), renownBefore = renownOf(c), m = c.meta;
       c.xp += r.xp; c.gold += r.gold; c.trophies += r.trophies; c.matches++; if (won) c.wins++; c.kills += clamp(p.kills | 0, 0, 500); if (!p.alive) c.deaths++; c.damage += Math.round(clamp(+p.dmg || 0, 0, 1e5)); if (p.star) c.stars++;
       const sk = p.skills || {}; for (const k of ['sword', 'bow', 'riding']) c.skills[k] = (c.skills[k] | 0) + clamp(sk[k] | 0, 0, 200);
-      const reward = Object.assign({ seed, won, draw, star: !!p.star }, r);
+      const reward = Object.assign({ seed, won, draw, star: !!p.star, xpBefore: c.xp - r.xp }, r);
       if (pvp && won) { const share = Math.floor(pot / winners.length); c.gold += share; reward.purse = share; }
       if (pvp && !won) reward.purse = -(paidCut[p.handle] || 0);
-      if (won) {                                               // LOOT: the odd purse, and rarely a unique — a look, not a stat
+      if (wager && !draw) { const stake = Math.min(wager, Math.max(0, c.gold)); if (won) c.gold += stake; else c.gold -= stake; reward.wager = won ? stake : -stake; }
+      if (won) {                                               // LOOT: the odd purse, and a unique whose odds climb with every win that rolled none (PITY)
         if (Math.random() < 0.25) { const g = 10 + Math.floor(Math.random() * 31); c.gold += g; reward.lootGold = g; }
-        if (Math.random() < 0.05) { const pool = Object.keys(ARENA_ITEMS).filter(id => ARENA_ITEMS[id].unique && c.items.indexOf(id) < 0);
-          if (pool.length) { const id = pool[Math.floor(Math.random() * pool.length)]; c.items.push(id); c.equipped[ARENA_ITEMS[id].slot] = id; reward.loot = id; } else { c.gold += 50; reward.lootGold = (reward.lootGold || 0) + 50; } }
+        if (Math.random() < uniqueChance(m.pity)) { const pool = Object.keys(ARENA_ITEMS).filter(id => ARENA_ITEMS[id].unique && c.items.indexOf(id) < 0);
+          if (pool.length) { const id = pool[Math.floor(Math.random() * pool.length)]; c.items.push(id); c.equipped[ARENA_ITEMS[id].slot] = id; reward.loot = id; m.pity = 0; } else { c.gold += 50; reward.lootGold = (reward.lootGold || 0) + 50; } }
+        else m.pity++;
+        reward.pity = m.pity; reward.pityAt = PITY_AT;
       }
+      { const B = p.bests || {}, cand = { kills: p.kills, dmg: p.dmg, life: B.life, blow: B.blow, streak: B.streak }, beat = [];   // PERSONAL BESTS
+        for (const [k, , cap] of ARENA_BESTS) { const v = Math.round(clamp(+cand[k] || 0, 0, cap)), was = m.bests[k] | 0; if (v > was) { m.bests[k] = v; beat.push({ k, v, was }); } }
+        if (beat.length) reward.bests = beat; }
+      { const rv = m.rival, inPit = rv && npcs.some(n => n.name === rv.name);   // THE RIVAL
+        if (inPit && won) { const bn = rivalBonus(rv); c.xp += bn.xp; c.gold += bn.gold; m.rivalsBeaten = (m.rivalsBeaten | 0) + 1; reward.rival = { name: rv.name, beaten: true, xp: bn.xp, gold: bn.gold, times: rv.times | 0 }; m.rival = null; }
+        else if (!won && p.killedBy && p.killedBy.kind === 'npc' && typeof p.killedBy.name === 'string') { const n = npcs.find(x => x.name === p.killedBy.name);
+          if (n) { const same = rv && rv.name === n.name; m.rival = { name: n.name, arch: n.arch, skill: n.skill | 0, times: same ? (rv.times | 0) + 1 : 1, since: same ? rv.since : Math.floor(Date.now() / 1000) }; reward.rival = { name: n.name, beaten: false, times: m.rival.times }; } }
+        else if (inPit && !won && rv) { rv.times = (rv.times | 0) + 1; reward.rival = { name: rv.name, beaten: false, times: rv.times }; } }
+      if (daily) {                                             // THE BOUT OF THE DAY
+        const sc = dailyScore(p, won, draw), old = db.prepare('SELECT score, tries FROM arena_daily WHERE day=? AND fighter=?').get(daily, a.handle);
+        const top = (db.prepare('SELECT MAX(score) AS s FROM arena_daily WHERE day=? AND fighter<>?').get(daily, a.handle) || {}).s | 0, best = Math.max(sc, old ? old.score | 0 : 0);
+        if (!old) db.prepare('INSERT INTO arena_daily(day, fighter, score, kills, dmg, alive, won, tries) VALUES (?,?,?,?,?,?,?,1)').run(daily, a.handle, sc, clamp(p.kills | 0, 0, 500), Math.round(clamp(+p.dmg || 0, 0, 1e5)), p.alive ? 1 : 0, won ? 1 : 0);
+        else if (sc > (old.score | 0)) db.prepare('UPDATE arena_daily SET score=?, kills=?, dmg=?, alive=?, won=?, tries=tries+1, updated_at=unixepoch() WHERE day=? AND fighter=?').run(sc, clamp(p.kills | 0, 0, 500), Math.round(clamp(+p.dmg || 0, 0, 1e5)), p.alive ? 1 : 0, won ? 1 : 0, daily, a.handle);
+        else db.prepare('UPDATE arena_daily SET tries=tries+1, updated_at=unixepoch() WHERE day=? AND fighter=?').run(daily, a.handle);
+        if (!old) m.dailies = (m.dailies | 0) + 1;
+        const topped = best > top && !(old && (old.score | 0) > top); if (topped) m.dailyTops = (m.dailyTops | 0) + 1;
+        reward.daily = { day: daily, score: sc, best, tries: old ? (old.tries | 0) + 1 : 1, top: topped, toBeat: best > top ? 0 : top - best + 1 }; }
+      const renownAfter = renownOf(c);                        // THE LADDER: whom you passed; the champion's belt
+      if (renownAfter > renownBefore) { const passed = db.prepare('SELECT a.handle, COUNT(*) OVER () AS n FROM arena_careers c JOIN accounts a ON a.id=c.account_id WHERE c.matches>0 AND a.id<>? AND c.renown>=? AND c.renown<? ORDER BY c.renown DESC LIMIT 1').get(a.id, renownBefore, renownAfter); if (passed) reward.passed = { name: passed.handle, n: passed.n | 0 }; }
+      if (won && (!beltHolder || (beltHolder !== a.handle && renownAfter > beltRenown))) {   // (taken on a win only — a loss never crowns anyone) reward.belt = { taken: beltHolder || null, defenses: 0 }; m.belts = (m.belts | 0) + 1; beltHolder = a.handle; beltRenown = renownAfter;
+        db.prepare('INSERT INTO arena_belt(id, holder, renown, since, defenses) VALUES (1,?,?,unixepoch(),0) ON CONFLICT(id) DO UPDATE SET holder=excluded.holder, renown=excluded.renown, since=excluded.since, defenses=0').run(a.handle, renownAfter); }
+      else if (beltHolder === a.handle) { const d = (belt.defenses | 0) + (won ? 1 : 0); beltRenown = renownAfter; reward.belt = { held: true, defenses: d, since: belt.since }; db.prepare('UPDATE arena_belt SET renown=?, defenses=? WHERE id=1').run(renownAfter, d); }
       const after = rankOf(c.xp); if (after > before) reward.rankUp = ARENA_RANKS[after][0];
-      const earned = []; for (const [id, label, stat, at] of ACHIEVEMENTS) if (c[stat] >= at && c.achievements.indexOf(id) < 0) { c.achievements.push(id); earned.push(label); }
+      const earned = []; for (const [id, label, stat, at] of ACHIEVEMENTS) if (statOf(c, stat) >= at && c.achievements.indexOf(id) < 0) { c.achievements.push(id); earned.push(label); }
       if (earned.length) reward.achievements = earned;
+      reward.position = position('player', renownAfter, c.matches).position; reward.renown = renownAfter;
       c.lastSeed = seed; c.lastReward = reward; write(a.id, c); markPaid.run(seed, a.id); bout('player', a.handle, p, won, draw); rewards[p.handle] = reward;
     }
     applyNpcs(seed, winner, npcs, bout);
@@ -121,6 +153,20 @@ function applyNpcs(seed, winner, npcs, bout) {
   }
 }
 
+// THE BOUT OF THE DAY (worker/index.js dailyDayOf / dailyBoard are the twins)
+function dailyDayOf(day, seed) {
+  if (typeof day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(day) || !String(seed).startsWith('d' + day + '-')) return null;
+  const today = dayKey(), yest = dayKey(new Date(Date.now() - 86400e3)); return day === today || day === yest ? day : null;
+}
+function dailyBoard(me) {
+  const day = dayKey(), spec = dailyOf(day);
+  const rows = db.prepare('SELECT fighter AS name, score, kills, dmg, alive, won, tries, updated_at FROM arena_daily WHERE day=? ORDER BY score DESC, updated_at ASC LIMIT 10').all(day); rows.forEach((r, i) => { r.pos = i + 1; });
+  const total = db.prepare('SELECT COUNT(*) AS n FROM arena_daily WHERE day=?').get(day).n;
+  let mine = null; if (me) { const r = db.prepare('SELECT score, kills, dmg, alive, won, tries FROM arena_daily WHERE day=? AND fighter=?').get(day, me); if (r) { r.pos = db.prepare('SELECT COUNT(*) AS n FROM arena_daily WHERE day=? AND score>?').get(day, r.score).n + 1; mine = r; } }
+  const endsIn = Math.max(0, Math.floor((Date.UTC(+day.slice(0, 4), +day.slice(5, 7) - 1, +day.slice(8, 10) + 1) - Date.now()) / 1000));
+  return { ok: true, day, spec, board: rows, total, mine, endsIn };
+}
+
 // ---- profiles + the ladder (the Worker's twin: see worker/index.js "profiles + the ladder") ----
 const npcTier = skill => skill >= 82 ? 'champion' : skill >= 60 ? 'veteran' : skill >= 35 ? 'soldier' : 'recruit';
 const LADDER = {
@@ -139,14 +185,15 @@ function rankings(o) {
   const total = db.prepare(`SELECT COUNT(*) AS n ${L.from} ${where}`).get(...args).n;
   const rows = db.prepare(`SELECT ${L.cols} ${L.from} ${where} ORDER BY c.renown DESC, c.wins DESC, name ASC LIMIT ? OFFSET ?`).all(...args, lim, off);
   rows.forEach((r, i) => { r.pos = off + i + 1; r.title = ladderTitle(r); });
-  return { ok: true, kind, scope, total, rows };
+  const belt = kind === 'player' ? beltRow() : null; if (belt && belt.holder) for (const r of rows) if (r.name === belt.holder) r.belt = { since: belt.since, defenses: belt.defenses };
+  return { ok: true, kind, scope, total, rows, belt: belt && belt.holder ? belt : null };
 }
 function position(kind, renown, matches) {
   const t = LADDER[kind].table, of = db.prepare(`SELECT COUNT(*) AS n FROM ${t} WHERE matches > 0`).get().n;
   if (!(matches > 0)) return { position: null, of };
   return { position: db.prepare(`SELECT COUNT(*) AS n FROM ${t} WHERE matches > 0 AND renown > ?`).get(renown).n + 1, of };
 }
-const BLANK_ROW = { xp: 0, gold: 0, trophies: 0, matches: 0, wins: 0, kills: 0, deaths: 0, damage: 0, stars: 0, items_json: '["wood_sword"]', equipped_json: '{"sword":"wood_sword"}', skills_json: '{}', achievements_json: '[]', last_seed: null, last_reward_json: null };
+const BLANK_ROW = { xp: 0, gold: 0, trophies: 0, matches: 0, wins: 0, kills: 0, deaths: 0, damage: 0, stars: 0, items_json: '["wood_sword"]', equipped_json: '{"sword":"wood_sword"}', skills_json: '{}', achievements_json: '[]', last_seed: null, last_reward_json: null, meta_json: '{}' };
 function profile(name, kind) {
   name = String(name || '').trim().slice(0, 64); if (!name) return { ok: false, error: 'who?' };
   let p = null;
@@ -155,7 +202,8 @@ function profile(name, kind) {
     if (a) { const c = parse(db.prepare('SELECT * FROM arena_careers WHERE account_id=?').get(a.id) || BLANK_ROW);
       const skills = {}; for (const k of ['sword', 'bow', 'riding']) skills[k] = { level: skillLevel(c.skills[k]) };
       p = { name: a.handle, kind: 'player', rank: rankInfo(c.xp), title: rankInfo(c.xp).name, xp: c.xp, matches: c.matches, wins: c.wins, losses: Math.max(0, c.matches - c.wins), kills: c.kills, deaths: c.deaths, damage: c.damage, stars: c.stars, trophies: c.trophies,
-        skills, achievements: c.achievements, equipped: c.equipped, renown: renownOf(c), since: a.created_at }; }
+        skills, achievements: c.achievements, equipped: c.equipped, renown: renownOf(c), since: a.created_at, bests: c.meta.bests || {}, rivalsBeaten: c.meta.rivalsBeaten | 0, dailyTops: c.meta.dailyTops | 0 };
+      const belt = beltRow(); if (belt.holder === a.handle) p.belt = { since: belt.since, defenses: belt.defenses }; }
   }
   if (!p && kind !== 'player') {
     const r = db.prepare('SELECT * FROM npc_careers WHERE name=? COLLATE NOCASE').get(name);
@@ -167,4 +215,4 @@ function profile(name, kind) {
   p.recent = db.prepare('SELECT seed, team, won, draw, kills, dmg, alive, star, venue, size, created_at FROM arena_bouts WHERE kind=? AND fighter=? ORDER BY created_at DESC LIMIT 10').all(p.kind, p.name);
   return { ok: true, profile: p };
 }
-module.exports = { career, buy, equip, applyResult, profile, rankings, simulateRound, ACHIEVEMENTS };
+module.exports = { career, buy, equip, applyResult, profile, rankings, dailyBoard, simulateRound, ACHIEVEMENTS };

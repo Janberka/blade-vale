@@ -776,6 +776,54 @@ Bram is the same Bram fight after fight, and his record grows like anyone's.
   (`SHELL.bootHash` — the first page shown strips the hash; `afProfileOpen`/`afLadderOpen` set it
   with `replaceState`, leaving them clears it). Test hooks: `BV.profile(name, kind)`, `BV.ladder(scope, kind)`.
 
+### The hooks: what makes a fight feel like something happened (2026-09-14)
+
+Eleven small systems that pull on the same few levers — anticipation, a variable reward, competence feedback, a goal
+gradient, social comparison, collection, novelty, stakes — without a timer, a streak penalty or a loot box (see
+`ROADMAP.md` → *We Will NOT Do*). All of it rides on the existing payout; the client sends a little more in the
+report (`bests`, `killedBy`, `wager`, `daily`) and the server answers with a richer `reward`.
+
+* **Callouts in the pit** (`afCallout`, a stack under the banner): FIRST BLOOD, DOUBLE / TRIPLE / RAMPAGE (kills
+  within 12 s of each other — `afKillHooks`), RIPOSTE (a blow that lands within 1.4 s of your block — `riposteAt` in
+  `afDamage`, mirrored for guests from the `hit` event), COMEBACK (a kill under a quarter health), LAST MAN STANDING.
+  Each one lifts the crowd (`afCrowdReact`). YOU FELL names who felled you.
+* **The near-miss line** (`afNearMiss`) under the result: how close it was — the last man's health, how long you
+  lasted, who will be back.
+* **The staged reveal** (`afRevealStart`): the purse comes one line at a time — XP ticks up into the rank bar (from
+  `reward.xpBefore`), the gold drops, "the crowd decides…" spins the unique names for a second and a half before the
+  loot lands, then the bests, the rival, the belt, whom you passed, the bout of the day, the achievements. A tap on
+  the box shows it all. A **Share** button (`afShare`) uses the phone's share sheet, else the clipboard.
+* **Loot pity** (`uniqueChance` in arena-items.js): a unique is 5% on a win and the odds climb with every win that
+  rolled none (`meta.pity`), certain at `PITY_AT` = 20. The reveal shows the odds for the next win.
+* **Personal bests** (`ARENA_BESTS`: kills, damage, longest life, biggest blow, kill streak — `meta.bests`): the
+  client reports life / blow / streak; a beaten record is a line on the reveal and a tile in the hall.
+* **The rival** (`meta.rival`): the vale's man who felled you in a lost fight. He takes the first empty seat against
+  you in your next lobby fight (`afStartFight`, `entry.rival`), the lobby says so, and a win in a fight he stands in
+  pays `rivalBonus` (+40 XP +30 gold, plus half his skill) and settles the score (`rivalsBeaten`).
+* **The champion's belt** (`arena_belt`, one row): players only. Taken on a win by whoever has more renown than the
+  holder; every win while holding it is a defense. The ladder badges the holder, the profile and the home say so.
+* **Whom you passed** (`reward.passed`): the highest-renown player you overtook this fight, and how many.
+* **The wager** (`WAGERS` = 0 / 25 / 50 / 100 / 200, a lobby row for signed-in hosts, carried in the `lobby` and
+  `go` messages): every signed-in player in the pit stakes it, never past what he has at payout. Win: the stake and
+  as much again. Lose: the stake. Draw: nothing.
+* **The bout of the day** (`dailyOf(day)` in arena-items.js, `arena_daily`, `GET /arena/daily`): one fight for the
+  whole vale — the seed, pit, hour, sky, ground and foes come from the UTC date, the men are rolled from it too
+  (`L.mixSeed` = the seed, names from `seed ^ 0x9e3779b9`), so everyone faces the same lot. Solo, no lobby. Each try
+  reports as its own fight (`AF.reportSeed` = `d<day>-<seed>-<try>`) and pays normally; the board keeps your best
+  (`dailyScore` = 100 a kill + damage + 150 alive + 300 a win) and resets at midnight. Buttons on the title and the
+  home carry today's name.
+* **The hall of trophies** (`afHallRender`, page `hall`): the belt, the rival, the bests, every unique lit or dim
+  with the odds, every achievement with the road to it (`statOf`), the daily record.
+* **Since you were away** (`afHomeNews`, `bv-seen-<handle>` in localStorage): after half an hour away the home
+  says what moved — climbed or passed on the ladder, the belt lost, the rival beaten — and always the belt, the
+  rival and the XP to the next rank.
+
+Storage: one `meta_json` blob on `arena_careers` (bests, rival, pity, rivalsBeaten, dailies, dailyTops, belts —
+`metaOf`), `arena_belt`, `arena_daily`. Achievements now check `statOf(career, stat)` so the new ones (scores settled,
+bouts of the day, the belt, streaks) read the blob. Test hooks: `BV.arenaFell(idx)` (I fell the man at idx —
+streaks, first blood), `BV.callout()`, `BV.reveal()`, `BV.nearMiss()`, `BV.daily()`, `BV.dailyStart()`,
+`BV.hall()`, `BV.homeNews()`.
+
 ### Network model
 
 Host-authoritative over the `/coop` relay. The host runs the sim and broadcasts a snapshot

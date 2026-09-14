@@ -55,7 +55,43 @@
     ['wins_5', '5 wins', 'wins', 5], ['wins_25', '25 wins', 'wins', 25], ['wins_100', '100 wins', 'wins', 100],
     ['star_1', 'Star of the match', 'stars', 1], ['star_10', 'Star ten times over', 'stars', 10],
     ['trophies_50', '50 trophies', 'trophies', 50], ['trophies_200', '200 trophies', 'trophies', 200],
+    // THE HOOKS (2026-09-14): scores settled with a rival, bouts of the day, the champion's belt, a streak
+    ['rival_1', 'A score settled', 'rivalsBeaten', 1], ['rival_5', 'Five scores settled', 'rivalsBeaten', 5],
+    ['daily_1', 'Fought a bout of the day', 'dailies', 1], ['daily_10', 'Ten bouts of the day', 'dailies', 10], ['daily_top', 'Topped a bout of the day', 'dailyTops', 1],
+    ['belt_1', "Took the champion's belt", 'belts', 1],
+    ['streak_3', 'Three in a row', 'streak', 3], ['streak_5', 'Rampage — five in a row', 'streak', 5],
   ];
+  // PERSONAL BESTS — one fight's numbers a career remembers (meta.bests); the results screen calls a beaten one out.
+  // [id, label, cap] — the client reports life / blow / streak beside the kills and damage it already sends.
+  var ARENA_BESTS = [['kills', 'kills in one fight', 500], ['dmg', 'damage in one fight', 1e5], ['life', 'longest life', 3600], ['blow', 'biggest blow', 500], ['streak', 'kill streak', 100]];
+  // a career stat, wherever it lives: the row (kills, wins…), the meta blob (rivalsBeaten, dailies, belts…), or a best (streak)
+  function statOf(c, stat) { if (c[stat] != null) return c[stat] | 0; var m = c.meta || {}; if (m[stat] != null) return m[stat] | 0; return ((m.bests || {})[stat]) | 0; }
+  // LOOT PITY: a unique is a 1-in-20 roll on a win, and the odds climb with every win that rolls nothing — at PITY_AT
+  // wins without one it is certain. (No loot box: nothing is bought; the roll is on the fight.)
+  var PITY_AT = 20;
+  function uniqueChance(pity) { pity = Math.max(0, pity | 0); return Math.min(1, 0.05 + pity * pity * 0.0024); }
+  // THE WAGER: the host may put gold on the fight; every signed-in player in it stakes the same (never more than he
+  // has). Win: the stake back and as much again. Lose: the stake. Draw: nothing moves.
+  var WAGERS = [0, 25, 50, 100, 200];
+  // THE RIVAL: the vale's man who felled you waits in your next pit; beat him and the purse is heavier
+  function rivalBonus(rival) { var sk = rival && rival.skill | 0; return { xp: 40 + Math.round(sk / 2), gold: 30 + Math.round(sk / 2) }; }
+  // THE BOUT OF THE DAY — one fight the whole vale fights: the same seed, the same men, the same sand, a board of its
+  // own that resets at midnight UTC. Everything below is derived from the day string, so client and server agree.
+  function fnv(s) { var h = 2166136261; for (var i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619); return h >>> 0; }
+  function mulberry(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; var t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  var DAILY_ADJ = ['Broken', 'Bloody', 'Silent', 'Crimson', 'Iron', 'Hollow', 'Burning', 'Cold', 'Long', 'Bitter', 'Golden', 'Black', 'Grey', 'Last', 'Wild', 'Quiet', 'Red', 'Lost', 'Proud', 'Hungry'];
+  var DAILY_NOUN = ['Shields', 'Sands', 'Gate', 'Spears', 'Crowns', 'Oath', 'Bell', 'Wolves', 'Banners', 'Steel', 'Dawn', 'Dusk', 'Hour', 'Ring', 'Torches', 'Helms', 'Hounds', 'Stones', 'Vigil', 'Reckoning'];
+  function dayKey(d) { d = d || new Date(); return d.toISOString().slice(0, 10); }
+  function dailyOf(day) {
+    day = day || dayKey(); var seed = fnv('blade-vale-daily:' + day), r = mulberry(seed), pick = function (a) { return a[Math.floor(r() * a.length)]; };
+    var name = 'The ' + pick(DAILY_ADJ) + ' ' + pick(DAILY_NOUN), pit = r() < 0.25;
+    var per = pit ? 1 : 2 + Math.floor(r() * 4), teams = pit ? (r() < 0.3 ? 3 : 2) : 2;
+    return { day: day, seed: seed, name: name, venue: pit ? 'pit' : 'colosseum', teams: teams, per: per,
+      time: pit ? 'night' : pick(['day', 'day', 'dusk', 'night']), weather: pit ? 'clear' : (r() < 0.25 ? 'rain' : 'clear'), pit: pick(['cosy', 'wide', 'wide', 'vast']), ground: pit ? 'sand' : pick(['sand', 'hills', 'rocks', 'broken']),
+      xp: pick(['mixed', 'mixed', 'veteran', 'green']) };
+  }
+  // the board's score: the star-of-the-match measure plus the outcome, so a win with kills tops a survival
+  function dailyScore(p, won, draw) { return Math.round(Math.min(500, p.kills | 0) * 100 + Math.min(1e5, +p.dmg || 0) + (p.alive ? 150 : 0) + (won ? 300 : draw ? 100 : 0)); }
   // use-skills: swing hits, arrow hits, ten-second stretches in the saddle — level = floor(sqrt(count / 5))
   function skillLevel(count) { return Math.floor(Math.sqrt(Math.max(0, count | 0) / 5)); }
   function rankOf(xp) { var i = 0; for (var k = 0; k < ARENA_RANKS.length; k++) if (xp >= ARENA_RANKS[k][1]) i = k; return i; }
@@ -81,6 +117,6 @@
     if ((career.gold | 0) < it.price) return 'needs ' + it.price + ' gold';
     return null;
   }
-  var api = { ARENA_RANKS: ARENA_RANKS, ARENA_ITEMS: ARENA_ITEMS, ARENA_SLOTS: ARENA_SLOTS, ARENA_ACHIEVEMENTS: ARENA_ACHIEVEMENTS, RENOWN: RENOWN, NPC_GIVEN: NPC_GIVEN, NPC_BYNAMES: NPC_BYNAMES, skillLevel: skillLevel, rankOf: rankOf, rankInfo: rankInfo, renownOf: renownOf, lockReason: lockReason };
+  var api = { ARENA_RANKS: ARENA_RANKS, ARENA_ITEMS: ARENA_ITEMS, ARENA_SLOTS: ARENA_SLOTS, ARENA_ACHIEVEMENTS: ARENA_ACHIEVEMENTS, ARENA_BESTS: ARENA_BESTS, RENOWN: RENOWN, NPC_GIVEN: NPC_GIVEN, NPC_BYNAMES: NPC_BYNAMES, PITY_AT: PITY_AT, WAGERS: WAGERS, skillLevel: skillLevel, rankOf: rankOf, rankInfo: rankInfo, renownOf: renownOf, lockReason: lockReason, statOf: statOf, uniqueChance: uniqueChance, rivalBonus: rivalBonus, dayKey: dayKey, dailyOf: dailyOf, dailyScore: dailyScore, fnv: fnv, mulberry: mulberry };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.ARENA_CAT = api;
 })(typeof window !== 'undefined' ? window : this);

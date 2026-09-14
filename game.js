@@ -16886,7 +16886,7 @@ const AF_LIM = { teamsMin: 2, teamsMax: 6, perMin: 1, perMax: 200, heroCap: 24 }
 // THE PITS (lobby Venue): an illegal fighting cellar under the tanners' quarter — a sunken ring of sand, a rail, and a
 // press of patrons looking down by torchlight. Two or three fighters, one a side (every man for himself), swords only:
 // no room to draw a bow, no door a horse fits through. Rookies cut their teeth here before the Colosseum.
-const AF_PIT = { r: 11, lip: 2.4, out: 22, roofY: 10.5, teamsMax: 3, arch: ['swordsman', 'brute', 'duelist', 'guardsman'] };   // (a Vale knight is ~3.3 tall: the lip is chest height, the roof three men)
+const AF_PIT = { r: 11, lip: 2.4, out: 22, roofY: 10.5, teamsMax: 3, arch: ['swordsman', 'brute', 'duelist', 'guardsman'], door: Math.PI / 2 + Math.PI / 16 };   // (a Vale knight is ~3.3 tall: the lip is chest height, the roof three men; door: the stair's bearing)
 function afLim(L) { return L && L.venue === 'pit' ? { teamsMin: 2, teamsMax: AF_PIT.teamsMax, perMin: 1, perMax: 1, heroCap: AF_LIM.heroCap } : AF_LIM; }
 function afSetVenue(L, v) {                                  // the host picks the house; the pits shrink the lobby to 2–3 single seats, swords, green foes
   v = v === 'pit' ? 'pit' : 'colosseum'; if ((L.venue || 'colosseum') === v) return true;
@@ -18168,7 +18168,7 @@ function afBuildPitHouse() {
   const R0 = AF_F.radius, P = AF_PIT, LIP = P.lip, OUT = P.out, ROOF = P.roofY, g = new THREE.Group(), seed = _mulberry32(AF.seed ^ 0x3c6ef372), S = afMesher(), C = afMesher();   // S casts shadows; C (roof, beams) does not — the lantern key hangs under it
   const at = (r, a, y) => [Math.cos(a) * r, y, Math.sin(a) * r], tang = (a) => -a - Math.PI / 2, arcN = (r, len) => Math.max(4, Math.round((TAU * r) / len));
   const STONE = 0x4e4640, STONE_D = 0x37312c, BRICK = 0x5a3f33, BRICK_D = 0x3f2c24, FLAG = 0x3a3531, WOOD = 0x4a3320, WOOD_D = 0x2e1f12, IRON = 0x2a2624, STRAW = 0xa88c48, BLOOD = 0x6a1e14, BONE = 0xd8cfb8;
-  const doorA = Math.PI / 2 + Math.PI / 16, nearDoor = (a, half) => Math.abs(angleDelta(a, doorA)) < half;   // the stair comes down between the corners, so nobody musters in the doorway
+  const doorA = P.door, nearDoor = (a, half) => Math.abs(angleDelta(a, doorA)) < half;   // the stair comes down between the corners, so nobody musters in the doorway
   AF.torches = []; AF.gates = []; AF.gateLights = [];
   // ---- the RING WALL: three courses of rough blocks, joints staggered, a plank cap the patrons lean on
   for (let c = 0; c < 3; c++) {
@@ -18178,10 +18178,10 @@ function afBuildPitHouse() {
   { const n = arcN(R0 + 0.45, 1.5), len = TAU * (R0 + 0.45) / n - 0.04; for (let i = 0; i < n; i++) { const a = (i / n) * TAU, p = at(R0 + 0.45, a, LIP + 0.06); S.box(len, 0.12, 1.0, p[0], p[1], p[2], tang(a), afTint(WOOD, 0.2, seed())); } }
   // ---- the PATRONS' FLOOR: flagstones from the wall out to the brick, a chest height over the sand
   S.lathe([{ r: OUT + 0.6, y: LIP, c: FLAG, k: 1 }, { r: R0 + 0.75, y: LIP, c: FLAG, k: 1 }, { r: R0 + 0.75, y: -0.3, c: STONE_D, k: 0 }], 48, null, null, 0.18, afHash);
-  // ---- the RAIL round the lip
+  // ---- the RAIL round the lip — open at the stair's bearing: the fighters' way down onto the sand (afPitIntroStart)
   { const rr = R0 + 1.05, n = arcN(rr, 1.6), len = 2 * rr * Math.sin(Math.PI / n) + 0.1;
-    for (let i = 0; i < n; i++) { const a = (i / n) * TAU, p = at(rr, a, LIP + 0.85); S.box(0.16, 1.7, 0.16, p[0], p[1], p[2], tang(a), WOOD_D);
-      const a2 = ((i + 0.5) / n) * TAU, q = at(rr, a2, LIP + 1.62); S.box(len, 0.1, 0.09, q[0], q[1], q[2], tang(a2), WOOD); } }
+    for (let i = 0; i < n; i++) { const a = (i / n) * TAU, a2 = ((i + 0.5) / n) * TAU; if (nearDoor(a2, 0.22)) continue; const p = at(rr, a, LIP + 0.85); S.box(0.16, 1.7, 0.16, p[0], p[1], p[2], tang(a), WOOD_D);
+      const q = at(rr, a2, LIP + 1.62); S.box(len, 0.1, 0.09, q[0], q[1], q[2], tang(a2), WOOD); } }
   // ---- the CELLAR: brick walls with pilasters, a plinth course, the stair's black doorway with a skull on a spike either side
   { const N = 16, H = ROOF - LIP + 0.6, len = 2 * OUT * Math.sin(Math.PI / N) + 0.2;
     for (let i = 0; i < N; i++) {
@@ -18240,7 +18240,7 @@ function afBuildPitHouse() {
   for (const rr of [R0 + 2.0, R0 + 3.3, R0 + 4.6, R0 + 5.9]) {
     const n = Math.round(TAU * rr / 1.35);
     for (let k = 0; k < n; k++) {
-      const a = ((k + 0.2 + seed() * 0.6) / n) * TAU; if (seed() > 0.9 - (rr - R0) * 0.08 || (rr > R0 + 3 && nearDoor(a, 0.24))) continue;
+      const a = ((k + 0.2 + seed() * 0.6) / n) * TAU; if (seed() > 0.9 - (rr - R0) * 0.08 || nearDoor(a, 0.24) || (rr > R0 + 3 && Math.abs(angleDelta(a, doorA - 0.42)) < 0.2)) continue;   // (the lane from the stair to the rail stays open through every ring; the punters' room at the bookmaker's table)
       const r = rr + (seed() - 0.5) * 0.4, x = Math.cos(a) * r, z = Math.sin(a) * r;
       list.push({ x, y: LIP, z, yaw: Math.atan2(-x, -z) + (seed() - 0.5) * 0.5, s: 1.22 + seed() * 0.22, sy: 1.04, col: cols[(seed() * cols.length) | 0], ph: seed() * TAU, ang: a, amp: 0.5 + seed() * 0.7, flag: 0 });
     }
@@ -18603,6 +18603,7 @@ function afPickActs(rnd, order) {
   return styles;
 }
 function afIntroStart() {
+  if (AF.cfg.venue === 'pit') return afPitIntroStart();      // the cellar has no gates: its own film
   const rnd = _mulberry32(AF.seed ^ 0x9e3779b9), myT = AF.me ? AF.me.team : 0, order = [myT]; for (let t = 0; t < AF.cfg.teams; t++) if (t !== myT) order.push(t);
   const I = AF.intro = { t: 0, shots: [], i: 0, shotT: 0, cut: true, stars: afPickStars(), order, myT, foeT: order[1], frames: [], drumT: 0.4, drums: true, cap: null, release: [], film: null };
   AF.timeScale = 1; AF.fov = CAM_BASE_FOV;
@@ -18862,6 +18863,76 @@ function afIntroCompose(I, L) {
   });
   L.faceoff(A, 2.0, 0.5);
 }
+/* THE PITS' ENTRANCE — no gates, no columns, no drums. The fighters come down the cellar stair one at a time,
+   through the lane the patrons keep open, and drop over the lip onto the sand. The lens: the cellar from the foot of
+   the stair, the bookmaker's table, then each man — out of the black doorway between the skulls, the walk through
+   the patrons, the drop in slow motion — the foes first and you last; a turn under the candle-wheel while they take
+   their marks, and the face-off. Same machinery as the Colosseum's (AF.intro, afIntroStep/afIntroBody, the lens
+   kit); the men carry b.yOff (the flagstones are a lip above the sand) until they land. */
+const AF_PIT_INTRO = { door: 1.7, lane: 2.0, drop: 2.4, slow: 0.4, dropSecs: 0.62, land: 0.32, stair: 2.0 };
+function afPitIntroStart() {
+  const rnd = _mulberry32(AF.seed ^ 0x9e3779b9), myT = AF.me ? AF.me.team : 0, order = []; for (let t = 0; t < AF.cfg.teams; t++) if (t !== myT) order.push(t); order.push(myT);   // (the foes first, you last)
+  const I = AF.intro = { t: 0, shots: [], i: 0, shotT: 0, cut: true, stars: afPickStars(), order, myT, foeT: order[0], frames: [], drumT: 0, drums: false, cap: null, release: [], film: 'pit', styles: [], pit: true };
+  AF.timeScale = 1; AF.fov = CAM_BASE_FOV;
+  const P = AF_PIT, T = AF_PIT_INTRO, a = P.door, ux = Math.cos(a), uz = Math.sin(a), sm = q => q * q * (3 - 2 * q), at = (r, an) => ({ x: Math.cos(an) * r, z: Math.sin(an) * r });
+  const F = { t: 0, a, R: P.r, ux, uz, wx: -Math.sin(a), wz: Math.cos(a), gx: ux * P.out, gz: uz * P.out, face: Math.atan2(-ux, -uz), tang: -a - Math.PI / 2, colDepth: 2.2, exit: { x: ux * (P.r + 3.4), z: uz * (P.r + 3.4) } };   // one door for everyone; exit: the lane's end, a pace short of the rail
+  for (let t = 0; t < AF.cfg.teams; t++) { I.frames.push(F); I.release.push(1e9); }
+  const m = AF.cfg.teams >= 3 ? 0.85 : 1, D = { door: T.door * m, lane: T.lane * m, drop: T.drop };
+  const lipR = P.r + 0.95, landR = P.r - 2.0, stairR = P.out + 1.6, spd = (stairR - lipR) / (D.door + D.lane - 0.35);   // he reaches the lip a beat before his drop shot
+  for (let t = 0; t < AF.cfg.teams; t++) AF.bodies.filter(b => b.team === t).forEach((b, j) => {
+    b.home = { x: b.x, z: b.z, yaw: b.yaw };
+    b.intro = { phase: 'wait', star: I.stars[t].includes(b), ahead: null, spd, salute: 0, side: 0, route: null, i: 0, pauseT: 0, release: null, rally: null, rallyPick: (rnd() * 3) | 0, penRallyAt: null, land: 0, drop: null };
+    const r = stairR + j * 2.2; b.x = ux * r; b.z = uz * r; b.yaw = F.face; b.lookYaw = F.face; b.vx = b.vz = 0; b.moving = false; b.yOff = P.lip + T.stair;   // (up the stair in the dark)
+    b.group.visible = true; b.tx = b.x; b.tz = b.z; b.tyaw = b.yaw;
+    afIntroRoute(b, [{ x: ux * lipR, z: uz * lipR, spd, tol: 0.3, pause: 0.55, face: () => Math.atan2(b.home.x - b.x, b.home.z - b.z) }, { x: ux * landR, z: uz * landR, spd, tol: 0.4, drop: true }]);   // the lane, a look down from the lip, the drop, then his mark
+    setPose(b.anim, 'relax', 0.01); afCommit(b, 0.016);
+  });
+  const L = afIntroLens(I, rnd), head = t => '<div style="font-size:.68em;letter-spacing:5px;opacity:.7;margin-bottom:6px">' + t + '</div>', n = AF.bodies.length, wager = AF.cfg.wager | 0;
+  const marksClear = p => Math.min(...AF.bodies.map(b => Math.hypot(b.home.x - p.x, b.home.z - p.z)));   // how far a lens here is from the nearest mark
+  // THE CELLAR: from the foot of the stair, over the patrons' heads, the ring under its candle-wheel
+  { const side = L.sideOf();
+    L.shot(3.4 * Math.max(m, 0.9), 1, (k) => { const e = sm(k), c = at(lerp(P.out - 1.2, P.out - 4.8, e), a + side * lerp(0, 0.12, e));
+      afIntroCam(c.x, P.lip + lerp(2.6, 2.1, e), c.z, 0, lerp(3.4, 2.6, e), 0, lerp(60, 50, e), 0); }, () => afCrowdReact(false),
+      head('THE PITS') + n + ' in the ring · every man for himself' + (wager ? '<div style="opacity:.85;font-size:.8em;margin-top:2px">' + wager + ' gold a man on the table</div>' : '')); }
+  // THE STAKES: the bookmaker's table by the stair, from the punters' side — the strongbox and the gold against the brick
+  { const ta = a - 0.42, tr = P.out - 4.2, tb = at(tr, ta), side = L.sideOf();
+    L.shot(1.9, 1, (k) => { const c = at(tr - lerp(2.5, 2.1, k), ta + side * 0.1); afIntroCam(c.x, P.lip + 1.9, c.z, tb.x, P.lip + 1.15, tb.z, 40, 0); }, null,
+      head('THE STAKES') + (wager ? wager + ' gold a man, on the bookmaker\'s table' : 'the bookmaker takes the stakes')); }
+  // EACH MAN: the doorway (he steps out of the dark), the lane through the patrons, the drop over the lip in slow motion
+  order.forEach((t, k) => {
+    const b = I.stars[t][0] || AF.bodies.find(x => x.team === t); if (!b) return;
+    const side = L.sideOf(), mine = AF.me && AF.me.team === t, title = mine ? 'AND YOU' : k === 0 ? 'THE FIRST DOWN THE STAIR' : k === order.length - 1 ? 'THE LAST DOWN THE STAIR' : 'THE NEXT DOWN THE STAIR';
+    L.shot(D.door, 1, (q) => { const c = at(P.out - lerp(5.8, 5.1, q), a); afIntroCam(c.x + F.wx * side * 1.5, P.lip + 1.4, c.z + F.wz * side * 1.5, F.gx - ux * 0.3, P.lip + 2.4, F.gz - uz * 0.3, 46, 0); },
+      () => { AF.bodies.filter(x => x.team === t).forEach((x, j) => { x.intro.release = I.t + 0.1 + j * 0.7; }); I.release[t] = I.t + 0.1; }, head(title) + L.starCap(b));
+    L.shot(D.lane, 1, (q, dt) => { const fx = Math.sin(b.yaw), fz = Math.cos(b.yaw), ah = lerp(4.4, 2.9, q), px = b.x + fx * ah - Math.cos(b.yaw) * side * 1.3, pz = b.z + fz * ah + Math.sin(b.yaw) * side * 1.3;
+      afIntroCam(px, (b.yOff || 0) + 1.5, pz, b.x, (b.yOff || 0) + AF_INTRO.chest + 0.1, b.z, 42, dt * 10); }, null, null);
+    const dropAt = [-1, 1].map(s => at(P.r - 2.8, a + s * 0.5)).sort((p, q) => marksClear(q) - marksClear(p))[0];   // (the side of the stair clear of the men's marks: a man on his mark must not stand in front of the lens)
+    L.shot(D.drop, T.slow, (q, dt) => afIntroCam(dropAt.x, 0.9, dropAt.z, b.x, (b.yOff || 0) + 1.7, b.z, 54, dt * 12), null, null);
+  });
+  // the FINALE: under the candle-wheel while they take their marks, then over your shoulder at the nearest of them
+  const A = I.stars[myT][0] || AF.me || AF.bodies[0];
+  L.orbit(() => ({ x: 0, z: 0 }), 9.6, 4.4, 2.4, 1, 58).onStart = () => {
+    for (let t = 0; t < AF.cfg.teams; t++) if (I.release[t] > 1e8) I.release[t] = I.t + 0.2;
+    for (const b of AF.bodies) if (b.intro && b.intro.phase === 'wait' && b.intro.release != null && b.intro.release > 1e8) b.intro.release = I.t + 0.2;
+    afCrowdReact(true); AF.roar = 2.0; afBanner('THE PITS', n + ' in the ring — every man for himself', 2.6); };
+  L.faceoff(A, 2.0, 0.5);
+  afIntroUi(true); afIntroApplyShot();
+  const fade = document.getElementById('af-intro-fade'); if (fade) { fade.style.transition = 'none'; fade.style.opacity = '1'; requestAnimationFrame(() => { fade.style.transition = 'opacity .9s'; fade.style.opacity = '0'; }); }
+  try { console.log('[arena] intro film', I.film); } catch (e) {}
+}
+// over the LIP (the pits): a hop off the flagstones and a fall onto the sand, the knees taking it, dust at his feet
+function afIntroDrop(b, S, wp, sdt) {
+  const T = AF_PIT_INTRO;
+  if (S.land > 0) { S.land -= sdt; const c = 0.7 * clamp(S.land / T.land, 0, 1); b.yOff = -0.45 * c; restLegs(b.parts, sdt, false, c); setPose(b.anim, 'relax', 0.2); b.moving = false; b.vx = b.vz = 0; afCommit(b, sdt); return; }
+  if (!S.drop) S.drop = { t: 0, x0: b.x, z0: b.z, y0: b.yOff || 0, yaw: Math.atan2(wp.x - b.x, wp.z - b.z) };
+  const D = S.drop; D.t += sdt; const k = clamp(D.t / T.dropSecs, 0, 1);
+  b.x = lerp(D.x0, wp.x, k); b.z = lerp(D.z0, wp.z, k); b.yaw = angleLerp(b.yaw, D.yaw, clamp(sdt * 8, 0, 1)); b.lookYaw = b.yaw;
+  b.yOff = D.y0 * (1 - k * k) + 0.45 * Math.sin(Math.PI * k) * (1 - k);   // a hop, then the fall
+  restLegs(b.parts, sdt, false, k < 0.25 ? 0.5 * (1 - k / 0.25) : 0.15 + 0.5 * k);   // (a crouch to push off, the legs gathered for the landing)
+  setPose(b.anim, 'relax', 0.2); b.vx = Math.sin(D.yaw) * 3; b.vz = Math.cos(D.yaw) * 3; b.moving = false;   // (the velocity leans him into it)
+  if (k >= 1) { S.drop = null; S.i++; S.land = T.land; b.yOff = 0; b.vx = b.vz = 0; afSparks(tmpV.set(b.x, afY(b.x, b.z) + 0.15, b.z), 0xc9b79a, 8); try { SFX.foot(b.group.position); } catch (e) {} afCrowdReact(true); }
+  afCommit(b, sdt);
+}
 function afIntroCam(px, py, pz, lx, ly, lz, fov, smooth) {
   const I = AF.intro; tmpV.set(px, py, pz);
   if (I.cut || !smooth) camera.position.copy(tmpV); else camera.position.lerp(tmpV, clamp(smooth, 0, 1));
@@ -18886,8 +18957,10 @@ function afIntroBody(b, sdt) {
   const I = AF.intro, S = b.intro; if (!S) return;
   const F = I.frames[b.team]; let moving = false, gait = 'walk', spd = S.spd;
   if (S.phase === 'wait' && I.t >= (S.release != null ? S.release : I.release[b.team])) S.phase = 'go';
+  if (I.pit && (S.phase === 'wait' || S.i === 0)) b.yOff = AF_PIT.lip + AF_PIT_INTRO.stair * clamp((Math.hypot(b.x, b.z) - (AF_PIT.out - 0.4)) / 2.4, 0, 1);   // the pits: down the stair to the flagstones
   if (S.phase === 'go') {
     const wp = S.route[S.i], dx = wp.x - b.x, dz = wp.z - b.z, d = Math.hypot(dx, dz); spd = wp.spd || S.spd; gait = wp.gait || 'walk';
+    if (wp.drop || S.land > 0) { afIntroDrop(b, S, wp, sdt); return; }   // (the pits: over the lip)
     let hold = false;                                        // in the tunnel, keep a pace behind the man ahead in the column
     if (S.i === 0 && S.ahead && S.ahead.intro && S.ahead.intro.phase !== 'done' && Math.hypot(S.ahead.x - b.x, S.ahead.z - b.z) < (b.mounted || S.ahead.mounted ? 3.6 : 2.2)) hold = true;
     if (S.pauseT > 0) { S.pauseT -= sdt; if (wp.face) b.yaw = angleLerp(b.yaw, wp.face(), clamp(sdt * 5, 0, 1)); if (S.pauseT <= 0) S.i++; }
@@ -18924,7 +18997,7 @@ function afIntroEnd() {
   const I = AF.intro; if (!I) return; AF.intro = null; AF.timeScale = 1;
   for (const b of AF.bodies) {                             // everyone to his muster point (the cut hides the jump)
     if (b.home) { b.x = b.home.x; b.z = b.home.z; b.yaw = b.home.yaw; b.lookYaw = b.yaw; b.inp.yaw = b.yaw; b.tx = b.x; b.tz = b.z; b.tyaw = b.yaw; }
-    b.vx = b.vz = 0; b.moving = false; b.group.visible = true; b.intro = null;
+    b.vx = b.vz = 0; b.moving = false; b.group.visible = true; b.intro = null; b.yOff = 0;
     if (b.mounted && b.horse) { b.horse.x = b.x; b.horse.z = b.z; b.horse.yaw = b.yaw; if (b.parts.mount) b.parts.mount.userData.rig.speed01 = 0; }
     afCommit(b, 0.016);
   }
@@ -18968,7 +19041,7 @@ function afIntroUi(show, label) {
    the steel goes up, the winning line with its swords in the air, a turn round the cavea while the house roars the
    win, and a crane back down onto the sand. Then the end panel. Skippable (the button, space/enter/escape);
    ?nooutro or BV.arena({outro:false}) drops the film (the poses stay). */
-const AF_OUTRO = { raise: 0.35, stagger: 1.0, pump: [1.2, 2.3], pumpDur: 0.3, shots: { star: 3.6, line: 3.4, crowd: 5.2, crane: 2.8 } };
+const AF_OUTRO = { raise: 0.35, stagger: 1.0, pump: [1.2, 2.3], pumpDur: 0.3, shots: { star: 3.6, line: 3.4, crowd: 5.2, crane: 2.8, fallen: 2.6, patrons: 4.0, purse: 2.2 } };   // (fallen / patrons / purse: the pits' cut)
 function afVictoryStart() {
   const w = AF.winner, alive = AF.bodies.filter(b => !b.dead);
   let mvp = null;                                            // the star of the match: the host's pick (a guest has only the name the host sent)
@@ -19048,20 +19121,30 @@ function afOutroCompose(O, V) {
       afOutroCam(px, gy(px, pz) + (M.mounted ? 2.9 : 1.35), pz, M.x, gy(M.x, M.z) + (M.mounted ? 3.4 : 2.7), M.z, lerp(46, 40, e), true); }
   }, mvpCap, () => afCrowdReact(true));
   // 2. THE LINE — a slow circle round the winners with their steel in the air, the star nearest the lens at the start
-  { const a0 = Math.atan2(A.z - c0.z, A.x - c0.x) || side * 0.7, r = clamp(6.5 + Math.min(spread, 14) * 0.35, 6.5, 12), h = 2.8 + Math.min(spread, 14) * 0.08, ly = A.mounted ? 3.2 : 2.4;   // (from the star's side of the line, so his men are behind him)
+  if (!pit) { const a0 = Math.atan2(A.z - c0.z, A.x - c0.x) || side * 0.7, r = clamp(6.5 + Math.min(spread, 14) * 0.35, 6.5, 12), h = 2.8 + Math.min(spread, 14) * 0.08, ly = A.mounted ? 3.2 : 2.4;   // (from the star's side of the line, so his men are behind him)
     shot(D.line, (k) => { const a = a0 + side * k * 1.25;
       afOutroCam(A.x + Math.cos(a) * r, gy(A.x, A.z) + h, A.z + Math.sin(a) * r, A.x, gy(A.x, A.z) + ly, A.z, 44, true); }, lineCap, () => { AF.roar = 2.4; }); }
+  // 2 (the pits). THE LAST MAN DOWN — from the sand where he lies, up at the man who put him there
+  else { const fallen = AF.bodies.filter(b => b.dead && b !== A).sort((p, q) => (q.diedAt || 0) - (p.diedAt || 0))[0];
+    if (fallen && Math.hypot(fallen.x - A.x, fallen.z - A.z) < 10) { const dx = A.x - fallen.x, dz = A.z - fallen.z, d = Math.hypot(dx, dz) || 1, nx = dx / d, nz = dz / d;
+      shot(D.fallen, (k) => { const e = sm(k), px = fallen.x - nx * lerp(2.9, 2.3, e) - nz * side * 0.7, pz = fallen.z - nz * lerp(2.9, 2.3, e) + nx * side * 0.7;   // (far enough back that he lies in the bottom of the frame, the winner standing over him)
+        afOutroCam(px, gy(px, pz) + 1.05, pz, A.x, gy(A.x, A.z) + 1.5, A.z, 46, true); },
+        head('THE LAST MAN DOWN') + '<span style="color:' + fallen.teamDef.col + '">' + fallen.name + '</span>' + (fallen.killedBy ? ' · fell to ' + fallen.killedBy.name : '') + ' · ' + afFmtSecs(fallen.diedAt || 0) + ' in', null); } }
   // 3. THE CROWD — the lens rides the rim round the bowl, the tiers rising ahead of it, the house on its feet (a wave runs with it)
   const aC = Math.atan2(M.z, M.x) + side * 0.35, turn = 1.6;
   const cr = pit ? AF_PIT.r - 1.4 : R + 2.6, cy = pit ? AF_PIT.lip + 1.7 : AF_AMPH.wall + 4.5, lr = pit ? AF_PIT.out - 2.5 : R + 15, ly = pit ? AF_PIT.lip + 1.3 : AF_AMPH.wall + 7.5;
-  shot(D.crowd, (k) => { const a = aC + side * k * turn, la = a + side * 0.55;
+  shot(pit ? D.patrons : D.crowd, (k) => { const a = aC + side * k * turn, la = a + side * 0.55;
     afOutroCam(Math.cos(a) * cr, cy, Math.sin(a) * cr, Math.cos(la) * lr, ly, Math.sin(la) * lr, pit ? 62 : 58, false); },
     head(pit ? 'THE CELLAR' : 'THE HOUSE') + (pit ? 'the patrons have had their sport' : 'the crowd has its winner'),
     () => { afCrowdReact(true); AF.roar = 2.6; AF.waveT = 3.6; AF.waveAng = aC + side * 0.9 - 0.6; });
+  // 3 (the pits). THE PURSE — the bookmaker's table by the stair: the strongbox, the gold, the patrons pressing round it
+  if (pit) { const ta = AF_PIT.door - 0.42, tr = AF_PIT.out - 4.2, tx = Math.cos(ta) * tr, tz = Math.sin(ta) * tr, wager = AF.cfg.wager | 0;   // (from the punters' side: the outer rings keep clear of the table)
+    shot(D.purse, (k) => { const e = sm(k), r = tr - lerp(2.5, 2.1, e), an = ta + side * 0.1; afOutroCam(Math.cos(an) * r, AF_PIT.lip + 1.9, Math.sin(an) * r, tx, AF_PIT.lip + 1.15, tz, 40, false); },
+      head('THE PURSE') + (wager ? wager + ' gold a man · ' : '') + 'the bookmaker pays out', null); }
   // 4. THE CRANE — from the rim back down onto the sand and the men holding it
   { const aE = aC + side * turn, laE = aE + side * 0.55, P0 = [Math.cos(aE) * cr, cy, Math.sin(aE) * cr], L0 = [Math.cos(laE) * lr, ly, Math.sin(laE) * lr];
     shot(D.crane, (k) => { const e = sm(k), rr = pit ? 5.5 : 7.5, P1 = [A.x + Math.cos(aE) * rr, gy(A.x, A.z) + (pit ? 3.0 : 3.8), A.z + Math.sin(aE) * rr], L1 = [A.x, gy(A.x, A.z) + (A.mounted ? 3.0 : 2.2), A.z];
-      afOutroCam(lerp(P0[0], P1[0], e), lerp(P0[1], P1[1], e), lerp(P0[2], P1[2], e), lerp(L0[0], L1[0], e), lerp(L0[1], L1[1], e), lerp(L0[2], L1[2], e), lerp(pit ? 62 : 58, 46, e), e > 0.85); }, null, null); }
+      afOutroCam(lerp(P0[0], P1[0], e), lerp(P0[1], P1[1], e), lerp(P0[2], P1[2], e), lerp(L0[0], L1[0], e), lerp(L0[1], L1[1], e), lerp(L0[2], L1[2], e), lerp(pit ? 62 : 58, 46, e), e > 0.85); }, pit ? lineCap : null, null); }   // (the pits: the film ends on the winner's name)
 }
 function afOutroStart() {
   const V = AF.victory; if (!V || !V.mvp || AF.outro) return false;
@@ -19512,7 +19595,7 @@ function afCommit(b, dt) {
       if (step !== b.lastStep) { b.lastStep = step; if (sp > 3 && camera.position.distanceToSquared(b.group.position) < (AF.bodies.length > AF_LIM.heroCap ? 120 : 900)) afSparks(tmpV.set(b.x, afY(b.x, b.z) + 0.15, b.z), 0xc9b79a, AF.bodies.length > AF_LIM.heroCap ? 1 : 2); }
     }
   }
-  const y = afY(b.x, b.z) + (b.moving && !b.dead && !b.mounted ? Math.abs(Math.cos(b.phase)) * g.bob : 0);
+  const y = afY(b.x, b.z) + (b.moving && !b.dead && !b.mounted ? Math.abs(Math.cos(b.phase)) * g.bob : 0) + (b.yOff || 0);   // (yOff: the entrance — on the pits' flagstones, the drop over the lip; zero in the fight)
   if (b.rollAng) {                                           // pivot the roll about the tucked body's middle: the feet swing over, the hips stay low
     // the tumble turns about the horizontal axis square to the roll's heading (rollRel, in the body's frame: +X is its
     // left, +Z its front), the head tipping the way it goes; the group's origin (the feet) is swung round a pivot at
@@ -20986,7 +21069,7 @@ function afCamera(dt) {
       const k = 1 - clamp(AF.countdown / AF_F.countdown, 0, 1), e = k * k * (3 - 2 * k), a = cam.yaw + Math.PI * 0.9 * (1 - e);
       const r = lerp(AF_F.radius * 1.12, cam.dist, e), h = lerp(AF.cfg.venue === 'pit' ? AF_PIT.roofY - 2.4 : clamp(AF_F.radius * 0.55 + 6, 12, 19), tmpV.y - hy, e);   // (from over the lower rows, under the sails, down onto the shoulder)
       tmpV2.set(me.x - Math.sin(a) * r, hy + h, me.z - Math.cos(a) * r);
-      camera.position.copy(tmpV2); camera.lookAt(me.x, hy + 0.2, me.z);
+      camera.position.copy(tmpV2); if (AF.cfg.venue === 'pit') afCamInPit(); camera.lookAt(me.x, hy + 0.2, me.z);   // (the pits: the sweep's end lands behind a man at the wall — over the lip, not inside the blocks)
     } else { const la = 3 * AF.camLift; camera.position.lerp(tmpV, clamp(dt * 14, 0, 1)); afCamInPit(); afCamAboveGround(0.7); camera.lookAt(me.x + Math.sin(cam.yaw) * la, hy + 0.9 * AF.camLift, me.z + Math.cos(cam.yaw) * la); } // lifted: look ahead over the fight, not down at your own helmet
     const sp = Math.hypot(me.vx, me.vz); AF.fov = lerp(AF.fov, afBaseFov() + clamp(sp / AF_F.move, 0, 1.2) * 5, clamp(dt * 4, 0, 1)); // a run widens the lens
   } else {                                                  // SPECTATING: ride on any fighter's shoulder, or a free camera over the pit
@@ -21480,7 +21563,7 @@ function afBoot(spec) {
   AF.firstBlood = false; AF.lastMan = false; AF.reveal = null; AF.xpBefore = AF.career ? AF.career.xp | 0 : null; AF.goldBefore = AF.career ? AF.career.gold | 0 : null;
   afHud();
   AF.intro = null; AF.timeScale = 1;
-  if (!AF.introOff && !inPit && !VR.on) { AF.phase = 'intro'; try { afIntroStart(); } catch (e) { console.warn('[arena] intro', e); AF.intro = null; AF.phase = 'countdown'; } }   // the entrance: gates, the march in, the stars in slow motion
+  if (!AF.introOff && !VR.on) { AF.phase = 'intro'; try { afIntroStart(); } catch (e) { console.warn('[arena] intro', e); AF.intro = null; AF.phase = 'countdown'; for (const b of AF.bodies) { if (b.home) { b.x = b.home.x; b.z = b.home.z; b.yaw = b.home.yaw; } b.intro = null; b.yOff = 0; b.group.visible = true; afCommit(b, 0.016); } } }   // the entrance: gates, the march in, the stars in slow motion (the pits: the stair and the drop)
   if (AF.phase !== 'intro') { if (inPit) afBanner('THE PITS', AF.bodies.length + ' in the ring — every man for himself', 2.6); else afBanner(AF.cfg.teams + ' TEAMS · ' + AF.cfg.per + ' EACH', AF.me ? 'you fight for ' + AF.me.teamDef.name + ' — steel yourself' : '', 2.6); }
   vrButton();                                                // a headset in the browser: the way into the pit in first person
   if (AF.role === 'guest') afSend({ k: 'go-ack', seed: AF.seed });   // tell the host the start got here (it re-sends until we do)

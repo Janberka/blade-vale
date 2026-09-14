@@ -63,3 +63,16 @@ The warrior's finger bones are unmapped, and an unmapped bone keeps the BIND pos
 fist round a hilt showed splayed fingers. `instanceModelRig` now gives every bone under a hand (`swordHand`, `bowHand`
 in rig.json) the file's own stance, a closed grip. Keep it that way for any new rig: save the model gripping.
 
+
+## Looks (2026-09-14) — no two fighters alike
+The warrior's armour is one sculpted mesh, so every man used to be the same plate knight. `tools/realmesh/warrior_pieces.py`
+bakes `assets/rigs/warrior/pieces.json`: the PIECE every armour triangle belongs to (helmet, pauldron, sleeve, elbow,
+vambrace, cuirass, skirt, straps, knee, greaves, pouch), what the palette makes each vertex of (steel, cloth, leather,
+dark, skin) and the hair/beard regions of the bald head that sits under the helmet. In game.js `lookRoll(name, arch,
+gear, pal)` rolls a LOOK from the fighter's name (host and guests roll the same man), his class and the armour he wears
+— which pieces he has on, what each is painted (`LOOK_ARMOR`, odds per class in `LOOK_CLASS`), skin, hair, beard,
+cloak, and his shield: the figure's heater, a low-poly round shield (`lookRoundShield`, skinned to the same bone, painted
+plain/halves/quarters/rays) or none (brutes and duelists). `lookApply` paints it as vertex colours over the palette and
+drops the missing pieces from the body's own index; the blue cloth is re-pointed at a white palette cell at load so the
+team dye takes. The shop's mannequin (`parts.lookFull`) shows every piece. Test hooks: `BV.look.live()`,
+`BV.showcase({name, arch, gear:{armor}})`. Re-run the bake after any change to the warrior model.

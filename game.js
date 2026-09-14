@@ -1032,7 +1032,11 @@ async function loadModelRig(name) {
     geo.setAttribute('skinIndex', new THREE.BufferAttribute(acc(p.attributes.JOINTS_0), 4)); geo.setAttribute('skinWeight', new THREE.BufferAttribute(acc(p.attributes.WEIGHTS_0), 4));
     geo.setIndex(new THREE.BufferAttribute(acc(p.indices), 1));
     const sk = g.skins[n.skin]; return { name: n.name, geo, joints: sk.joints, ibm: acc(sk.inverseBindMatrices) }; });
-  const entry = { name, spec, g, meshes, tex }; MODEL_RIGS.set(name, entry); return entry;
+  // LOOKS: pieces.json (tools/realmesh/warrior_pieces.py) names every triangle's armour piece and every vertex's stuff
+  let pieces = null; try { const pr = await fetch(base + 'pieces.json'); if (pr.ok) pieces = await pr.json(); } catch (e) { pieces = null; }
+  if (pieces) for (const m of meshes) { const key = Object.keys(pieces).find(k => m.name.indexOf('_' + k + '_') >= 0); const pj = key && pieces[key]; if (!pj) continue; m.pieces = pj; m.short = key;
+    const ci = pj.mats.indexOf('cloth'), uv = m.geo.getAttribute('uv'); if (ci >= 0 && uv) { for (let v = 0; v < uv.count; v++) if (pj.vmat[v] === ci) uv.setXY(v, LOOK_WHITE_UV[0], LOOK_WHITE_UV[1]); uv.needsUpdate = true; } }   // (the blue cloth → a white cell: the vertex colour IS the dye)
+  const entry = { name, spec, g, meshes, tex, pieces }; MODEL_RIGS.set(name, entry); return entry;
 }
 // build a fresh skeleton + skinned meshes for one body
 function instanceModelRig(R) {
@@ -1042,8 +1046,14 @@ function instanceModelRig(R) {
   const root = new THREE.Group(); g.nodes.forEach((n, i) => { if (parent[i] < 0 && n.mesh == null) root.add(nodes[i]); });
   const byName = {}; nodes.forEach(b => { byName[b.name] = b; });
   const mat = new THREE.MeshPhongMaterial({ map: R.tex, shininess: 6, specular: 0x111111, skinning: true });
+  const matVC = new THREE.MeshPhongMaterial({ map: R.tex, shininess: 6, specular: 0x111111, skinning: true, vertexColors: true });   // (the painted meshes: palette × vertex colour)
   const skinned = {};
-  for (const m of R.meshes) { const sm = new THREE.SkinnedMesh(m.geo, mat); sm.name = m.name; sm.frustumCulled = false; sm.castShadow = true; root.add(sm);
+  for (const m of R.meshes) { let geo = m.geo; const own = !!(m.pieces && m.pieces.classes.length > 1);
+    if (own) {                                               // this body's own copy of the index (pieces drop out of it) and its own paint; positions, normals, uvs, weights are shared
+      geo = new THREE.BufferGeometry(); for (const k of ['position', 'normal', 'uv', 'skinIndex', 'skinWeight']) geo.setAttribute(k, m.geo.getAttribute(k));
+      const i0 = m.geo.index.array; geo.setIndex(new THREE.BufferAttribute(new i0.constructor(i0), 1));
+      const nv = m.geo.getAttribute('position').count; geo.setAttribute('color', new THREE.BufferAttribute(new Uint8Array(nv * 3).fill(255), 3, true)); }
+    const sm = new THREE.SkinnedMesh(geo, own ? matVC : mat); sm.name = m.name; sm.frustumCulled = false; sm.castShadow = true; root.add(sm); if (own) { sm.userData.pieces = m.pieces; sm.userData.geo0 = m.geo; }
     const bones = m.joints.map(j => nodes[j]), inv = []; for (let i = 0; i < bones.length; i++) inv.push(new THREE.Matrix4().fromArray(m.ibm, i * 16));
     sm.bind(new THREE.Skeleton(bones, inv), new THREE.Matrix4()); skinned[m.name] = sm; }
   const order = []; const dfs = i => { order.push(i); (g.nodes[i].children || []).forEach(dfs); }; g.nodes.forEach((n, i) => { if (parent[i] < 0) dfs(i); });   // parents before children (the file's root sits last)
@@ -1107,12 +1117,12 @@ function wearModelRig(h, name, o = {}) {
   if (P.sword) { mount(P.sword, R.spec.swordHand); P.sword.traverse(x => { if (x.isMesh) x.visible = false; }); }
   if (P.bow) mount(P.bow, R.spec.bowHand || R.spec.swordHand);
   if (P.shield) { mount(P.shield, R.spec.shieldArm); P.shield.visible = false; P.shield.userData.modelHidden = true; }   // the figure's own shield shows instead
-  { let plume = null; g.traverse(x => { if (x.name === 'plume') plume = x; });   // the plume rides the figure's head bone, on the helmet's crown (rig.json plumeY = crown height above the head bone, model units)
+  let plume = null; { g.traverse(x => { if (x.name === 'plume') plume = x; });   // the plume rides the figure's head bone, on the helmet's crown (rig.json plumeY = crown height above the head bone, model units)
     if (plume && R.spec.map.head && inst.byName[R.spec.map.head]) { mount(plume, R.spec.map.head); plume.position.set(0, (R.spec.plumeY != null ? R.spec.plumeY : 0.35) * S - 0.04, -0.1); plume.rotation.x = 0.6; } }
   // team colour: the cloak is dyed outright, the shield's face is tinted — the steel stays steel
   if (o.team != null) { const cloak = inst.skinned[M.cloak]; if (cloak) cloak.material = new THREE.MeshPhongMaterial({ color: o.team, shininess: 4, specular: 0x050505, skinning: true });
     if (mShield) mShield.material = new THREE.MeshPhongMaterial({ map: R.tex, color: new THREE.Color(o.team).lerp(new THREE.Color(0xffffff), 0.35), shininess: 6, specular: 0x111111, skinning: true }); }
-  const live = { h, P, g, inst, drive, mSword, mShield, q: new THREE.Quaternion(), w: [], armBase, armAmt: armBase, body: null, bodyLooked: 0 };
+  const live = { h, P, g, inst, drive, mSword, mShield, mRound: null, shieldKind: 'heater', plume, q: new THREE.Quaternion(), w: [], armBase, armAmt: armBase, body: null, bodyLooked: 0 };
   MODEL_LIVE.push(live); P.modelRig = live; g.userData.model = name; return true;
 }
 // every render: copy the pivots onto the bones, top-down (unmapped bones keep their rest pose)
@@ -1134,11 +1144,119 @@ function syncModelRigs() {
     if (L.mSword) L.mSword.visible = !vr && drawn && !showGear && !L.P.noModelSword;
     if (L.P.shield) L.P.shield.visible = vr ? !!L.P.vrShieldOn : false;                          // (afMakeBody re-shows and rescales it; the figure's own shield is the one)
     if (L.P.sword) L.P.sword.traverse(m => { if (m.isMesh && m.visible !== showGear) m.visible = showGear; });   // (afBuildSword rebuilds it on every gear pass)
-    if (L.mShield) L.mShield.visible = !vr && !L.P.noModelShield && !!(L.P.bow ? !L.P.bow.visible : true);
+    const shieldOn = !vr && !L.P.noModelShield && !!(L.P.bow ? !L.P.bow.visible : true);   // (his LOOK says which shield, if any — lookApply)
+    if (L.mShield) L.mShield.visible = shieldOn && L.shieldKind === 'heater';
+    if (L.mRound) L.mRound.visible = shieldOn && L.shieldKind === 'round';
   }
 }
 { const _r = renderer.render.bind(renderer); renderer.render = (s, c) => { if (MODEL_LIVE.length) syncModelRigs(); return _r(s, c); }; }
 BV.modelRig = { load: loadModelRig, wear: wearModelRig, live: () => MODEL_LIVE.length, pos: () => MODEL_LIVE.map(L => [L.g.position.x, L.g.position.y, L.g.position.z, L.g.rotation.y]) };
+
+// ---------- LOOKS: no two fighters alike ----------
+// The warrior's armour is one sculpted mesh; pieces.json (tools/realmesh/warrior_pieces.py) says which PIECE every
+// triangle belongs to (helmet, pauldron, sleeve, elbow, vambrace, cuirass, skirt, straps, knee, greaves, pouch), what
+// the palette makes each vertex of (steel, cloth, leather, dark, skin) and where the bald head's hair and beard would
+// be. A LOOK is rolled per fighter from his NAME (host and guests roll the same man), the armour he wears and his
+// class: which pieces he has on, what each is painted, his skin, hair and beard, whether he wears a cloak, and which
+// shield he carries — the figure's heater, a round shield, or none. Pieces come off by leaving their triangles out
+// of the body's own index; the paint is a vertex colour over the palette (the blue cloth is re-pointed at a white
+// cell at load, so the team dye takes on the sleeves and the skirt).
+const LOOK_WHITE_UV = [1.5 / 16, 0.5 / 16];               // palette cell (1,0) = #eeeeee
+const LOOK_HAIR = [0x1a1210, 0x3a2416, 0x5c3a1e, 0x8a5a2e, 0xb08040, 0xd0b078, 0x8a8a88, 0x4a3a3a];   // black, dark brown, brown, auburn, fair, blond, grey, ash
+const LOOK_SKIN = [0xffffff, 0xf4dcc4, 0xe4c4a4, 0xc89a78, 0xa87858, 0x8a5c40];
+// per armour: the odds of each piece and what its STEEL is painted (a multiplier on the palette's grey — white leaves it steel)
+const LOOK_ARMOR = {
+  none:           { helmet: 0.08, pauldron: 0.00, elbow: 0.30, knee: 0.15, cloak: 0.25, plume: 0.00, cloth: 0.35, base: 'leather', cuirass: 'jack', skirt: 'jack', helmetP: 0x6a6c72 },
+  leather:        { helmet: 0.25, pauldron: 0.20, elbow: 0.50, knee: 0.30, cloak: 0.35, plume: 0.00, cloth: 0.35, base: 'leather', helmetP: 0x6a6c72 },
+  brigandine:     { helmet: 0.50, pauldron: 0.35, elbow: 0.70, knee: 0.50, cloak: 0.40, plume: 0.10, cloth: 0.15, base: 0x606268, cuirass: 0xa03030, skirt: 'leather' },
+  mail:           { helmet: 0.60, pauldron: 0.40, elbow: 0.80, knee: 0.60, cloak: 0.50, plume: 0.15, cloth: 0.10, base: 0xa8acb4, helmetP: 0xb4b8c0 },
+  plate:          { helmet: 0.80, pauldron: 0.85, elbow: 1.00, knee: 0.90, cloak: 0.60, plume: 0.35, cloth: 0.00, base: 'plate' },
+  champion_plate: { helmet: 0.90, pauldron: 1.00, elbow: 1.00, knee: 1.00, cloak: 1.00, plume: 0.80, cloth: 0.00, base: 0xf4ecd8, helmetP: 0xe8c050, pauldronP: 0xe8c050, elbowP: 0xe8c050, kneeP: 0xe8c050 },
+  dragon_plate:   { helmet: 1.00, pauldron: 1.00, elbow: 1.00, knee: 1.00, cloak: 1.00, plume: 0.60, cloth: 0.40, base: 0x34303c, pauldronP: 0x8a2424, elbowP: 0x8a2424, kneeP: 0x8a2424, helmetP: 0x2a2630 },
+};
+// by class: a guardsman wears his helm, an archer mostly goes bareheaded, a duelist travels light
+const LOOK_CLASS = { guardsman: { helmet: 0.25, pauldron: 0.2 }, archer: { helmet: -0.35, pauldron: -0.3, cloak: -0.2 }, duelist: { helmet: -0.25, pauldron: -0.3, cloak: 0.1 }, brute: { helmet: -0.1, pauldron: 0.1 }, rider: { helmet: 0.15, cloak: 0.2 } };
+const LOOK_LEATHER = [0x8a6a48, 0x6e4e30, 0x5a3e26, 0x7a5a3a];
+const LOOK_PLATE = [0xffffff, 0xffffff, 0xe8ecf4, 0xd0d4dc];
+function lookSeed(s) { let h = 2166136261 >>> 0; s = String(s || ''); for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return h; }
+function lookRng(seed) { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+// roll the look: name = whose (the seed), arch = his class, gear = his loadout, pal = the team palette; o.full = every piece on (the shop's mannequin)
+function lookRoll(name, arch, gear, pal, o = {}) {
+  const r = lookRng(lookSeed(name) ^ 0x5bd1e995), A = AF_ARCH[arch] || AF_ARCH.swordsman, kind = gear && gear.armor && LOOK_ARMOR[gear.armor] ? gear.armor : 'none', O = LOOK_ARMOR[kind], K = LOOK_CLASS[arch] || {};
+  const p = k => o.full ? 1 : clamp((O[k] || 0) + (K[k] || 0), 0, 1), pick = a => a[Math.floor(r() * a.length)];
+  const c = new THREE.Color(), team = new THREE.Color(pal ? pal.cloth : 0x8a8a8a);
+  const look = { kind, hide: [], paint: {}, cloth: 0, leather: pick(LOOK_LEATHER), skin: 0, hair: null, beard: null, cloak: false, shield: 'none', helmet: false, plume: false, round: 0 };
+  // the man: skin, hair, beard (rolled first, so a change of kit never changes his face)
+  look.skin = pick(LOOK_SKIN); const bald = r() < 0.16, hairC = pick(LOOK_HAIR);
+  look.hair = bald ? null : hairC; look.beard = r() < 0.42 ? c.setHex(hairC).lerp(new THREE.Color(look.skin), r() < 0.5 ? 0.45 : 0.1).getHex() : null;
+  // the kit
+  look.helmet = r() < p('helmet'); if (gear && gear.plume) look.helmet = true;                     // (a bought plume needs a helm to sit on)
+  for (const k of ['pauldron', 'elbow', 'knee']) if (r() >= p(k)) look.hide.push(k);
+  if (r() >= 0.6) look.hide.push('straps'); if (r() >= 0.5) look.hide.push('pouch'); if (!look.helmet) look.hide.push('helmet');
+  look.cloak = o.full ? true : r() < p('cloak'); look.plume = o.full || (r() < p('plume')) || !!(gear && gear.plume);
+  const sh = o.full ? 'heater' : !A.shield ? 'none' : arch === 'guardsman' ? 'heater' : (r() < 0.5 ? 'heater' : 'round'); look.shield = sh; look.round = Math.floor(r() * 4);
+  // the paint: cloth = the team dye (dulled on a poor man), steel per piece
+  look.cloth = c.copy(team).lerp(new THREE.Color(0x8a8480), O.cloth || 0).getHex(); if (kind === 'dragon_plate') look.cloth = c.copy(team).lerp(new THREE.Color(0x000000), 0.4).getHex();
+  const jack = c.copy(team).lerp(new THREE.Color(0x6a6460), 0.45).multiplyScalar(0.9).getHex();
+  const base = O.base === 'leather' ? look.leather : O.base === 'plate' ? pick(LOOK_PLATE) : O.base;
+  for (const pc of ['helmet', 'pauldron', 'sleeve', 'elbow', 'vambrace', 'cuirass', 'skirt', 'straps', 'knee', 'greaves', 'pouch']) {
+    let v = O[pc + 'P'] != null ? O[pc + 'P'] : O[pc] != null && typeof O[pc] !== 'number' ? O[pc] : base;
+    if (v === 'jack') v = jack; else if (v === 'leather') v = look.leather; look.paint[pc] = v; }
+  if (kind === 'none' || kind === 'leather') look.paint.vambrace = look.paint.greaves = look.leather;
+  return look;
+}
+function lookColour(look, cls, mt) {
+  if (mt === 'cloth') return look.cloth; if (mt === 'leather') return look.leather; if (mt === 'dark') return 0xffffff;
+  if (mt === 'skin') return cls === 'hair' ? (look.hair != null ? look.hair : look.skin) : cls === 'beard' ? (look.beard != null ? look.beard : look.skin) : cls === 'eye' ? 0xffffff : look.skin;
+  return look.paint[cls] != null ? look.paint[cls] : 0xffffff;
+}
+// dress a live figure in a look: paint the vertices, drop the pieces he goes without, cloak, plume, shield
+function lookApply(L, look) {
+  if (!L || !L.inst) return; L.look = look; const c = new THREE.Color(), R = MODEL_RIGS.get(L.g.userData.model), M = (R && R.spec.meshes) || {};
+  for (const sm of Object.values(L.inst.skinned)) { const pj = sm.userData.pieces; if (!pj) continue;
+    const col = sm.geometry.getAttribute('color'), nv = col.count, hide = new Set(look.hide), skinTint = pj.classes.indexOf('hair') >= 0;
+    // skin vertices carry a per-vertex colour, so the palette's skin (~#ffdcb4) × tint: the tint is chosen so tint × skin ≈ the tone wanted
+    for (let v = 0; v < nv; v++) { const cls = pj.classes[pj.vclass[v]], mt = pj.mats[pj.vmat[v]]; c.setHex(lookColour(look, cls, mt)); if (skinTint && mt === 'skin' && cls !== 'eye') { c.r = Math.min(1, c.r / 1.0); c.g = Math.min(1, c.g / 0.86); c.b = Math.min(1, c.b / 0.70); } col.setXYZ(v, c.r * 255, c.g * 255, c.b * 255); } col.needsUpdate = true;
+    const i0 = sm.userData.geo0.index.array, tri = pj.tri, idx = sm.geometry.index; let n = 0;
+    for (let t = 0; t < tri.length; t++) { if (hide.has(pj.classes[tri[t]])) continue; idx.array[n] = i0[t * 3]; idx.array[n + 1] = i0[t * 3 + 1]; idx.array[n + 2] = i0[t * 3 + 2]; n += 3; }
+    idx.needsUpdate = true; sm.geometry.setDrawRange(0, n); }
+  const cloak = L.inst.skinned[M.cloak]; if (cloak) { cloak.visible = !!look.cloak; if (cloak.material && cloak.material.color && !cloak.material.map) cloak.material.color.setHex(look.cloth); }
+  if (L.plume) L.plume.visible = !!(look.helmet && look.plume);
+  L.shieldKind = look.shield; if (look.shield === 'round') lookRoundShield(L, look); else if (L.mRound) L.mRound.visible = false;
+  if (L.mShield && L.mShield.material && L.mShield.material.color) L.mShield.material.color.setHex(look.cloth).lerp(new THREE.Color(0xffffff), 0.35);
+}
+// A ROUND SHIELD in the figure's shield hand: a faceted disc with a rim and a boss, skinned to the same bone as the
+// figure's own heater so it rides the arm exactly as that does. Painted per look: plain, halves, quarters, or rays.
+const LOOK_ROUND = { r: 0.31, x: 0.47, seg: 12 };
+function lookRoundShieldGeo(R) {
+  if (R.roundGeo) return R.roundGeo; const M = R.spec.meshes || {}, m = R.meshes.find(x => x.name === M.shield); if (!m) return null;
+  m.geo.computeBoundingBox(); const bb = m.geo.boundingBox, cy = (bb.min.y + bb.max.y) / 2, cz = (bb.min.z + bb.max.z) / 2, j = m.geo.getAttribute('skinIndex').getX(0);
+  const P = [], N = LOOK_ROUND.seg, rr = LOOK_ROUND.r, x0 = LOOK_ROUND.x, part = [];   // part: 0 face seg i (i<N), N = rim, N+1 = boss, N+2 = back
+  const tri = (a, b, c, pt) => { P.push(a, b, c); part.push(pt); };
+  const ring = (rad, x) => { const o = []; for (let i = 0; i <= N; i++) { const a = i / N * Math.PI * 2; o.push([x, cy + Math.cos(a) * rad, cz + Math.sin(a) * rad]); } return o; };
+  const outer = ring(rr, x0), inner = ring(rr * 0.86, x0 + 0.045), back = ring(rr, x0 - 0.015), bossR = ring(0.075, x0 + 0.055);
+  for (let i = 0; i < N; i++) {
+    tri(inner[i], outer[i], outer[i + 1], N); tri(inner[i], outer[i + 1], inner[i + 1], N);                    // the rim (a shallow slope)
+    tri([x0 + 0.075, cy, cz], inner[i], inner[i + 1], i);                                                        // the face: a slight dome
+    tri([x0 + 0.13, cy, cz], bossR[i], bossR[i + 1], N + 1);                                                     // the boss
+    tri([x0 - 0.015, cy, cz], back[i + 1], back[i], N + 2); tri(back[i], back[i + 1], outer[i + 1], N + 2); tri(back[i], outer[i + 1], outer[i], N + 2); }   // the back and the edge
+  const pos = new Float32Array(P.length * 3), si = new Uint16Array(P.length * 4), sw = new Float32Array(P.length * 4), pt = new Uint8Array(P.length);
+  P.forEach((v, i) => { pos.set(v, i * 3); si[i * 4] = j; sw[i * 4] = 1; pt[i] = part[Math.floor(i / 3)]; });
+  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); geo.setAttribute('skinIndex', new THREE.BufferAttribute(si, 4)); geo.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4));
+  geo.computeVertexNormals(); geo.userData.part = pt; return (R.roundGeo = geo);
+}
+function lookRoundShield(L, look) {
+  const R = MODEL_RIGS.get(L.g.userData.model), g0 = R && lookRoundShieldGeo(R); if (!g0 || !L.mShield) return;
+  if (!L.mRound) { const geo = new THREE.BufferGeometry(); for (const k of ['position', 'normal', 'skinIndex', 'skinWeight']) geo.setAttribute(k, g0.getAttribute(k)); geo.setAttribute('color', new THREE.BufferAttribute(new Uint8Array(g0.getAttribute('position').count * 3), 3, true));
+    const sm = new THREE.SkinnedMesh(geo, new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 8, specular: 0x222222, skinning: true, flatShading: true })); sm.frustumCulled = false; sm.castShadow = true; sm.name = 'roundShield';
+    L.mShield.parent.add(sm); sm.bind(L.mShield.skeleton, L.mShield.bindMatrix); L.mRound = sm; }
+  const col = L.mRound.geometry.getAttribute('color'), pt = g0.userData.part, N = LOOK_ROUND.seg, c = new THREE.Color();
+  const team = new THREE.Color(look.cloth), dev = new THREE.Color(look.kind === 'champion_plate' ? 0xe8c050 : look.kind === 'dragon_plate' ? 0x8a2424 : 0xf0e8d8), rim = new THREE.Color(0x3a3a40), boss = new THREE.Color(look.kind === 'champion_plate' ? 0xe8c050 : 0xc0c4cc), backC = new THREE.Color(0x6b4a2a);
+  const faceOf = i => look.round === 0 ? team : look.round === 1 ? (i < N / 2 ? team : dev) : look.round === 2 ? (Math.floor(i / (N / 4)) % 2 ? dev : team) : (i % 2 ? dev : team);
+  for (let v = 0; v < col.count; v++) { const p = pt[v]; c.copy(p < N ? faceOf(p) : p === N ? rim : p === N + 1 ? boss : backC); col.setXYZ(v, c.r * 255, c.g * 255, c.b * 255); } col.needsUpdate = true;
+  L.mRound.visible = true;
+}
+BV.look = { roll: lookRoll, apply: lookApply, live: () => MODEL_LIVE.map(L => ({ name: L.P.lookName, arch: L.P.lookArch, full: !!L.P.lookFull, shield: L.shieldKind, look: L.look && { kind: L.look.kind, hide: L.look.hide, helmet: L.look.helmet, cloak: L.look.cloak, plume: L.look.plume, hair: L.look.hair, beard: L.look.beard, skin: L.look.skin } })) };   // (test: every live figure's look)
 const MODEL_ON = !/[?&]plastic\b/.test(location.search);   // the warrior is the base soldier; ?plastic brings the plastic figures back
 const MODEL_NAME = 'warrior';
 BV.modelLoad = MODEL_ON ? loadModelRig(MODEL_NAME).then(() => { BV.modelReady = true; console.log('[model] warrior ready'); }, e => console.error('[model] load failed', e)) : Promise.resolve();   // (the home / market figure waits on this — the plastic placeholder is never shown)
@@ -17497,7 +17615,7 @@ function vrHallFigure(dt) {
     if (F) { VRM.hall.remove(F.group); try { disposeGroup(F.group); } catch (e) {} VRM.fig = null; }
     try {
       const G = afGearStats(gear), r = buildHumanoid(pal, 1, 'sword', { hero: true, both: true, plume: G.plume != null ? G.plume : AF_TEAM_HEX[0] }), parts = r.parts, group = r.group || r;
-      afWearModel({ group, parts }, pal); afDressGear(parts, gear, pal);
+      afWearModel({ group, parts }, pal); parts.lookName = who || (window.net && net.session ? net.session.username : ''); afDressGear(parts, gear, pal);
       if (parts.shield) parts.shield.visible = !showBow; if (parts.bow) parts.bow.visible = showBow; if (parts.sword) parts.sword.visible = !showBow;
       const anim = makeAnimator(parts); setPose(anim, showBow ? 'aimBow' : page === 'market' ? 'guard' : 'relax', 0.01); updateAnimator(anim, 1); restLegs(parts, 1, page === 'market' || showBow);
       group.scale.setScalar(0.5); group.position.set(-1.35, 0, -2.1); group.rotation.y = Math.atan2(1.35, 2.1);   // (half a knight = a man; to the left of the panel, turned to you)
@@ -19478,6 +19596,7 @@ function afMakeBody(entry, idx, r) {
   };
   b.tx = b.x; b.tz = b.z; b.tyaw = b.yaw; b.inp.yaw = b.yaw; b.baseScale = group.scale.x; b.tagH = afTagH(mounted, b.baseScale);
   if (mounted) { const hh = afNewHorse(group, h.horse); hh.rider = b; b.horse = hh; hh.x = b.x; hh.z = b.z; hh.yaw = b.yaw; hh.hp = hh.maxHp = Math.round(G.horseHp); }
+  b.parts.lookName = b.name; b.parts.lookArch = archKey;     // (his look is rolled from his name — every guest builds the same man)
   afDressGear(b.parts, b.gear, td.pal);
   group.position.set(b.x, afY(b.x, b.z), b.z); group.rotation.y = b.yaw;
   scene.add(group); group.userData.afBody = b;
@@ -19725,10 +19844,11 @@ function afDressGear(parts, gear, pal) {
   const sw = AF_LOOK.sword[gear.sword] || AF_LOOK.sword.iron_sword, trim = gear.trim && I[gear.trim];
   if (parts.sword) afBuildSword(parts.sword, sw, trim ? trim.blade : null);
   parts.gearSword = !!((gear.sword && gear.sword !== 'iron_sword' && AF_LOOK.sword[gear.sword]) || trim);   // the warrior figure puts his own blade away for this one (syncModelRigs)
-  if (parts.modelRig && parts.modelRig.inst) {                // the figure's sculpted armour is one mesh: the piece you wear tints it (leather brown, mail grey, plate bright, gold for the champion)
-    const L = parts.modelRig, R = MODEL_RIGS.get(L.g.userData.model), an = R && R.spec.meshes && R.spec.meshes.armor, am = an && L.inst.skinned[an];
-    if (am) { if (!am.userData.tintMat) { am.material = am.material.clone(); am.userData.tintMat = true; }
-      const c = ar ? new THREE.Color(ar.torso).lerp(new THREE.Color(0xffffff), 0.4) : new THREE.Color(0xffffff); if (ar && ar.gold) c.lerp(new THREE.Color(0xd9b24a), 0.35); am.material.color.copy(c); } }
+  if (parts.modelRig && parts.modelRig.inst) {                // the figure's sculpted armour, worn HIS way: the look rolled from his name, his class and the piece he wears (lookRoll)
+    const L = parts.modelRig; if (L.inst.skinned && Object.values(L.inst.skinned).some(sm => sm.userData.pieces)) lookApply(L, lookRoll(parts.lookName || '', parts.lookArch || 'swordsman', gear, pal, { full: !!parts.lookFull }));
+    else { const R = MODEL_RIGS.get(L.g.userData.model), an = R && R.spec.meshes && R.spec.meshes.armor, am = an && L.inst.skinned[an];   // (no pieces.json: the old one-colour tint)
+      if (am) { if (!am.userData.tintMat) { am.material = am.material.clone(); am.userData.tintMat = true; }
+        const c = ar ? new THREE.Color(ar.torso).lerp(new THREE.Color(0xffffff), 0.4) : new THREE.Color(0xffffff); if (ar && ar.gold) c.lerp(new THREE.Color(0xd9b24a), 0.35); am.material.color.copy(c); } } }
   const bw = gear.bow && AF_LOOK.bow[gear.bow];
   if (parts.bow && bw) {                                     // the bow: wood, size, a leather wrap at the grip, tips of gold or horn
     parts.bow.scale.setScalar(bw.scale); let arc = null; parts.bow.traverse(c => { if (c.isMesh && c.geometry.type === 'TorusGeometry') { arc = c; c.material = mat(bw.wood, { smooth: true, shared: false }); } });
@@ -19777,7 +19897,7 @@ function afBuildSword(g, sw, tint) {
   g.scale.set(1, 1, 1); g.rotation.y = Math.PI / 2;        // (the grip: edge forward, guard vertical to the wrist — same as makeSword)
   if (real) { for (const c of g.children) c.visible = false; g.add(real); }
 }
-function afBladeLook(b) { afDressGear(b.parts, b.gear, b.pal); }   // (the rig swaps on mount / dismount re-dress the man)
+function afBladeLook(b) { b.parts.lookName = b.name; b.parts.lookArch = b.arch; afDressGear(b.parts, b.gear, b.pal); }   // (the rig swaps on mount / dismount re-dress the man)
 function afItemName(id) { const I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}; return I[id] ? I[id].name : id; }
 // sheathe one, draw the other: bow in the left hand, or sword and shield (the arm settles for a beat)
 function afSetWeapon(b, w) {
@@ -22216,6 +22336,7 @@ function afPreviewSet(gear, pal, mounted) {
   const r = P.mounted ? buildCavalry(pal, hsz, 'sword', opts) : buildHumanoid(pal, 1, 'sword', opts);
   P.rig = { group: r.group || r, parts: P.mounted ? Object.assign({}, r.parts, { mount: r.horse }) : r.parts };
   afWearModel({ group: P.mounted ? r.riderGroup : P.rig.group, parts: P.rig.parts }, pal);   // the marketplace man is the warrior too
+  P.rig.parts.lookName = (typeof SHELL !== 'undefined' && SHELL.page === 'profile' && AF.profile && AF.profile.gear) ? AF.profile.name : (window.net && net.session ? net.session.username : '');   // (the figure is YOU — or the man whose page this is)
   afPreviewFloor(pal, gear);                                 // (the home floor: his sword and shield, until he takes them up)
   if (MODEL_ON && !BV.modelReady) {                          // the warrior is still loading: an empty disc until he is, never the plastic stand-in
     P.rig.group.visible = false; const gen = P.gen = (P.gen || 0) + 1;
@@ -22357,7 +22478,7 @@ function afThumbShot(obj, box) {                            // an orthographic l
 }
 function afThumbRig() {                                     // one figure for the armour and bow wares, dressed anew per ware
   if (!TH.rig) { const h = buildHumanoid(AF_TEAMS[0].pal, 1, 'sword', { hero: true, both: true }); TH.rig = h; const anim = makeAnimator(h.parts); setPose(anim, 'relax', 0.01); updateAnimator(anim, 1); restLegs(h.parts, 1, false); }
-  if (!TH.wearing && MODEL_ON && BV.modelReady) { afWearModel(TH.rig, AF_TEAMS[0].pal); TH.wearing = true; }
+  if (!TH.wearing && MODEL_ON && BV.modelReady) { afWearModel(TH.rig, AF_TEAMS[0].pal); TH.wearing = true; TH.rig.parts.lookName = 'the mannequin'; TH.rig.parts.lookFull = true; }
   return TH.rig;
 }
 function afThumb(id) {
@@ -22876,7 +22997,8 @@ BV.showcase = (o) => {
   const pal = (AF_TEAMS[o.team || 0] || AF_TEAMS[0]).pal;
   const h = buildHumanoid(pal, o.scale || 1, o.weapon || 'sword', { hero: o.hero !== false, both: !!o.both, armor: o.armor, plume: AF_TEAM_HEX[o.team || 0] });
   if (o.real && REAL_RIGS.size) wearRealRig(h, o.real, { team: pal.cloth });
-  else if (o.model !== false && MODEL_RIGS.size && (o.model || MODEL_ON)) wearModelRig(h, o.model || MODEL_NAME, { team: pal.cloth });
+  else if (o.model !== false && MODEL_RIGS.size && (o.model || MODEL_ON)) { wearModelRig(h, o.model || MODEL_NAME, { team: pal.cloth });
+    h.parts.lookName = o.name != null ? o.name : ''; h.parts.lookArch = o.arch || 'swordsman'; if (o.full) h.parts.lookFull = true; afDressGear(h.parts, o.gear || {}, pal); }   // (his look: {name, arch, gear:{armor}, full})
   const fwd = new THREE.Vector3(); camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
   const p = o.at ? new THREE.Vector3().fromArray(o.at) : camera.position.clone().add(fwd.multiplyScalar(o.dist || 7)); p.y = o.y != null ? o.y : (typeof afY === 'function' && AF.on ? afY(p.x, p.z) : 0);
   h.group.position.copy(p); h.group.rotation.y = o.yaw != null ? o.yaw : Math.atan2(camera.position.x - p.x, camera.position.z - p.z);

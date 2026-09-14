@@ -343,7 +343,7 @@
   @media (max-width: 600px) { .prof-bout { grid-template-columns: 46px 1fr auto; } .prof-bout span:nth-child(3) { display: none; } }
   #home-foot { font-size: 13px; color: #c8ffd6; }
   #home-foot button { cursor: pointer; background: none; border: none; color: #9fb2cc; text-decoration: underline; font-size: 13px; }
-  #home-foot label { cursor: pointer; color: #9fb2cc; } #home-foot input { vertical-align: -2px; margin: 0 3px 0 0; accent-color: #ffd34d; }
+  #home-foot label { cursor: pointer; color: #9fb2cc; } #home-foot input { vertical-align: -2px; margin: 0 3px 0 0; accent-color: #ffd34d; } #home-foot select { background: #16121c; color: #c8ffd6; border: 1px solid #3a3346; border-radius: 4px; font-size: 12px; padding: 1px 3px; }
   /* the marketplace: tabs, and a picture card per ware (afThumb draws each from its own mesh) */
   .mk-tabs { position: sticky; top: -18px; z-index: 2; display: flex; gap: 6px; flex-wrap: wrap; padding: 8px 0 10px; margin-top: -8px; background: rgba(8,6,14,.97); }
   .mk-tabs button { cursor: pointer; padding: 8px 16px; border-radius: 8px; border: 1px solid rgba(255,207,91,.35); background: rgba(0,0,0,.3); color: #e9eef5; font: 700 13px system-ui; letter-spacing: 1px; text-transform: uppercase; touch-action: manipulation; }
@@ -1047,7 +1047,7 @@
           <button class="btn world-only" id="home-world-btn">Enter the Vale</button>
         </div>
         <div class="hm-gear" id="hm-gear" title="What you ride in with — tap a piece for its stall in the market"></div>
-        <div id="home-foot">Signed in as <b id="home-name"></b> · <button id="home-logout">sign out</button> · <label title="During a fight: round trip, jitter, snap rate, the host's sim rate — bottom right"><input type="checkbox" id="home-net"> net readout</label></div>
+        <div id="home-foot">Signed in as <b id="home-name"></b> · <button id="home-logout">sign out</button> · <label title="During a fight: round trip, jitter, snap rate, the host's sim rate — bottom right"><input type="checkbox" id="home-net"> net readout</label> · <label title="Auto: phones fight at low and step down further if the frame rate can't hold. Low: 1× pixels, hard shadows, half the crowd, no bloom. High: everything.">graphics <select id="home-gfx"><option value="auto">auto</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label></div>
         <div class="sfx-credit">Crowd sounds by Gregor Quendel (CC-BY 4.0) · bow shot by dorkster, from sounds by qubodup (CC-BY-SA 3.0) · more in assets/sfx/CREDITS.md</div>
       </div>
       <!-- the career sheet (the name card under the figure opens it) -->
@@ -1251,6 +1251,6 @@
 <script src="arena-items.js?v=4"></script>
 <script src="net-battle.js?v=5"></script>
 <script src="real-skin.js?v=1"></script>
-<script src="game.js?v=141"></script>
+<script src="game.js?v=140"></script>
 </body>
 </html>

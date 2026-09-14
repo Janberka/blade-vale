@@ -20753,6 +20753,7 @@ function afApplySnap(s) {
     if (!b.remoteSeen) { b.remoteSeen = true; b.x = x; b.z = z; b.yaw = yaw; }
     b.tstate = code; b.tmove = row[6] || 0; b.hp = hp;
     if (!b.buf) b.buf = [];
+    if (b.rowAt && st <= b.rowAt) continue;                  // an older row after a newer one (never on a live socket, but a resumed link or a test rig can do it): the buffer stays in order
     if (b.rowAt) { const gap = st - b.rowAt; b.rowDt = b.rowDt ? Math.min(gap, b.rowDt * 1.02 + 0.001) : gap; } b.rowAt = st;   // (a running MIN of the gaps: a stall must not read as a slower body — only a rate that stays slower creeps it up)
     b.buf.push({ t: st, x, z, yaw, s: code, mv: row[6] || 0, aim: row[7] != null ? row[7] / 100 : 0 }); if (b.buf.length > 24) b.buf.shift();
     if (b.mounted) b.taim = row[7] != null ? row[7] / 100 : 0;   // the rider's twist in the saddle

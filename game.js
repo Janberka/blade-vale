@@ -21335,13 +21335,11 @@ function afApplyRemotePose(b, dt) {
     case 12: restLegs(b.parts, dt, true); break;              // blades locked — hold whatever the blade was doing
     case 13: b.tiltX = -1.35; b.roll = 0.45; setPose(b.anim, 'hurt', 0.08); restLegs(b.parts, dt, true); break;   // ridden down
     case 14: { const J = AF_F.jump; b.airT = (b.airT || 0) + dt; b.airY = Math.max(0, J.v * b.airT - 0.5 * J.g * b.airT * b.airT); afAirPose(b, dt); setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.15); break; }   // in the air: the same leap everyone makes, timed from here
-    case 14: { const J = AF_F.jump; b.airT = (b.airT || 0) + dt; b.airY = Math.max(0, J.v * b.airT - 0.5 * J.g * b.airT * b.airT); afAirPose(b, dt); setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.15); break; }   // in the air: the same leap everyone makes, timed from here
     case 9: setPose(b.anim, 'aimBow', 0.1); afRemoteLegs(b, dt, false); break;
     case 10: setPose(b.anim, 'looseBow', 0.05); afRemoteLegs(b, dt, false); break;
     default: setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.2); restLegs(b.parts, dt, true);
   }
   if (s !== 7) { b.rollT = 0; b.rollAng = 0; b.rollSq = 0; }
-  if (s !== 14) { b.airT = 0; b.airY = 0; }
   if (s !== 14) { b.airT = 0; b.airY = 0; }
 }
 function afApplySnap(s) {

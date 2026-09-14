@@ -1035,7 +1035,8 @@ async function loadModelRig(name) {
   // LOOKS: pieces.json (tools/realmesh/warrior_pieces.py) names every triangle's armour piece and every vertex's stuff
   let pieces = null; try { const pr = await fetch(base + 'pieces.json'); if (pr.ok) pieces = await pr.json(); } catch (e) { pieces = null; }
   if (pieces) for (const m of meshes) { const key = Object.keys(pieces).find(k => m.name.indexOf('_' + k + '_') >= 0); const pj = key && pieces[key]; if (!pj) continue; m.pieces = pj; m.short = key;
-    const ci = pj.mats.indexOf('cloth'), uv = m.geo.getAttribute('uv'); if (ci >= 0 && uv) { for (let v = 0; v < uv.count; v++) if (pj.vmat[v] === ci) uv.setXY(v, LOOK_WHITE_UV[0], LOOK_WHITE_UV[1]); uv.needsUpdate = true; } }   // (the blue cloth → a white cell: the vertex colour IS the dye)
+    const ci = pj.mats.indexOf('cloth'), uv = m.geo.getAttribute('uv'); if (ci >= 0 && uv) { for (let v = 0; v < uv.count; v++) if (pj.vmat[v] === ci) uv.setXY(v, LOOK_WHITE_UV[0], LOOK_WHITE_UV[1]); uv.needsUpdate = true; }   // (the blue cloth → a white cell: the vertex colour IS the dye)
+    if (key === 'body') lookRuggedHead(m.geo, pj); }
   const entry = { name, spec, g, meshes, tex, pieces }; MODEL_RIGS.set(name, entry); return entry;
 }
 // build a fresh skeleton + skinned meshes for one body
@@ -1162,8 +1163,25 @@ BV.modelRig = { load: loadModelRig, wear: wearModelRig, live: () => MODEL_LIVE.l
 // of the body's own index; the paint is a vertex colour over the palette (the blue cloth is re-pointed at a white
 // cell at load, so the team dye takes on the sleeves and the skirt).
 const LOOK_WHITE_UV = [1.5 / 16, 0.5 / 16];               // palette cell (1,0) = #eeeeee
-const LOOK_HAIR = [0x1a1210, 0x3a2416, 0x5c3a1e, 0x8a5a2e, 0xb08040, 0xd0b078, 0x8a8a88, 0x4a3a3a];   // black, dark brown, brown, auburn, fair, blond, grey, ash
-const LOOK_SKIN = [0xffffff, 0xf4dcc4, 0xe4c4a4, 0xc89a78, 0xa87858, 0x8a5c40];
+// THE FACE: the model's head is a smooth, boyish one. Once, at load, every man's head is roughened in the bind pose
+// (model units, the face looks +z): a wider jaw, the chin and the brow pushed forward and the brow lowered so the eyes
+// sit deep, cheekbones out. The eyes are their own meshes and stay put.
+function lookRuggedHead(geo, pj) {
+  const pos = geo.getAttribute('position'), head = new Set(['head', 'hair', 'beard', 'brow', 'socket', 'scarL', 'scarR']);
+  for (let v = 0; v < pos.count; v++) { if (!head.has(pj.classes[pj.vclass[v]])) continue; let x = pos.getX(v), y = pos.getY(v), z = pos.getZ(v);
+    if (y > 1.49 && y < 1.61 && z > -0.04) x *= 1.13;                                    // the jaw
+    if (y > 1.49 && y < 1.565 && z > 0.06) z += 0.014;                                   // the chin
+    if (y > 1.70 && y < 1.745 && z > 0.08) { z += 0.014; y -= 0.007; }                   // the brow: heavier, lower
+    if (y > 1.625 && y < 1.685 && Math.abs(x) > 0.08) x *= 1.07;                         // cheekbones
+    pos.setXYZ(v, x, y, z); }
+  // the eyes: narrowed to a hard squint and tucked under the brow (each eye about its own centre)
+  const ei = pj.classes.indexOf('eye'); if (ei >= 0) { const eyes = { L: [], R: [] }; for (let v = 0; v < pos.count; v++) if (pj.vclass[v] === ei) eyes[pos.getX(v) < 0 ? 'L' : 'R'].push(v);
+    for (const vs of [eyes.L, eyes.R]) { if (!vs.length) continue; let cy = 0; for (const v of vs) cy += pos.getY(v); cy /= vs.length;
+      for (const v of vs) pos.setXYZ(v, pos.getX(v), cy + (pos.getY(v) - cy) * 0.62, pos.getZ(v) - 0.004); } }
+  pos.needsUpdate = true; geo.computeVertexNormals();
+}
+const LOOK_HAIR = [0x1a1210, 0x1a1210, 0x2a1a12, 0x3a2416, 0x3a2416, 0x5c3a1e, 0x8a5a2e, 0x6a6a68, 0x4a3a3a];   // black, black, near-black, dark brown ×2, brown, auburn, grey, ash — cropped and dark, mostly
+const LOOK_SKIN = [0xf0d4b8, 0xe4c4a4, 0xd8b090, 0xc89a78, 0xa87858, 0x8a5c40];
 // per armour: the odds of each piece and what its STEEL is painted (a multiplier on the palette's grey — white leaves it steel)
 const LOOK_ARMOR = {
   none:           { helmet: 0.08, pauldron: 0.00, elbow: 0.30, knee: 0.15, cloak: 0.25, plume: 0.00, cloth: 0.35, base: 'leather', cuirass: 'jack', skirt: 'jack', helmetP: 0x6a6c72 },
@@ -1187,8 +1205,11 @@ function lookRoll(name, arch, gear, pal, o = {}) {
   const c = new THREE.Color(), team = new THREE.Color(pal ? pal.cloth : 0x8a8a8a);
   const look = { kind, hide: [], paint: {}, cloth: 0, leather: pick(LOOK_LEATHER), skin: 0, hair: null, beard: null, cloak: false, shield: 'none', helmet: false, plume: false, round: 0 };
   // the man: skin, hair, beard (rolled first, so a change of kit never changes his face)
-  look.skin = pick(LOOK_SKIN); const bald = r() < 0.16, hairC = pick(LOOK_HAIR);
-  look.hair = bald ? null : hairC; look.beard = r() < 0.42 ? c.setHex(hairC).lerp(new THREE.Color(look.skin), r() < 0.5 ? 0.45 : 0.1).getHex() : null;
+  look.skin = c.setHex(pick(LOOK_SKIN)).lerp(new THREE.Color(0xc89070), r() * 0.35).getHex();   // weathered: every tone pulled toward a sun-browned red
+  const bald = r() < 0.28, hairC = pick(LOOK_HAIR), skinC = new THREE.Color(look.skin);
+  look.hair = bald ? null : hairC; look.beard = r() < 0.75 ? c.setHex(hairC).lerp(skinC, r() < 0.65 ? 0.08 : 0.4).getHex() : null;   // most wear a beard, most of those a full one
+  look.brow = c.setHex(hairC).lerp(skinC, 0.3).getHex(); look.socket = c.copy(skinC).multiplyScalar(0.78).getHex(); look.lip = c.copy(skinC).multiplyScalar(0.88).getHex();   // heavy dark brows, eyes deep in shadow, a hard mouth
+  const scar = r(); look.scar = scar < 0.18 ? 'scarL' : scar < 0.36 ? 'scarR' : null; look.scarC = c.copy(skinC).lerp(new THREE.Color(0xe8a0a0), 0.45).multiplyScalar(1.05).getHex();
   // the kit
   look.helmet = r() < p('helmet'); if (gear && gear.plume) look.helmet = true;                     // (a bought plume needs a helm to sit on)
   for (const k of ['pauldron', 'elbow', 'knee']) if (r() >= p(k)) look.hide.push(k);
@@ -1206,8 +1227,10 @@ function lookRoll(name, arch, gear, pal, o = {}) {
   return look;
 }
 function lookColour(look, cls, mt) {
-  if (mt === 'cloth') return look.cloth; if (mt === 'leather') return look.leather; if (mt === 'dark') return 0xffffff;
-  if (mt === 'skin') return cls === 'hair' ? (look.hair != null ? look.hair : look.skin) : cls === 'beard' ? (look.beard != null ? look.beard : look.skin) : cls === 'eye' ? 0xffffff : look.skin;
+  if (mt === 'cloth') return look.cloth; if (mt === 'dark') return 0xffffff;
+  if (mt === 'leather') return cls === 'brow' ? look.brow : cls === 'beard' ? (look.beard != null ? look.beard : look.lip) : (cls === 'head' || cls === 'socket' || cls === 'scarL' || cls === 'scarR') ? look.lip : look.leather;   // (the palette's lip/brow brown on the face: no painted lips)
+  if (mt === 'skin') return cls === 'hair' ? (look.hair != null ? look.hair : look.skin) : cls === 'beard' ? (look.beard != null ? look.beard : look.skin) : cls === 'brow' ? look.brow
+    : cls === 'socket' ? look.socket : (cls === 'scarL' || cls === 'scarR') ? (look.scar === cls ? look.scarC : look.skin) : cls === 'eye' ? 0xd8d0c8 : look.skin;   // (eye whites dimmed: no doe eyes)
   return look.paint[cls] != null ? look.paint[cls] : 0xffffff;
 }
 // dress a live figure in a look: paint the vertices, drop the pieces he goes without, cloak, plume, shield

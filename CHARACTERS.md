@@ -76,3 +76,7 @@ plain/halves/quarters/rays) or none (brutes and duelists). `lookApply` paints it
 drops the missing pieces from the body's own index; the blue cloth is re-pointed at a white palette cell at load so the
 team dye takes. The shop's mannequin (`parts.lookFull`) shows every piece. Test hooks: `BV.look.live()`,
 `BV.showcase({name, arch, gear:{armor}})`. Re-run the bake after any change to the warrior model.
+Faces (same day, "put some alpha male look on the faces"): `lookRuggedHead` roughens the shared head once at load —
+wider jaw, chin and brow forward and the brow lowered, cheekbones out, the eye meshes narrowed to a squint — and the
+roll gives dark cropped hair or a shaved head, a full beard on most, heavy dark brows (`brow`), shadowed eye sockets
+(`socket`), weathered skin, dimmed eye whites, no painted lips, and a scar across one cheek on a third (`scarL`/`scarR`).

@@ -17182,7 +17182,7 @@ const VR_SHIELD = { pos: new THREE.Vector3(-0.05, 0, 0.16), quat: new THREE.Quat
 const VR_BOW = { pos: new THREE.Vector3(0, 0, 0), pre: (() => { const a = new THREE.Vector3(0, 0, 1), b = new THREE.Vector3(1, -1, 0).normalize(), c = a.clone().cross(b), A = new THREE.Vector3(0, 1, 0), B = new THREE.Vector3(0, 0, -1), C = A.clone().cross(B);
   const M1 = new THREE.Matrix4().makeBasis(a, b, c), M2 = new THREE.Matrix4().makeBasis(A, B, C); return new THREE.Quaternion().setFromRotationMatrix(M2.multiply(M1.transpose())); })() };
 const VR_BOWT = { near: 0.35, slack: 0.12, full: 0.5, cd: 0.45, saddle: 1.0 };
-const VR_FILM = { maxPitch: 0.55, glide: 2.2 };             // the films in the headset: a lens looking steeper than this is brought to a glance; a shot may glide the rig this fast at most (m/s — the lens's own crane and orbit are faster; the rig lags, the next cut catches up)   // a draw starts with the string hand within `near` m of the bow hand; k = (hands apart − slack) / full; the rider's eyes sit `saddle` units higher
+const VR_FILM = { maxPitch: 0.55, glide: 2.2, minEye: 2.5 };   // the films in the headset: a lens looking steeper than this is brought to a glance; the eyes never lower than a standing man's (units — 2.95 is the fighter's own; a lens on the sand is dramatic on a screen and lying down in a headset); a shot may glide the rig this fast at most (m/s — the lens's own crane and orbit are faster; the rig lags, the next cut catches up)   // a draw starts with the string hand within `near` m of the bow hand; k = (hands apart − slack) / full; the rider's eyes sit `saddle` units higher
 if (/[?&]xrshim\b/.test(location.search)) { const s = document.createElement('script'); s.src = 'xr-shim.js?v=' + Date.now(); document.head.appendChild(s); }   // tests: a headset out of thin air (never cached)
 
 function vrSupported() {
@@ -17421,13 +17421,15 @@ function vrFilmFrame(dt) {
 }
 function vrFilmCam(px, py, pz, lx, ly, lz, cut, inPit) {
   const rig = VR.rig; if (!rig) return; const s = VR.scale || 1, c = camera.position;
+  const eye = VR_FILM.minEye * (AF.me ? AF.me.footScale || 1 : 1);   // a standing man's eyes: a low lens (the gate from the sand, the drop, the star from below) is raised to them — the look stays on the subject
+  py = Math.max(py, afY(px, pz) + eye);
   let dx = lx - px, dz = lz - pz; const dy = ly - py, dh = Math.hypot(dx, dz), d3 = Math.hypot(dh, dy) || 1, pitch = Math.atan2(-dy, dh), maxP = VR_FILM.maxPitch;
   if (Math.abs(pitch) > maxP) {                              // too steep for a head: the same distance from the subject, from a height a glance covers
     const p2 = pitch > 0 ? maxP : -maxP, bx = dh > 1e-3 ? dx / dh : Math.sin(rig.rotation.y), bz = dh > 1e-3 ? dz / dh : Math.cos(rig.rotation.y);
     px = lx - bx * Math.cos(p2) * d3; pz = lz - bz * Math.cos(p2) * d3; py = ly + Math.sin(p2) * d3; dx = lx - px; dz = lz - pz;
   }
   if (inPit) { const d = Math.hypot(px, pz), lim = AF_F.radius - 0.7; if (d > lim) { px *= lim / d; pz *= lim / d; } }
-  py = Math.max(py, afY(px, pz) + 0.4);
+  py = Math.max(py, afY(px, pz) + eye);                      // (the clamp may have brought it down again)
   if (cut || !VR.film) {
     camera.getWorldDirection(tmpV); const local = Math.atan2(tmpV.x, tmpV.z) - rig.rotation.y;
     rig.rotation.y = Math.atan2(dx, dz) - local;              // the subject lands where you are looking now

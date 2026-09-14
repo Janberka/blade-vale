@@ -98,6 +98,9 @@ lens — position, look-at, focal length — through `afIntroCam` / `afOutroCam`
   `VR_FILM.glide` (2.2 m/s; the lens's own crane and orbit are faster — the rig lags, the next cut catches up); the
   comfort vignette rises with the glide speed. A lens looking steeper than `VR_FILM.maxPitch` (0.55 rad — the aerials,
   the top shot over a block) is brought to a place a standing man can look from: the same distance, a 30° glance down.
+  The eyes never go lower than a standing man's (`VR_FILM.minEye`, 2.5 units): a lens on the sand — the gate from
+  low, the drop over the pit's lip, the star from below — is raised to eye height, the look still on the subject
+  (on a screen a low lens is drama; in a headset it is lying on the floor).
 - Captions go on a head-locked plate under the eyes (`VR.cap`, `vrPlain` turns the letterbox's HTML into lines — an
   all-caps line is a small header). **B / Y skips** (`afIntroSkip`, the same as the flat screen's button).
 - Your own body is one of the men in the film: it is **undressed** for the length of it (whole, sword in hand, it marches

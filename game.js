@@ -21790,7 +21790,7 @@ function afPreviewEl() {
   const P = AF.preview = { wrap, cv, W: 0, H: 0, renderer: null, scene: new THREE.Scene(), camera: new THREE.PerspectiveCamera(30, 1, 0.1, 60), rig: null, yaw: -0.3, mounted: false, drag: null, crouch: 0 };
   try { P.renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: true }); P.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2)); P.renderer.toneMapping = THREE.ACESFilmicToneMapping; P.renderer.localClippingEnabled = true; } catch (e) { P.renderer = null; }   // (clipping: the planted sword's buried tip is cut at the sand)
   P.scene.add(new THREE.HemisphereLight(0xbfd8ff, 0x6a5a44, 0.9)); const sun = new THREE.DirectionalLight(0xfff0d0, 1.1); sun.position.set(3, 6, 4); P.scene.add(sun);
-  const disc = new THREE.Mesh(new THREE.CircleGeometry(2.7, 32), mat(0xc9b79a, { shared: false })); disc.rotation.x = -Math.PI / 2; P.scene.add(disc);   // (wide enough that the planted sword's buried tip stays under it from the lens)
+  const disc = new THREE.Mesh(new THREE.CircleGeometry(2.7, 32), mat(0xc9b79a, { shared: false })); disc.rotation.x = -Math.PI / 2; P.scene.add(disc); P.disc = disc;   // (wide enough that the planted sword's buried tip stays under it from the lens)
   const down = e => { P.drag = { x: e.clientX, y: e.clientY, yaw: P.yaw, moved: false }; P.holdT = performance.now(); try { cv.setPointerCapture(e.pointerId); } catch (err) {} }; const move = e => { if (P.drag) { if (Math.hypot(e.clientX - P.drag.x, e.clientY - P.drag.y) > 6) P.drag.moved = true; if (P.drag.moved) { P.yaw = P.drag.yaw + (e.clientX - P.drag.x) * 0.012; P.yawTo = null; } P.holdT = performance.now(); } }; const up = e => { const d = P.drag; P.drag = null; if (d && !d.moved) afPreviewClick(e); };   // a tap (no drag) picks what it lands on
   cv.addEventListener('pointerdown', down); cv.addEventListener('pointermove', move); cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
   AF.previewEl = wrap; return wrap;
@@ -21902,7 +21902,7 @@ function afPreviewFrame() {
   const P = AF.preview; if (!P || !afShellVisible() || !P.renderer || !P.rig) { if (P) P.loop = false; return; }
   const w = P.cv.clientWidth, h = P.cv.clientHeight;
   if (w && h && (w !== P.W || h !== P.H)) { P.W = w; P.H = h; P.renderer.setSize(w, h, false); P.camera.aspect = w / h; P.camera.updateProjectionMatrix();
-    const k = Math.max(1, 1 / P.camera.aspect) * 1.08; P.camera.position.set(0, P.mounted ? 2.9 : 2.1, (P.mounted ? 9.4 : 6.4) * k); P.camera.lookAt(0, P.mounted ? 1.9 : 1.45, 0); }   // a narrow canvas backs off so he fits; he sits a little high, clear of the strip along the bottom
+    const k = Math.max(1, 1 / P.camera.aspect) * 1.08 * (SHELL.page === 'home' ? 1.42 : 1); P.camera.position.set(0, P.mounted ? 2.9 : 2.1, (P.mounted ? 9.4 : 6.4) * k);   /* (on the home his canvas is the whole screen with the HUD round him: he stands back so the cards frame him) */ P.camera.lookAt(0, P.mounted ? 1.9 : 1.45, 0); }   // a narrow canvas backs off so he fits; he sits a little high, clear of the strip along the bottom
   if (P.yawTo != null && !P.drag) { P.yaw = angleLerp(P.yaw, P.yawTo, clamp(dt0(P) * 6, 0, 1)); if (Math.abs(angleDelta(P.yaw, P.yawTo)) < 0.01) P.yawTo = null; }   // (only a pick turns him; a drag is yours)
   P.rig.group.rotation.y = P.yaw;                           // (he stands where you left him — drag turns him, nothing else does)
   // STANDING: the pose holds, and on top of it he breathes hard, like a man just out of the pit — the chest heaves,
@@ -21993,6 +21993,7 @@ function afCareerSheetHtml(c) {
     '<b>' + c.gold + '</b> gold · 🏆 ' + c.trophies + ' trophies<br>' +
     c.matches + ' fights · ' + c.wins + ' won · ' + c.kills + ' kills · ' + c.deaths + ' deaths · ' + c.stars + '× star · ' + Math.round(c.damage) + ' damage<br>' +
     'skills: sword ' + c.skills.sword.level + ' · bow ' + c.skills.bow.level + ' · riding ' + c.skills.riding.level + '</div>' +
+    '<div class="rank-road" title="The road to Legend — every rank by XP">' + ARENA_CAT.ARENA_RANKS.map(([n, at], i) => '<div class="rr' + (i < r.idx ? ' got' : i === r.idx ? ' got now' : '') + '">' + n + '<i>' + (i ? at + ' XP' : 'start') + '</i></div>').join('') + '</div>' +
     '<h3>Achievements</h3><div class="career-ach">' + ARENA_CAT.ARENA_ACHIEVEMENTS.map(([id, label]) => '<span class="' + (c.achievements.includes(id) ? 'got' : '') + '">' + (c.achievements.includes(id) ? '🏅 ' : '') + label + '</span>').join('') + '</div>';
 }
 // ---- PROFILES + THE LADDER. Every fighter who has stood in a pit has a page — players and the vale's own men
@@ -22067,7 +22068,7 @@ function afLadderRender() {
   html += '<div class="lad-note">' + (LADDER.kind === 'npc' ? 'The vale\'s own fighters, ranked among themselves — they stand in every pit, and fight each other between your visits.' : LADDER.scope === 'network' ? 'Everyone who has shared a pit with you.' : 'Every player who has fought, by renown.') + (LADDER.total ? ' · ' + LADDER.total + (LADDER.kind === 'npc' ? ' fighters' : ' players') : '') + '</div>';
   if (LADDER.err) html += '<div class="lad-empty" style="color:#ff9a9a">' + escHtml(LADDER.err) + '</div>';
   else if (!LADDER.rows.length) html += '<div class="lad-empty">' + (LADDER.loading ? 'reaching the war-net…' : LADDER.scope === 'network' ? 'Nobody yet — fight once and everyone in that pit is here.' : 'Nobody has fought yet. Be the first name on the wall.') + '</div>';
-  else html += '<div class="lad-list">' + LADDER.rows.map(r => '<div class="lad-row' + (r.kind === 'player' && r.name === afSession() ? ' you' : '') + '" data-prof="' + r.kind + '|' + escHtml(r.name) + '"><span class="lad-pos">' + (r.pos <= 3 ? ['🥇', '🥈', '🥉'][r.pos - 1] : '#' + r.pos) + '</span><span class="lad-name"><b>' + escHtml(r.name) + (r.belt ? ' <span class="lad-belt" title="the champion\'s belt — ' + (r.belt.defenses | 0) + ' defenses">🏆 belt</span>' : '') + '</b><i>' + escHtml(r.title) + '</i></span><span class="lad-ren" title="renown">' + (r.renown | 0).toLocaleString() + '</span><span class="lad-rec">' + r.matches + ' fights · ' + r.wins + ' won · ★ ' + r.stars + ' · ' + r.kills + ' kills</span></div>').join('') + '</div>';
+  else html += '<div class="lad-list">' + LADDER.rows.map(r => '<div class="lad-row' + (r.pos <= 3 ? ' top' + r.pos : '') + (r.kind === 'player' && r.name === afSession() ? ' you' : '') + '" data-prof="' + r.kind + '|' + escHtml(r.name) + '"><span class="lad-pos">' + (r.pos <= 3 ? ['🥇', '🥈', '🥉'][r.pos - 1] : '#' + r.pos) + '</span><span class="lad-name"><b>' + escHtml(r.name) + (r.belt ? ' <span class="lad-belt" title="the champion\'s belt — ' + (r.belt.defenses | 0) + ' defenses">🏆 belt</span>' : '') + '</b><i>' + escHtml(r.title) + '</i></span><span class="lad-ren" title="renown">' + (r.renown | 0).toLocaleString() + '</span><span class="lad-rec">' + r.matches + ' fights · ' + r.wins + ' won · ★ ' + r.stars + ' · ' + r.kills + ' kills</span></div>').join('') + '</div>';
   if (LADDER.rows.length && LADDER.rows.length < LADDER.total) html += '<div class="lad-more"><button class="prof-btn" data-act="more"' + (LADDER.loading ? ' disabled' : '') + '>' + (LADDER.loading ? '…' : 'Show more') + '</button></div>';
   html += '<div class="prof-foot">Renown = XP + 25 a win + 5 a loss + 60 a star of the match + 3 a kill + 6 a trophy + 30 a skill level + damage / 100</div>';
   el.innerHTML = html;
@@ -22084,7 +22085,8 @@ function afDailyLoad() {
 }
 function afDailyLabel() {                                  // the buttons on the title and the home carry today's name
   const d = DAILY.data, spec = d ? d.spec : (window.ARENA_CAT ? ARENA_CAT.dailyOf() : null);
-  for (const id of ['home-daily-btn', 'title-daily-btn']) { const b = document.getElementById(id); if (b && spec) b.innerHTML = '📅 Bout of the day · <i>' + escHtml(spec.name) + '</i>' + (d && d.mine ? ' <span style="opacity:.7;font-size:.8em">#' + d.mine.pos + '</span>' : ''); }
+  { const b = document.getElementById('title-daily-btn'); if (b && spec) b.innerHTML = '📅 Bout of the day · <i>' + escHtml(spec.name) + '</i>' + (d && d.mine ? ' <span style="opacity:.7;font-size:.8em">#' + d.mine.pos + '</span>' : ''); }
+  if (SHELL.page === 'home') afHomeHud();                   // (the home's card carries the same name, the board, the clock)
 }
 function afDailyOpen() {
   if (SHELL.page !== 'daily') afShellPage('daily'); afDailyRender();
@@ -22102,7 +22104,7 @@ function afDailyRender() {
   html += '<h3>The board' + (d ? ' · ' + d.total + (d.total === 1 ? ' fighter' : ' fighters') : '') + '</h3>';
   if (!d) html += '<div class="lad-empty">' + escHtml(DAILY.err || 'reaching the war-net…') + '</div>';
   else if (!d.board.length) html += '<div class="lad-empty">Nobody has fought it yet. Be the first name on the board.</div>';
-  else html += '<div class="lad-list">' + d.board.map(r => '<div class="lad-row' + (r.name === afSession() ? ' you' : '') + '" data-prof="player|' + escHtml(r.name) + '"><span class="lad-pos">' + (r.pos <= 3 ? ['🥇', '🥈', '🥉'][r.pos - 1] : '#' + r.pos) + '</span><span class="lad-name"><b>' + escHtml(r.name) + '</b><i>' + (r.won ? 'won' : 'fell') + (r.alive ? ' · stood at the bell' : '') + '</i></span><span class="lad-ren" title="points">' + r.score + '</span><span class="lad-rec">' + r.kills + ' kills · ' + Math.round(r.dmg) + ' dealt · ' + r.tries + ' tr' + (r.tries === 1 ? 'y' : 'ies') + '</span></div>').join('') + '</div>';
+  else html += '<div class="lad-list">' + d.board.map(r => '<div class="lad-row' + (r.pos <= 3 ? ' top' + r.pos : '') + (r.name === afSession() ? ' you' : '') + '" data-prof="player|' + escHtml(r.name) + '"><span class="lad-pos">' + (r.pos <= 3 ? ['🥇', '🥈', '🥉'][r.pos - 1] : '#' + r.pos) + '</span><span class="lad-name"><b>' + escHtml(r.name) + '</b><i>' + (r.won ? 'won' : 'fell') + (r.alive ? ' · stood at the bell' : '') + '</i></span><span class="lad-ren" title="points">' + r.score + '</span><span class="lad-rec">' + r.kills + ' kills · ' + Math.round(r.dmg) + ' dealt · ' + r.tries + ' tr' + (r.tries === 1 ? 'y' : 'ies') + '</span></div>').join('') + '</div>';
   html += '<div class="prof-foot">Points = 100 a kill + damage dealt + 150 for standing at the bell + 300 for the win.</div>';
   el.innerHTML = html;
   const fb = document.getElementById('daily-fight'); if (fb) fb.onclick = () => { SFX.init && SFX.init(); afDailyStart(spec); };
@@ -22188,7 +22190,7 @@ function afShellPage(name, o) {
   const st = document.getElementById('start'); if (!st || !document.getElementById('page-' + name)) return;
   const root = name === 'home' || name === 'title';
   if (root) SHELL.stack.length = 0; else if (SHELL.page && SHELL.page !== name && !(o && o.replace)) SHELL.stack.push(SHELL.page);
-  SHELL.page = name; st.classList.remove('hidden');
+  SHELL.page = name; st.classList.remove('hidden'); st.classList.toggle('home', name === 'home');   // (the home is full bleed: the fighter under the HUD — index.html #start.home)
   for (const p of st.querySelectorAll('.page')) p.classList.toggle('on', p.id === 'page-' + name);
   const t = document.getElementById('shell-title'); if (t) t.textContent = SHELL.titles[name] || '';
   const b = document.getElementById('shell-back'); if (b) { b.style.visibility = root && !AF.on ? 'hidden' : ''; b.textContent = name === 'lobby' && AF.lobby && AF.lobby.role === 'guest' ? '← Leave' : AF.on && !SHELL.stack.length && name !== 'lobby' ? '← Fight' : '← Back'; }
@@ -22197,7 +22199,7 @@ function afShellPage(name, o) {
   const pg = document.getElementById('shell-page'); if (pg) pg.scrollTop = 0;
   if (name !== 'profile' && name !== 'ladder' && /^#(profile|rankings)/.test(location.hash || '')) { try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {} }   // (a profile / the ladder is a link you can share; off it, the hash goes)
   { const more = document.getElementById('home-char-more'); if (more) more.textContent = name === 'profile' ? '▸ your own career' : '▸ career & stats'; }
-  if (name === 'profile' && AF.profile) { const nm = document.getElementById('home-char-name'), sub = document.getElementById('home-char-sub'); if (nm) nm.textContent = AF.profile.name; if (sub) sub.textContent = AF.profile.kind === 'npc' ? 'a fighter of the vale' : 'player'; }
+  if (name === 'profile' && AF.profile) { const nm = document.getElementById('home-char-name'), sub = document.getElementById('home-char-sub'), av = document.getElementById('home-char-av'); if (nm) nm.textContent = AF.profile.name; if (sub) sub.textContent = AF.profile.kind === 'npc' ? 'a fighter of the vale' : 'player'; if (av) av.textContent = (AF.profile.name || '?').charAt(0).toUpperCase(); }
   else afHomeCard();
   afShellFigure(); afPreviewRun();
 }
@@ -22208,6 +22210,7 @@ function afShellFigure() {                                  // the figure on the
   const pal = prof ? (AF.profile.kind === 'npc' ? AF_TEAMS[1] : AF_TEAMS[0]) : (AF.lobby && afHostSeat() ? AF_TEAMS[AF.lobby.slots.findIndex(r => r.includes(afHostSeat()))] : AF_TEAMS[0]) || AF_TEAMS[0];
   const gear = prof ? AF.profile.gear : afPreviewGear(); if (!AF.preview.rig || JSON.stringify(AF.preview.gear) !== JSON.stringify(afGearClean(gear)) || AF.preview.pal !== pal.pal) afPreviewSet(gear, pal.pal, prof ? !!gear.horse : AF.preview.mounted);
   AF.preview.W = 0; afPreviewPose(0.3);
+  if (AF.preview.disc) AF.preview.disc.material.color.setHex(SHELL.page === 'home' ? 0x120d0c : 0xc9b79a);   // (the home lights him from the HUD's gold ring, not from the sand)
 }
 function afShellBack() {
   const cur = SHELL.page; if (!cur) return;
@@ -22221,16 +22224,83 @@ function afShellBack() {
 function afShellHide() { const st = document.getElementById('start'); if (st) st.classList.add('hidden'); SHELL.page = null; SHELL.stack.length = 0; }   // (the pit: whatever page was up is forgotten — a ? in the fight starts a fresh trail, and Back goes to the fight)
 function afHomeVisible() { return afShellVisible(); }
 function afHomeCard() {                                    // the name card under the figure: you (on a fighter's page afShellPage writes him instead)
-  const c = AF.career, nm = document.getElementById('home-char-name'), sub = document.getElementById('home-char-sub');
-  if (nm) nm.textContent = afSession() || '';
-  if (sub) sub.innerHTML = c ? '<b>' + c.rank.name + '</b>' + (c.position ? ' · <b>#' + c.position + '</b>' : '') + ' · <b>' + c.gold + '</b> gold · 🏆 ' + c.trophies + (c.rank.next ? ' · ' + (c.rank.nextAt - c.xp) + ' XP to ' + c.rank.next : '') : (window.net && window.net.arenaCareer ? 'reaching the war-net…' : 'no career yet');
+  const c = AF.career, me = afSession() || '', nm = document.getElementById('home-char-name'), sub = document.getElementById('home-char-sub'), av = document.getElementById('home-char-av');
+  if (nm) nm.textContent = me;
+  if (av) av.textContent = (me || '?').charAt(0).toUpperCase();
+  if (sub) sub.innerHTML = c ? '<span class="hc-rank">◆ ' + escHtml(c.rank.name) + (c.position ? ' · #' + c.position : '') + '</span><span class="hc-more"> · <b>' + c.gold + '</b> gold · 🏆 ' + c.trophies + (c.rank.next ? ' · ' + (c.rank.nextAt - c.xp) + ' XP to ' + escHtml(c.rank.next) : '') + '</span>'
+    : '<span class="hc-more">' + (window.net && window.net.arenaCareer ? 'reaching the war-net…' : 'no career yet') + '</span>';   // (the home shows only the rank line: the purse and the bar are its own)
 }
+// ---- THE HOME'S HUD (the 2026-09-14 redesign): the rank bar, the purse, the bout of the day, the rival, FIGHT with who is
+// online, the three doors with a reason on each, the nearest achievement, and his kit along the bottom. Everything reads
+// from what the home already has (AF.career, DAILY, AF.online, the catalogue); nothing here asks the war-net for more. ----
+const HOME_HUD = { xpShown: null, clock: null };
+function afHomeHud() {
+  const g = id => document.getElementById(id); if (!g('hm-xp') || !window.ARENA_CAT) return;
+  const C = ARENA_CAT, c = AF.career, me = afSession(), m = (c && c.meta) || {}, I = C.ARENA_ITEMS;
+  // the rank bar: the number counts up from what it showed last, and a "+N XP" pops when it grew
+  { const now = c ? c.xp | 0 : 0, r = c ? c.rank : null, lo = r ? C.ARENA_RANKS[r.idx][1] : 0, hi = r && r.nextAt ? r.nextAt : null;
+    g('hm-xp-of').textContent = hi ? '/ ' + hi + ' XP' : 'XP'; g('hm-xp-rank').textContent = r ? (r.next ? '→ ' + r.next : r.name) : (me ? 'reaching the war-net…' : 'sign in for a career');
+    g('hm-xp-fill').style.width = (hi ? Math.round((now - lo) / (hi - lo) * 100) : c ? 100 : 0) + '%';
+    const from = HOME_HUD.xpShown == null ? now : HOME_HUD.xpShown; afHomeCount(g('hm-xp-now'), from, now);
+    if (HOME_HUD.xpShown != null && now > HOME_HUD.xpShown) { const pop = g('hm-xp-pop'); pop.textContent = '+' + (now - HOME_HUD.xpShown) + ' XP'; pop.classList.remove('on'); void pop.offsetWidth; pop.classList.add('on'); }
+    HOME_HUD.xpShown = now; }
+  g('hm-gold').textContent = c ? c.gold : '—'; g('hm-streak').textContent = c ? ((m.bests || {}).streak | 0) : '—';
+  // the bout of the day: the name, the sand, the clock to midnight, where you stand on the board
+  { const d = DAILY.data, spec = d ? d.spec : C.dailyOf(); if (spec) {
+      g('hm-daily-name').textContent = spec.name;
+      const tags = spec.venue === 'pit' ? ['The pits', spec.teams + ' fighters', 'night'] : ['Colosseum', spec.teams + ' × ' + spec.per, spec.time, spec.weather === 'rain' ? 'rain' : 'clear', spec.pit, spec.ground];
+      tags.push({ green: 'green foes', mixed: 'mixed foes', veteran: 'veteran foes' }[spec.xp] || spec.xp);
+      g('hm-daily-tags').innerHTML = tags.map(t => '<span>' + escHtml(t) + '</span>').join('');
+      const you = g('hm-daily-you');
+      if (d && d.mine) { const above = (d.board || []).find(r => r.pos === d.mine.pos - 1); you.innerHTML = 'You\'re <b>#' + d.mine.pos + '</b> of ' + d.total + (above ? ' · beat <b>' + above.score.toLocaleString() + '</b> for #' + above.pos : ' · <b>' + d.mine.score.toLocaleString() + '</b> points'); }
+      else if (d) you.innerHTML = d.total ? '<b>' + d.total + '</b> on the board' + (d.board && d.board[0] ? ' · top <b>' + d.board[0].score.toLocaleString() + '</b>' : '') : 'Nobody has fought it yet';
+      else you.textContent = me ? 'reaching the war-net…' : 'the same fight for everyone today';
+      afHomeClock(); if (!HOME_HUD.clock) HOME_HUD.clock = setInterval(afHomeClock, 1000); } }
+  // the rival
+  { const card = g('hm-rival'), rv = m.rival; card.classList.toggle('none', !rv);
+    if (rv) { const bn = C.rivalBonus(rv); g('hm-rival-av').textContent = (rv.name || '?').charAt(0).toUpperCase(); g('hm-rival-name').textContent = rv.name; g('hm-rival-sub').innerHTML = 'He felled you' + (rv.times > 1 ? ' ' + rv.times + ' times' : '') + ' · beat him for <b>+' + bn.xp + ' XP</b> · <b>+' + bn.gold + ' gold</b>'; card.dataset.name = rv.name; }
+    else { g('hm-rival-av').textContent = '?'; g('hm-rival-name').textContent = 'No rival yet'; g('hm-rival-sub').textContent = c ? 'Nobody has felled you lately. The man who does waits in your next pit.' : (me ? 'reaching the war-net…' : 'Sign in to keep a career — and a grudge.'); delete card.dataset.name; } }
+  // FIGHT: who is online (the relay's roll-call, once it has answered), else the vale's men
+  { const seen = new Set(), n = (AF.online || []).filter(p => p && p.name !== me && !seen.has(p.name) && seen.add(p.name)).length;
+    g('hm-fight-sub').textContent = n ? n + (n === 1 ? ' player online' : ' players online') + ' · invite them' : 'The vale\'s men wait'; }
+  // the three doors, a reason on each
+  { const own = c ? c.items || [] : [], afford = c ? Object.keys(I).filter(id => !I[id].unique && !own.includes(id) && !C.lockReason(id, c)).length : 0;
+    g('hm-market-sub').textContent = c ? (afford ? afford + ' you can afford' : 'nothing new to buy') : 'swords, mail, bows, horses'; g('hm-market-sub').className = afford ? 'up' : ''; g('hm-market-badge').classList.toggle('hidden', !afford);
+    let prev = null; try { prev = me ? JSON.parse(localStorage.getItem('bv-seen-' + me) || 'null') : null; } catch (e) {}
+    const lad = g('hm-ladder-sub'), dp = c && prev && prev.position && c.position ? prev.position - c.position : 0;
+    lad.textContent = dp > 0 ? '▲ ' + dp + ' since last time' : dp < 0 ? '▼ ' + (-dp) + ' since last time' : c && c.position ? '#' + c.position + ' of ' + c.of : 'every fighter by renown'; lad.className = dp > 0 ? 'up' : dp < 0 ? 'hot' : '';
+    const uniq = Object.keys(I).filter(id => I[id].unique), got = uniq.filter(id => own.includes(id)).length;
+    g('hm-hall-sub').textContent = c ? got + ' / ' + uniq.length + ' uniques' : 'uniques, the belt, bests'; const hb = g('hm-hall-badge'); hb.textContent = got; hb.classList.toggle('hidden', !got); }
+  // the nearest achievement: the one closest to done, and how far it is
+  { const el = g('hm-ach-txt'), pips = g('hm-ach-pips');
+    if (!c) { el.textContent = me ? 'reaching the war-net…' : 'Sign in to keep a career: XP, gold, gear, a name on the wall.'; pips.innerHTML = ''; }
+    else { const got = c.achievements || []; let best = null;
+      for (const a of C.ARENA_ACHIEVEMENTS) { if (got.includes(a[0])) continue; const v = Math.min(a[3], C.statOf(c, a[2])), k = v / a[3]; if (!best || k > best.k) best = { a, v, k }; }
+      if (!best) { el.innerHTML = '<b>Every achievement</b> is yours.'; pips.innerHTML = ''; }
+      else { const [, label, stat, at] = best.a, left = at - best.v, one = left === 1, unit = { kills: one ? 'kill' : 'kills', matches: one ? 'fight' : 'fights', wins: one ? 'win' : 'wins', stars: one ? 'star of the match' : 'stars of the match', trophies: one ? 'trophy' : 'trophies', rivalsBeaten: one ? 'score settled' : 'scores settled', dailies: one ? 'bout of the day' : 'bouts of the day', dailyTops: 'bout of the day topped', belts: 'belt taken', streak: 'kills in a row' }[stat] || stat;
+        el.innerHTML = '<b>' + escHtml(label.replace(/ — .*$/, '')) + '</b> — ' + left + ' more ' + unit + ' for the achievement';
+        const n = 5, lit = Math.min(n - 1, Math.floor(best.k * n)); pips.innerHTML = Array.from({ length: n }, (_, i) => '<i class="' + (i < lit ? 'on' : '') + '"></i>').join(''); } } }
+  // his kit: what he rides in with, a chip a slot — a tap opens that stall of the market
+  { const gear = afGear(), el = g('hm-gear'); el.innerHTML = ['sword', 'armor', 'bow', 'horse'].map(sl => gear[sl] && I[gear[sl]] ? '<span data-slot="' + sl + '">' + escHtml(I[gear[sl]].name) + '</span>' : '<span class="none" data-slot="' + sl + '" title="no ' + (sl === 'armor' ? 'armour' : sl) + ' yet — the market has one">—</span>').join(''); }
+}
+function afHomeClock() {                                    // the bout of the day ends at midnight UTC — the card counts down to it
+  const el = document.getElementById('hm-daily-clock'); if (!el) return;
+  const now = new Date(), end = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1), sec = Math.max(0, Math.floor((end - now) / 1000)), p = n => String(n).padStart(2, '0');
+  el.textContent = '◉ ' + p(Math.floor(sec / 3600)) + ':' + p(Math.floor(sec % 3600 / 60)) + ':' + p(sec % 60);
+}
+function afHomeCount(el, from, to) {                        // a number that counts up to where it is (the rank bar earns its moment)
+  if (!el) return; if (from === to || Math.abs(to - from) > 5000) { el.textContent = to.toLocaleString(); return; }
+  const t0 = performance.now(), dur = 900; el._countTo = to;
+  const step = () => { if (el._countTo !== to) return; const k = Math.min(1, (performance.now() - t0) / dur), e = 1 - Math.pow(1 - k, 3); el.textContent = Math.round(from + (to - from) * e).toLocaleString(); if (k < 1) requestAnimationFrame(step); };
+  step();
+}
+BV.homeHud = () => { afHomeHud(); const g = id => (document.getElementById(id) || {}).textContent; return { xp: g('hm-xp-now'), of: g('hm-xp-of'), rank: g('hm-xp-rank'), gold: g('hm-gold'), daily: g('hm-daily-name'), you: g('hm-daily-you'), rival: g('hm-rival-name'), fight: g('hm-fight-sub'), market: g('hm-market-sub'), ladder: g('hm-ladder-sub'), hall: g('hm-hall-sub'), ach: g('hm-ach-txt'), gear: g('hm-gear') }; };   // test: what the home's HUD says
 function afHomeRender() {
   const c = AF.career, g = id => document.getElementById(id);
   const body = g('home-stats-body');
   if (!(SHELL.page === 'profile' && AF.profile)) afHomeCard();
   if (body) body.innerHTML = afCareerSheetHtml(c);
-  afHomeNews(); afDailyLabel();
+  afHomeNews(); afDailyLabel(); afHomeHud();
   if (afShellVisible()) { afShellFigure(); afPreviewRun(); }
 }
 function afHomeOpen(name) {
@@ -22246,7 +22316,13 @@ function afHomeResume() { AF.tryItem = null; afHomeRender(); }   // back on the 
   g('home-market-btn').onclick = () => { SFX.init && SFX.init(); afMarketOpen(); };
   if (g('home-ladder-btn')) g('home-ladder-btn').onclick = () => afLadderOpen('global');
   if (g('title-ladder-btn')) g('title-ladder-btn').onclick = () => afLadderOpen('global');
-  for (const id of ['home-daily-btn', 'title-daily-btn']) if (g(id)) g(id).onclick = () => { SFX.init && SFX.init(); afDailyOpen(); };
+  if (g('title-daily-btn')) g('title-daily-btn').onclick = () => { SFX.init && SFX.init(); afDailyOpen(); };
+  // the home's HUD (the 2026-09-14 redesign): the card opens the bout's page, FIGHT IT goes straight into the sand
+  if (g('hm-daily')) g('hm-daily').onclick = () => { SFX.init && SFX.init(); afDailyOpen(); };
+  if (g('home-daily-btn')) g('home-daily-btn').onclick = e => { e.stopPropagation(); SFX.init && SFX.init(); afDailyStart(); };
+  if (g('hm-help')) g('hm-help').onclick = e => { e.stopPropagation(); afShellPage('help'); };
+  if (g('hm-rival')) g('hm-rival').onclick = () => { const n = g('hm-rival').dataset.name; if (n) afProfileOpen(n, 'npc'); };
+  if (g('hm-gear')) g('hm-gear').onclick = e => { const t = e.target && e.target.closest ? e.target.closest('[data-slot]') : null; if (!t) return; SFX.init && SFX.init(); AF.marketTab = t.getAttribute('data-slot'); afMarketOpen(); };
   if (g('home-hall-btn')) g('home-hall-btn').onclick = () => afHallOpen();
   afDailyLabel(); if (!DAILY.data) afDailyLoad();
   // any name anywhere is a link to its profile (data-prof="kind|name"); the profile/career buttons ride the same handler
@@ -22307,7 +22383,7 @@ function afMarketRender() {
   html += '<div class="mk-grid">' + ids.map(id => {
     const it = I[id], owned = !!(c && c.items.includes(id)), eq = c ? c.equipped[it.slot] === id : (!it.unique && AF_GEAR_FREE[it.slot] === id), trying = AF.tryItem === id, why = it.unique ? null : (c ? ARENA_CAT.lockReason(id, c) : 'sign in'), th = afThumb(id);
     const foot = eq && !c ? '<span>worn</span>' : owned ? (eq ? '<span>worn</span>' : btn('equip:' + it.slot + ':' + id, 'Wear')) : it.unique ? '<span class="mk-lock">not yet yours</span>' : why === 'sign in' ? '<span>' + it.price + ' g</span>' : why ? '<span class="mk-lock">🔒 ' + why + '</span>' : btn('buy:' + id, 'Buy ' + it.price + ' g');
-    return '<div class="mk-card' + (trying ? ' on' : '') + (eq ? ' worn' : owned ? ' owned' : '') + (why && !owned && !eq ? ' locked' : '') + '" data-act="try:' + id + '"><div class="mk-img">' + (th ? '<img src="' + th + '" alt="">' : '<span class="mk-wait">…</span>') + '</div><div class="mk-name">' + it.name + '</div><div class="mk-stat">' + statOf(it) + '</div><div class="mk-foot">' + foot + '</div></div>'; }).join('') + '</div>';
+    return '<div class="mk-card tier-' + (it.unique || it.rank >= 4 ? 'legend' : it.rank >= 3 ? 'epic' : it.rank >= 2 ? 'rare' : 'common') + (trying ? ' on' : '') + (eq ? ' worn' : owned ? ' owned' : '') + (why && !owned && !eq ? ' locked' : '') + '" data-act="try:' + id + '"><div class="mk-img">' + (th ? '<img src="' + th + '" alt="">' : '<span class="mk-wait">…</span>') + '</div><div class="mk-name">' + it.name + '</div><div class="mk-stat">' + statOf(it) + '</div><div class="mk-foot">' + foot + '</div></div>'; }).join('') + '</div>';
   p.innerHTML = '<div id="af-market-head" style="font-size:14px;color:#e8def8">' + left + '</div><div id="af-market-right">' + html + '</div>';   // (the figure is the shell's, on the left; a try-on shows on him with its buy strip under him)
   afShellFigure();
   if (pg) pg.scrollTop = keepScroll;

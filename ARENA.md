@@ -632,6 +632,25 @@ finer mesh when there are hills.
 falls (louder for your kills and your death — the roar is synthesised, a swell of band-passed noise,
 `afRoar`), cheer the bell, and every half-minute or so the wave goes round the stands.
 
+### The arena menu (2026-09-14 redesign)
+
+Every screen outside the fight is the shell in `index.html` (`#start`): the fighter on the left,
+the page on the right, Back always in the same place. The 2026-09-14 redesign (Claude Design
+"Blade Vale - Arena Menu", phone landscape 844×390) gave it one look — gold-foil Cinzel titles,
+Oswald labels, blood-red FIGHT, cards on a dark plum ground — and turned the **home** into a HUD
+round the fighter: `#start.home` lays the shell's own preview under the whole screen and
+`#page-home` over it as a grid. The name card sits top-left; the rank bar (`afHomeHud`: counts up,
+"+N XP" pops when it grew) and the purse along the top; the bout of the day (name, sand, a clock to
+midnight UTC, where you stand on the board — FIGHT IT goes straight into the sand, the card opens
+the page) and the rival down the left; FIGHT (who is online, else the vale's men), the three doors
+with a reason on each (wares you can afford, places moved since last time, uniques held) and the
+achievement nearest to done down the right; his kit as chips along the bottom (a tap opens that
+stall of the market). The market cards carry a rarity tier (`tier-common/rare/epic/legend` from the
+catalogue's rank lock; a unique is legendary and shimmers), the ladder and the day's board put
+the top three on a podium (`top1..3`), the hall shows a unique you lack as a locked "?", and the
+career sheet draws the road to Legend (`.rank-road`). `BV.homeHud()` returns what the HUD says.
+Bigger screens zoom the home grid (1.25× from 1100×620, 1.5× from 1500×820).
+
 ### The career: XP, gold, ranks, the marketplace
 
 Signed-in accounts keep an **arena career** on the server (`server/arena.js`, table

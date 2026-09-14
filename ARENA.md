@@ -40,7 +40,8 @@ shows the hidden **Enter the Vale** button and the open-world title copy again (
 
 | | Desktop | Touch |
 |---|---|---|
-| Move | WASD | left thumb stick |
+| Move — **the run builds**: the first strides are a jog, hold forward (the way you face — nobody sprints sideways or backwards) and you reach full stride in about a second and a half; at full stride you carry momentum (slower to stop, wide to turn); backing up, cutting across your own line, blocking or loading a blow bleed it away | WASD | left thumb stick |
+| **Jump** — a leap from wherever you stand, with the blade at rest; you fly the way you left the ground. Come down on a man at full stride and he is **FLOORED** (the horse's trick on foot: a second and a half on the sand, open) and your own stride is spent on him; a slow hop onto a man is nothing | Space | JUMP |
 | Aim | mouse (click the pit to lock the cursor) | drag the right half of the screen |
 | Attack: **hold to load, release to swing** — a tap is a quick light (three chain into a combo), a full hold is a heavy that cracks a raised guard; the bow draws the same way | hold / release left click | hold / release ATK |
 | Block (hold; 85% less damage from the front) | Shift or right click | BLOCK |
@@ -48,7 +49,7 @@ shows the hidden **Enter the Vale** button and the open-world title copy again (
 
 On touch, the thumb that holds ATK or BLOCK also aims: press, drag to turn, release to swing where you
 face (the other thumb is on the stick, so there is no third finger).
-| Roll — forward, back, either side or anything between (invulnerable for most of it; you come up still facing your man) | Space rolls the way you're moving (a side if you stand still); Q / E are always the sides | double-tap the stick, then push the way you want to go |
+| Roll — forward, back, either side or anything between (invulnerable for most of it; you come up still facing your man) | C rolls the way you're moving (a side if you stand still); Q / E are always the sides | double-tap the stick, then push the way you want to go |
 
 When you fall you spectate: drag to orbit the pit, wheel to zoom. The fight ends when one
 team is left standing, or after 3 minutes (most fighters standing, then most health, wins).
@@ -617,6 +618,22 @@ as speed grows (a galloping horse carves a wide arc, `MOUNT`). Top speed is 1.9�
 longer from the saddle, a blow at full tilt lands harder, and a horse at speed **tramples** foot
 soldiers in its path. NPC riders charge, strike in passing, ride through and wheel for another pass (the cycle above);
 foot soldiers roll clear of a charge. A rider's dodge is a spur.
+
+**On foot: the run builds, and the leap** (2026-09-14, `AF_F.run` / `AF_F.jump`, `afDrive`'s movement branch,
+`afJump` / `afAirPose` / `afTackle`, `afIntegrate`): a body no longer goes from a stand to full speed in a third of
+a second. `run01` climbs while the stick is held forward along the facing (`up` 1.4 s) and falls when it isn't
+(`down` 0.45 s, twice as fast on a reversal); the stride is `lerp(jog 0.62, top 1.05)` of `move` on a smoothstep of
+it, and at full stride the push in `afDrive` and the drag in `afIntegrate` both scale by `1 − inertia·run01` — the
+same terminal speed, a slower response (0.14 s → 0.47 s), so a sprinter slides half a stride to a stop and swings
+wide through a turn. A hit, a stagger, a clash or being ridden down zero it. The leap (`I.jump`, Space / the JUMP
+button, edge-triggered like the roll and carried on the wire) needs both feet on the ground and no blow in hand:
+`v` 6.6 up under `g` 18 (a ~1.2-unit hop, 0.73 s), nothing steers in the air and there is no ground to drag on, so
+you fly where you left it; the landing bends the knees for `land` 0.22 s with no load allowed. `afTackle` (host,
+in the air): with `leapSp` ≥ `tackleAt` × move behind the leap, the first foe within `tackleR` and not behind you
+takes 5–14 damage and the trample's `downT` (1–1.5 s) plus a shove along your line; your own speed is cut to 30 %
+and the landing is half again as long. The press ignores a man in the air (`afShove`), which is how he comes down
+ON a man. Remote bodies play the leap from state code 14 on their own clock (`afApplyRemotePose`) — it is always the
+same arc. NPCs never jump (yet).
 
 **Auto-turn** (`afAutoTurn`): after a swing or a roll, if a foe is at your elbow but not in front of
 you, the camera eases onto him — on a phone the thumb can't chase a man who slipped behind you. It

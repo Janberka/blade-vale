@@ -2650,6 +2650,7 @@ if (TOUCH) {
   bindBtn('tb-attack', requestAttack, () => { if (AF.on) AF.locIn.atk++; }); // arena: the release swings
   bindBtn('tb-heavy', requestHeavyAttack);
   bindBtn('tb-dodge', requestDodge);               // (the pit hides it: there the roll is the stick's double-tap-and-push)
+  bindBtn('tb-jump', () => { if (AF.on && AF.me && !AF.me.dead) AF.locIn.jump++; });   // the pit's LEAP (only the pit shows it)
   bindBtn('tb-block', () => { keys['ShiftLeft'] = true; }, () => { keys['ShiftLeft'] = false; });
   bindBtn('tb-weapon', toggleWeapon);
   // The ONE zoom control a phone has (no wheel, no pinch), so it has to land on a rung, not nudge
@@ -2818,7 +2819,7 @@ function startAttack() {
   showCombo(player.combo);
 }
 function requestDodge() {
-  if (AF.on) { AF.locIn.rollDir = null; AF.locIn.dodge++; return; }   // arena: Space rolls the way you're moving (a side if you stand still)
+  if (AF.on) { AF.locIn.jump++; return; }   // arena: Space is the LEAP (the roll: C the way you move, Q / E the sides — the arena keydown handler)
   if (!gameRunning || !player.alive || player.rolling) return;
   if (player.stamina < 30) return;
   player.stamina -= 30;
@@ -17064,7 +17065,15 @@ const AF_F = { hp: 100, move: 5.6, reach: 2.5, cone: 0.3, radius: 34, timeLimit:
   comboMax: 3, comboRest: 2.0, comboCd: 0.35, chainAt: 0.75,   // the light chain is THREE blows, the next chained at 3/4 of the follow-through — ~0.37 s hit to hit, a hair LONGER than the flinch, so a man who reads the chain gets his guard up for the second (at 0.45 it was 0.29 s: nobody could): the third has twice the follow-through and nothing queues behind it; then a breath before the next tap counts
   accel: 7.13, friction: 0.0008, lunge: 2, heavyLunge: 3,      // velocity model borrowed from the field fighters (terminal speed ≈ move)
   dodge: { dur: 0.40, speed: 13, iframes: 0.32, cd: 0.55 },
-  chargeMax: 0.85, heavyAt: 0.6, horseSpeed: 1.9, horseReach: 0.9 };
+  chargeMax: 0.85, heavyAt: 0.6, horseSpeed: 1.9, horseReach: 0.9,
+  // THE RUN BUILDS (2026-09-14): the first strides are a jog (jog × move); hold the stick forward and the stride lengthens
+  // over `up` seconds to the full run (top × move); ease off, cut across your own line, block or load a blow and it bleeds
+  // away in `down`. At full stride the body has MOMENTUM — the push and the drag both scale by (1 − inertia): the same top
+  // speed, a slower response (0.14 s → 0.47 s to settle), so nobody turns on a coin at a sprint.
+  run: { jog: 0.62, top: 1.05, up: 1.4, down: 0.45, inertia: 0.7 },
+  // THE LEAP (Space / JUMP): v up, g down (a ~1.2-unit hop, 0.73 s in the air), a bent-knee landing of `land` seconds with
+  // no blow in it. Come down on a man at `tackleAt` of the full run or better and he is FLOORED like a man ridden down.
+  jump: { v: 6.6, g: 18, land: 0.22, tackleAt: 0.75, tackleR: 1.15 } };
 // FIGHTERS OF THE VALE — the NPC archetypes: build (rig, weapon, size), body (hp/poise/speed/damage) and
 // temperament (how often he loads a swing, whether he blocks or rolls, whether he feints or walls up)
 // WHO CARRIES WHAT (the class rule): an ARCHER carries a bow AND a sword — he draws steel when a foe is in his face,
@@ -17155,7 +17164,7 @@ const AF = {
   on: false, role: 'solo',                 // 'solo' (no peers) | 'host' | 'guest'
   phase: 'lobby',                          // 'lobby' | 'countdown' | 'fight' | 'over'
   bodies: [], arrows: [], ground: null, props: [], seed: 1, cfg: { teams: 2, per: 3 }, roster: [],
-  me: null, keys: new Set(), locIn: { mx: 0, mz: 0, yaw: 0, atk: 0, heavy: 0, dodge: 0, rollDir: null, block: false, hold: false, swap: 0 },   // rollDir: the roll's world heading (rad), or null = the way you move
+  me: null, keys: new Set(), locIn: { mx: 0, mz: 0, yaw: 0, atk: 0, heavy: 0, dodge: 0, rollDir: null, block: false, hold: false, swap: 0, jump: 0 },   // rollDir: the roll's world heading (rad), or null = the way you move
   cam: { yaw: 0, pitch: 0.3, dist: 6.5 }, orbit: { theta: 0.4, phi: 0.9, r: 62, drag: false }, spec: { mode: 'orbit', target: null, fx: 0, fz: 0, touched: false },
   last: 0, t: 0, countdown: 0, over: false, winner: -1, standings: null, hudEl: null, events: [],
   inputs: new Map(), snapAcc: 0, inAcc: 0, lastSnap: 0, installed: false, log: [], torches: [], motes: null, hurt: 0, fov: CAM_BASE_FOV,
@@ -19636,7 +19645,7 @@ function afTagH(mounted, scale) { return (mounted ? 4.3 : 3.4) * (scale || 1) + 
 // Only the men near us wear a name: past ~24 m a tag is an unreadable smear over the fight (12 m in a big fight).
 const AF_TAG_R2 = { near: 24 * 24, big: 12 * 12 };
 function afTagNear(pos) { return camera.position.distanceToSquared(pos) < (AF.bodies.length > AF_LIM.heroCap ? AF_TAG_R2.big : AF_TAG_R2.near); }
-function afFreshInput() { return { mx: 0, mz: 0, yaw: 0, atk: 0, heavy: 0, dodge: 0, block: false, hold: false, swap: 0 }; } // atk = release count (a tap between samples still lands); hold = the button is down (charging)
+function afFreshInput() { return { mx: 0, mz: 0, yaw: 0, atk: 0, heavy: 0, dodge: 0, block: false, hold: false, swap: 0, jump: 0 }; } // atk = release count (a tap between samples still lands); hold = the button is down (charging)
 function afWearModel(h, pal) {                            // dress a fresh rig (foot, or a cavalry build / seated rider) in the warrior figure
   if (!MODEL_ON || !BV.modelReady || !h || !h.parts) return false;
   const g = h.riderGroup || h.group || h;                    // a horseman: only the man in the saddle wears it, the horse is the horse
@@ -19663,7 +19672,7 @@ function afMakeBody(entry, idx, r) {
     group, parts: h.parts, anim: makeAnimator(h.parts),
     x: sp.cx + rgx * off - Math.sin(sp.yaw) * back, z: sp.cz + rgz * off - Math.cos(sp.yaw) * back, yaw: sp.yaw, phase: r() * TAU, tiltX: 0,
     hp: A.hp + G.hp, maxHp: A.hp + G.hp, state: 'idle', atk: null, combo: 0, comboT: 0, blocking: false,
-    dodgeT: 0, dodgeCd: 0, ddx: 0, ddz: 0, iframes: 0, flinch: 0, stagger: 0, dead: false, deadT: 0, tinted: false, kills: 0,
+    dodgeT: 0, dodgeCd: 0, ddx: 0, ddz: 0, iframes: 0, flinch: 0, stagger: 0, dead: false, deadT: 0, tinted: false, kills: 0, run01: 0, airT: 0, airY: 0, vy: 0, landT: 0, seenJump: 0,
     // (a PLAYER is the hero: ×1.6 poise, so four jabs break it, not three)
     vx: 0, vz: 0, poise: A.poise * (entry.kind !== 'npc' ? 1.6 : 1) + G.poise, maxPoise: A.poise * (entry.kind !== 'npc' ? 1.6 : 1) + G.poise, queued: false, cd: 0, waiting: false, slotAngle: 0, retreatT: 0, bob: 0,
     gait: null, hitT: 0, hitSide: 0, lookYaw: 0, headYaw: 0, capeX: 0.12, phase0: r() * TAU, roll: 0, lastStep: 0, flashT: 0, sway: r() * TAU, clashT: 0, clashAtk: false, clashDx: 0, clashDz: 0,
@@ -20007,6 +20016,7 @@ function afStateCode(b) {
   if (b.stagger > 0) return 11;
   if (b.flinch > 0) return 5;
   if (b.dodgeT > 0) return 7;                                // (the roll's heading rides the snapshot's move slot)
+  if (b.airT > 0) return 14;                                 // in the air (the guest plays the arc himself: it is always the same leap)
   if (b.charge) return b.weapon === 'bow' ? 9 : 2;
   if (b.atk) { if (b.atk.bow) return b.atk.hit ? 10 : 9; return b.atk.hit ? (b.atk.t > b.atk.wind + b.atk.strike ? 4 : 3) : 2; }
   if (b.blocking) return 6;
@@ -20018,7 +20028,11 @@ function afMove(b, ux, uz, spd, dt) {                     // steer: accelerate t
   b.vx += ux * spd * AF_F.accel * dt; b.vz += uz * spd * AF_F.accel * dt;
 }
 function afIntegrate(b, dt) {                              // friction + slope + step + the rocks + the ring wall (the wall kills outward speed)
-  const f = Math.pow(AF_F.friction, dt); b.vx *= f; b.vz *= f;
+  const f = Math.pow(AF_F.friction, dt * (b.airT > 0 ? 0.03 : 1 - AF_F.run.inertia * (b.run01 || 0))); b.vx *= f; b.vz *= f;   // (a body at full stride carries: less drag here, less push in afDrive — the same top speed, a slower response; in the AIR there is no ground to drag on: you fly where you left it)
+  if (b.airT > 0) {                                          // THE LEAP: a fixed arc under gravity; the ground takes it back with a bent-knee landing (landT)
+    const J = AF_F.jump; b.airT += dt; b.vy -= J.g * dt; b.airY += b.vy * dt;
+    if (b.airY <= 0) { b.airY = 0; b.airT = 0; b.vy = 0; b.landT = Math.max(b.landT || 0, J.land); b.vx *= 0.75; b.vz *= 0.75; try { SFX.foot(b.group.position); } catch (e) {} if (b === AF.me) addShake(0.05); }
+  }
   if (AF.terr.hills.length) {                                // a hill takes the legs out of a run: uphill drags, downhill gives a little
     const sp = Math.hypot(b.vx, b.vz);
     if (sp > 0.5) { const rise = afHillY(b.x + b.vx / sp * 1.2, b.z + b.vz / sp * 1.2) - afHillY(b.x, b.z), g = clamp(1 - clamp(rise / 1.2, -0.2, 0.7) * 4 * dt, 0, 1.2); b.vx *= g; b.vz *= g; }
@@ -20062,7 +20076,7 @@ function afCommit(b, dt) {
       if (step !== b.lastStep) { b.lastStep = step; if (sp > 3 && camera.position.distanceToSquared(b.group.position) < (AF.bodies.length > AF_LIM.heroCap ? 120 : 900)) afSparks(tmpV.set(b.x, afY(b.x, b.z) + 0.15, b.z), 0xc9b79a, AF.bodies.length > AF_LIM.heroCap ? 1 : 2); }
     }
   }
-  const y = afY(b.x, b.z) + (b.moving && !b.dead && !b.mounted ? Math.abs(Math.cos(b.phase)) * g.bob : 0) + (b.yOff || 0);   // (yOff: the entrance — on the pits' flagstones, the drop over the lip; zero in the fight)
+  const y = afY(b.x, b.z) + (b.moving && !b.dead && !b.mounted ? Math.abs(Math.cos(b.phase)) * g.bob : 0) + (b.yOff || 0) + (b.airY || 0);   // (yOff: the entrance — on the pits' flagstones, the drop over the lip; zero in the fight)
   if (b.rollAng) {                                           // pivot the roll about the tucked body's middle: the feet swing over, the hips stay low
     // the tumble turns about the horizontal axis square to the roll's heading (rollRel, in the body's frame: +X is its
     // left, +Z its front), the head tipping the way it goes; the group's origin (the feet) is swung round a pivot at
@@ -20079,18 +20093,47 @@ function afCommit(b, dt) {
   }
   if (b.tag) { b.tag.visible = !b.dead && AF.phase !== 'intro' && !AF.outro && afTagNear(b.group.position); b.tag.position.set(b.x, y + (b.tagH || afTagH(b.mounted, b.baseScale)), b.z); b.bar.quaternion.copy(camera.quaternion); b.bar.userData.fill.scale.x = clamp(b.hp / b.maxHp, 0, 1); }
 }
+// THE LEAP. afJump puts a body in the air (afIntegrate flies the arc and lands it); afAirPose draws the knees up through it;
+// afTackle (host / solo, in the air) is the horse's trick on foot: come down on a man with a full stride behind you and he
+// is FLOORED — the same downT the trample uses — while your own way is spent on him. A slow hop onto a man is nothing: the
+// press (afShove) simply pushes the two apart once you land. A friend is never floored.
+function afJump(b) {
+  const J = AF_F.jump; b.airT = 1e-3; b.airY = 1e-3; b.vy = J.v; b.leapSp = Math.hypot(b.vx, b.vz); b.blocking = false; b.queued = false; b.charge = null; b.anim.ease = null;   // (leapSp: the stride he left the ground with — what the leap is worth, afTackle)
+  try { SFX.foot(b.group.position); } catch (e) {}
+  if (b === AF.me) addShake(0.03);
+}
+function afAirPose(b, dt) {                                  // knees drawn up through the leap, straightening again for the ground
+  const J = AF_F.jump, total = 2 * J.v / J.g, k = clamp(b.airT / total, 0, 1), tuck = Math.sin(Math.PI * clamp((k - 0.05) / 0.9, 0, 1)) * 0.8;
+  restLegs(b.parts, dt * 2.5, true, tuck); b.tiltX = 0;
+}
+function afTackle(b) {
+  const F = AF_F, J = F.jump, sp = Math.hypot(b.vx, b.vz), took = b.leapSp || 0; if (took < F.move * J.tackleAt || sp < 1) return;   // (no stride behind it: just a hop)
+  const q = clamp((took / F.move - J.tackleAt) / (F.run.top - J.tackleAt), 0, 1), ux = b.vx / sp, uz = b.vz / sp;   // q: how much of the full stride was behind it
+  for (const o of AF.bodies) {
+    if (o.dead || o === b || o.mounted || o.downT > 0 || o.airT > 0 || o.team === b.team) continue;
+    const dx = o.x - b.x, dz = o.z - b.z, dd = Math.hypot(dx, dz); if (dd > J.tackleR || (dx * ux + dz * uz) / (dd || 1) < -0.2) continue;   // (on him, or nearly under him — never a man behind)
+    const side = (dx * uz - dz * ux) >= 0 ? 1 : -1;
+    afDamage(o, 5 + 9 * q, b, false, false, false, 0.3 * q);
+    if (!o.dead) { o.downT = 1.0 + 0.5 * q; o.downSide = side; o.atk = null; o.charge = null; o.blocking = false; o.stagger = 0; o.flinch = 0; o.queued = false; o.run01 = 0; o.vx += ux * (3 + 4 * q); o.vz += uz * (3 + 4 * q); afPopup(o.group.position, 'FLOORED', '#ffb347'); }
+    b.vx = ux * sp * 0.3; b.vz = uz * sp * 0.3; b.vy = Math.min(b.vy, -2.5); b.landT = J.land * 1.6;   // he comes down on him, and off him: his own way spent
+    try { SFX.hit(o.group.position, true); } catch (e) {}
+    afSparks(tmpV.set(o.x, afY(o.x, o.z) + 0.2, o.z), 0xc9b79a, 8);
+    if (b === AF.me) addShake(0.18); else if (o === AF.me) addShake(0.28);
+    break;                                                   // one man per leap
+  }
+}
 // ONE control routine for everyone: reads b.inp (keyboard, NPC brain, or a remote player's record).
 // sim=true means this client is the authority (hits land); a guest driving its own body passes false.
 function afDrive(b, dt, sim) {
   const I = b.inp, F = AF_F, human = b.ctrl !== 'ai';
-  if (b.dodgeCd > 0) b.dodgeCd -= dt; if (b.mountCd > 0) b.mountCd -= dt;
+  if (b.dodgeCd > 0) b.dodgeCd -= dt; if (b.mountCd > 0) b.mountCd -= dt; if (b.landT > 0) b.landT -= dt;
   if (b.cd > 0 && (human || (!b.atk && !b.charge && !(b.aiHoldT > 0)))) b.cd -= dt;   // an NPC's pause between blows starts once the blow is DONE (it used to run out mid-swing: jab, jab, jab)
   if (b.comboT > 0) { b.comboT -= dt; if (b.comboT <= 0) b.combo = 0; }
   if (b.iframes > 0) b.iframes -= dt;
   if (b.stagger <= 0 && b.poise < b.maxPoise) b.poise = Math.min(b.maxPoise, b.poise + F.poiseRegen * dt); // poise recovers off the pressure
   b.moving = false;
   if (b.downT > 0) {                                         // ridden down: flat on the sand, then up again
-    b.downT -= dt; b.atk = null; b.charge = null; b.blocking = false; b.queued = false; b.prevHold = !!I.hold; if (!human) b.aiHoldT = 0;
+    b.downT -= dt; b.atk = null; b.charge = null; b.blocking = false; b.queued = false; b.prevHold = !!I.hold; b.run01 = 0; if (!human) b.aiHoldT = 0;
     const k = b.downT > 0.45 ? 1 : clamp(b.downT / 0.45, 0, 1);   // the last half-second: getting up
     b.tiltX = -1.35 * k; b.roll = (b.downSide || 1) * 0.45 * k;
     setPose(b.anim, 'hurt', 0.08); restLegs(b.parts, dt, true);
@@ -20099,19 +20142,19 @@ function afDrive(b, dt, sim) {
   }
   if (b.stagger > 0 || b.flinch > 0) {                     // reeling (flinch) or guard broken / poise gone (stagger: open to an execution)
     if (b.stagger > 0) b.stagger -= dt; else b.flinch -= dt;
-    b.atk = null; b.charge = null; b.queued = false; b.blocking = false; b.tiltX = 0; b.prevHold = !!I.hold; if (!human) b.aiHoldT = 0;   // (no press buffers through the reel: the hold has to come again — an NPC's cancelled load used to run its whole 0.9 s with nothing behind it)
+    b.atk = null; b.charge = null; b.queued = false; b.blocking = false; b.tiltX = 0; b.prevHold = !!I.hold; b.run01 = 0; if (!human) b.aiHoldT = 0;   // (no press buffers through the reel: the hold has to come again — an NPC's cancelled load used to run its whole 0.9 s with nothing behind it)
     setPose(b.anim, 'hurt', 0.06); restLegs(b.parts, dt, true);
     if (!b.tinted && b.flashT <= 0) { setTint(b.parts, 0x551111); b.tinted = true; }
     afIntegrate(b, dt); afCommit(b, dt); return;
   }
   if (b.tinted) { setTint(b.parts, null); b.tinted = false; }
   if (b.clashT > 0) {                                        // blades locked: hold the pose, then shove apart (the attacker further, and open)
-    b.clashT -= dt; b.vx *= 0.4; b.vz *= 0.4; b.blocking = !b.clashAtk; b.prevHold = !!I.hold; restLegs(b.parts, dt, true);
+    b.clashT -= dt; b.vx *= 0.4; b.vz *= 0.4; b.run01 = 0; b.blocking = !b.clashAtk; b.prevHold = !!I.hold; restLegs(b.parts, dt, true);
     if (b.clashT <= 0) { const k = b.clashAtk ? 5.5 : 2.5; b.vx += b.clashDx * k; b.vz += b.clashDz * k; b.cd = Math.max(human ? 0 : b.cd, b.clashAtk ? 0.35 : 0.05); b.anim.ease = null; setPose(b.anim, b.clashAtk ? 'hurt' : 'block', 0.12); if (b.clashAtk) b.flinch = 0.16; }
     afIntegrate(b, dt); afCommit(b, dt); return;
   }
   if (b.dodgeT > 0) {                                        // mid-roll: i-frames, a burst of sideways speed, tucked into a ball and rolling over the shoulder
-    b.dodgeT -= dt; const k = 1 - clamp(b.dodgeT / F.dodge.dur, 0, 1); b.prevHold = !!I.hold;
+    b.dodgeT -= dt; const k = 1 - clamp(b.dodgeT / F.dodge.dur, 0, 1); b.prevHold = !!I.hold; b.run01 = Math.max(0, b.run01 - dt / F.run.down);
     const sp = F.dodge.speed * (1 - k * 0.5); b.vx = b.ddx * sp; b.vz = b.ddz * sp;
     afRollPose(b, k, dt);
     if (b.dodgeT <= 0) { b.rollAng = 0; b.rollSq = 0; b.vx *= 0.4; b.vz *= 0.4; if (b === AF.me) afAutoTurn(b); }
@@ -20121,7 +20164,7 @@ function afDrive(b, dt, sim) {
   if (I.dodge !== b.seenDodge) {                             // a roll cancels a windup, never a landed blow
     b.seenDodge = I.dodge;
     if (b.mounted) { if (b.dodgeCd <= 0) { b.dodgeCd = 1.2; b.vx += Math.sin(b.yaw) * 6; b.vz += Math.cos(b.yaw) * 6; b.iframes = 0.15; try { SFX.foot(b.group.position); } catch (e) {} } }
-    else if (b.dodgeCd <= 0 && !(b.atk && b.atk.hit)) {
+    else if (b.dodgeCd <= 0 && !(b.atk && b.atk.hit) && b.airT <= 0 && b.landT <= 0) {
       b.dodgeT = F.dodge.dur; b.iframes = F.dodge.iframes; b.dodgeCd = F.dodge.dur + F.dodge.cd; b.atk = null; b.charge = null; b.queued = false; b.blocking = false;
       // THE ROLL'S HEADING: the one asked for (Q / E, the stick's double-tap-and-push), else — a player — the way he is
       // moving, else a SIDE: the side the stick leans, else a coin. (An NPC always takes a side: he closes on his man,
@@ -20136,6 +20179,10 @@ function afDrive(b, dt, sim) {
       afIntegrate(b, dt); afCommit(b, dt); return;
     }
   }
+  if (I.jump !== b.seenJump) {                               // a LEAP (Space / JUMP): from your feet, with the blade at rest — the run you bring to it is what it's worth
+    b.seenJump = I.jump;
+    if (!b.mounted && b.airT <= 0 && b.landT <= 0 && !b.atk && !b.charge && b.swapT <= 0 && b.clashT <= 0) afJump(b);
+  }
   // facing: everyone turns, nobody snaps — a player's aim leads, an NPC's intent follows (a horse wheels slower the faster it goes)
   if (b.trampleT > 0) b.trampleT -= dt;
   if (!b.mounted) b.yaw = angleLerp(b.yaw, I.yaw, clamp(dt * (human ? 14 : 9), 0, 1));
@@ -20149,6 +20196,12 @@ function afDrive(b, dt, sim) {
     else b.yaw += clamp(angleDelta(b.yaw, I.yaw), -maxYaw, maxYaw);
   }
   if (human) b.lookYaw = I.yaw; else if (b.target && !b.target.dead) b.lookYaw = Math.atan2(b.target.x - b.x, b.target.z - b.z); else b.lookYaw = b.yaw;
+  if (b.airT > 0) {                                          // IN THE AIR: the knees come up, the aim still turns — no blow, no guard, no steering (the way you left the ground with is the way you go)
+    b.charge = null; b.blocking = false; b.queued = false; b.prevHold = !!I.hold; b.seenAtk = I.atk; if (!human) b.aiHoldT = 0;
+    afAirPose(b, dt); setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.15);
+    if (sim && b.airT > 0.1) afTackle(b);
+    afIntegrate(b, dt); afCommit(b, dt); return;
+  }
   if (I.swap !== b.seenSwap) { b.seenSwap = I.swap; if (!b.atk && b.clashT <= 0) afSetWeapon(b, b.weapon === 'bow' ? 'sword' : 'bow'); }
   if (b.swapT > 0) { b.swapT -= dt; b.charge = null; }         // hands busy changing weapons
   if (b.noBowT > 0) b.noBowT -= dt;
@@ -20160,7 +20213,7 @@ function afDrive(b, dt, sim) {
   // sword combo — an archer swinging his bow like a blade), and a draw let go inside 0.12 s is simply lowered
   if (!b.atk) {
     if (!b.charge && (pressed || (tapped && !bow)) && b.swapT <= 0) {
-      if (!human || b.cd <= 0) { b.charge = { t: 0, heavyPose: false }; b.chargeMove = b.combo % 3; b.anim.ease = null;
+      if ((!human || b.cd <= 0) && b.landT <= 0) { b.charge = { t: 0, heavyPose: false }; b.chargeMove = b.combo % 3; b.anim.ease = null;
         setPose(b.anim, b.weapon === 'bow' ? 'aimBow' : MOVES[AF_MOVES[b.chargeMove]].windup, 0.1); b.blocking = false;
         b.releaseNow = tapped && !holdNow;                   // a tap that came and went between samples: swing at once
       }
@@ -20214,14 +20267,24 @@ function afDrive(b, dt, sim) {
   else if (!b.atk && !b.charge) setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.22);
   const canMove = !b.atk || (!b.atk.heavy && !b.atk.bow && !b.atk.hit);
   if (b.mounted) { afRide(b, dt, I, mm, canMove || !!(b.atk && b.atk.bow), sim); afIntegrate(b, dt); afCommit(b, dt); return; }   // (a shot from the saddle is the rider's arms — the horse runs on under him; a sword cut still checks it)
+  const R = F.run, landK = b.landT > 0 ? 0.5 * clamp(b.landT / F.jump.land, 0, 1) : 0;   // (landK: the knees give under a landing)
   if (mm > 1e-3 && canMove) {
-    const spd = F.move * (b.moveMul || 1) * (b.blocking ? 0.4 : (b.atk || b.charge) ? 0.35 : 1) * Math.min(1, mm);
-    afMove(b, ux, uz, spd, dt); b.moving = true;
-    const g = b.gait = b.blocking || b.atk || b.charge ? GAIT.walk : GAIT.run;
     const fwdDot = ux * Math.sin(b.yaw) + uz * Math.cos(b.yaw);       // backpedaling plays the cycle in reverse
-    b.phase += dt * g.tempo * (fwdDot < -0.1 ? -1 : 1) * Math.min(1, spd / F.move + 0.3);
-    walkLegs(b.parts, b.phase, g.leg);
-  } else restLegs(b.parts, dt, true);
+    // THE RUN BUILDS: a jog first; hold the stick forward — the way you face, nobody sprints sideways or backwards — and the
+    // stride lengthens over R.up seconds to the full run. Ease off, cut across your own line, block or load a blow and it
+    // bleeds away in R.down. At full stride the body carries: it accelerates and stops slower (afIntegrate scales the drag by
+    // the same `inert`, so the top speed holds and only the response slows) — you can't turn on a coin at a sprint, nor can he.
+    const vsp = Math.hypot(b.vx, b.vz), along = vsp > 1 ? (ux * b.vx + uz * b.vz) / vsp : 1;
+    const straight = mm > 0.5 && !b.blocking && !b.atk && !b.charge && b.landT <= 0 && fwdDot > 0.35 && along > 0.5;
+    b.run01 = straight ? Math.min(1, b.run01 + dt / R.up) : Math.max(0, b.run01 - dt / (along < 0 ? R.down * 0.5 : R.down));
+    const stride = lerp(R.jog, R.top, b.run01 * b.run01 * (3 - 2 * b.run01)), inert = 1 - R.inertia * b.run01;
+    const spd = F.move * (b.moveMul || 1) * (b.blocking ? 0.4 : (b.atk || b.charge) ? 0.35 : b.landT > 0 ? 0.5 : stride) * Math.min(1, mm);
+    afMove(b, ux, uz, spd * inert, dt); b.moving = true;
+    if (b === AF.me) { if (b.run01 > 0.98 && !b._strode) { b._strode = true; afPopup(b.group.position, 'FULL STRIDE', '#ffe089'); } else if (b.run01 < 0.5) b._strode = false; }
+    const g = b.gait = b.blocking || b.atk || b.charge ? GAIT.walk : GAIT.run;
+    b.phase += dt * g.tempo * (fwdDot < -0.1 ? -1 : 1) * Math.min(1.15, spd / F.move + 0.3);
+    walkLegs(b.parts, b.phase, g.leg * (g === GAIT.run ? 0.72 + 0.28 * b.run01 : 1), landK);
+  } else { b.run01 = Math.max(0, b.run01 - dt / R.down); restLegs(b.parts, dt, true, landK); }
   afIntegrate(b, dt); afCommit(b, dt);
 }
 // CLOTH: each hinge of the cape chain is a damped spring chasing a target that its parent's angle sets,
@@ -21024,6 +21087,7 @@ function afSeparate() {
 // so a horse creeping into a line still "trampled" everyone it brushed)
 function afHorseWeight(b) { return b.mounted ? 1.6 + 18.4 * clamp((b.sp01 - 0.45) / 0.35, 0, 1) : b.ctrl === 'ai' ? 1 : 2; }
 function afShove(b, o) {
+  if ((b.airY || 0) > 0.35 || (o.airY || 0) > 0.35) return;   // a man in the air is over the press, not in it (he can come down ON a man — afTackle)
   const R = 1.1 + (b.mounted ? 0.7 : 0) + (o.mounted ? 0.7 : 0), R2 = R * R;
   const dx = o.x - b.x, dz = o.z - b.z, d2 = dx * dx + dz * dz; if (d2 >= R2 || d2 < 1e-6) return;
   const d = Math.sqrt(d2), ov = R - d, nx = dx / d, nz = dz / d, wb = afHorseWeight(b), wo = afHorseWeight(o), tot = wb + wo;
@@ -21271,11 +21335,13 @@ function afApplyRemotePose(b, dt) {
     case 12: restLegs(b.parts, dt, true); break;              // blades locked — hold whatever the blade was doing
     case 13: b.tiltX = -1.35; b.roll = 0.45; setPose(b.anim, 'hurt', 0.08); restLegs(b.parts, dt, true); break;   // ridden down
     case 14: { const J = AF_F.jump; b.airT = (b.airT || 0) + dt; b.airY = Math.max(0, J.v * b.airT - 0.5 * J.g * b.airT * b.airT); afAirPose(b, dt); setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.15); break; }   // in the air: the same leap everyone makes, timed from here
+    case 14: { const J = AF_F.jump; b.airT = (b.airT || 0) + dt; b.airY = Math.max(0, J.v * b.airT - 0.5 * J.g * b.airT * b.airT); afAirPose(b, dt); setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.15); break; }   // in the air: the same leap everyone makes, timed from here
     case 9: setPose(b.anim, 'aimBow', 0.1); afRemoteLegs(b, dt, false); break;
     case 10: setPose(b.anim, 'looseBow', 0.05); afRemoteLegs(b, dt, false); break;
     default: setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.2); restLegs(b.parts, dt, true);
   }
   if (s !== 7) { b.rollT = 0; b.rollAng = 0; b.rollSq = 0; }
+  if (s !== 14) { b.airT = 0; b.airY = 0; }
   if (s !== 14) { b.airT = 0; b.airY = 0; }
 }
 function afApplySnap(s) {
@@ -21395,7 +21461,7 @@ function afNetTick(dt) {
     n.pingAcc += dt; if (n.pingAcc >= AF_NET.pingDt) { n.pingAcc = 0; afSend({ k: 'ping', t: performance.now() }, AF.hostPeer || undefined); }
     const sig = I.atk + '|' + I.dodge + '|' + I.swap + '|' + (I.hold ? 1 : 0) + (I.block ? 1 : 0);   // a button edge goes out NOW; the sticks ride the tick
     AF.inAcc += dt; if (sig === n.inSig && AF.inAcc < AF_NET.inDt) return; AF.inAcc = 0; n.inSig = sig;
-    afSend({ k: 'in', mx: +I.mx.toFixed(2), mz: +I.mz.toFixed(2), yaw: +I.yaw.toFixed(3), st: I.steer == null ? null : +I.steer.toFixed(2), th: I.thr == null ? null : +I.thr.toFixed(2), hy: AF.me && AF.me.mounted ? +AF.me.yaw.toFixed(3) : null, atk: I.atk, heavy: I.heavy, dodge: I.dodge, roll: I.rollDir == null ? null : +I.rollDir.toFixed(2), block: I.block ? 1 : 0, hold: I.hold ? 1 : 0, swap: I.swap, px: VR.on && AF.me && !AF.me.dead ? +AF.me.x.toFixed(2) : undefined, pz: VR.on && AF.me && !AF.me.dead ? +AF.me.z.toFixed(2) : undefined }, AF.hostPeer || undefined);   // (VR: where my head walked me) — to the host alone: the other guests have no use for my sticks
+    afSend({ k: 'in', mx: +I.mx.toFixed(2), mz: +I.mz.toFixed(2), yaw: +I.yaw.toFixed(3), st: I.steer == null ? null : +I.steer.toFixed(2), th: I.thr == null ? null : +I.thr.toFixed(2), hy: AF.me && AF.me.mounted ? +AF.me.yaw.toFixed(3) : null, atk: I.atk, heavy: I.heavy, dodge: I.dodge, roll: I.rollDir == null ? null : +I.rollDir.toFixed(2), block: I.block ? 1 : 0, hold: I.hold ? 1 : 0, swap: I.swap, jump: I.jump, px: VR.on && AF.me && !AF.me.dead ? +AF.me.x.toFixed(2) : undefined, pz: VR.on && AF.me && !AF.me.dead ? +AF.me.z.toFixed(2) : undefined }, AF.hostPeer || undefined);   // (VR: where my head walked me) — to the host alone: the other guests have no use for my sticks
   } else AF.events = [];
 }
 // the START must reach every player: a phone that was switching apps (or asleep on a dead socket) when the host
@@ -21442,7 +21508,7 @@ function afOnFightMsg(m) {
     if (d.hy != null) { const hb = inp.body && inp.body.peer === m.from ? inp.body : (inp.body = AF.bodies.find(x => x.peer === m.from)); if (hb && hb.mounted && !hb.dead) hb.yaw = angleLerp(hb.yaw, +d.hy || 0, 0.7); } // a horse's heading is steered, not aimed: the rider's own screen owns it, or the two copies drift apart
     // (2026-09-13: everything from here on sat behind that comment — the host never saw a guest's attack, block, roll,
     // hold or swap; guests could walk and turn but none of their blows landed. Keep the buttons on their own line.)
-    inp.atk = d.atk | 0; inp.heavy = d.heavy | 0; if ((d.dodge | 0) !== inp.dodge) inp.rollDir = d.roll == null ? null : +d.roll; inp.dodge = d.dodge | 0; inp.block = !!d.block; inp.hold = !!d.hold; inp.swap = d.swap | 0;
+    inp.atk = d.atk | 0; inp.heavy = d.heavy | 0; if ((d.dodge | 0) !== inp.dodge) inp.rollDir = d.roll == null ? null : +d.roll; inp.dodge = d.dodge | 0; inp.block = !!d.block; inp.hold = !!d.hold; inp.swap = d.swap | 0; inp.jump = d.jump | 0;
   } else if (AF.role === 'guest') {
     if (d.k === 'snap') { AF.hostPeer = m.from; afApplySnap(d); }
     else if (d.k === 'over' && !AF.over) { AF.starName = d.star || null; if (d.ledger) d.ledger.forEach((r, i) => { const b = AF.bodies[i]; if (b) { b.kills = r[0]; b.dmgDealt = r[1]; b.dmgTaken = r[2]; } }); afFinish(d.winner, d.standings); }
@@ -21527,7 +21593,7 @@ function afCamera(dt) {
   if (AF.phase === 'intro' && AF.intro) afIntroCamera(dt);   // the entrance's own lens (afIntroStart's shot list)
   else if (AF.outro) afOutroCamera(dt);                      // the end-game film's (afOutroCompose)
   else if (me && !me.dead) {
-    const hy = afY(me.x, me.z) + 1.55, cp = Math.cos(cam.pitch);
+    const hy = afY(me.x, me.z) + 1.55 + (me.airY || 0) * 0.6, cp = Math.cos(cam.pitch);
     // OVER THE CROWD: if a body stands between you and the lens (the press behind you in a big fight), the camera
     // rises and comes in a little so it looks down over their helmets instead of through their chests
     const bx = -Math.sin(cam.yaw), bz = -Math.cos(cam.yaw), L = cam.dist * cp; let blocked = false;
@@ -21765,7 +21831,8 @@ function afInstallControls() {
     if (e.key === 'Shift') AF.keys.add('shift');
     if (k === 'f' && !e.repeat) { if (AF.me && !AF.me.dead) AF.locIn.swap++; else afSpecFree(); }   // sword <-> bow (dead: the free camera)
     if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !e.repeat && (!AF.me || AF.me.dead)) afSpecPick(e.key === 'ArrowLeft' ? -1 : 1);
-    if ((k === 'q' || k === 'e') && !e.repeat) { AF.locIn.rollDir = AF.cam.yaw + (k === 'q' ? 1 : -1) * Math.PI / 2; AF.locIn.dodge++; }   // roll left / right (Space: the way you move)
+    if ((k === 'q' || k === 'e') && !e.repeat) { AF.locIn.rollDir = AF.cam.yaw + (k === 'q' ? 1 : -1) * Math.PI / 2; AF.locIn.dodge++; }   // roll left / right (C: the way you move; Space is the leap — requestDodge)
+    if (k === 'c' && !e.repeat) { AF.locIn.rollDir = null; AF.locIn.dodge++; }
     if (e.key === 'Tab') { e.preventDefault(); if (!e.repeat) afHudOpen(); }                       // the score card opens to the full sheet (works under pointer lock)
     if (e.key === '[' || e.key === ']') afSetFov(afBaseFov() + (e.key === '[' ? -5 : 5));          // the lens, without leaving the fight (the card has a slider too)
   });

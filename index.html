@@ -816,6 +816,8 @@
   #tb-heavy  { width: 66px; height: 66px; right: 112px; bottom: 178px; border-color: rgba(255,120,80,.6);  color: #ffc7a8; }
   #tb-block  { width: 66px; height: 66px; right: 120px; bottom: 100px; border-color: rgba(125,255,154,.55); color: #c8ffd6; }
   #tb-dodge  { width: 62px; height: 62px; right: 30px;  bottom: 154px; border-color: rgba(120,210,255,.6);  color: #cfeaff; }
+  #tb-jump   { width: 62px; height: 62px; right: 30px;  bottom: 154px; border-color: rgba(120,210,255,.6);  color: #cfeaff; display: none; }   /* the pit's leap: DODGE's spot (the pit hides DODGE — the roll is on the stick) */
+  #touch.arenamode #tb-jump { display: flex; }
   #tb-weapon { width: 52px; height: 52px; right: 96px;  bottom: 250px; font-size: 11px; }
   /* map-mode kingdom actions — stacked pills, right side */
   #tmap .tbtn { border-radius: 12px; width: 116px; height: 48px; right: 22px; font-size: 12px; }
@@ -933,6 +935,7 @@
     <button id="tb-heavy"  class="tbtn">HVY</button>
     <button id="tb-block"  class="tbtn">BLOCK</button>
     <button id="tb-dodge"  class="tbtn">DODGE</button>
+    <button id="tb-jump"   class="tbtn">JUMP</button>
     <button id="tb-weapon" class="tbtn">SWAP</button>
   </div>
   <div id="tmap">
@@ -1100,7 +1103,8 @@
       <div class="row"><b>Mouse</b><span>Aim — click the sand to take the mouse, Esc gives it back</span></div>
       <div class="row"><b>Hold / release Left-Click</b><span>Load and swing — a tap is light, a full hold is heavy</span></div>
       <div class="row"><b>Shift / Right-Click</b><span>Block (hold)</span></div>
-      <div class="row"><b>Space</b><span>Roll the way you move — Q / E sideways</span></div>
+      <div class="row"><b>Space</b><span>Jump — at full stride, land on a man and he is floored</span></div>
+      <div class="row"><b>C</b><span>Roll the way you move — Q / E sideways</span></div>
       <div class="row"><b>F</b><span>Swap sword ↔ bow (archers)</span></div>
       <h4>On horseback</h4>
       <div class="row"><b>A / D</b><span>Turn the horse</span></div>
@@ -1251,6 +1255,6 @@
 <script src="arena-items.js?v=4"></script>
 <script src="net-battle.js?v=5"></script>
 <script src="real-skin.js?v=1"></script>
-<script src="game.js?v=158"></script>
+<script src="game.js?v=159"></script>
 </body>
 </html>

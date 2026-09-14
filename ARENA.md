@@ -197,8 +197,18 @@ barrels, crates and straw against the walls, a bookmaker's table with the strong
 doorway (skulls on spikes either side), an iron candle-wheel on chains over the sand with the lantern key
 light under it, a beamed plank roof three men up (in a second, non-casting mesh so the near-vertical sun
 that stands in for the wheel still throws body shadows), and four rings of dark-cloaked patrons in the
-same instanced vertex-shader crowd as the Colosseum (`afBuildCrowdMeshes`). No gates, no tunnels, no
-entrance film — the bell just rings under a `THE PITS` banner. The cameras know the room: the free lens
+same instanced vertex-shader crowd as the Colosseum (`afBuildCrowdMeshes`). No gates, no tunnels: the
+pits have their **own entrance film** (`afPitIntroStart`, on the Colosseum's machinery — `AF.intro`,
+`afIntroStep` / `afIntroBody`, the lens kit): the cellar from the foot of the stair under its candle-wheel
+(`THE PITS · N in the ring · every man for himself`, the stake if there is one), the bookmaker's table from
+the punters' side (`THE STAKES`; the outer rings keep clear of it), then each fighter in turn — the foes
+first, you last (`AND YOU`) — stepping out of the black doorway between the skulls, walking the lane the
+patrons keep open through every ring, and **dropping over the lip** onto the sand in slow motion through
+a gap in the rail (`afIntroDrop`: a hop, the fall, the knees taking it, dust; the men carry `b.yOff`
+while they are up on the flagstones or the stair, zero in the fight), a turn under the candle-wheel while
+they take their marks (the `THE PITS` banner), and the face-off over your shoulder. The drop's lens
+picks the side of the stair clear of every mark (`marksClear`). Timings in `AF_PIT_INTRO`; ~22 s for
+two, ~26 s for three. The cameras know the room: the free lens
 stays under the beams, over the patrons and inside the walls (`afCamOverBuilding`), the countdown sweep
 starts under the roof, `afArchTop` is flat. The end panel names the fighter, not the team (`Ysolde holds
 the pit`, *You won.*). The result report carries `venue` (the server ignores it for now — a pit fight
@@ -260,7 +270,10 @@ star of the match** low and close as the steel goes up (a fallen star: the sand 
 circle round the star with his men behind him (or, if the star fell, the winner nearest the middle of them), **the
 crowd** — the lens rides the rim of the bowl for five seconds with the tiers rising ahead of it while the house is on
 its feet (a wave runs with it; in the cellar it rides the ring among the patrons), and **the crane** back down onto the
-sand and the man holding it. The subject sits in the **left third** of the frame (`afOutroShift`: a lens shift via
+sand and the man holding it. The pits have their own cut: the star, then **the last man down** — from the sand where he
+lies, up at the man who put him there (only if he fell within ten paces of the winner), **the cellar** (the ring among
+the patrons, four seconds), **the purse** — the bookmaker's table, the strongbox and the gold (`the bookmaker pays
+out`, the stake a man if there was one), and the crane, which ends on `THE RING IS HIS · name`. The subject sits in the **left third** of the frame (`afOutroShift`: a lens shift via
 `camera.setViewOffset`, cleared when the film ends; portrait screens shift up instead) and the **board** fills the
 right (`afOutroBoard`, in the letterbox overlay): the result and the star, then every team's tally — standing, kills,
 damage dealt and taken — and its men row by row (kills / dealt / taken / standing or fallen, the star in gold, you in

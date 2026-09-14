@@ -17102,7 +17102,15 @@ const AF_F = { hp: 100, move: 5.6, reach: 2.5, cone: 0.3, radius: 34, timeLimit:
   stam: { max: 100, run: 11, draw: 7, light: 7, heavy: 16, loose: 4, dodge: 14, jump: 12, regen: 12, regenMove: 7, recover: 35, winded: { move: 0.6, dmg: 0.65 }, aiRest: 22 },
   // THE LEAP (Space / JUMP): v up, g down (a ~1.2-unit hop, 0.73 s in the air), a bent-knee landing of `land` seconds with
   // no blow in it. Come down on a man at `tackleAt` of the full run or better and he is FLOORED like a man ridden down.
-  jump: { v: 6.6, g: 18, land: 0.22, tackleAt: 0.75, tackleR: 1.15 } };
+  jump: { v: 6.6, g: 18, land: 0.22, tackleAt: 0.75, tackleR: 1.15 },
+  // THE SHIELD CHARGE (2026-09-14, the user: "running really fast charging the enemies should be a very good animation —
+  // go block mode, shield in front of the body, and hit as hard as possible; a good hit and 2 men can fall, or even a horse"):
+  // hold BLOCK at `at` of the full stride and the shield comes down in front (a shoulder, for a man without one) and you
+  // keep the stride (× speed) instead of dropping to the guard's walk. afRushHit: square on (within 0.75 of your line), a
+  // man on foot is RUN DOWN — the trample's downT — up to `men` of them, each costing you speed; a man behind a raised
+  // shield is guard-broken instead; a horse at a walk (sp01 < horseAt) loses its rider. `stam` to start, double the
+  // stride's drain while it lasts, at most `max` seconds; the charge ends in a stumble of `rec` (landT).
+  rush: { at: 0.85, speed: 1.08, reach: 1.5, cone: 0.5, men: 2, dmg: [8, 16], down: [1.0, 1.4], horseAt: 0.55, stam: 18, max: 1.8, after: 0.35, rec: 0.4 } };
 // FIGHTERS OF THE VALE — the NPC archetypes: build (rig, weapon, size), body (hp/poise/speed/damage) and
 // temperament (how often he loads a swing, whether he blocks or rolls, whether he feints or walls up)
 // WHO CARRIES WHAT (the class rule): an ARCHER carries a bow AND a sword — he draws steel when a foe is in his face,
@@ -19702,7 +19710,7 @@ function afMakeBody(entry, idx, r) {
     x: sp.cx + rgx * off - Math.sin(sp.yaw) * back, z: sp.cz + rgz * off - Math.cos(sp.yaw) * back, yaw: sp.yaw, phase: r() * TAU, tiltX: 0,
     hp: A.hp + G.hp, maxHp: A.hp + G.hp, state: 'idle', atk: null, combo: 0, comboT: 0, blocking: false,
     stam: AF_F.stam.max, maxStam: AF_F.stam.max, winded: false, stamRegen: 1 + clamp(G.move, -0.4, 0) * 1.5,   // (plate: −22 % speed is a third off the breath coming back)
-    dodgeT: 0, dodgeCd: 0, ddx: 0, ddz: 0, iframes: 0, flinch: 0, stagger: 0, dead: false, deadT: 0, tinted: false, kills: 0, run01: 0, airT: 0, airY: 0, vy: 0, landT: 0, seenJump: 0,
+    dodgeT: 0, dodgeCd: 0, ddx: 0, ddz: 0, iframes: 0, flinch: 0, stagger: 0, dead: false, deadT: 0, tinted: false, kills: 0, run01: 0, airT: 0, airY: 0, vy: 0, landT: 0, seenJump: 0, rushT: 0, rushHits: 0, rushHitT: 0,
     // (a PLAYER is the hero: ×1.6 poise, so four jabs break it, not three)
     vx: 0, vz: 0, poise: A.poise * (entry.kind !== 'npc' ? 1.6 : 1) + G.poise, maxPoise: A.poise * (entry.kind !== 'npc' ? 1.6 : 1) + G.poise, queued: false, cd: 0, waiting: false, slotAngle: 0, retreatT: 0, bob: 0,
     gait: null, hitT: 0, hitSide: 0, lookYaw: 0, headYaw: 0, capeX: 0.12, phase0: r() * TAU, roll: 0, lastStep: 0, flashT: 0, sway: r() * TAU, clashT: 0, clashAtk: false, clashDx: 0, clashDz: 0,
@@ -20048,6 +20056,7 @@ function afStateCode(b) {
   if (b.flinch > 0) return 5;
   if (b.dodgeT > 0) return 7;                                // (the roll's heading rides the snapshot's move slot)
   if (b.airT > 0) return 14;                                 // in the air (the guest plays the arc himself: it is always the same leap)
+  if (b.rushT > 0) return 15;                                // the shield charge (block pose, running legs, the lean)
   if (b.charge) return b.weapon === 'bow' ? 9 : 2;
   if (b.atk) { if (b.atk.bow) return b.atk.hit ? 10 : 9; return b.atk.hit ? (b.atk.t > b.atk.wind + b.atk.strike ? 4 : 3) : 2; }
   if (b.blocking) return 6;
@@ -20084,7 +20093,8 @@ function afCommit(b, dt) {
   if (b.flashT > 0) { b.flashT -= dt; if (!b.flashWhite) { setTint(p, 0xfff0e0); b.flashWhite = true; } if (b.flashT <= 0) { b.flashWhite = false; b.tinted = false; setTint(p, null); } }
   if (!b.dead) {
     const ex = b.maxStam ? 1 - b.stam / b.maxStam : 0;      // (spent: the breath deepens and quickens — bent over it when winded)
-    p.upperBody.rotation.x += clamp(fwd / F.move, -1, 1) * 0.14 + Math.sin(rtNow * (2.1 + 2.6 * ex) + b.phase0) * (0.012 + 0.04 * ex * ex) + (b.winded ? 0.12 : 0); // lean into the run + breathe
+    const leanX = 0.16 * (b.run01 || 0) + (b.rushT > 0 ? 0.3 : 0);   // THE SPRINT: the body goes down over the stride — and further behind the shield in a charge
+    p.upperBody.rotation.x += clamp(fwd / F.move, -1, 1) * (0.14 + leanX) + Math.sin(rtNow * (2.1 + 2.6 * ex) + b.phase0) * (0.012 + 0.04 * ex * ex) + (b.winded ? 0.12 : 0); // lean into the run + breathe
     if (!b.moving && !b.atk && b.dodgeT <= 0 && !(b.downT > 0)) {   // standing guard: the weight shifts from foot to foot
       const w = Math.sin(rtNow * 0.9 + b.sway); p.upperBody.rotation.z += w * 0.03; p.hipL.rotation.x += w * 0.05; p.hipR.rotation.x -= w * 0.05; b.roll = w * 0.015;
     }
@@ -20092,7 +20102,8 @@ function afCommit(b, dt) {
       b.hitT -= dt; const k = clamp(b.hitT / 0.25, 0, 1);
       p.upperBody.rotation.x -= k * 0.32; p.upperBody.rotation.z += b.hitSide * k * 0.22;
       if (p.headPivot) p.headPivot.rotation.x = -k * 0.35;
-    } else if (p.headPivot) p.headPivot.rotation.x = lerp(p.headPivot.rotation.x, 0, clamp(dt * 8, 0, 1));
+    } else if (p.headPivot) p.headPivot.rotation.x = lerp(p.headPivot.rotation.x, -leanX * 0.8, clamp(dt * 8, 0, 1));   // (the head comes up as the back goes down: eyes on the man)
+    if (b.rushT > 0 && !b.mounted) p.upperBody.rotation.y -= 0.22;   // the shield shoulder leads
     if (b.mounted && !b.dead) {                              // the RIDER turns in the saddle: shoulders follow the aim (a torso's travel), legs stay astride
       const tw = b.aimYaw != null ? clamp(angleDelta(b.yaw, afAimOf(b)), -1.25, 1.25) : 0;
       b.twist = lerp(b.twist || 0, tw, clamp(dt * 9, 0, 1)); p.upperBody.rotation.y += b.twist;
@@ -20130,7 +20141,7 @@ function afCommit(b, dt) {
 // is FLOORED — the same downT the trample uses — while your own way is spent on him. A slow hop onto a man is nothing: the
 // press (afShove) simply pushes the two apart once you land. A friend is never floored.
 function afJump(b) {
-  const J = AF_F.jump; b.airT = 1e-3; b.airY = 1e-3; b.vy = J.v; b.leapSp = Math.hypot(b.vx, b.vz); b.blocking = false; b.queued = false; b.charge = null; b.anim.ease = null;   // (leapSp: the stride he left the ground with — what the leap is worth, afTackle)
+  const J = AF_F.jump; b.airT = 1e-3; b.airY = 1e-3; b.vy = J.v; b.leapSp = Math.hypot(b.vx, b.vz); b.blocking = false; b.queued = false; b.charge = null; b.rushT = 0; b.anim.ease = null;   // (leapSp: the stride he left the ground with — what the leap is worth, afTackle)
   try { SFX.foot(b.group.position); } catch (e) {}
   if (b === AF.me) addShake(0.03);
 }
@@ -20154,6 +20165,48 @@ function afTackle(b) {
     break;                                                   // one man per leap
   }
 }
+// THE SHIELD CHARGE. afDrive's movement branch starts it (block held at full stride) and ends it (guard dropped, stick
+// eased, wall, wind, time, or enough men); afRushHit (host / solo, every tick of it) is the impact: square on and a man on
+// foot goes down as if ridden down, a man behind his raised shield is guard-broken and keeps his feet, a clip off the
+// shoulder only shoves; a horse at a walk loses its rider (afDismount thrown), a horse under way is a wall — or the thing
+// that runs YOU down (afRide's trample). A friend is shouldered aside. Every man hit takes a stride off the charge.
+function afRushEnd(b, hit) { b.rushT = 0; if (hit) b.landT = Math.max(b.landT || 0, AF_F.rush.rec); }   // (hit: the stumble)
+function afRushHit(b) {
+  const F = AF_F, RU = F.rush, sp = Math.hypot(b.vx, b.vz); if (sp < F.move * 0.6) return;
+  const q = clamp((sp / F.move - 0.6) / (F.run.top * RU.speed - 0.6), 0, 1), fx = Math.sin(b.yaw), fz = Math.cos(b.yaw);   // q: how much of the charge is behind it
+  for (const o of AF.bodies) {
+    if (o.dead || o === b || o.downT > 0 || o.airT > 0 || o.rushHitT > 0) continue;
+    const dx = o.x - b.x, dz = o.z - b.z, dd = Math.hypot(dx, dz), reach = RU.reach + (o.mounted ? 0.9 : 0); if (dd > reach) continue;
+    if ((dx * fx + dz * fz) / (dd || 1) < RU.cone) continue;                                  // (only the men in front of the shield)
+    const cross = dx * fz - dz * fx, square = Math.abs(cross) < (o.mounted ? 1.1 : 0.75), side = cross >= 0 ? 1 : -1, rgx = fz * side, rgz = -fx * side;
+    o.rushHitT = 3;                                                                          // (one shoulder per man per charge — a guard-broken man is not then run down by the same shield)
+    if (o.team === b.team) { o.vx += rgx * 4 + fx * 2; o.vz += rgz * 4 + fz * 2; continue; }   // a friend is shouldered aside
+    const pos = o.group.position;
+    if (o.mounted) {
+      if (!square || (o.sp01 || 0) > RU.horseAt) { b.vx *= 0.5; b.vz *= 0.5; continue; }      // a horse under way: you bounce off it (or under it)
+      const h = o.horse; if (h) afDamageHorse(h, 6 + 8 * q, b, false);
+      if (!o.dead && o.horse) { afDismount(o, true, true); afPopup(pos, 'UNHORSED', '#ffb347'); afLogLine(o.name + ' is unhorsed by ' + b.name, b.teamDef.col); if (o === AF.me) { afBanner('UNHORSED', b.name + ' ran you down', 2); addShake(0.35); } }
+      b.vx *= 0.2; b.vz *= 0.2; b.rushHits = RU.men; afRushEnd(b, true); if (b === AF.me) addShake(0.3); try { SFX.hit(pos, true); } catch (e) {}
+      return;
+    }
+    const facing = (-dx * Math.sin(o.yaw) - dz * Math.cos(o.yaw)) / (dd || 1), amt = lerp(RU.dmg[0], RU.dmg[1], q) * (b.dmgMul || 1);
+    if (!square) {                                                                            // a clip off the shoulder: a shove and a step lost
+      afDamage(o, amt * 0.35, b, false, false, false, 0.2);
+      if (!o.dead) { o.flinch = Math.max(o.flinch, 0.25); o.vx += rgx * 4 + fx * 2; o.vz += rgz * 4 + fz * 2; afPopup(pos, 'shouldered', '#d8c8a8'); }
+      b.vx *= 0.9; b.vz *= 0.9; continue;
+    }
+    b.rushHits++; b.rushLastHit = b.rushT;
+    if (o.blocking && facing > 0.15) afDamage(o, amt * 0.5, b, true, false, false, 0.9);   // shield on shield: his guard breaks (afDamage's heavy on a raised guard), he keeps his feet
+    else {
+      afDamage(o, amt, b, false, false, false, 0.5);
+      if (!o.dead) { o.downT = lerp(RU.down[0], RU.down[1], q); o.downSide = side; o.atk = null; o.charge = null; o.blocking = false; o.stagger = 0; o.flinch = 0; o.queued = false; o.run01 = 0; o.rushT = 0; o.vx += fx * (4 + 4 * q) + rgx * 2; o.vz += fz * (4 + 4 * q) + rgz * 2; afPopup(pos, 'RUN DOWN', '#ffb347'); }
+    }
+    afSparks(tmpV.set(o.x, afY(o.x, o.z) + 1.0, o.z), 0xc9b79a, 8); try { SFX.hit(pos, true); } catch (e) {}
+    if (b === AF.me) addShake(0.2); else if (o === AF.me) addShake(0.3);
+    b.vx *= 0.7; b.vz *= 0.7;                                                                 // each man costs a stride
+    if (b.rushHits >= RU.men) { afRushEnd(b, true); return; }
+  }
+}
 // ONE control routine for everyone: reads b.inp (keyboard, NPC brain, or a remote player's record).
 // sim=true means this client is the authority (hits land); a guest driving its own body passes false.
 const AF_S = () => AF_F.stam;
@@ -20166,6 +20219,7 @@ function afStamina(b, dt) {                                 // every tick, befor
   if (b.maxStam == null) { b.maxStam = AF_S().max; b.stam = b.maxStam; b.winded = false; b.stamRegen = b.stamRegen || 1; }
   const S = AF_S(), bow = b.weapon === 'bow'; let drain = 0;
   if (!b.mounted && b.run01 > 0.4) drain += S.run * (b.run01 - 0.4) / 0.6;   // the jog is free; the stride costs, the full stride most
+  if (b.rushT > 0) drain += S.run;                                             // the charge: the stride's cost again on top
   if (b.charge && bow) drain += S.draw;                                       // a drawn bow is held against the arm
   if (drain > 0) afStamCost(b, drain * dt);
   else if (!b.atk && !b.charge && b.dodgeT <= 0 && b.airT <= 0 && b.stam < b.maxStam) {
@@ -20177,14 +20231,14 @@ function afStamina(b, dt) {                                 // every tick, befor
 function afDrive(b, dt, sim) {
   const I = b.inp, F = AF_F, human = b.ctrl !== 'ai';
   afStamina(b, dt);
-  if (b.dodgeCd > 0) b.dodgeCd -= dt; if (b.mountCd > 0) b.mountCd -= dt; if (b.landT > 0) b.landT -= dt;
+  if (b.dodgeCd > 0) b.dodgeCd -= dt; if (b.mountCd > 0) b.mountCd -= dt; if (b.landT > 0) b.landT -= dt; if (b.rushHitT > 0) b.rushHitT -= dt;
   if (b.cd > 0 && (human || (!b.atk && !b.charge && !(b.aiHoldT > 0)))) b.cd -= dt;   // an NPC's pause between blows starts once the blow is DONE (it used to run out mid-swing: jab, jab, jab)
   if (b.comboT > 0) { b.comboT -= dt; if (b.comboT <= 0) b.combo = 0; }
   if (b.iframes > 0) b.iframes -= dt;
   if (b.stagger <= 0 && b.poise < b.maxPoise) b.poise = Math.min(b.maxPoise, b.poise + F.poiseRegen * dt); // poise recovers off the pressure
   b.moving = false;
   if (b.downT > 0) {                                         // ridden down: flat on the sand, then up again
-    b.downT -= dt; b.atk = null; b.charge = null; b.blocking = false; b.queued = false; b.prevHold = !!I.hold; b.run01 = 0; if (!human) b.aiHoldT = 0;
+    b.downT -= dt; b.atk = null; b.charge = null; b.blocking = false; b.queued = false; b.prevHold = !!I.hold; b.run01 = 0; b.rushT = 0; if (!human) b.aiHoldT = 0;
     const k = b.downT > 0.45 ? 1 : clamp(b.downT / 0.45, 0, 1);   // the last half-second: getting up
     b.tiltX = -1.35 * k; b.roll = (b.downSide || 1) * 0.45 * k;
     setPose(b.anim, 'hurt', 0.08); restLegs(b.parts, dt, true);
@@ -20193,19 +20247,19 @@ function afDrive(b, dt, sim) {
   }
   if (b.stagger > 0 || b.flinch > 0) {                     // reeling (flinch) or guard broken / poise gone (stagger: open to an execution)
     if (b.stagger > 0) b.stagger -= dt; else b.flinch -= dt;
-    b.atk = null; b.charge = null; b.queued = false; b.blocking = false; b.tiltX = 0; b.prevHold = !!I.hold; b.run01 = 0; if (!human) b.aiHoldT = 0;   // (no press buffers through the reel: the hold has to come again — an NPC's cancelled load used to run its whole 0.9 s with nothing behind it)
+    b.atk = null; b.charge = null; b.queued = false; b.blocking = false; b.tiltX = 0; b.prevHold = !!I.hold; b.run01 = 0; b.rushT = 0; if (!human) b.aiHoldT = 0;   // (no press buffers through the reel: the hold has to come again — an NPC's cancelled load used to run its whole 0.9 s with nothing behind it)
     setPose(b.anim, 'hurt', 0.06); restLegs(b.parts, dt, true);
     if (!b.tinted && b.flashT <= 0) { setTint(b.parts, 0x551111); b.tinted = true; }
     afIntegrate(b, dt); afCommit(b, dt); return;
   }
   if (b.tinted) { setTint(b.parts, null); b.tinted = false; }
   if (b.clashT > 0) {                                        // blades locked: hold the pose, then shove apart (the attacker further, and open)
-    b.clashT -= dt; b.vx *= 0.4; b.vz *= 0.4; b.run01 = 0; b.blocking = !b.clashAtk; b.prevHold = !!I.hold; restLegs(b.parts, dt, true);
+    b.clashT -= dt; b.vx *= 0.4; b.vz *= 0.4; b.run01 = 0; b.rushT = 0; b.blocking = !b.clashAtk; b.prevHold = !!I.hold; restLegs(b.parts, dt, true);
     if (b.clashT <= 0) { const k = b.clashAtk ? 5.5 : 2.5; b.vx += b.clashDx * k; b.vz += b.clashDz * k; b.cd = Math.max(human ? 0 : b.cd, b.clashAtk ? 0.35 : 0.05); b.anim.ease = null; setPose(b.anim, b.clashAtk ? 'hurt' : 'block', 0.12); if (b.clashAtk) b.flinch = 0.16; }
     afIntegrate(b, dt); afCommit(b, dt); return;
   }
   if (b.dodgeT > 0) {                                        // mid-roll: i-frames, a burst of sideways speed, tucked into a ball and rolling over the shoulder
-    b.dodgeT -= dt; const k = 1 - clamp(b.dodgeT / F.dodge.dur, 0, 1); b.prevHold = !!I.hold; b.run01 = Math.max(0, b.run01 - dt / F.run.down);
+    b.dodgeT -= dt; const k = 1 - clamp(b.dodgeT / F.dodge.dur, 0, 1); b.prevHold = !!I.hold; b.run01 = Math.max(0, b.run01 - dt / F.run.down); b.rushT = 0;
     const sp = F.dodge.speed * (1 - k * 0.5); b.vx = b.ddx * sp; b.vz = b.ddz * sp;
     afRollPose(b, k, dt);
     if (b.dodgeT <= 0) { b.rollAng = 0; b.rollSq = 0; b.vx *= 0.4; b.vz *= 0.4; if (b === AF.me) afAutoTurn(b); }
@@ -20264,7 +20318,7 @@ function afDrive(b, dt, sim) {
   // sword combo — an archer swinging his bow like a blade), and a draw let go inside 0.12 s is simply lowered
   if (!b.atk) {
     if (!b.charge && (pressed || (tapped && !bow)) && b.swapT <= 0) {
-      if ((!human || b.cd <= 0) && b.landT <= 0) { b.charge = { t: 0, heavyPose: false }; b.chargeMove = b.combo % 3; b.anim.ease = null;
+      if ((!human || b.cd <= 0) && b.landT <= 0 && b.rushT <= 0) { b.charge = { t: 0, heavyPose: false }; b.chargeMove = b.combo % 3; b.anim.ease = null;
         setPose(b.anim, b.weapon === 'bow' ? 'aimBow' : MOVES[AF_MOVES[b.chargeMove]].windup, 0.1); b.blocking = false;
         b.releaseNow = tapped && !holdNow;                   // a tap that came and went between samples: swing at once
       }
@@ -20318,24 +20372,37 @@ function afDrive(b, dt, sim) {
   else if (!b.atk && !b.charge) setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.22);
   const canMove = !b.atk || (!b.atk.heavy && !b.atk.bow && !b.atk.hit);
   if (b.mounted) { afRide(b, dt, I, mm, canMove || !!(b.atk && b.atk.bow), sim); afIntegrate(b, dt); afCommit(b, dt); return; }   // (a shot from the saddle is the rider's arms — the horse runs on under him; a sword cut still checks it)
-  const R = F.run, landK = b.landT > 0 ? 0.5 * clamp(b.landT / F.jump.land, 0, 1) : 0;   // (landK: the knees give under a landing)
+  const R = F.run, RU = F.rush, landK = b.landT > 0 ? 0.5 * clamp(b.landT / F.jump.land, 0, 1) : 0;   // (landK: the knees give under a landing — and the stumble after a charge)
   if (mm > 1e-3 && canMove) {
     const fwdDot = ux * Math.sin(b.yaw) + uz * Math.cos(b.yaw);       // backpedaling plays the cycle in reverse
+    const vsp = Math.hypot(b.vx, b.vz), along = vsp > 1 ? (ux * b.vx + uz * b.vz) / vsp : 1;
+    // THE SHIELD CHARGE: block at full stride and the shield comes down in front, the head behind it, and you keep the
+    // stride and go THROUGH (afRushHit). Drop the guard, ease the stick, cut across, hit the wall, run out of breath, time
+    // or men and it is over; each man hit costs speed, and a charge that lands ends in a stumble (afRushEnd → landT).
+    if (b.rushT <= 0 && b.blocking && !b.winded && b.run01 >= RU.at && mm > 0.5 && fwdDot > 0.5 && along > 0.6 && b.airT <= 0 && b.landT <= 0 && b.stam >= RU.stam) {
+      b.rushT = 1e-3; b.rushHits = 0; b.rushLastHit = -1; afStamCost(b, RU.stam); try { SFX.foot(b.group.position); } catch (e) {}
+      if (b === AF.me) { addShake(0.06); afPopup(b.group.position, 'CHARGE', '#ffe089'); } else if (afTagNear(b.group.position)) afPopup(b.group.position, 'charge', '#d8c8a8');
+    }
+    if (b.rushT > 0) {
+      b.rushT += dt; if (sim) afRushHit(b);
+      if (b.rushT > 0 && (!b.blocking || mm < 0.5 || fwdDot < 0.3 || b.winded || b.rushT > RU.max || b.rushHits >= RU.men || (b.rushHits > 0 && b.rushT - b.rushLastHit > RU.after) || (b.rushT > 0.3 && vsp < F.move * 0.55))) afRushEnd(b, b.rushHits > 0);   // (after: a lone man ends it; a second man right behind him goes down too)
+    }
+    const rush = b.rushT > 0;
     // THE RUN BUILDS: a jog first; hold the stick forward — the way you face, nobody sprints sideways or backwards — and the
     // stride lengthens over R.up seconds to the full run. Ease off, cut across your own line, block or load a blow and it
     // bleeds away in R.down. At full stride the body carries: it accelerates and stops slower (afIntegrate scales the drag by
     // the same `inert`, so the top speed holds and only the response slows) — you can't turn on a coin at a sprint, nor can he.
-    const vsp = Math.hypot(b.vx, b.vz), along = vsp > 1 ? (ux * b.vx + uz * b.vz) / vsp : 1;
-    const straight = mm > 0.5 && !b.blocking && !b.atk && !b.charge && b.landT <= 0 && fwdDot > 0.35 && along > 0.5 && !b.winded && b.stam > 0;   // (no wind, no stride)
+    const straight = mm > 0.5 && (!b.blocking || rush) && !b.atk && !b.charge && b.landT <= 0 && fwdDot > 0.35 && along > 0.5 && !b.winded && b.stam > 0;   // (no wind, no stride)
     b.run01 = straight ? Math.min(1, b.run01 + dt / R.up) : Math.max(0, b.run01 - dt / (along < 0 ? R.down * 0.5 : R.down));
     const stride = lerp(R.jog, R.top, b.run01 * b.run01 * (3 - 2 * b.run01)), inert = 1 - R.inertia * b.run01;
-    const spd = F.move * (b.moveMul || 1) * (b.blocking ? 0.4 : (b.atk || b.charge) ? 0.35 : b.landT > 0 ? 0.5 : stride) * Math.min(1, mm) * (b.winded ? F.stam.winded.move : 1);
+    const spd = F.move * (b.moveMul || 1) * (rush ? stride * RU.speed : b.blocking ? 0.4 : (b.atk || b.charge) ? 0.35 : b.landT > 0 ? 0.5 : stride) * Math.min(1, mm) * (b.winded ? F.stam.winded.move : 1);
     afMove(b, ux, uz, spd * inert, dt); b.moving = true;
     if (b === AF.me) { if (b.run01 > 0.98 && !b._strode) { b._strode = true; afPopup(b.group.position, 'FULL STRIDE', '#ffe089'); } else if (b.run01 < 0.5) b._strode = false; }
-    const g = b.gait = b.blocking || b.atk || b.charge ? GAIT.walk : GAIT.run;
+    const g = b.gait = (b.blocking && !rush) || b.atk || b.charge ? GAIT.walk : GAIT.run;
     b.phase += dt * g.tempo * (fwdDot < -0.1 ? -1 : 1) * Math.min(1.15, spd / F.move + 0.3);
-    walkLegs(b.parts, b.phase, g.leg * (g === GAIT.run ? 0.72 + 0.28 * b.run01 : 1), landK);
-  } else { b.run01 = Math.max(0, b.run01 - dt / R.down); restLegs(b.parts, dt, true, landK); }
+    walkLegs(b.parts, b.phase, g.leg * (g === GAIT.run ? 0.72 + 0.28 * b.run01 : 1), landK + (rush ? 0.18 : 0));   // (a charge runs low)
+    if (rush && b === AF.me) addShake(0.006);                  // the ground under a charge
+  } else { if (b.rushT > 0) afRushEnd(b, false); b.run01 = Math.max(0, b.run01 - dt / R.down); restLegs(b.parts, dt, true, landK); }
   afIntegrate(b, dt); afCommit(b, dt);
 }
 // CLOTH: each hinge of the cape chain is a damped spring chasing a target that its parent's angle sets,
@@ -21002,7 +21069,7 @@ function afThink(b, dt) {
   if (b.hp < b.maxHp * 0.3 && b.stagger <= 0 && b.arch !== 'brute' && b.skill > 0.4) { let near = 0; for (const o of AF.bodies) if (!o.dead && o.team !== b.team && Math.hypot(o.x - b.x, o.z - b.z) < 6) near++; if (near >= 2 && Math.random() < dt * 0.9) { b.retreatT = 1.4; return; } }
   // a swing is coming at me: a skilled fighter blocks it or rolls out of it (once per swing)
   const facingMe = ((b.x - t.x) * Math.sin(t.yaw) + (b.z - t.z) * Math.cos(t.yaw)) / d;
-  if (t.mounted && !b.mounted && t.sp01 > 0.5 && d < 7 && facingMe > 0.6 && b.reactedTo !== t && Math.random() < b.skill * b.skill * 0.9) { b.reactedTo = t; I.dodge++; I.mx = tx; I.mz = tz; return; } // a charge is coming: roll out of its line
+  if ((t.mounted ? t.sp01 > 0.5 : t.rushT > 0) && !b.mounted && d < 7 && facingMe > 0.6 && b.reactedTo !== t && Math.random() < b.skill * b.skill * 0.9) { b.reactedTo = t; I.dodge++; I.mx = tx; I.mz = tz; return; } // a charge is coming: roll out of its line
   // XP decides how early he SEES it: a green man never reads a raised arm, only the blade once it moves — and late
   const sk01 = b.skill, swing = t.atk && !t.atk.hit && !t.atk.bow ? t.atk : (t.vrSwing && !t.vrSwing.hit ? t.vrSwing : null);   // (a VR player's fast blade reads as a swing in the air)
   // a man MID-CHAIN (a light landed, the next tap is coming) is as readable as a raised arm: a tapped light lands 0.06 s
@@ -21046,6 +21113,7 @@ function afThink(b, dt) {
   }
   if (d > reach * lerp(0.9, 1.2, sk01)) {                    // close in — a charge when far, a wary circling approach near contact (a veteran strikes from the edge of reach: the lunge covers the last pace, a recruit walks onto the blade)
     const circ = d < 4.5 ? A.circ * lerp(0.3, 1, sk01) : 0.12, pace = d > 7 ? 1 : 0.85;   // a recruit walks straight onto the blade
+    if (A.shield && !b.mounted && !t.mounted && b.rushT <= 0 && b.holdBlock <= 0 && d > 5 && d < 12 && b.run01 >= F.rush.at && b.stam > F.rush.stam + 15 && facingMe < 0.9 + sk01 && Math.random() < dt * lerp(0.15, 0.6, sk01)) b.holdBlock = Math.max(b.holdBlock || 0, 1.6);   // a shield-bearer at full stride with ground to cover: the shield comes down and he CHARGES (afDrive's rush)
     I.mx = (ux + tx * circ) * pace + sx * 1.2; I.mz = (uz + tz * circ) * pace + sz * 1.2;
     if (open && d <= reach * 1.3 && b.cd <= 0 && !busy) { afAiSwing(b, false); b.cd = 0.4; }   // he's open and a lunge covers the gap
     return;
@@ -21388,12 +21456,14 @@ function afApplyRemotePose(b, dt) {
     case 12: restLegs(b.parts, dt, true); break;              // blades locked — hold whatever the blade was doing
     case 13: b.tiltX = -1.35; b.roll = 0.45; setPose(b.anim, 'hurt', 0.08); restLegs(b.parts, dt, true); break;   // ridden down
     case 14: { const J = AF_F.jump; b.airT = (b.airT || 0) + dt; b.airY = Math.max(0, J.v * b.airT - 0.5 * J.g * b.airT * b.airT); afAirPose(b, dt); setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.15); break; }   // in the air: the same leap everyone makes, timed from here
+    case 15: b.rushT = 1; b.gait = GAIT.run; walkLegs(b.parts, b.phase += dt * GAIT.run.tempo, GAIT.run.leg, 0.18); setPose(b.anim, 'block', 0.1); break;   // the shield charge (rushT: the lean in afCommit)
     case 9: setPose(b.anim, 'aimBow', 0.1); afRemoteLegs(b, dt, false); break;
     case 10: setPose(b.anim, 'looseBow', 0.05); afRemoteLegs(b, dt, false); break;
     default: setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.2); restLegs(b.parts, dt, true);
   }
   if (s !== 7) { b.rollT = 0; b.rollAng = 0; b.rollSq = 0; }
   if (s !== 14) { b.airT = 0; b.airY = 0; }
+  if (s !== 15) b.rushT = 0;
 }
 function afApplySnap(s) {
   if (s.ph === 'fight' && (AF.phase === 'countdown' || AF.phase === 'intro')) { if (AF.phase === 'intro') afIntroEnd(); AF.phase = 'fight'; AF.countdown = 0; afIntroTailEnd(); afBanner('FIGHT', '', 1.0); afCrowdReact(false); }   // the host's bell rang while we were still watching the entrance

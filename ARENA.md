@@ -45,6 +45,7 @@ shows the hidden **Enter the Vale** button and the open-world title copy again (
 | Aim | mouse (click the pit to lock the cursor) | drag the right half of the screen |
 | Attack: **hold to load, release to swing** — a tap is a quick light (three chain into a combo), a full hold is a heavy that cracks a raised guard; the bow draws the same way | hold / release left click | hold / release ATK |
 | Block (hold; 85% less damage from the front) | Shift or right click | BLOCK |
+| **Shield charge** — hold block at full stride and the shield comes down in front, you keep the stride and go through: square on, a man on foot is **RUN DOWN** (two of them, if the first doesn't stop you), a man behind his own raised shield is guard-broken instead, a horse at a walk loses its rider; a horse under way is a wall. Costs breath; ends when you drop the guard, ease off, or run out of men | Shift at full stride | BLOCK at full stride |
 | Swap sword-and-shield ↔ bow (archers only — a swordsman or rider has no bow, and the SWAP button is hidden) | F | SWAP |
 
 On touch, the thumb that holds ATK or BLOCK also aims: press, drag to turn, release to swing where you
@@ -634,6 +635,22 @@ takes 5–14 damage and the trample's `downT` (1–1.5 s) plus a shove along you
 and the landing is half again as long. The press ignores a man in the air (`afShove`), which is how he comes down
 ON a man. Remote bodies play the leap from state code 14 on their own clock (`afApplyRemotePose`) — it is always the
 same arc. NPCs never jump (yet).
+
+**The shield charge** (`AF_F.rush`, afDrive's movement branch, `afRushHit` / `afRushEnd`): block held at `at` 0.85 of
+the stride (forward, along the line, feet on the ground, `stam` in hand) starts `rushT`; the stride is kept (× `speed`)
+instead of the guard's walk, `straight` still climbs, the legs run low (`walkLegs` crouch 0.18), the back goes down a
+further 0.3 rad and the shield shoulder leads (afCommit), the stamina drain doubles. Every host tick `afRushHit` looks
+`reach` ahead in a `cone`: square on (within 0.75 of the line) a man on foot takes 8–16 and the trample's `downT`
+(1–1.4 s) with a shove along the line ("RUN DOWN"); a man blocking toward you takes half through `afDamage`'s heavy on a
+raised guard (GUARD BREAK, on his feet); off the line he is only shouldered (a third, a flinch, a shove); a friend is
+pushed aside. A mounted man square on with his horse under `horseAt` 0.55: the horse takes 6–14 and the rider is thrown
+(`afDismount` thrown, "UNHORSED") and the charge is spent; a horse faster than that is a wall (you lose half your speed
+into it) — and if it is cantering, `afRide`'s trample has you. Each man costs 30 % of the speed; after `men` (2), a horse,
+a dropped guard, a slack stick, a cut across the line, a wall, the wind, `max` 1.8 s or `after` 0.35 s past the last man hit (a lone man ends it; a second right behind him goes down too) the charge ends — with a stumble
+of `rec` 0.4 s (`landT`: half speed, no load) if it landed on anyone. State code 15 carries it to guests. NPCs: a
+shield-bearer at full stride with 5–12 m to cover holds his guard up (`holdBlock`) and comes on — the same charge — with a
+chance that grows with skill; and a man sees a charge coming as he sees a horse: veterans roll clear (the horse-charge
+reaction in afThink now reads `rushT` too).
 
 **Auto-turn** (`afAutoTurn`): after a swing or a roll, if a foe is at your elbow but not in front of
 you, the camera eases onto him — on a phone the thumb can't chase a man who slipped behind you. It

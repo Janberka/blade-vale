@@ -5,7 +5,8 @@
   'use strict';
   // rank titles by XP earned (an XP lock on the marketplace: gold alone never buys the top gear)
   var ARENA_RANKS = [['Rookie', 0], ['Fighter', 150], ['Veteran', 500], ['Champion', 1200], ['Master', 2500], ['Legend', 5000]];
-  // a fighter's four slots (sword, armor, bow, horse) plus two cosmetic slots that only loot fills (plume, trim).
+  // a fighter's six slots (sword, armor, helm, shield, bow, horse) plus two cosmetic slots that only loot fills (plume, trim).
+  // No armour = a linen shirt and wool breeches; no helm = bareheaded; no shield = the round the pit lends.
   // rank = the rank index needed; skill = [use-skill, level] also needed; stats are what the item does in the pit.
   var ARENA_ITEMS = {
     wood_sword:     { slot: 'sword', name: 'Wooden sword',      price: 0,    rank: 0, dmg: 0.8,  desc: 'the training blade every fighter starts with' },
@@ -20,12 +21,17 @@
     flamberge:      { slot: 'sword', name: 'Serpent flamberge', price: 1600, rank: 2, dmg: 1.22, desc: 'a wavy blade that bites on the draw' },
     doomsword:      { slot: 'sword', name: 'Doomsword',         price: 2400, rank: 3, dmg: 1.3,  reach: 0.3, move: -0.03, desc: 'a great blade as tall as a boy' },
     sun_blade:      { slot: 'sword', name: 'Sun-forged blade',  price: 6000, rank: 5, skill: ['sword', 5], dmg: 1.4, reach: 0.2, desc: 'it glows — the pit falls quiet when it is drawn' },
+    gambeson:       { slot: 'armor', name: 'Padded gambeson',   price: 60,   rank: 0, hp: 8,  desc: 'a quilted jack in the team cloth — the poor man\'s armour' },
+    wolf_pelt:      { slot: 'armor', name: 'Wolf pelt',         price: 220,  rank: 0, hp: 10, poise: 5, desc: 'bare-chested under a pelt, fur boots, a fur cloak — the northern look' },
     leather:        { slot: 'armor', name: 'Leather jerkin',    price: 150,  rank: 0, hp: 15, desc: 'turns a glancing cut' },
-    mail:           { slot: 'armor', name: 'Mail hauberk',      price: 500,  rank: 1, hp: 35, poise: 5, desc: 'rings over padding' },
-    plate:          { slot: 'armor', name: 'Plate harness',     price: 1500, rank: 2, hp: 60, poise: 15, move: -0.05, desc: 'heavy, and worth it' },
-    champion_plate: { slot: 'armor', name: "Champion's plate",  price: 3500, rank: 4, hp: 90, poise: 25, move: -0.06, desc: 'the pit has seen nothing harder' },
-    brigandine:     { slot: 'armor', name: 'Brigandine',        price: 1000, rank: 2, hp: 45, poise: 10, desc: 'steel plates riveted under cloth — no weight to speak of' },
-    dragon_plate:   { slot: 'armor', name: 'Dragon plate',      price: 7000, rank: 5, skill: ['sword', 5], hp: 110, poise: 30, move: -0.08, desc: 'black steel, red trim, spiked shoulders' },
+    mail:           { slot: 'armor', name: 'Mail hauberk',      price: 500,  rank: 1, hp: 35, poise: 5, move: -0.06, desc: 'rings over padding' },
+    plate:          { slot: 'armor', name: 'Plate harness',     price: 1500, rank: 2, hp: 60, poise: 15, move: -0.22, desc: 'heavy, and worth it — you will not be running' },
+    champion_plate: { slot: 'armor', name: "Champion's plate",  price: 3500, rank: 4, hp: 90, poise: 25, move: -0.25, desc: 'the pit has seen nothing harder, or slower' },
+    brigandine:     { slot: 'armor', name: 'Brigandine',        price: 1000, rank: 2, hp: 45, poise: 10, move: -0.03, desc: 'steel plates riveted under cloth — little weight to speak of' },
+    dragon_plate:   { slot: 'armor', name: 'Dragon plate',      price: 7000, rank: 5, skill: ['sword', 5], hp: 110, poise: 30, move: -0.3, desc: 'black steel, red trim, spiked shoulders — a walking fortress' },
+    sallet:         { slot: 'helm',  name: 'Sallet',            price: 200,  rank: 0, hp: 8,  poise: 3, desc: 'a visored steel helm — without one you fight bareheaded' },
+    round_shield:   { slot: 'shield', name: 'Round shield',     price: 0,    rank: 0, desc: 'a painted wooden round — the pit lends every fighter one' },
+    heater_shield:  { slot: 'shield', name: 'Heater shield',    price: 350,  rank: 1, poise: 5, desc: 'steel-faced and team-painted' },
     hunting_bow:    { slot: 'bow',   name: 'Hunting bow',       price: 200,  rank: 0, dmg: 1.0,  desc: 'lets you ride in with a bow at all' },
     longbow:        { slot: 'bow',   name: 'Longbow',           price: 700,  rank: 1, dmg: 1.15, desc: 'a heavier draw, a harder arrow' },
     warbow:         { slot: 'bow',   name: 'Warbow',            price: 2000, rank: 2, skill: ['bow', 3], dmg: 1.32, desc: 'punches through mail' },
@@ -44,7 +50,7 @@
     frost_fang:     { slot: 'sword', name: 'Frost fang',        unique: true, dmg: 1.12, reach: 0.1, desc: 'serrated ice-steel with a cold light' },
     black_night:    { slot: 'sword', name: 'Black Night',       unique: true, dmg: 1.12, desc: 'a black curve with a violet gleam' },
   };
-  var ARENA_SLOTS = ['sword', 'armor', 'bow', 'horse', 'plume', 'trim'];
+  var ARENA_SLOTS = ['sword', 'armor', 'helm', 'shield', 'bow', 'horse', 'plume', 'trim'];
   // THE VALE'S MEN — the NPC name pool. A name is an NPC's identity (his profile, his record), so the lobby, the
   // world's warbands and the server's own simulated bouts all draw from this one list.
   var NPC_GIVEN = ['Aldric','Bram','Cedwyn','Doran','Eadric','Falk','Garrec','Hale','Ivo','Joren','Kell','Lorne','Maddoc','Nael','Osric','Perrin','Quenn','Roderic','Sefton','Tomas','Ulf','Varin','Wend','Yorin','Ansel','Brand','Corin','Dunmar','Edra','Freya','Gerda','Halla','Ingrid','Jorah','Kara','Linnet','Mira','Nessa','Orla','Petra','Romilda','Sigrun','Thora','Ysolde'];

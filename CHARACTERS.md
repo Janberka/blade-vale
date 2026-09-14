@@ -80,3 +80,14 @@ Faces (same day, "put some alpha male look on the faces"): `lookRuggedHead` roug
 wider jaw, chin and brow forward and the brow lowered, cheekbones out, the eye meshes narrowed to a squint — and the
 roll gives dark cropped hair or a shaved head, a full beard on most, heavy dark brows (`brow`), shadowed eye sockets
 (`socket`), weathered skin, dimmed eye whites, no painted lips, and a scar across one cheek on a third (`scarL`/`scarR`).
+
+## The wardrobe is the marketplace (2026-09-14, "any item we add should be available in the marketplace")
+Six slots now: sword, armor, helm, shield, bow, horse (`ARENA_SLOTS` in arena-items.js; the server validates against the
+same list). No armour = a linen shirt in the team dye and wool breeches; the market sells a padded gambeson, a wolf pelt
+(bare-chested, fur pauldrons, fur cloak, fur boots — the barbarian, with a round shield and the beard the name rolls),
+leather, mail, brigandine, plate and up. A helm is a ware (`sallet`) — without one you fight bareheaded; a bought plume
+forces one on. Shields are wares too: the round shield is lent to everyone (`AF_GEAR_LENT`), the heater is bought; whether
+a man carries one at all is still his class (`AF_ARCH.shield`). NPCs roll all of it in `afNpcGear` (helm odds from
+`lookOdds`). Plate is heavy now: plate −22 % speed, champion's −25 %, dragon −30 %, mail −6 % (arena-items `move`).
+Adding a ware: an entry in ARENA_ITEMS (slot, price, rank, stats), a `LOOK_ARMOR` row if it is armour (paint per piece,
+`bare: true` for skin), the plastic fallback in `AF_LOOK.armor`, and a thumbnail branch in `afThumb` if the slot is new.

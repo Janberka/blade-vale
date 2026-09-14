@@ -1182,28 +1182,37 @@ function lookRuggedHead(geo, pj) {
 }
 const LOOK_HAIR = [0x1a1210, 0x1a1210, 0x2a1a12, 0x3a2416, 0x3a2416, 0x5c3a1e, 0x8a5a2e, 0x6a6a68, 0x4a3a3a];   // black, black, near-black, dark brown ×2, brown, auburn, grey, ash — cropped and dark, mostly
 const LOOK_SKIN = [0xf0d4b8, 0xe4c4a4, 0xd8b090, 0xc89a78, 0xa87858, 0x8a5c40];
-// per armour: the odds of each piece and what its STEEL is painted (a multiplier on the palette's grey — white leaves it steel)
+// per armour: the odds of each loose piece and of a helm (NPCs — a player's helm is a ware), the paint of each piece's
+// STEEL (a multiplier on the palette grey — white leaves it steel; the names are the look's own colours) and of its CLOTH
 const LOOK_ARMOR = {
-  none:           { helmet: 0.08, pauldron: 0.00, elbow: 0.30, knee: 0.15, cloak: 0.25, plume: 0.00, cloth: 0.35, base: 'leather', cuirass: 'jack', skirt: 'jack', helmetP: 0x6a6c72 },
-  leather:        { helmet: 0.25, pauldron: 0.20, elbow: 0.50, knee: 0.30, cloak: 0.35, plume: 0.00, cloth: 0.35, base: 'leather', helmetP: 0x6a6c72 },
-  brigandine:     { helmet: 0.50, pauldron: 0.35, elbow: 0.70, knee: 0.50, cloak: 0.40, plume: 0.10, cloth: 0.15, base: 0x606268, cuirass: 0xa03030, skirt: 'leather' },
-  mail:           { helmet: 0.60, pauldron: 0.40, elbow: 0.80, knee: 0.60, cloak: 0.50, plume: 0.15, cloth: 0.10, base: 0xa8acb4, helmetP: 0xb4b8c0 },
-  plate:          { helmet: 0.80, pauldron: 0.85, elbow: 1.00, knee: 0.90, cloak: 0.60, plume: 0.35, cloth: 0.00, base: 'plate' },
-  champion_plate: { helmet: 0.90, pauldron: 1.00, elbow: 1.00, knee: 1.00, cloak: 1.00, plume: 0.80, cloth: 0.00, base: 0xf4ecd8, helmetP: 0xe8c050, pauldronP: 0xe8c050, elbowP: 0xe8c050, kneeP: 0xe8c050 },
-  dragon_plate:   { helmet: 1.00, pauldron: 1.00, elbow: 1.00, knee: 1.00, cloak: 1.00, plume: 0.60, cloth: 0.40, base: 0x34303c, pauldronP: 0x8a2424, elbowP: 0x8a2424, kneeP: 0x8a2424, helmetP: 0x2a2630 },
+  none:           { helm: 0.08, pauldron: 0,    elbow: 0,    knee: 0,    cloak: 0.12, plume: 0,    straps: 0.3, pouch: 0.5, cloth: 0.5,  base: 'shirt',   paint: { skirt: 'breeches', greaves: 'breeches', boot: 'leather', helmet: 'iron' }, clothOf: { skirt: 'breeches' } },   // a linen shirt and wool breeches
+  gambeson:       { helm: 0.15, pauldron: 0,    elbow: 0.3,  knee: 0.15, cloak: 0.25, plume: 0,    straps: 0.6, pouch: 0.5, cloth: 0.35, base: 'leather', paint: { cuirass: 'jack', skirt: 'jack', boot: 'leather', helmet: 'iron' } },
+  wolf_pelt:      { helm: 0.02, pauldron: 1,    elbow: 0,    knee: 0,    cloak: 1,    plume: 0,    straps: 0.7, pouch: 0.6, cloth: 0,    base: 'fur',     bare: true, paint: { cuirass: 'skin', vambrace: 'leather', pauldron: 'furDark', boot: 'leather', helmet: 'iron' }, clothOf: { sleeve: 'skin', skirt: 'fur' }, cloakC: 'furDark' },   // bare-chested under the pelt
+  leather:        { helm: 0.25, pauldron: 0.2,  elbow: 0.5,  knee: 0.3,  cloak: 0.35, plume: 0,    straps: 0.6, pouch: 0.5, cloth: 0.35, base: 'leather', paint: { helmet: 'iron' } },
+  brigandine:     { helm: 0.5,  pauldron: 0.35, elbow: 0.7,  knee: 0.5,  cloak: 0.4,  plume: 0.1,  straps: 0.6, pouch: 0.5, cloth: 0.15, base: 0x606268,  paint: { cuirass: 0xa03030, skirt: 'leather' } },
+  mail:           { helm: 0.6,  pauldron: 0.4,  elbow: 0.8,  knee: 0.6,  cloak: 0.5,  plume: 0.15, straps: 0.6, pouch: 0.5, cloth: 0.1,  base: 0xa8acb4,  paint: { helmet: 0xb4b8c0 } },
+  plate:          { helm: 0.8,  pauldron: 0.85, elbow: 1,    knee: 0.9,  cloak: 0.6,  plume: 0.35, straps: 0.6, pouch: 0.5, cloth: 0,    base: 'plate' },
+  champion_plate: { helm: 0.9,  pauldron: 1,    elbow: 1,    knee: 1,    cloak: 1,    plume: 0.8,  straps: 0.6, pouch: 0.5, cloth: 0,    base: 0xf4ecd8,  paint: { helmet: 0xe8c050, pauldron: 0xe8c050, elbow: 0xe8c050, knee: 0xe8c050 } },
+  dragon_plate:   { helm: 1,    pauldron: 1,    elbow: 1,    knee: 1,    cloak: 1,    plume: 0.6,  straps: 0.6, pouch: 0.5, cloth: 0.4,  base: 0x34303c,  paint: { pauldron: 0x8a2424, elbow: 0x8a2424, knee: 0x8a2424, helmet: 0x2a2630 } },
 };
 // by class: a guardsman wears his helm, an archer mostly goes bareheaded, a duelist travels light
 const LOOK_CLASS = { guardsman: { helmet: 0.25, pauldron: 0.2 }, archer: { helmet: -0.35, pauldron: -0.3, cloak: -0.2 }, duelist: { helmet: -0.25, pauldron: -0.3, cloak: 0.1 }, brute: { helmet: -0.1, pauldron: 0.1 }, rider: { helmet: 0.15, cloak: 0.2 } };
+const LOOK_PIECES = ['helmet', 'pauldron', 'sleeve', 'elbow', 'vambrace', 'cuirass', 'skirt', 'straps', 'knee', 'greaves', 'boot', 'pouch'];
 const LOOK_LEATHER = [0x8a6a48, 0x6e4e30, 0x5a3e26, 0x7a5a3a];
 const LOOK_PLATE = [0xffffff, 0xffffff, 0xe8ecf4, 0xd0d4dc];
+const LOOK_WOOL = [0x5a4a3a, 0x4a4a4c, 0x6a5040, 0x3e3a36];                 // breeches
+const LOOK_FUR = [0x4a3626, 0x5a4432, 0x3e2e22];
 function lookSeed(s) { let h = 2166136261 >>> 0; s = String(s || ''); for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return h; }
 function lookRng(seed) { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
-// roll the look: name = whose (the seed), arch = his class, gear = his loadout, pal = the team palette; o.full = every piece on (the shop's mannequin)
+function lookOdds(kind, arch, k) { const O = LOOK_ARMOR[kind] || LOOK_ARMOR.none, K = LOOK_CLASS[arch] || {}; return clamp((O[k] || 0) + (K[k === 'helm' ? 'helmet' : k] || 0), 0, 1); }   // (afNpcGear rolls a helm with it)
+// roll the look: name = whose (the seed), arch = his class, gear = his loadout (armor, helm, shield, plume), pal = the team
+// palette; o.full = every loose piece on (the shop's mannequin). The helm and the shield are what he WEARS; the loose
+// pieces, the cloak and his face are his habit, rolled from the name.
 function lookRoll(name, arch, gear, pal, o = {}) {
   const r = lookRng(lookSeed(name) ^ 0x5bd1e995), A = AF_ARCH[arch] || AF_ARCH.swordsman, kind = gear && gear.armor && LOOK_ARMOR[gear.armor] ? gear.armor : 'none', O = LOOK_ARMOR[kind], K = LOOK_CLASS[arch] || {};
   const p = k => o.full ? 1 : clamp((O[k] || 0) + (K[k] || 0), 0, 1), pick = a => a[Math.floor(r() * a.length)];
   const c = new THREE.Color(), team = new THREE.Color(pal ? pal.cloth : 0x8a8a8a);
-  const look = { kind, hide: [], paint: {}, cloth: 0, leather: pick(LOOK_LEATHER), skin: 0, hair: null, beard: null, cloak: false, shield: 'none', helmet: false, plume: false, round: 0 };
+  const look = { kind, hide: [], paint: {}, clothOf: {}, cloth: 0, cloakC: 0, leather: pick(LOOK_LEATHER), skin: 0, hair: null, beard: null, cloak: false, shield: 'none', helmet: false, plume: false, round: 0 };
   // the man: skin, hair, beard (rolled first, so a change of kit never changes his face)
   look.skin = c.setHex(pick(LOOK_SKIN)).lerp(new THREE.Color(0xc89070), r() * 0.35).getHex();   // weathered: every tone pulled toward a sun-browned red
   const bald = r() < 0.28, hairC = pick(LOOK_HAIR), skinC = new THREE.Color(look.skin);
@@ -1211,23 +1220,24 @@ function lookRoll(name, arch, gear, pal, o = {}) {
   look.brow = c.setHex(hairC).lerp(skinC, 0.3).getHex(); look.socket = c.copy(skinC).multiplyScalar(0.78).getHex(); look.lip = c.copy(skinC).multiplyScalar(0.88).getHex();   // heavy dark brows, eyes deep in shadow, a hard mouth
   const scar = r(); look.scar = scar < 0.18 ? 'scarL' : scar < 0.36 ? 'scarR' : null; look.scarC = c.copy(skinC).lerp(new THREE.Color(0xe8a0a0), 0.45).multiplyScalar(1.05).getHex();
   // the kit
-  look.helmet = r() < p('helmet'); if (gear && gear.plume) look.helmet = true;                     // (a bought plume needs a helm to sit on)
-  for (const k of ['pauldron', 'elbow', 'knee']) if (r() >= p(k)) look.hide.push(k);
-  if (r() >= 0.6) look.hide.push('straps'); if (r() >= 0.5) look.hide.push('pouch'); if (!look.helmet) look.hide.push('helmet');
+  look.helmet = !!(gear && (gear.helm || gear.plume));                                              // (a bought plume needs a helm to sit on)
+  for (const k of ['pauldron', 'elbow', 'knee', 'straps', 'pouch']) if (r() >= p(k)) look.hide.push(k); if (!look.helmet) look.hide.push('helmet');
   look.cloak = o.full ? true : r() < p('cloak'); look.plume = o.full || (r() < p('plume')) || !!(gear && gear.plume);
-  const sh = o.full ? 'heater' : !A.shield ? 'none' : arch === 'guardsman' ? 'heater' : (r() < 0.5 ? 'heater' : 'round'); look.shield = sh; look.round = Math.floor(r() * 4);
-  // the paint: cloth = the team dye (dulled on a poor man), steel per piece
+  look.shield = !A.shield && !o.full ? 'none' : (gear && gear.shield === 'heater_shield') ? 'heater' : 'round'; look.round = Math.floor(r() * 4);
+  // the paint: cloth = the team dye (dulled on a poor man), steel per piece, the named colours resolved here
   look.cloth = c.copy(team).lerp(new THREE.Color(0x8a8480), O.cloth || 0).getHex(); if (kind === 'dragon_plate') look.cloth = c.copy(team).lerp(new THREE.Color(0x000000), 0.4).getHex();
-  const jack = c.copy(team).lerp(new THREE.Color(0x6a6460), 0.45).multiplyScalar(0.9).getHex();
-  const base = O.base === 'leather' ? look.leather : O.base === 'plate' ? pick(LOOK_PLATE) : O.base;
-  for (const pc of ['helmet', 'pauldron', 'sleeve', 'elbow', 'vambrace', 'cuirass', 'skirt', 'straps', 'knee', 'greaves', 'pouch']) {
-    let v = O[pc + 'P'] != null ? O[pc + 'P'] : O[pc] != null && typeof O[pc] !== 'number' ? O[pc] : base;
-    if (v === 'jack') v = jack; else if (v === 'leather') v = look.leather; look.paint[pc] = v; }
-  if (kind === 'none' || kind === 'leather') look.paint.vambrace = look.paint.greaves = look.leather;
+  const bare = skinC.clone().multiplyScalar(1.28); bare.r = Math.min(1, bare.r); bare.g = Math.min(1, bare.g); bare.b = Math.min(1, bare.b);   // (the palette's steel is a mid grey: lift the tone so a bare chest matches the face)
+  const named = { shirt: c.copy(team).lerp(new THREE.Color(0xd8cfb8), 0.5).getHex(), breeches: pick(LOOK_WOOL), jack: c.copy(team).lerp(new THREE.Color(0x6a6460), 0.45).multiplyScalar(0.9).getHex(),
+    leather: look.leather, fur: pick(LOOK_FUR), furDark: 0x33241a, skin: bare.getHex(), plate: pick(LOOK_PLATE), iron: 0x6a6c72 };
+  look.bare = !!O.bare; if (look.bare) { const t = skinC.clone().multiply(new THREE.Color(1.075, 1.01, 1.0)); named.skin = t.setRGB(Math.min(1, t.r), Math.min(1, t.g), Math.min(1, t.b)).getHex(); }   // (a bare chest: its steel is re-pointed at the white cell — lookApply — so the face's own tone paints it)
+  const resolve = v => typeof v === 'string' ? named[v] : v, base = resolve(O.base);
+  for (const pc of LOOK_PIECES) look.paint[pc] = O.paint && O.paint[pc] != null ? resolve(O.paint[pc]) : base;
+  for (const k in (O.clothOf || {})) look.clothOf[k] = resolve(O.clothOf[k]);
+  look.cloakC = O.cloakC ? resolve(O.cloakC) : look.cloth;
   return look;
 }
 function lookColour(look, cls, mt) {
-  if (mt === 'cloth') return look.cloth; if (mt === 'dark') return 0xffffff;
+  if (mt === 'cloth') return look.clothOf[cls] != null ? look.clothOf[cls] : look.cloth; if (mt === 'dark') return 0xffffff;
   if (mt === 'leather') return cls === 'brow' ? look.brow : cls === 'beard' ? (look.beard != null ? look.beard : look.lip) : (cls === 'head' || cls === 'socket' || cls === 'scarL' || cls === 'scarR') ? look.lip : look.leather;   // (the palette's lip/brow brown on the face: no painted lips)
   if (mt === 'skin') return cls === 'hair' ? (look.hair != null ? look.hair : look.skin) : cls === 'beard' ? (look.beard != null ? look.beard : look.skin) : cls === 'brow' ? look.brow
     : cls === 'socket' ? look.socket : (cls === 'scarL' || cls === 'scarR') ? (look.scar === cls ? look.scarC : look.skin) : cls === 'eye' ? 0xd8d0c8 : look.skin;   // (eye whites dimmed: no doe eyes)
@@ -1238,12 +1248,17 @@ function lookApply(L, look) {
   if (!L || !L.inst) return; L.look = look; const c = new THREE.Color(), R = MODEL_RIGS.get(L.g.userData.model), M = (R && R.spec.meshes) || {};
   for (const sm of Object.values(L.inst.skinned)) { const pj = sm.userData.pieces; if (!pj) continue;
     const col = sm.geometry.getAttribute('color'), nv = col.count, hide = new Set(look.hide), skinTint = pj.classes.indexOf('hair') >= 0;
+    // a bare chest (the wolf pelt): the cuirass' steel vertices point at the white palette cell, on this body's own copy of the uvs
+    const cuI = pj.classes.indexOf('cuirass'), stI = pj.mats.indexOf('steel'), uv0 = sm.userData.geo0.getAttribute('uv');
+    if (look.bare && cuI >= 0 && stI >= 0) { if (!sm.userData.ownUv) { sm.geometry.setAttribute('uv', uv0.clone()); sm.userData.ownUv = true; } const uv = sm.geometry.getAttribute('uv');
+      for (let v = 0; v < nv; v++) { if (pj.vclass[v] === cuI && pj.vmat[v] === stI) uv.setXY(v, LOOK_WHITE_UV[0], LOOK_WHITE_UV[1]); else uv.setXY(v, uv0.getX(v), uv0.getY(v)); } uv.needsUpdate = true; }
+    else if (sm.userData.ownUv) { sm.geometry.setAttribute('uv', uv0); sm.userData.ownUv = false; }
     // skin vertices carry a per-vertex colour, so the palette's skin (~#ffdcb4) × tint: the tint is chosen so tint × skin ≈ the tone wanted
     for (let v = 0; v < nv; v++) { const cls = pj.classes[pj.vclass[v]], mt = pj.mats[pj.vmat[v]]; c.setHex(lookColour(look, cls, mt)); if (skinTint && mt === 'skin' && cls !== 'eye') { c.r = Math.min(1, c.r / 1.0); c.g = Math.min(1, c.g / 0.86); c.b = Math.min(1, c.b / 0.70); } col.setXYZ(v, c.r * 255, c.g * 255, c.b * 255); } col.needsUpdate = true;
     const i0 = sm.userData.geo0.index.array, tri = pj.tri, idx = sm.geometry.index; let n = 0;
     for (let t = 0; t < tri.length; t++) { if (hide.has(pj.classes[tri[t]])) continue; idx.array[n] = i0[t * 3]; idx.array[n + 1] = i0[t * 3 + 1]; idx.array[n + 2] = i0[t * 3 + 2]; n += 3; }
     idx.needsUpdate = true; sm.geometry.setDrawRange(0, n); }
-  const cloak = L.inst.skinned[M.cloak]; if (cloak) { cloak.visible = !!look.cloak; if (cloak.material && cloak.material.color && !cloak.material.map) cloak.material.color.setHex(look.cloth); }
+  const cloak = L.inst.skinned[M.cloak]; if (cloak) { cloak.visible = !!look.cloak; if (cloak.material && cloak.material.color && !cloak.material.map) cloak.material.color.setHex(look.cloakC); }
   if (L.plume) L.plume.visible = !!(look.helmet && look.plume);
   L.shieldKind = look.shield; if (look.shield === 'round') lookRoundShield(L, look); else if (L.mRound) L.mRound.visible = false;
   if (L.mShield && L.mShield.material && L.mShield.material.color) L.mShield.material.color.setHex(look.cloth).lerp(new THREE.Color(0xffffff), 0.35);
@@ -1273,11 +1288,13 @@ function lookRoundShield(L, look) {
   if (!L.mRound) { const geo = new THREE.BufferGeometry(); for (const k of ['position', 'normal', 'skinIndex', 'skinWeight']) geo.setAttribute(k, g0.getAttribute(k)); geo.setAttribute('color', new THREE.BufferAttribute(new Uint8Array(g0.getAttribute('position').count * 3), 3, true));
     const sm = new THREE.SkinnedMesh(geo, new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 8, specular: 0x222222, skinning: true, flatShading: true })); sm.frustumCulled = false; sm.castShadow = true; sm.name = 'roundShield';
     L.mShield.parent.add(sm); sm.bind(L.mShield.skeleton, L.mShield.bindMatrix); L.mRound = sm; }
-  const col = L.mRound.geometry.getAttribute('color'), pt = g0.userData.part, N = LOOK_ROUND.seg, c = new THREE.Color();
+  lookRoundPaint(L.mRound.geometry.getAttribute('color'), g0.userData.part, look); L.mRound.visible = true;
+}
+function lookRoundPaint(col, pt, look) {
+  const N = LOOK_ROUND.seg, c = new THREE.Color();
   const team = new THREE.Color(look.cloth), dev = new THREE.Color(look.kind === 'champion_plate' ? 0xe8c050 : look.kind === 'dragon_plate' ? 0x8a2424 : 0xf0e8d8), rim = new THREE.Color(0x3a3a40), boss = new THREE.Color(look.kind === 'champion_plate' ? 0xe8c050 : 0xc0c4cc), backC = new THREE.Color(0x6b4a2a);
   const faceOf = i => look.round === 0 ? team : look.round === 1 ? (i < N / 2 ? team : dev) : look.round === 2 ? (Math.floor(i / (N / 4)) % 2 ? dev : team) : (i % 2 ? dev : team);
   for (let v = 0; v < col.count; v++) { const p = pt[v]; c.copy(p < N ? faceOf(p) : p === N ? rim : p === N + 1 ? boss : backC); col.setXYZ(v, c.r * 255, c.g * 255, c.b * 255); } col.needsUpdate = true;
-  L.mRound.visible = true;
 }
 BV.look = { roll: lookRoll, apply: lookApply, live: () => MODEL_LIVE.map(L => ({ name: L.P.lookName, arch: L.P.lookArch, full: !!L.P.lookFull, shield: L.shieldKind, look: L.look && { kind: L.look.kind, hide: L.look.hide, helmet: L.look.helmet, cloak: L.look.cloak, plume: L.look.plume, hair: L.look.hair, beard: L.look.beard, skin: L.look.skin } })) };   // (test: every live figure's look)
 const MODEL_ON = !/[?&]plastic\b/.test(location.search);   // the warrior is the base soldier; ?plastic brings the plastic figures back
@@ -17796,21 +17813,21 @@ function vrMenuDraw() {
     B(VRM.leaveArmed ? 'Sure? The fight ends for everyone' : 'Leave the pit', skipOk ? 544 : 302, 262, 420, 64, 'leave-fight', { fs: VRM.leaveArmed ? 19 : 22, col: VRM.leaveArmed ? '#ff6a5a' : undefined, ...(VRM.leaveArmed ? {} : DIM) });
     T('the panel hangs under your eyes — the fight goes on above it', W / 2, 348, '500 16px system-ui', '#6b5e7a', 'center');
   } else if (page === 'market') {
-    const cr = AF.career, TABS = [['sword', 'Swords'], ['armor', 'Armor'], ['bow', 'Bows'], ['horse', 'Horses'], ['unique', 'Uniques']]; if (!AF.marketTab) AF.marketTab = 'sword'; const tab = AF.marketTab; if (VRM.mkTab !== tab) { VRM.mkTab = tab; VRM.mkPg = 0; }
+    const cr = AF.career, TABS = [['sword', 'Swords'], ['armor', 'Armor'], ['helm', 'Helms'], ['shield', 'Shields'], ['bow', 'Bows'], ['horse', 'Horses'], ['unique', 'Uniques']]; if (!AF.marketTab) AF.marketTab = 'sword'; const tab = AF.marketTab; if (VRM.mkTab !== tab) { VRM.mkTab = tab; VRM.mkPg = 0; }
     T('MARKETPLACE', 40, 24, '900 40px system-ui', '#ffd34d');
     T(cr ? cr.rank.name + '  ·  ' + cr.gold + ' gold  ·  🏆 ' + cr.trophies : u ? 'reaching the war-net…' : 'sign in to buy — until then the pit lends plain gear', 400, 34, '600 24px system-ui', '#ffe2a8', 'left', 580);
-    TABS.forEach(([k, l], i) => B(l, 40 + i * 190, 84, 180, 46, 'mk:tab:' + k, { fs: 20, bg: tab === k ? ON : undefined }));
+    TABS.forEach(([k, l], i) => B(l, 40 + i * 136, 84, 130, 46, 'mk:tab:' + k, { fs: 18, bg: tab === k ? ON : undefined }));
     const statOf = it => [it.dmg ? '×' + it.dmg + ' dmg' : '', it.reach ? (it.reach > 0 ? '+' : '') + it.reach + ' reach' : '', it.hp ? (it.slot === 'horse' ? it.hp + ' hp' : '+' + it.hp + ' hp') : '', it.poise ? '+' + it.poise + ' poise' : '', it.move ? Math.round(it.move * 100) + '% speed' : '', it.speed && it.speed !== 1 ? '×' + it.speed + ' pace' : ''].filter(Boolean).join(' · ');
     const ids = Object.keys(I).filter(id => tab === 'unique' ? I[id].unique : I[id].slot === tab && !I[id].unique), PER = 6, pages = Math.max(1, Math.ceil(ids.length / PER)); VRM.mkPg = clamp(VRM.mkPg, 0, pages - 1);
     let y = 146;
     for (const id of ids.slice(VRM.mkPg * PER, VRM.mkPg * PER + PER)) {
-      const it = I[id], owned = !!(cr && cr.items.includes(id)), eq = cr ? cr.equipped[it.slot] === id : (!it.unique && AF_GEAR_FREE[it.slot] === id), trying = AF.tryItem === id, why = it.unique ? null : (cr ? ARENA_CAT.lockReason(id, cr) : 'sign in');
+      const it = I[id], owned = !!(cr && cr.items.includes(id)), eq = cr ? (cr.equipped[it.slot] === id || (!cr.equipped[it.slot] && AF_GEAR_LENT[it.slot] === id)) : (!it.unique && AF_GEAR_FREE[it.slot] === id), trying = AF.tryItem === id, why = it.unique ? null : (cr ? ARENA_CAT.lockReason(id, cr) : 'sign in');
       c.fillStyle = trying ? 'rgba(255,211,77,.10)' : 'rgba(255,255,255,.03)'; vrRR(c, 40, y, 944, 68, 10); c.fill();
       T(it.name, 56, y + 8, '800 24px system-ui', eq ? '#ffe089' : '#f3ead8', 'left', 330); T(statOf(it), 56, y + 40, '500 17px system-ui', '#9fb2cc', 'left', 330);
       T(eq ? 'worn' : owned ? 'yours' : it.unique ? 'loot only' : why === 'sign in' ? it.price + ' g' : why ? '🔒 ' + why : it.price + ' g', 400, y + 22, '600 20px system-ui', eq ? '#ffe089' : why && !owned ? '#ff9a8a' : '#c9bfda', 'left', 260);
       B(trying ? 'trying' : 'Try on', 672, y + 10, 120, 48, 'mk:try:' + id, { fs: 18, r: 10, bg: trying ? ON : undefined });
       if (owned && !eq) B('Wear', 806, y + 10, 170, 48, 'mk:equip:' + it.slot + ':' + id, { fs: 20, r: 10 });
-      else if (!owned && !it.unique && cr && !why) B('Buy ' + it.price + ' g', 806, y + 10, 170, 48, 'mk:buy:' + id, { fs: 20, r: 10 });
+      else if (!owned && !eq && !it.unique && cr && !why) B('Buy ' + it.price + ' g', 806, y + 10, 170, 48, 'mk:buy:' + id, { fs: 20, r: 10 });
       y += 78;
     }
     B('‹', 40, 622, 70, 50, 'mk:pg:-1', { fs: 26, r: 10, off: VRM.mkPg <= 0 }); T((VRM.mkPg + 1) + ' / ' + pages, 155, 634, '600 22px system-ui', '#c9bfda', 'center'); B('›', 200, 622, 70, 50, 'mk:pg:1', { fs: 26, r: 10, off: VRM.mkPg >= pages - 1 });
@@ -19760,7 +19777,8 @@ function afHorseTags() {
 /* ---- the CAREER: what you own and have earned rides in with you. Signed-in accounts keep an arena career on the
    server (XP, gold, rank, loadout); without one the pit lends plain gear and pays nothing. The loadout travels in
    the roster (gear per player) so every client builds the same fighter. ---- */
-const AF_GEAR_FREE = { sword: 'iron_sword', bow: 'hunting_bow', horse: 'courser' };
+const AF_GEAR_FREE = { sword: 'iron_sword', bow: 'hunting_bow', horse: 'courser', shield: 'round_shield' };
+const AF_GEAR_LENT = { shield: 'round_shield' };                 // what a career carries in a slot it has bought nothing for
 function afCareerLoad(seed) {
   if (!afSession() || !window.net || !window.net.arenaCareer) { AF.career = null; return Promise.resolve(null); }
   return window.net.arenaCareer(seed).then(c => { AF.career = c || null; AF.careerAt = Date.now(); if (AF.lobby) { afLobbyRender(); afSendGear(); } if (AF.marketOpen) afMarketRender(); if (AF.homeOpen) afHomeRender(); return AF.career; });
@@ -19768,7 +19786,7 @@ function afCareerLoad(seed) {
 function afGear() {                                        // my loadout as the roster carries it
   const c = AF.career, eq = c ? c.equipped : AF_GEAR_FREE, I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}, g = {};
   for (const k of (window.ARENA_CAT ? ARENA_CAT.ARENA_SLOTS : [])) if (eq[k] && I[eq[k]] && I[eq[k]].slot === k) g[k] = eq[k];
-  if (!g.sword) g.sword = c ? 'wood_sword' : 'iron_sword'; if (c) { g.rank = c.rank.name; g.bowLv = c.skills && c.skills.bow ? c.skills.bow.level | 0 : 0; } return g;
+  if (!g.sword) g.sword = c ? 'wood_sword' : 'iron_sword'; if (!g.shield) g.shield = AF_GEAR_LENT.shield; if (c) { g.rank = c.rank.name; g.bowLv = c.skills && c.skills.bow ? c.skills.bow.level | 0 : 0; } return g;
 }
 function afGearClean(g) {                                  // (a guest's word for his loadout — only real items, in their own slots)
   const I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}, out = {}; if (!g || typeof g !== 'object') g = AF_GEAR_FREE;
@@ -19776,8 +19794,9 @@ function afGearClean(g) {                                  // (a guest's word fo
   if (!out.sword) out.sword = 'iron_sword'; if (typeof g.rank === 'string') out.rank = g.rank.slice(0, 12); if (typeof g.bowLv === 'number') out.bowLv = clamp(g.bowLv | 0, 0, 12); return out;
 }
 function afGearStats(g) {                                  // what the loadout does in the pit
-  const I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}, sw = I[g.sword] || { dmg: 1 }, ar = g.armor && I[g.armor], bw = g.bow && I[g.bow], hs = g.horse && I[g.horse], pl = g.plume && I[g.plume], tr = g.trim && I[g.trim];
-  return { swordDmg: (sw.dmg || 1) * (tr && tr.dmg ? tr.dmg : 1), reach: sw.reach || 0, hp: ar ? ar.hp || 0 : 0, poise: ar ? ar.poise || 0 : 0, move: ar ? ar.move || 0 : 0,
+  const I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}, sw = I[g.sword] || { dmg: 1 }, ar = g.armor && I[g.armor], hm = g.helm && I[g.helm], sh = g.shield && I[g.shield], bw = g.bow && I[g.bow], hs = g.horse && I[g.horse], pl = g.plume && I[g.plume], tr = g.trim && I[g.trim];
+  const sum = k => [ar, hm, sh].reduce((a, it) => a + (it && it[k] ? it[k] : 0), 0);   // (armour, helm and shield all weigh and all protect)
+  return { swordDmg: (sw.dmg || 1) * (tr && tr.dmg ? tr.dmg : 1), reach: sw.reach || 0, hp: sum('hp'), poise: sum('poise'), move: sum('move'),
     bow: !!bw, bowDmg: bw ? bw.dmg || 1 : 1, horse: !!hs, horseHp: hs ? hs.hp : AF_HORSE.hp, horseSpeed: hs ? hs.speed || 1 : 1, plume: pl ? pl.plume : null, blade: tr ? tr.blade : g.sword === 'wood_sword' ? 'wood' : null };
 }
 // NPCS DRESS BY XP: a recruit in wood and cloth, a soldier in mail with a falchion, a veteran in plate with a
@@ -19788,7 +19807,12 @@ function afNpcGear(entry, xp, r) {
   const pick = a => a[Math.floor(r() * a.length)], A = AF_ARCH[entry.arch] || AF_ARCH.swordsman, g = {};
   g.sword = xp < 25 ? pick(['wood_sword', 'iron_sword']) : xp < 45 ? pick(['iron_sword', 'falchion']) : xp < 60 ? pick(['steel_sword', 'cleaver', 'rapier']) : xp < 82 ? pick(['vale_blade', 'scimitar', 'flamberge']) : xp < 95 ? pick(['doomsword', 'master_sword']) : pick(['master_sword', 'sun_blade', 'ember_blade', 'frost_fang', 'black_night']);
   if (A.weapon === 'longsword' && xp >= 45) g.sword = xp < 82 ? 'cleaver' : 'doomsword';     // a brute swings something broad
-  if (xp >= 20) g.armor = xp < 40 ? (r() < 0.6 ? 'leather' : undefined) : xp < 60 ? 'mail' : xp < 82 ? (r() < 0.4 ? 'brigandine' : 'plate') : xp < 95 ? 'champion_plate' : (r() < 0.35 ? 'dragon_plate' : 'champion_plate');
+  const pelt = A.weapon !== 'bow' && r() < 0.12;                                                 // a northerner in a wolf pelt, now and then
+  if (xp < 20) g.armor = r() < 0.3 ? 'gambeson' : undefined;                                     // (nothing = a shirt and breeches)
+  else if (xp < 40) g.armor = pelt ? 'wolf_pelt' : r() < 0.55 ? 'leather' : r() < 0.5 ? 'gambeson' : undefined;
+  else g.armor = xp < 60 ? (pelt ? 'wolf_pelt' : 'mail') : xp < 82 ? (r() < 0.4 ? 'brigandine' : 'plate') : xp < 95 ? 'champion_plate' : (r() < 0.35 ? 'dragon_plate' : 'champion_plate');
+  if (r() < lookOdds(g.armor || 'none', entry.arch, 'helm')) g.helm = 'sallet';                   // a helm by his armour and his class (lookOdds)
+  g.shield = xp < 45 ? 'round_shield' : r() < 0.65 ? 'heater_shield' : 'round_shield';
   if (A.weapon === 'bow') g.bow = xp < 40 ? 'hunting_bow' : xp < 70 ? 'longbow' : xp < 90 ? 'warbow' : 'recurve';
   if (A.weapon === 'horse') g.horse = xp < 35 ? 'nag' : xp < 65 ? 'courser' : xp < 85 ? 'destrier' : 'warhorse';
   for (const k in g) if (!g[k]) delete g[k]; return g;
@@ -19800,6 +19824,8 @@ function afSendGear() { const L = AF.lobby; if (!L || L.role !== 'guest' || !win
 const AF_LOOK = {
   // armor is BUILT too (afDressGear): each spec names its torso/pauldron look and the extra pieces that make it read
   armor: { none: null,
+    gambeson:       null,                                    // (null = the padded jack the plastic rig builds)
+    wolf_pelt:      { torso: 0x5a4432, pad: 0x33241a, metal: 0, straps: true },
     leather:        { torso: 0x6b4a2a, pad: 0x5a3d22, metal: 0, straps: true },
     brigandine:     { torso: 0x8a2a2a, pad: 0x3a3a44, metal: 0, rivets: true, sleeves: 0x3a3a44 },
     mail:           { torso: 0x7a808a, pad: 0x6e747e, metal: 1, sleeves: 0x7a808a, coif: true },
@@ -22523,9 +22549,19 @@ function afThumb(id) {
       const keep = { p: b.parent, pos: b.position.clone(), rot: b.rotation.clone() }; b.visible = true; b.traverse(x => { if (x.isMesh) x.visible = true; });
       const wrap = new THREE.Group(); wrap.add(b); b.position.set(0, 0, 0); b.rotation.set(0, 0, 0); wrap.rotation.z = -0.35; url = afThumbShot(wrap);
       wrap.remove(b); if (keep.p) keep.p.add(b); b.position.copy(keep.pos); b.rotation.copy(keep.rot); }
-    else if (it.slot === 'armor') {                          // a bust of the figure wearing it (the warrior, tinted — so it waits for him)
+    else if (it.slot === 'shield') {                         // the shield alone, face to the lens
       if (MODEL_ON && !BV.modelReady) { BV.modelLoad.then(() => { if (AF.marketOpen) afMarketRender(); }); return null; }
-      const h = afThumbRig(); afDressGear(h.parts, { armor: id }, pal); h.group.rotation.y = 0.4;
+      const R = MODEL_RIGS.get(MODEL_NAME); let m;
+      if (id === 'round_shield') { const g0 = lookRoundShieldGeo(R), geo = new THREE.BufferGeometry(); for (const k of ['position', 'normal']) geo.setAttribute(k, g0.getAttribute(k));
+        const col = new THREE.BufferAttribute(new Uint8Array(g0.getAttribute('position').count * 3), 3, true); geo.setAttribute('color', col); lookRoundPaint(col, g0.userData.part, { cloth: pal.cloth, kind: 'none', round: 1 });
+        m = new THREE.Mesh(geo, new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: true, shininess: 8, specular: 0x222222 })); }
+      else m = new THREE.Mesh(modelPropGeo(R, 'shield'), new THREE.MeshPhongMaterial({ map: R.tex, color: new THREE.Color(pal.cloth).lerp(new THREE.Color(0xffffff), 0.35), shininess: 6 }));
+      m.geometry.computeBoundingBox(); const cc = m.geometry.boundingBox.getCenter(new THREE.Vector3()); m.position.set(-cc.x, -cc.y, -cc.z);
+      const wrap = new THREE.Group(); wrap.add(m); wrap.rotation.y = -Math.PI / 2; wrap.rotation.z = 0.35; wrap.scale.setScalar(3);   // (the face looks +x in bind space: turned to the lens, tilted a little)
+      url = afThumbShot(wrap); }
+    else if (it.slot === 'armor' || it.slot === 'helm') {    // a bust of the figure wearing it (the warrior, tinted — so it waits for him); a helm over a leather jerkin
+      if (MODEL_ON && !BV.modelReady) { BV.modelLoad.then(() => { if (AF.marketOpen) afMarketRender(); }); return null; }
+      const h = afThumbRig(); afDressGear(h.parts, it.slot === 'helm' ? { helm: id, armor: 'leather' } : { armor: id }, pal); h.group.rotation.y = 0.4;
       url = afThumbShot(h.group, new THREE.Box3(new THREE.Vector3(-0.95, 1.55, -3), new THREE.Vector3(0.95, 3.45, 3))); }   // (a bust: shoulders to crown)
   } catch (e) { console.warn('[thumb]', id, e); url = null; }
   if (url) AF.thumbs.set(id, url); return url;
@@ -22833,7 +22869,7 @@ function afHomeHud() {
         el.innerHTML = '<b>' + escHtml(label.replace(/ — .*$/, '')) + '</b> — ' + left + ' more ' + unit + ' for the achievement';
         const n = 5, lit = Math.min(n - 1, Math.floor(best.k * n)); pips.innerHTML = Array.from({ length: n }, (_, i) => '<i class="' + (i < lit ? 'on' : '') + '"></i>').join(''); } } }
   // his kit: what he rides in with, a chip a slot — a tap opens that stall of the market
-  { const gear = afGear(), el = g('hm-gear'); el.innerHTML = ['sword', 'armor', 'bow', 'horse'].map(sl => gear[sl] && I[gear[sl]] ? '<span data-slot="' + sl + '">' + escHtml(I[gear[sl]].name) + '</span>' : '<span class="none" data-slot="' + sl + '" title="no ' + (sl === 'armor' ? 'armour' : sl) + ' yet — the market has one">—</span>').join(''); }
+  { const gear = afGear(), el = g('hm-gear'); el.innerHTML = ['sword', 'armor', 'helm', 'shield', 'bow', 'horse'].map(sl => gear[sl] && I[gear[sl]] ? '<span data-slot="' + sl + '">' + escHtml(I[gear[sl]].name) + '</span>' : '<span class="none" data-slot="' + sl + '" title="no ' + (sl === 'armor' ? 'armour' : sl) + ' yet — the market has one">—</span>').join(''); }
 }
 function afHomeClock() {                                    // the bout of the day ends at midnight UTC — the card counts down to it
   const el = document.getElementById('hm-daily-clock'); if (!el) return;
@@ -22926,16 +22962,16 @@ function afMarketRender() {
     '<div id="af-market-msg" style="display:' + (AF.marketMsg ? '' : 'none') + ';margin-bottom:6px;padding:6px 9px;border-radius:8px;background:rgba(255,211,77,.12);border:1px solid rgba(255,207,91,.5);font-size:12px;font-weight:700;color:' + (AF.marketMsg && AF.marketMsg.bad ? '#ff9a9a' : '#ffe089') + '">' + (AF.marketMsg ? AF.marketMsg.t : '') + '</div>' +
     '';
   // RIGHT: one tab at a time — a picture card per ware; the card is a TRY-ON, its button the buy
-  const TABS = [['sword', 'Swords'], ['armor', 'Armor'], ['bow', 'Bows'], ['horse', 'Horses'], ['unique', 'Uniques']]; if (!AF.marketTab) AF.marketTab = 'sword'; const tab = AF.marketTab;
+  const TABS = [['sword', 'Swords'], ['armor', 'Armor'], ['helm', 'Helms'], ['shield', 'Shields'], ['bow', 'Bows'], ['horse', 'Horses'], ['unique', 'Uniques']]; if (!AF.marketTab) AF.marketTab = 'sword'; const tab = AF.marketTab;
   let html = '<div class="mk-tabs">' + TABS.map(([k, l]) => '<button data-act="tab:' + k + '" class="' + (tab === k ? 'on' : '') + '">' + l + '</button>').join('') + '</div>';
   const statOf = it => [it.dmg ? '×' + it.dmg + ' dmg' : '', it.reach ? (it.reach > 0 ? '+' : '') + it.reach + ' reach' : '', it.hp ? (it.slot === 'horse' ? it.hp + ' hp' : '+' + it.hp + ' hp') : '', it.poise ? '+' + it.poise + ' poise' : '', it.move ? Math.round(it.move * 100) + '% speed' : '', it.speed && it.speed !== 1 ? '×' + it.speed + ' pace' : ''].filter(Boolean).join(' · ');
   const ids = Object.keys(I).filter(id => tab === 'unique' ? I[id].unique : I[id].slot === tab && !I[id].unique);
-  if (tab !== 'unique') { const eq = c ? c.equipped[tab] : (AF_GEAR_FREE[tab] || null);
-    html += '<div class="mk-head">' + (eq ? 'Wearing <b>' + I[eq].name + '</b>' + (tab !== 'sword' && c ? ' ' + btn('unequip:' + tab, 'take off') : '') : tab === 'armor' ? 'No armour yet' : 'None yet — ' + (tab === 'bow' ? 'a bow lets you ride in as an archer' : 'a horse lets you ride in')) + '</div>'; }
+  if (tab !== 'unique') { const eq = c ? (c.equipped[tab] || AF_GEAR_LENT[tab] || null) : (AF_GEAR_FREE[tab] || null);
+    html += '<div class="mk-head">' + (eq ? 'Wearing <b>' + I[eq].name + '</b>' + (tab !== 'sword' && c && c.equipped[tab] ? ' ' + btn('unequip:' + tab, 'take off') : '') : tab === 'armor' ? 'A linen shirt and wool breeches — no armour yet' : tab === 'helm' ? 'Bareheaded — no helm yet' : 'None yet — ' + (tab === 'bow' ? 'a bow lets you ride in as an archer' : 'a horse lets you ride in')) + '</div>'; }
   else html += '<div class="mk-head">Loot only — a look, and a hair of power.</div>';
   html += '<div class="mk-grid">' + ids.map(id => {
-    const it = I[id], owned = !!(c && c.items.includes(id)), eq = c ? c.equipped[it.slot] === id : (!it.unique && AF_GEAR_FREE[it.slot] === id), trying = AF.tryItem === id, why = it.unique ? null : (c ? ARENA_CAT.lockReason(id, c) : 'sign in'), th = afThumb(id);
-    const foot = eq && !c ? '<span>worn</span>' : owned ? (eq ? '<span>worn</span>' : btn('equip:' + it.slot + ':' + id, 'Wear')) : it.unique ? '<span class="mk-lock">not yet yours</span>' : why === 'sign in' ? '<span>' + it.price + ' g</span>' : why ? '<span class="mk-lock">🔒 ' + why + '</span>' : btn('buy:' + id, 'Buy ' + it.price + ' g');
+    const it = I[id], owned = !!(c && c.items.includes(id)), eq = c ? (c.equipped[it.slot] === id || (!c.equipped[it.slot] && AF_GEAR_LENT[it.slot] === id)) : (!it.unique && AF_GEAR_FREE[it.slot] === id), trying = AF.tryItem === id, why = it.unique ? null : (c ? ARENA_CAT.lockReason(id, c) : 'sign in'), th = afThumb(id);
+    const foot = eq ? '<span>worn</span>' : owned ? btn('equip:' + it.slot + ':' + id, 'Wear') : it.unique ? '<span class="mk-lock">not yet yours</span>' : why === 'sign in' ? '<span>' + it.price + ' g</span>' : why ? '<span class="mk-lock">🔒 ' + why + '</span>' : btn('buy:' + id, 'Buy ' + it.price + ' g');
     return '<div class="mk-card tier-' + (it.unique || it.rank >= 4 ? 'legend' : it.rank >= 3 ? 'epic' : it.rank >= 2 ? 'rare' : 'common') + (trying ? ' on' : '') + (eq ? ' worn' : owned ? ' owned' : '') + (why && !owned && !eq ? ' locked' : '') + '" data-act="try:' + id + '"><div class="mk-img">' + (th ? '<img src="' + th + '" alt="">' : '<span class="mk-wait">…</span>') + '</div><div class="mk-name">' + it.name + '</div><div class="mk-stat">' + statOf(it) + '</div><div class="mk-foot">' + foot + '</div></div>'; }).join('') + '</div>';
   p.innerHTML = '<div id="af-market-head" style="font-size:14px;color:#e8def8">' + left + '</div><div id="af-market-right">' + html + '</div>';   // (the figure is the shell's, on the left; a try-on shows on him with its buy strip under him)
   afShellFigure();

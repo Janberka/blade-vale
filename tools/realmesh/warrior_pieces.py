@@ -65,13 +65,16 @@ for node in g['nodes']:
             elif cz < -0.08 and 0.85 < cy < 1.06 and n > 100: c = 'pouch'   # the pouches on the back of the belt
             elif n == 128: c = 'skirt'                                      # the hip plates
             elif top in ('n75', 'n76', 'n77', 'n78'): c = 'straps'          # the hanging leather straps
-            elif n == 68 and mx[1] < 0.1: c = 'greaves'                     # the soles
+            elif n == 68 and mx[1] < 0.1: c = 'boot'                        # the soles: leather under breeches or fur
             elif 1.4 < cy < 1.5 and n < 50: c = 'pauldron'                  # the buckles that hold them
             elif n == 46 and cy < 0.6: c = 'knee'
             else: c = 'cuirass'                                             # chest buckle and back strap
         elif short == 'body': c = 'eye' if (top == 'n12' and n < 400) else ('head' if top == 'n12' else 'hand')
         else: c = short
         for v in vs: vclass[v] = c
+    if short == 'armor':                                                    # the cuirass component carries the cloth too: upper-arm sleeves and the skirt's front
+        for v in range(nv):
+            if vclass[v] == 'cuirass' and vmat[v] == 'cloth': vclass[v] = 'sleeve' if pos[v * 3 + 1] > 1.15 else 'skirt'
     if short == 'body':                                                     # hair and beard: regions of the bald head (bind pose, model units)
         for v in range(nv):
             if vclass[v] != 'head': continue

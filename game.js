@@ -17926,7 +17926,7 @@ function afBuildPitClutter(g) {
   if (S.n) g.add(S.build());
 }
 function afBuildGround() {
-  const size = Math.round(AF_F.radius * 5.2), segs = Math.round((AF.terr.hills.length ? clamp(Math.round(size / 0.85), 120, 240) : 120) * AF_Q.ground), geo = new THREE.PlaneGeometry(size, size, segs, segs);   // (a phone: about half the quads a side) geo.rotateX(-Math.PI / 2);   // hills want a finer mesh than a flat floor
+  const size = Math.round(AF_F.radius * 5.2), segs = Math.round((AF.terr.hills.length ? clamp(Math.round(size / 0.85), 120, 240) : 120) * AF_Q.ground), geo = new THREE.PlaneGeometry(size, size, segs, segs); geo.rotateX(-Math.PI / 2);   // hills want a finer mesh than a flat floor (a phone: about half the quads a side)
   const p = geo.attributes.position, col = new Float32Array(p.count * 3), c = new THREE.Color(), pit = AF.cfg.venue === 'pit';
   const sand = new THREE.Color(0xb89a6c), sandDk = new THREE.Color(0x8f7650), churn = new THREE.Color(0x745538), grass = new THREE.Color(0x4f7a2e), grassDk = new THREE.Color(0x3c5f23), stone = new THREE.Color(0x77726a), scrub = new THREE.Color(0x8e8a55), scree = new THREE.Color(0x857d70);
   const n = (x, z) => 0.5 + 0.25 * Math.sin(x * 0.37 + AF.terr.p1) * Math.cos(z * 0.41 + AF.terr.p2) + 0.25 * Math.sin((x - z) * 0.23 + AF.terr.p3); // 0..1 patches

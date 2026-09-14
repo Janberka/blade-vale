@@ -17094,6 +17094,12 @@ const AF_F = { hp: 100, move: 5.6, reach: 2.5, cone: 0.3, radius: 34, timeLimit:
   // away in `down`. At full stride the body has MOMENTUM — the push and the drag both scale by (1 − inertia): the same top
   // speed, a slower response (0.14 s → 0.47 s to settle), so nobody turns on a coin at a sprint.
   run: { jog: 0.62, top: 1.05, up: 1.4, down: 0.45, inertia: 0.7 },
+  // STAMINA (2026-09-14, the user: "we should also have stamina when we run, swing sword, draw arrows — it should go lower
+  // and you need to catch a breath sometimes"): a pool of `max` that the full stride, a drawn bow, every swing, roll and
+  // leap spend, and standing or walking refills. Plate slows the refill (afMakeBody: stamRegen from the gear's speed
+  // penalty). At zero a man is WINDED until he has `recover` back: he walks (winded.move), can't roll, leap or load a
+  // heavy, his blows land soft (winded.dmg at zero, easing to full above 30 %). The vale's men guard and back off to breathe.
+  stam: { max: 100, run: 11, draw: 7, light: 7, heavy: 16, loose: 4, dodge: 14, jump: 12, regen: 12, regenMove: 7, recover: 35, winded: { move: 0.6, dmg: 0.65 }, aiRest: 22 },
   // THE LEAP (Space / JUMP): v up, g down (a ~1.2-unit hop, 0.73 s in the air), a bent-knee landing of `land` seconds with
   // no blow in it. Come down on a man at `tackleAt` of the full run or better and he is FLOORED like a man ridden down.
   jump: { v: 6.6, g: 18, land: 0.22, tackleAt: 0.75, tackleR: 1.15 } };
@@ -19695,6 +19701,7 @@ function afMakeBody(entry, idx, r) {
     group, parts: h.parts, anim: makeAnimator(h.parts),
     x: sp.cx + rgx * off - Math.sin(sp.yaw) * back, z: sp.cz + rgz * off - Math.cos(sp.yaw) * back, yaw: sp.yaw, phase: r() * TAU, tiltX: 0,
     hp: A.hp + G.hp, maxHp: A.hp + G.hp, state: 'idle', atk: null, combo: 0, comboT: 0, blocking: false,
+    stam: AF_F.stam.max, maxStam: AF_F.stam.max, winded: false, stamRegen: 1 + clamp(G.move, -0.4, 0) * 1.5,   // (plate: −22 % speed is a third off the breath coming back)
     dodgeT: 0, dodgeCd: 0, ddx: 0, ddz: 0, iframes: 0, flinch: 0, stagger: 0, dead: false, deadT: 0, tinted: false, kills: 0, run01: 0, airT: 0, airY: 0, vy: 0, landT: 0, seenJump: 0,
     // (a PLAYER is the hero: ×1.6 poise, so four jabs break it, not three)
     vx: 0, vz: 0, poise: A.poise * (entry.kind !== 'npc' ? 1.6 : 1) + G.poise, maxPoise: A.poise * (entry.kind !== 'npc' ? 1.6 : 1) + G.poise, queued: false, cd: 0, waiting: false, slotAngle: 0, retreatT: 0, bob: 0,
@@ -19746,7 +19753,7 @@ function afDismount(b, thrown, quiet) {                    // the man leaves the
   const hm = buildHumanoid(b.pal, b.footScale || 1, b.weapon === 'longsword' ? 'longsword' : 'sword', b.rigOpts || {}); afWearModel(hm, b.pal);
   b.group = hm.group; b.parts = hm.parts; b.anim = makeAnimator(hm.parts); b.group.rotation.order = 'YXZ'; b.group.userData.afBody = b;
   b.mounted = false; b.gallop = 0; b.sp01 = 0; b.aimYaw = null; b.twist = 0; b.cav = null; b.baseScale = b.group.scale.x; b.tagH = afTagH(false, b.baseScale); b.mountCd = 2; b.wantHorse = null;
-  b.atk = null; b.charge = null; b.queued = false; b.blocking = false; b.dodgeT = 0; b.rollAng = 0; b.rollSq = 0; b.moving = false; b.remoteSeen = true;
+  b.atk = null; b.charge = null; b.queued = false; b.blocking = false; b.dodgeT = 0; b.rollAng = 0; b.rollSq = 0; b.moving = false; b.remoteSeen = true; b.stam = b.maxStam || AF_F.stam.max; b.winded = false;
   afDressRig(b); afBladeLook(b); setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.2); scene.add(b.group);
   const side = Math.random() < 0.5 ? -1 : 1, rgx = -Math.cos(b.yaw), rgz = Math.sin(b.yaw);   // he lands beside the horse, not inside it
   b.x += rgx * side * 1.1; b.z += rgz * side * 1.1; b.tx = b.x; b.tz = b.z;
@@ -20076,7 +20083,8 @@ function afCommit(b, dt) {
   if (b.moving && !b.dead) walkArms(p, b.phase, g.arm * (b.atk || b.blocking ? 0.3 : 1), 0);
   if (b.flashT > 0) { b.flashT -= dt; if (!b.flashWhite) { setTint(p, 0xfff0e0); b.flashWhite = true; } if (b.flashT <= 0) { b.flashWhite = false; b.tinted = false; setTint(p, null); } }
   if (!b.dead) {
-    p.upperBody.rotation.x += clamp(fwd / F.move, -1, 1) * 0.14 + Math.sin(rtNow * 2.1 + b.phase0) * 0.012; // lean into the run + breathe
+    const ex = b.maxStam ? 1 - b.stam / b.maxStam : 0;      // (spent: the breath deepens and quickens — bent over it when winded)
+    p.upperBody.rotation.x += clamp(fwd / F.move, -1, 1) * 0.14 + Math.sin(rtNow * (2.1 + 2.6 * ex) + b.phase0) * (0.012 + 0.04 * ex * ex) + (b.winded ? 0.12 : 0); // lean into the run + breathe
     if (!b.moving && !b.atk && b.dodgeT <= 0 && !(b.downT > 0)) {   // standing guard: the weight shifts from foot to foot
       const w = Math.sin(rtNow * 0.9 + b.sway); p.upperBody.rotation.z += w * 0.03; p.hipL.rotation.x += w * 0.05; p.hipR.rotation.x -= w * 0.05; b.roll = w * 0.015;
     }
@@ -20148,8 +20156,27 @@ function afTackle(b) {
 }
 // ONE control routine for everyone: reads b.inp (keyboard, NPC brain, or a remote player's record).
 // sim=true means this client is the authority (hits land); a guest driving its own body passes false.
+const AF_S = () => AF_F.stam;
+function afStamMul(b) { const s = b.maxStam ? b.stam / b.maxStam : 1; return s < 0.3 ? lerp(AF_S().winded.dmg, 1, s / 0.3) : 1; }   // a tired arm: the blow lands soft
+function afStamCost(b, cost) {
+  if (b.maxStam == null) afStamina(b, 0); b.stam = Math.max(0, b.stam - cost);
+  if (b.stam <= 0 && !b.winded) { b.winded = true; b.run01 = 0; if (b === AF.me) { afPopup(b.group.position, 'WINDED', '#ff8a6a'); addShake(0.05); } }
+}
+function afStamina(b, dt) {                                 // every tick, before the drive reads the inputs: the spend of the stride and the draw, or the breath coming back
+  if (b.maxStam == null) { b.maxStam = AF_S().max; b.stam = b.maxStam; b.winded = false; b.stamRegen = b.stamRegen || 1; }
+  const S = AF_S(), bow = b.weapon === 'bow'; let drain = 0;
+  if (!b.mounted && b.run01 > 0.4) drain += S.run * (b.run01 - 0.4) / 0.6;   // the jog is free; the stride costs, the full stride most
+  if (b.charge && bow) drain += S.draw;                                       // a drawn bow is held against the arm
+  if (drain > 0) afStamCost(b, drain * dt);
+  else if (!b.atk && !b.charge && b.dodgeT <= 0 && b.airT <= 0 && b.stam < b.maxStam) {
+    const rate = (b.moving && b.run01 > 0.15 ? S.regenMove : S.regen) * (b.stamRegen || 1) * (b.winded ? 1.35 : 1) * (b.blocking ? 0.6 : 1);   // (winded, he is bent double getting it back)
+    b.stam = Math.min(b.maxStam, b.stam + rate * dt);
+    if (b.winded && b.stam >= S.recover) { b.winded = false; if (b === AF.me) afPopup(b.group.position, 'breath back', '#9fd6ff'); }
+  }
+}
 function afDrive(b, dt, sim) {
   const I = b.inp, F = AF_F, human = b.ctrl !== 'ai';
+  afStamina(b, dt);
   if (b.dodgeCd > 0) b.dodgeCd -= dt; if (b.mountCd > 0) b.mountCd -= dt; if (b.landT > 0) b.landT -= dt;
   if (b.cd > 0 && (human || (!b.atk && !b.charge && !(b.aiHoldT > 0)))) b.cd -= dt;   // an NPC's pause between blows starts once the blow is DONE (it used to run out mid-swing: jab, jab, jab)
   if (b.comboT > 0) { b.comboT -= dt; if (b.comboT <= 0) b.combo = 0; }
@@ -20188,8 +20215,8 @@ function afDrive(b, dt, sim) {
   if (I.dodge !== b.seenDodge) {                             // a roll cancels a windup, never a landed blow
     b.seenDodge = I.dodge;
     if (b.mounted) { if (b.dodgeCd <= 0) { b.dodgeCd = 1.2; b.vx += Math.sin(b.yaw) * 6; b.vz += Math.cos(b.yaw) * 6; b.iframes = 0.15; try { SFX.foot(b.group.position); } catch (e) {} } }
-    else if (b.dodgeCd <= 0 && !(b.atk && b.atk.hit) && b.airT <= 0 && b.landT <= 0) {
-      b.dodgeT = F.dodge.dur; b.iframes = F.dodge.iframes; b.dodgeCd = F.dodge.dur + F.dodge.cd; b.atk = null; b.charge = null; b.queued = false; b.blocking = false;
+    else if (b.dodgeCd <= 0 && !(b.atk && b.atk.hit) && b.airT <= 0 && b.landT <= 0 && !b.winded) {   // (winded: no roll in him)
+      b.dodgeT = F.dodge.dur; b.iframes = F.dodge.iframes; b.dodgeCd = F.dodge.dur + F.dodge.cd; b.atk = null; b.charge = null; b.queued = false; b.blocking = false; afStamCost(b, F.stam.dodge);
       // THE ROLL'S HEADING: the one asked for (Q / E, the stick's double-tap-and-push), else — a player — the way he is
       // moving, else a SIDE: the side the stick leans, else a coin. (An NPC always takes a side: he closes on his man,
       // and a roll along his line of advance would carry him onto the blade he is dodging.)
@@ -20205,7 +20232,7 @@ function afDrive(b, dt, sim) {
   }
   if (I.jump !== b.seenJump) {                               // a LEAP (Space / JUMP): from your feet, with the blade at rest — the run you bring to it is what it's worth
     b.seenJump = I.jump;
-    if (!b.mounted && b.airT <= 0 && b.landT <= 0 && !b.atk && !b.charge && b.swapT <= 0 && b.clashT <= 0) afJump(b);
+    if (!b.mounted && b.airT <= 0 && b.landT <= 0 && !b.atk && !b.charge && b.swapT <= 0 && b.clashT <= 0 && !b.winded) { afJump(b); afStamCost(b, F.stam.jump); }   // (winded: no spring in him)
   }
   // facing: everyone turns, nobody snaps — a player's aim leads, an NPC's intent follows (a horse wheels slower the faster it goes)
   if (b.trampleT > 0) b.trampleT -= dt;
@@ -20243,7 +20270,7 @@ function afDrive(b, dt, sim) {
       }
       b.seenAtk = I.atk;
     } else if (b.charge) {
-      b.charge.t += dt;
+      b.charge.t += dt; if (b.winded && !bow) b.charge.t = Math.min(b.charge.t, F.chargeMax * F.heavyAt - 0.02);   // (winded: the load never coils into a heavy)
       if (b.charge.t > 0.35 && !b.charge.heavyPose && b.weapon !== 'bow') { setPose(b.anim, 'windupHeavy', 0.2); b.charge.heavyPose = true; }
       const released = b.releaseNow || (!holdNow && b.prevHold) || tapped;
       if (released) { b.seenAtk = I.atk; b.releaseNow = false;
@@ -20299,10 +20326,10 @@ function afDrive(b, dt, sim) {
     // bleeds away in R.down. At full stride the body carries: it accelerates and stops slower (afIntegrate scales the drag by
     // the same `inert`, so the top speed holds and only the response slows) — you can't turn on a coin at a sprint, nor can he.
     const vsp = Math.hypot(b.vx, b.vz), along = vsp > 1 ? (ux * b.vx + uz * b.vz) / vsp : 1;
-    const straight = mm > 0.5 && !b.blocking && !b.atk && !b.charge && b.landT <= 0 && fwdDot > 0.35 && along > 0.5;
+    const straight = mm > 0.5 && !b.blocking && !b.atk && !b.charge && b.landT <= 0 && fwdDot > 0.35 && along > 0.5 && !b.winded && b.stam > 0;   // (no wind, no stride)
     b.run01 = straight ? Math.min(1, b.run01 + dt / R.up) : Math.max(0, b.run01 - dt / (along < 0 ? R.down * 0.5 : R.down));
     const stride = lerp(R.jog, R.top, b.run01 * b.run01 * (3 - 2 * b.run01)), inert = 1 - R.inertia * b.run01;
-    const spd = F.move * (b.moveMul || 1) * (b.blocking ? 0.4 : (b.atk || b.charge) ? 0.35 : b.landT > 0 ? 0.5 : stride) * Math.min(1, mm);
+    const spd = F.move * (b.moveMul || 1) * (b.blocking ? 0.4 : (b.atk || b.charge) ? 0.35 : b.landT > 0 ? 0.5 : stride) * Math.min(1, mm) * (b.winded ? F.stam.winded.move : 1);
     afMove(b, ux, uz, spd * inert, dt); b.moving = true;
     if (b === AF.me) { if (b.run01 > 0.98 && !b._strode) { b._strode = true; afPopup(b.group.position, 'FULL STRIDE', '#ffe089'); } else if (b.run01 < 0.5) b._strode = false; }
     const g = b.gait = b.blocking || b.atk || b.charge ? GAIT.walk : GAIT.run;
@@ -20420,7 +20447,8 @@ function afStartAttack(b, heavy) {                          // (kept for the hoo
 }
 // the swing itself: the load already happened in the hand; k is how much of it there was
 function afRelease(b, k) {
-  const F = AF_F, heavy = k >= F.heavyAt;
+  const F = AF_F; if (b.winded && k >= F.heavyAt) k = F.heavyAt - 0.01; const heavy = k >= F.heavyAt;
+  afStamCost(b, b.weapon === 'bow' ? F.stam.loose : lerp(F.stam.light, F.stam.heavy, k));   // (the swing is spent whether or not it lands)
   if (b.weapon === 'bow') { b.atk = { bow: true, k, t: 0, wind: 0.05, strike: F.bow.strike, rec: F.bow.rec, hit: false, move: 4 }; return; }
   let move;
   if (heavy) { move = 3; b.combo = 0; } else { move = b.chargeMove; b.combo++; b.comboT = 1.1; }
@@ -20437,7 +20465,7 @@ function afAimOf(b) { return b.mounted && b.aimYaw != null ? b.yaw + clamp(angle
 function afHitPoint(o, x, z) { if (!o.mounted) return [o.x, o.z]; const fx = Math.sin(o.yaw), fz = Math.cos(o.yaw), t = clamp((x - o.x) * fx + (z - o.z) * fz, -1.3, 1.3); return [o.x + fx * t, o.z + fz * t]; }
 function afStrike(b, heavy, k) {
   const F = AF_F, w = k || 0, reach = lerp(F.reach, F.reach * 1.25, w) + (b.mounted ? F.horseReach : 0) + (b.reachBonus || 0), ay = afAimOf(b), fdx = Math.sin(ay), fdz = Math.cos(ay), cone = lerp(F.cone, 0.1, w);
-  const shock = (b.mounted ? 1 + MOUNT.chargeDmg * b.sp01 : 1) * (b.dmgMul || 1);   // a blow at full tilt lands harder; a brute's lands harder still
+  const shock = (b.mounted ? 1 + MOUNT.chargeDmg * b.sp01 : 1) * (b.dmgMul || 1) * afStamMul(b);   // a blow at full tilt lands harder; a brute's lands harder still; a winded man's lands soft
   for (const o of AF.bodies) {
     if (o.dead || o.team === b.team || o === b) continue;
     const [px, pz] = afHitPoint(o, b.x, b.z), dx = px - b.x, dz = pz - b.z, dd = Math.hypot(dx, dz); if (dd > reach) continue;
@@ -20861,7 +20889,8 @@ function afRemoteLegs(b, dt, rest) {                        // a remote rider's 
   if (b.mounted && (b.rsp || 0) > 0.4) { b.parts.mount.userData.rig.speed01 = clamp((b.rsp || 0) / (AF_F.move * AF_F.horseSpeed * 1.3), 0, 1); walkLegs(b.parts, b.phase += dt * (3 + 2.4 * (b.rsp || 0)), 0.6); }
   else restLegs(b.parts, dt, rest);
 }
-function afAiSwing(b, heavy) { if (heavy) b.aiHoldT = AF_F.chargeMax + 0.05; else { b.aiHoldT = 0; b.inp.atk = (b.inp.atk | 0) + 1; } b.holdBlock = 0; b.guardUp = Math.random() < 0.15 + b.skill * 0.85; }   // a light is a TAP, as quick as a player's (a 0.06 s hold was three frames slower: every race for the first blow went to the man with the mouse); committing to the blow drops the guard // (guardUp: does he raise the guard again between blows?)
+function afAiSwing(b, heavy) { if (b.winded || b.stam < AF_F.stam.aiRest) { b.holdBlock = Math.max(b.holdBlock || 0, 0.7); b.cd = Math.max(b.cd, 0.6); return; }   // (gassed: he covers up and breathes — the opening you were waiting for)
+  if (heavy) b.aiHoldT = AF_F.chargeMax + 0.05; else { b.aiHoldT = 0; b.inp.atk = (b.inp.atk | 0) + 1; } b.holdBlock = 0; b.guardUp = Math.random() < 0.15 + b.skill * 0.85; }   // a light is a TAP, as quick as a player's (a 0.06 s hold was three frames slower: every race for the first blow went to the man with the mouse); committing to the blow drops the guard // (guardUp: does he raise the guard again between blows?)
 function afThink(b, dt) {
   const I = b.inp, F = AF_F; I.mx = 0; I.mz = 0; I.block = false;
   if (b.aiHoldT > 0) { b.aiHoldT -= dt; I.hold = true; } else I.hold = false;
@@ -21940,6 +21969,7 @@ function afUpdateHud(force) {
   const rem = Math.max(0, AF_F.timeLimit * (AF.bodies.length > AF_LIM.heroCap ? 2 : 1) - AF.t), mm = Math.floor(rem / 60), ss = Math.floor(rem % 60);
   const clock = AF.phase === 'countdown' || AF.phase === 'intro' ? 'ready…' : mm + ':' + (ss < 10 ? '0' : '') + ss;
   const b = AF.me, hp = b ? clamp(b.hp / b.maxHp, 0, 1) : 0, open = !!AF.hudOpen;
+  const st = b && b.maxStam ? clamp(b.stam / b.maxStam, 0, 1) : 1, sbar = h => '<div title="stamina — the stride, a draw, every swing, roll and leap spend it; stand or walk to get it back" style="height:' + h + 'px;margin-top:3px;border-radius:3px;background:#2a2438;overflow:hidden"><div style="height:100%;width:' + Math.round(st * 100) + '%;background:' + (b && b.winded ? '#ff8a6a' : st < 0.3 ? '#e0a040' : '#ffd34d') + ';transition:width .15s"></div></div>';
   const bar = h => '<div style="height:' + h + 'px;margin-top:' + (open ? 5 : 4) + 'px;border-radius:3px;background:#2a2438;overflow:hidden"><div style="height:100%;width:' + Math.round(hp * 100) + '%;background:' + (hp > 0.35 ? '#8fd08f' : '#ff6a5a') + ';transition:width .15s"></div></div>';
   let html;
   if (!open) {                                              // AZURE 3 / CRIMSON 1 · 2:14, your health under it
@@ -21947,7 +21977,7 @@ function afUpdateHud(force) {
     for (let t = 0; t < AF.cfg.teams; t++) { const c = tally.get(t) || { alive: 0, total: 0 }, mine = b && b.team === t;
       html += (t ? '<span style="opacity:.35;margin:0 2px">/</span>' : '') + '<b style="color:' + AF_TEAMS[t].col + (c.alive ? '' : ';opacity:.45') + (mine ? ';text-decoration:underline;text-underline-offset:2px' : '') + '">' + AF_TEAMS[t].name + '</b><span style="font-weight:800' + (c.alive ? '' : ';opacity:.45') + '">' + c.alive + '</span>'; }
     html += '<span style="margin-left:auto;padding-left:10px;color:#c9bfda">' + clock + '</span></div>';
-    if (b) html += bar(4);
+    if (b) html += bar(4) + sbar(3);
   } else {                                                  // the sheet: clock, the captain, every team, you, the controls (the lens row sits below, kept across redraws)
     html = '<div style="display:flex;justify-content:space-between;gap:14px;margin-bottom:6px;font-size:13px"><b style="color:#ffe089">⚔ Arena</b><span style="color:#c9bfda">' + clock + ' <span style="opacity:.5;margin-left:6px">▴</span></span></div>';
     const myT = AF.teams && b ? AF.teams[b.team] : null, ordTxt = myT ? (myT.phase === 'form' ? 'form up' : myT.order) : AF.myOrder ? (AF.myOrder === 'form' || AF.myOrder === 'regroup' ? 'form up' : AF.myOrder) : null;
@@ -21956,6 +21986,7 @@ function afUpdateHud(force) {
       html += '<div style="display:flex;justify-content:space-between;gap:10px;margin-top:2px' + (c.alive ? '' : ';opacity:.45') + '"><span style="color:' + AF_TEAMS[t].col + ';font-weight:800">' + AF_TEAMS[t].name + (mine ? ' ◉' : '') + '</span><span style="font-weight:800">' + c.alive + '<span style="opacity:.5;font-weight:400">/' + c.total + '</span></span></div>'; }
     if (b) {
       html += '<div style="display:flex;justify-content:space-between;gap:12px;margin-top:8px;padding-top:6px;border-top:1px solid #3a3247"><b style="color:' + b.teamDef.col + '">' + b.name + '</b><span style="color:#c9bfda">' + b.kills + ' kill' + (b.kills === 1 ? '' : 's') + (b.dead ? ' · fallen' : '') + '</span></div>' + bar(7);
+      html += sbar(4);
     } else html += '<div style="font-size:11px;color:#9a90ab;margin-top:6px">spectating</div>';
     if (AF.net) html += '<div style="font-size:10px;color:#9a90ab;margin-top:6px;white-space:nowrap">' + afNetLine() + '</div>';   // the wire (guests: round trip, jitter, the host's rate; host: the sim rate and bytes out)
   }
@@ -23199,7 +23230,7 @@ BV.arenaNet = () => ({ id: window.coop && window.coop.id, room: window.coop && w
   lobby: AF.lobby ? { role: AF.lobby.role, seats: AF.lobby.slots.flat().filter(Boolean).map(x => x.name + ':' + x.kind + ':' + x.peer + (x.away ? ':away' : '')), msg: (document.getElementById('al-msg') || {}).textContent } : null,
   roster: AF.on ? AF.roster.filter(e => e.kind !== 'npc').map(e => e.name + ':' + e.kind + ':' + e.peer + (e.away ? ':away' : '')) : null, acks: AF.goAcks ? [...AF.goAcks] : null,
   bodies: AF.on ? AF.bodies.filter(b => b.kind !== 'npc' || b.awayPeer).map(b => b.name + ':' + b.ctrl + ':' + (b.peer || '')) : null });
-BV.arenaStatus = () => ({ on: AF.on, role: AF.role, phase: AF.phase, t: +AF.t.toFixed(1), teams: AF.cfg.teams, per: AF.cfg.per, venue: AF.cfg.venue, seed: AF.seed, over: AF.over, winner: AF.winner,
+BV.arenaStatus = () => ({ on: AF.on, stam: AF.me && AF.me.maxStam ? +AF.me.stam.toFixed(1) : null, winded: !!(AF.me && AF.me.winded), role: AF.role, phase: AF.phase, t: +AF.t.toFixed(1), teams: AF.cfg.teams, per: AF.cfg.per, venue: AF.cfg.venue, seed: AF.seed, over: AF.over, winner: AF.winner,
   bodies: AF.bodies.map(b => ({ i: b.idx, name: b.name, team: b.team, kind: b.kind, ctrl: b.ctrl, weapon: b.weapon, hp: Math.round(b.hp), dead: b.dead, kills: b.kills, x: +b.x.toFixed(1), z: +b.z.toFixed(1), state: afStateCode(b) })),
   me: AF.me ? AF.me.idx : null, lobby: AF.lobby ? { role: AF.lobby.role, teams: AF.lobby.teams, per: AF.lobby.per, seats: AF.lobby.slots.map(r => r.map(s => s ? s.name : null)) } : null, online: AF.online.map(p => p.name) });
 BV.arenaIntro = (cmd) => { if (cmd === 'skip') afIntroSkip(); else if (typeof cmd === 'number' && AF.intro) { const I = AF.intro, n = clamp(cmd, 0, I.shots.length - 1); for (let k = I.i + 1; k < n; k++) if (I.shots[k].onStart) I.shots[k].onStart(); I.i = n; afIntroApplyShot(); } /* (a jump still fires the beats it skips over) */ else if (cmd && cmd.advance && AF.intro) { for (let t = 0; t < cmd.advance && AF.intro; t += 1 / 60) { afIntroStep(1 / 60); if (AF.intro) afIntroCamera(1 / 60); } } const I = AF.intro; return I ? { film: I.film, shot: I.i, of: I.shots.length, t: +I.t.toFixed(1), shotT: +I.shotT.toFixed(2), ts: AF.timeScale, released: I.released, cap: I.cap, stars: I.stars.map(a => a.map(b => b.name + ':' + b.xp)), gates: AF.gates.map(g => +g.open.toFixed(2)), march: AF.bodies.map(b => b.intro ? b.intro.phase[0] : '-').join('') } : { shot: -1, phase: AF.phase }; };   // test: the entrance (skip / jump to a shot / read it)
@@ -23207,6 +23238,7 @@ BV.arenaOutro = (cmd) => { const O = AF.outro; if (cmd === 'skip') afOutroSkip()
   const V = AF.victory, P = AF.outro, ndc = V && V.mvp ? tmpV.set(V.mvp.x, afY(V.mvp.x, V.mvp.z) + 2, V.mvp.z).project(camera) : null; return { film: !!P, mvpScreen: ndc ? [+ndc.x.toFixed(2), +ndc.y.toFixed(2)] : null, view: camera.view ? [camera.view.enabled, camera.view.offsetX, camera.view.fullWidth] : null, shot: P ? P.i : -1, of: P ? P.shots.length : 0, t: P ? +P.t.toFixed(1) : 0, shotT: P ? +P.shotT.toFixed(2) : 0, mvp: V && V.mvp ? V.mvp.name + (V.mvp.dead ? ' (fallen)' : '') : null, winners: V ? V.winners.map(b => b.name + ':' + (b.anim ? b.anim.name : '-')).join(' ') : '', roar: +AF.roar.toFixed(2), cam: [camera.position.x, camera.position.y, camera.position.z].map(v => +v.toFixed(1)), fov: +AF.fov.toFixed(0) }; };   // test: the end-game film (skip / jump to a shot / advance seconds / read it)
 BV.arenaStep = (steps = 60, dt = 1 / 60) => { if (AF.phase === 'intro') afIntroEnd(); if (AF.phase === 'countdown') { AF.phase = 'fight'; AF.countdown = 0; } for (let i = 0; i < steps; i++) afTick(dt); return BV.arenaStatus(); };
 BV.arenaInput = (patch) => { Object.assign(AF.locIn, patch || {}); return { ...AF.locIn }; };
+BV.arenaStam = (v) => { const b = AF.me; if (!b) return null; if (v != null) { afStamina(b, 0); b.stam = clamp(v, 0, b.maxStam); } return { stam: b.stam, winded: b.winded, max: b.maxStam, regen: b.stamRegen }; };   // test: read / set your stamina
 
 
 // BV.showcase(o): stand ONE fighter in front of the camera for a look at the character — {team, weapon, armor, hero, real}. BV.showcase(null) clears.

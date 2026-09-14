@@ -967,6 +967,20 @@ A guest in a **headset** (`VR.md`) sends `{k:'vrhit', i, w, heavy}` when his bla
 Lobby messages (`{k:'lobby'}` host→guests, `{k:'team'}` / `{k:'weapon'}` guest→host,
 `{k:'invite-declined'}` via `dm`) ride the same room.
 
+### Stamina (2026-09-14)
+The user: "we should also have stamina — when we run, swing sword, draw arrows it should go lower and you need to catch
+a breath sometimes." Every body carries `stam` / `maxStam` (`AF_F.stam`, 100). The FULL STRIDE spends it (the jog is free;
+the stride past 0.4 costs up to 11/s), a drawn bow spends 7/s while it is held, a light swing 7, a heavy 16, an arrow 4, a
+roll 14, a leap 12 — whether or not the blow lands. Standing refills 12/s, walking 7/s, nothing while a blow, a load, a
+roll or a leap is in progress; plate slows the refill (`stamRegen` from the gear's speed penalty: −22 % speed is a third off
+the breath). At zero a man is WINDED (a popup for you, the body bent double and panting — afCommit's breath deepens and
+quickens as the wind goes): he walks at 0.6, can't roll, leap or coil a heavy (the load caps under `heavyAt`), and his
+blows land soft (`afStamMul`: ×0.65 at empty, full again above 30 %). He is winded until `recover` (35) is back, a touch
+faster than the normal refill. The vale's men: `afAiSwing` refuses a swing under `aiRest` (22) — he covers up (`holdBlock`)
+and breathes, the opening a patient foe waits for. The HUD shows a gold bar under your health (red when winded).
+`BV.arenaStatus().stam / .winded` read yours. Guests predict their own stamina from their own inputs like the rest of
+their body; the host's copy decides the damage. Not yet on the headset's panel.
+
 ### Tuning
 
 `AF_F` in `game.js` is the whole feel table: hp, speed, reach, light/heavy/bow timings and

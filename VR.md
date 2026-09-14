@@ -24,8 +24,10 @@ bladevale.com is https, and the Quest's own browser has WebXR, so nothing is ins
    Invite button each, Start Fight. A challenge from a friend arrives on the panel too, Accept / Decline.
 3. Start (or the host's start, if you were invited): the panel goes and the **entrance film** plays round you — the
    gates, the column, the stars, or the stair and the drop in the pits — a cut at a time, each one placing you where
-   the lens stood, facing the subject; **B / Y skips**. Then a cut into your fighter for the countdown (no sweep). The
-   **pits** venue is the safest first try — small, dark, few bodies.
+   the lens stood, facing the subject; **B / Y skips**. Your own team comes in last, and the film ends on **the
+   walk-in**: from behind you as you walk onto your mark with your men, the view glides forward into your own eyes,
+   and the countdown starts from there — no blink, no turn (no sweep). The **pits** venue is the safest first try —
+   small, dark, few bodies.
 4. If you fall, a short card hangs under your eyes: **Watch** a fighter (a cut to a stride behind him), **From the
    stands** (the balustrade, or the flagstones over the pit's lip), **Skip to the end** (alone) or **Leave**.
 5. At the bell the **end-game film** plays (the star, the line, the house, the crane), then the panel comes back with
@@ -107,6 +109,11 @@ lens — position, look-at, focal length — through `afIntroCam` / `afOutroCam`
   with the others) and dressed again at the cut back — `vrFilmEnd` turns the rig so the head faces the body's yaw.
   The panel stays hidden through the end film; the results page follows it.
 - Entering VR mid-film (the Enter VR button during the entrance) carries the film on in the headset from the next cut.
+- **The walk-in** (the entrance's last shot, `afIntroWalkIn`): its lens is `afFightLens`, which in a headset is your own
+  eyes on the body (eye height, looking the way your mark faces), so the rig glides from behind you into your fighter
+  as you walk — forward, where you look, so it may close faster than the film's glide (`VR_FILM.glideWalk`). At the
+  film's end `vrFilmEnd` sees `AF.noSweep` and neither blinks nor turns the rig: your head is already where
+  `vrAnchor` will keep it, and the body faces where you look once the bell rings.
 
 ### A dead man's seat
 

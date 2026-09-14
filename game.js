@@ -17199,7 +17199,7 @@ const VR_SHIELD = { pos: new THREE.Vector3(-0.05, 0, 0.16), quat: new THREE.Quat
 const VR_BOW = { pos: new THREE.Vector3(0, 0, 0), pre: (() => { const a = new THREE.Vector3(0, 0, 1), b = new THREE.Vector3(1, -1, 0).normalize(), c = a.clone().cross(b), A = new THREE.Vector3(0, 1, 0), B = new THREE.Vector3(0, 0, -1), C = A.clone().cross(B);
   const M1 = new THREE.Matrix4().makeBasis(a, b, c), M2 = new THREE.Matrix4().makeBasis(A, B, C); return new THREE.Quaternion().setFromRotationMatrix(M2.multiply(M1.transpose())); })() };
 const VR_BOWT = { near: 0.35, slack: 0.12, full: 0.5, cd: 0.45, saddle: 1.0 };
-const VR_FILM = { maxPitch: 0.55, glide: 2.2, minEye: 2.5 };   // the films in the headset: a lens looking steeper than this is brought to a glance; the eyes never lower than a standing man's (units — 2.95 is the fighter's own; a lens on the sand is dramatic on a screen and lying down in a headset); a shot may glide the rig this fast at most (m/s — the lens's own crane and orbit are faster; the rig lags, the next cut catches up)   // a draw starts with the string hand within `near` m of the bow hand; k = (hands apart − slack) / full; the rider's eyes sit `saddle` units higher
+const VR_FILM = { maxPitch: 0.55, glide: 2.2, glideWalk: 5.0, minEye: 2.5 };   // the films in the headset: a lens looking steeper than this is brought to a glance; the eyes never lower than a standing man's (units — 2.95 is the fighter's own; a lens on the sand is dramatic on a screen and lying down in a headset); a shot may glide the rig this fast at most (m/s — the lens's own crane and orbit are faster; the rig lags, the next cut catches up)   // a draw starts with the string hand within `near` m of the bow hand; k = (hands apart − slack) / full; the rider's eyes sit `saddle` units higher
 if (/[?&]xrshim\b/.test(location.search)) { const s = document.createElement('script'); s.src = 'xr-shim.js?v=' + Date.now(); document.head.appendChild(s); }   // tests: a headset out of thin air (never cached)
 
 function vrSupported() {
@@ -17455,11 +17455,13 @@ function vrFilmCam(px, py, pz, lx, ly, lz, cut, inPit) {
   }
   const F = VR.film, tx = px - F.ox, ty = py - F.oy, tz = pz - F.oz;
   if (F.cutNow || !(VR.filmDt > 0)) rig.position.set(tx, ty, tz);
-  else { const mx = tx - rig.position.x, my = ty - rig.position.y, mz = tz - rig.position.z, m = Math.hypot(mx, my, mz), cap = VR_FILM.glide * s * VR.filmDt; if (m <= cap) rig.position.set(tx, ty, tz); else rig.position.set(rig.position.x + mx / m * cap, rig.position.y + my / m * cap, rig.position.z + mz / m * cap); }   // (no faster than a brisk walk: a crane or an orbit is felt as a glide, not a fall)
+  else { const walk = !!(AF.intro && AF.intro.shots[AF.intro.i] && AF.intro.shots[AF.intro.i].walkIn), mx = tx - rig.position.x, my = ty - rig.position.y, mz = tz - rig.position.z, m = Math.hypot(mx, my, mz), cap = (walk ? VR_FILM.glideWalk : VR_FILM.glide) * s * VR.filmDt; if (m <= cap) rig.position.set(tx, ty, tz); else rig.position.set(rig.position.x + mx / m * cap, rig.position.y + my / m * cap, rig.position.z + mz / m * cap); }   // (no faster than a brisk walk: a crane or an orbit is felt as a glide, not a fall; the walk-in closes on your own eyes faster — forward, where you look)
   rig.updateMatrixWorld(true);
 }
 function vrFilmEnd() {
-  VR.film = null; VR.capTxt = null; VR.fade = 1; VR.skipWas = true; const me = AF.me, rig = VR.rig;
+  VR.film = null; VR.capTxt = null; VR.skipWas = true; const me = AF.me, rig = VR.rig;
+  if (AF.noSweep && me && !me.dead) { AF.noSweep = false; return; }   // the walk-in has already brought your eyes into the body, looking its way: no blink, no turn (the body will face where you look once the bell rings)
+  VR.fade = 1;
   if (me && rig) { camera.getWorldDirection(tmpV); const local = Math.atan2(tmpV.x, tmpV.z) - rig.rotation.y; rig.rotation.y = me.yaw - local; }
 }
 function vrPlain(h) {                                       // a caption's HTML as lines of text for the plate
@@ -18998,23 +19000,23 @@ const AF_ACTS = {
 function afPickActs(rnd, order) {
   let last = null; try { last = localStorage.getItem('bv-intro-last'); } catch (e) {}
   const forced = (AF.introFilm || '').split(',').filter(k => AF_ACTS[k]);   // ?film=champion,riders — my team's act, then the others'
-  const styles = [], taken = new Set();
+  const styles = [], taken = new Set(), mineAt = order.length - 1;   // (my team marches last — afIntroStart's order)
   order.forEach((t, k) => {
-    const n = AF.bodies.filter(b => b.team === t).length, pool = Object.keys(AF_ACTS).filter(a => AF_ACTS[a].ok(t, n));
-    let pick = pool.filter(a => !taken.has(a) && (k > 0 || a !== last)); if (!pick.length) pick = pool.filter(a => !taken.has(a)); if (!pick.length) pick = pool;
+    const n = AF.bodies.filter(b => b.team === t).length, pool = Object.keys(AF_ACTS).filter(a => AF_ACTS[a].ok(t, n)), mine = k === mineAt, fk = mine ? 0 : k + 1;
+    let pick = pool.filter(a => !taken.has(a) && (!mine || a !== last)); if (!pick.length) pick = pool.filter(a => !taken.has(a)); if (!pick.length) pick = pool;
     const w = a => { const v = AF_ACTS[a].weight; return typeof v === 'function' ? v(t, n) : v; };
     let tot = 0; for (const a of pick) tot += w(a); let x = rnd() * tot, style = pick[pick.length - 1];
     for (const a of pick) { x -= w(a); if (x <= 0) { style = a; break; } }
-    if (forced[k] && AF_ACTS[forced[k]].ok(t, n)) style = forced[k];
+    if (forced[fk] && AF_ACTS[forced[fk]].ok(t, n)) style = forced[fk];
     styles[t] = style; taken.add(style);
   });
-  try { localStorage.setItem('bv-intro-last', styles[order[0]]); } catch (e) {}
+  try { localStorage.setItem('bv-intro-last', styles[order[mineAt]]); } catch (e) {}
   return styles;
 }
 function afIntroStart() {
   if (AF.cfg.venue === 'pit') return afPitIntroStart();      // the cellar has no gates: its own film
-  const rnd = _mulberry32(AF.seed ^ 0x9e3779b9), myT = AF.me ? AF.me.team : 0, order = [myT]; for (let t = 0; t < AF.cfg.teams; t++) if (t !== myT) order.push(t);
-  const I = AF.intro = { t: 0, shots: [], i: 0, shotT: 0, cut: true, stars: afPickStars(), order, myT, foeT: order[1], frames: [], drumT: 0.4, drums: true, cap: null, release: [], film: null };
+  const rnd = _mulberry32(AF.seed ^ 0x9e3779b9), myT = AF.me ? AF.me.team : 0, order = []; for (let t = 0; t < AF.cfg.teams; t++) if (t !== myT) order.push(t); order.push(myT);   // (the others first, your own team last: the film ends on your march in — afIntroCompose's walk-in)
+  const I = AF.intro = { t: 0, shots: [], i: 0, shotT: 0, cut: true, stars: afPickStars(), order, myT, foeT: order[0], frames: [], drumT: 0.4, drums: true, cap: null, release: [], film: null };
   AF.timeScale = 1; AF.fov = CAM_BASE_FOV;
   for (let t = 0; t < AF.cfg.teams; t++) { I.frames.push(afGateFrame(t)); I.release.push(1e9); }
   const seatKey = b => { const so = afSlotOffset(AF.roster[b.idx].s, AF.cfg.per); return so.back * 100 + Math.abs(so.right); };
@@ -19078,8 +19080,9 @@ const AF_RALLIES = {
 };
 function afRally(b, kind) { const set = AF_RALLIES[kind], S = b.intro; if (!set || !S) return; S.rally = { steps: set[(S.rallyPick + (kind === 'pen' ? 0 : 1)) % set.length], i: 0, t: 0 }; if (kind !== 'pen') AF.roar = Math.max(AF.roar, 1.1); }
 function afRallyYaw(b, face) {                             // 'men': back at his own ranks · 'foe' / 'gate': across the pit
-  if (face === 'men') { const F = AF.intro.frames[b.team]; return AF.intro && b.intro.phase === 'wait' ? F.face + Math.PI : Math.atan2(F.ux, F.uz); }
-  return b.intro.phase === 'wait' ? AF.intro.frames[b.team].face : Math.atan2(-b.x, -b.z);
+  const I = AF.intro || AF.introTail; if (!I) return b.yaw;    // (a star arriving during the countdown rallies from the film's tail)
+  if (face === 'men') { const F = I.frames[b.team]; return b.intro.phase === 'wait' ? F.face + Math.PI : Math.atan2(F.ux, F.uz); }
+  return b.intro.phase === 'wait' ? I.frames[b.team].face : Math.atan2(-b.x, -b.z);
 }
 // a man's route through the entrance: the tunnel mouth, any waypoints the film adds, then his muster point
 // waypoint: { x, z, spd, gait: 'walk'|'run'|'canter', pause (s), face: () => yaw while paused, tol }
@@ -19184,6 +19187,7 @@ function afIntroLens(I, rnd) {
     return shot(dur, ts, (k, dt) => { const B = foe(); if (!B) return; const dx = B.x - A.x, dz = B.z - A.z, d = Math.hypot(dx, dz) || 1, fx = dx / d, fz = dz / d, rx = -fz, rz = fx;
       const px = A.x - fx * 3.8 + rx * lerp(1.5, 1.8, k), pz = A.z - fz * 3.8 + rz * lerp(1.5, 1.8, k);
       afIntroCam(px, gy(px, pz) + 3.9, pz, B.x, gy(B.x, B.z) + AF_INTRO.chest, B.z, 36, dt * 8); }, null, null); };
+  L.walkIn = (b, dur, maxDur, onStart) => afIntroWalkIn(I, b, dur, maxDur, onStart);
   L.banner = () => { afCrowdReact(false); AF.roar = 2.4; afBanner(AF.cfg.teams + ' TEAMS · ' + AF.cfg.per + ' EACH', AF.me ? 'you fight for ' + AF.me.teamDef.name + ' — steel yourself' : '', 2.6); };
   L.roar = (big, ang) => { afCrowdReact(big); if (ang != null) { AF.waveT = 3.4; AF.waveAng = ang - 0.6; } };
   return L;
@@ -19270,7 +19274,32 @@ function afIntroCompose(I, L) {
     for (const b of AF.bodies) if (b.intro && b.intro.phase === 'wait' && b.intro.release != null && b.intro.release > 1e8) b.intro.release = I.t + 0.2;
     L.banner();
   });
-  L.faceoff(A, 2.0, 0.5);
+  if (AF.me && AF.me.intro) L.walkIn(AF.me, 2.6, 12);      // the end: behind you as you and your men take your marks, the lens settling into the fight's — no cut into the countdown
+  else L.faceoff(A, 2.0, 0.5);                             // (watching: over my star's shoulder)
+}
+// THE WALK-IN: the last shot of every entrance. From wherever the lens was, it eases in behind you as you walk onto your
+// mark with the rest of your team, and by the end it IS the fight camera (afFightLens — the same place afCamera's follow
+// puts it, or in a headset your own eyes), so the countdown starts without a cut, a fade or the sweep. The shot lasts
+// until you are on your mark and a beat more (afIntroStep: `until`), never past maxDur; whoever is still walking then
+// finishes during the countdown (AF.introTail).
+function afFightLens(b, yaw) {
+  const gy = afY(b.x, b.z), s = b.footScale || 1;
+  if (VR.on) { const ey = gy + VR_T.eyeWorld * s + (b.mounted ? VR_BOWT.saddle * s : 0); return { p: [b.x, ey, b.z], l: [b.x + Math.sin(yaw) * 10, ey - 0.4, b.z + Math.cos(yaw) * 10] }; }
+  const cam = AF.cam, hy = gy + 1.55, cp = Math.cos(cam.pitch), d = cam.dist;
+  let px = b.x - Math.sin(yaw) * d * cp, py = hy + d * Math.sin(cam.pitch) + 0.6, pz = b.z - Math.cos(yaw) * d * cp;
+  if (AF.cfg.venue === 'pit') { const r = Math.hypot(px, pz), lim = AF_F.radius - 0.7; if (r > lim) { px *= lim / r; pz *= lim / r; } }   // (the same clamps afCamera applies: inside the pit's wall, over the ground and any boulder)
+  { let floor = afY(px, pz) + 0.7; if (AF.terr.rocks.length) { const K = afRockAt(px, pz, 0.3); if (K) floor = Math.max(floor, K.top + 0.4); } if (py < floor) py = floor; }
+  return { p: [px, py, pz], l: [b.x, hy, b.z] };
+}
+function afIntroWalkIn(I, b, dur, maxDur, onStart) {
+  let P0 = null, L0 = null, F0 = CAM_BASE_FOV; const sm = q => q * q * (3 - 2 * q);
+  const s = { dur, ts: 1, cap: null, walkIn: true, maxDur: maxDur || dur, until: () => !b.intro || b.intro.phase === 'done',
+    onStart: () => { AF.cam.pitch = 0.3; for (const o of AF.bodies) if (o.intro && o.intro.pauseT > 1e8) o.intro.pauseT = 0.01;   // (a star holding the middle lets go and takes his mark)
+      if (onStart) onStart(); },
+    cam: (k) => { const e = sm(clamp(k, 0, 1)), yaw = b.intro && b.intro.phase !== 'done' ? angleLerp(b.yaw, b.home.yaw, e) : b.home.yaw, T = afFightLens(b, VR.on ? b.home.yaw : yaw);
+      if (I.cut || !P0) { P0 = (I.cam || T.p).slice(); L0 = (I.look || T.l).slice(); F0 = AF.fov || CAM_BASE_FOV; }
+      afIntroCam(lerp(P0[0], T.p[0], e), lerp(P0[1], T.p[1], e), lerp(P0[2], T.p[2], e), lerp(L0[0], T.l[0], e), lerp(L0[1], T.l[1], e), lerp(L0[2], T.l[2], e), lerp(F0, afBaseFov(), e), 0); } };
+  I.shots.push(s); return s;
 }
 /* THE PITS' ENTRANCE — no gates, no columns, no drums. The fighters come down the cellar stair one at a time,
    through the lane the patrons keep open, and drop over the lip onto the sand. The lens: the cellar from the foot of
@@ -19307,9 +19336,17 @@ function afPitIntroStart() {
   { const ta = a - 0.42, tr = P.out - 4.2, tb = at(tr, ta), side = L.sideOf();
     L.shot(1.9, 1, (k) => { const c = at(tr - lerp(2.5, 2.1, k), ta + side * 0.1); afIntroCam(c.x, P.lip + 1.9, c.z, tb.x, P.lip + 1.15, tb.z, 40, 0); }, null,
       head('THE STAKES') + (wager ? wager + ' gold a man, on the bookmaker\'s table' : 'the bookmaker takes the stakes')); }
+  // the TURN under the candle-wheel while the others take their marks (before you come down; the finale when you only watch)
+  const A = I.stars[myT][0] || AF.me || AF.bodies[0];
+  const orbit = (skipT) => { L.orbit(() => ({ x: 0, z: 0 }), 9.6, 4.4, 2.4, 1, 58).onStart = () => {
+    for (let t = 0; t < AF.cfg.teams; t++) if (t !== skipT && I.release[t] > 1e8) I.release[t] = I.t + 0.2;
+    for (const b of AF.bodies) if (b.team !== skipT && b.intro && b.intro.phase === 'wait' && b.intro.release != null && b.intro.release > 1e8) b.intro.release = I.t + 0.2;
+    afCrowdReact(true); AF.roar = 2.0; afBanner('THE PITS', n + ' in the ring — every man for himself', 2.6); }; };
+  const walkIn = !!(AF.me && AF.me.intro);
   // EACH MAN: the doorway (he steps out of the dark), the lane through the patrons, the drop over the lip in slow motion
   order.forEach((t, k) => {
     const b = I.stars[t][0] || AF.bodies.find(x => x.team === t); if (!b) return;
+    if (walkIn && k === order.length - 1) orbit(t);           // (the ring turns once before you: the film ends on your own drop and your steps to the mark)
     const side = L.sideOf(), mine = AF.me && AF.me.team === t, title = mine ? 'AND YOU' : k === 0 ? 'THE FIRST DOWN THE STAIR' : k === order.length - 1 ? 'THE LAST DOWN THE STAIR' : 'THE NEXT DOWN THE STAIR';
     L.shot(D.door, 1, (q) => { const c = at(P.out - lerp(5.8, 5.1, q), a); afIntroCam(c.x + F.wx * side * 1.5, P.lip + 1.4, c.z + F.wz * side * 1.5, F.gx - ux * 0.3, P.lip + 2.4, F.gz - uz * 0.3, 46, 0); },
       () => { AF.bodies.filter(x => x.team === t).forEach((x, j) => { x.intro.release = I.t + 0.1 + j * 0.7; }); I.release[t] = I.t + 0.1; }, head(title) + L.starCap(b));
@@ -19318,13 +19355,8 @@ function afPitIntroStart() {
     const dropAt = [-1, 1].map(s => at(P.r - 2.8, a + s * 0.5)).sort((p, q) => marksClear(q) - marksClear(p))[0];   // (the side of the stair clear of the men's marks: a man on his mark must not stand in front of the lens)
     L.shot(D.drop, T.slow, (q, dt) => afIntroCam(dropAt.x, 0.9, dropAt.z, b.x, (b.yOff || 0) + 1.7, b.z, 54, dt * 12), null, null);
   });
-  // the FINALE: under the candle-wheel while they take their marks, then over your shoulder at the nearest of them
-  const A = I.stars[myT][0] || AF.me || AF.bodies[0];
-  L.orbit(() => ({ x: 0, z: 0 }), 9.6, 4.4, 2.4, 1, 58).onStart = () => {
-    for (let t = 0; t < AF.cfg.teams; t++) if (I.release[t] > 1e8) I.release[t] = I.t + 0.2;
-    for (const b of AF.bodies) if (b.intro && b.intro.phase === 'wait' && b.intro.release != null && b.intro.release > 1e8) b.intro.release = I.t + 0.2;
-    afCrowdReact(true); AF.roar = 2.0; afBanner('THE PITS', n + ' in the ring — every man for himself', 2.6); };
-  L.faceoff(A, 2.0, 0.5);
+  // the FINALE: behind you as you land and take your mark, the lens settling into the fight's (watching: the turn under the candle-wheel, then over my star's shoulder)
+  if (walkIn) L.walkIn(AF.me, 2.2, 8); else { orbit(-1); L.faceoff(A, 2.0, 0.5); }
   afIntroUi(true); afIntroApplyShot();
   const fade = document.getElementById('af-intro-fade'); if (fade) { fade.style.transition = 'none'; fade.style.opacity = '1'; requestAnimationFrame(() => { fade.style.transition = 'opacity .9s'; fade.style.opacity = '0'; }); }
   try { console.log('[arena] intro film', I.film); } catch (e) {}
@@ -19343,7 +19375,7 @@ function afIntroDrop(b, S, wp, sdt) {
   afCommit(b, sdt);
 }
 function afIntroCam(px, py, pz, lx, ly, lz, fov, smooth) {
-  const I = AF.intro;
+  const I = AF.intro; I.cam = [px, py, pz]; I.look = [lx, ly, lz];   // (where the lens was asked to be: the walk-in eases out of it)
   if (VR.on) { vrFilmCam(px, py, pz, lx, ly, lz, I.cut, AF.cfg.venue === 'pit'); I.cut = false; if (fov) AF.fov = fov; return; }   // (a headset: the shot places the rig — see THE FILMS IN THE HEADSET)
   tmpV.set(px, py, pz);
   if (I.cut || !smooth) camera.position.copy(tmpV); else camera.position.lerp(tmpV, clamp(smooth, 0, 1));
@@ -19363,10 +19395,12 @@ function afIntroStep(dt) {
   if (I.drums && (I.drumT -= dt) <= 0) { I.drumT = I.drums === 'heavy' ? 0.6 : 0.95; afDrum(I.drums === 'heavy' ? 0.55 : 0.42); if (AF.gates.some(G => G.want)) I.drums = false; }
   afStepGates(sdt);
   for (const b of AF.bodies) { const S = b.intro; if (S && S.penRallyAt != null && S.phase === 'wait' && !S.rally && I.t >= S.penRallyAt) { S.penRallyAt = null; afRally(b, 'pen'); } afIntroBody(b, sdt); }
-  if (I.shotT >= I.shots[I.i].dur) { I.i++; if (I.i >= I.shots.length) { afIntroEnd(); return; } afIntroApplyShot(); }
+  const s = I.shots[I.i]; let over = I.shotT >= s.dur;
+  if (over && s.until) { if (!s.doneAt && s.until()) s.doneAt = I.shotT; over = (s.doneAt && I.shotT >= s.doneAt + 0.6) || I.shotT >= s.maxDur; }   // (the walk-in waits for you to reach your mark, a beat more, never past maxDur)
+  if (over) { I.i++; if (I.i >= I.shots.length) { afIntroEnd(); return; } afIntroApplyShot(); }
 }
 function afIntroBody(b, sdt) {
-  const I = AF.intro, S = b.intro; if (!S) return;
+  const I = AF.intro || AF.introTail, S = b.intro; if (!S || !I) return;   // (introTail: the film is over, this man is still walking to his mark through the countdown)
   const F = I.frames[b.team]; let moving = false, gait = 'walk', spd = S.spd;
   if (S.phase === 'wait' && I.t >= (S.release != null ? S.release : I.release[b.team])) S.phase = 'go';
   if (I.pit && (S.phase === 'wait' || S.i === 0)) b.yOff = AF_PIT.lip + AF_PIT_INTRO.stair * clamp((Math.hypot(b.x, b.z) - (AF_PIT.out - 0.4)) / 2.4, 0, 1);   // the pits: down the stair to the flagstones
@@ -19407,7 +19441,10 @@ function afIntroBody(b, sdt) {
 }
 function afIntroEnd() {
   const I = AF.intro; if (!I) return; AF.intro = null; AF.timeScale = 1;
-  for (const b of AF.bodies) {                             // everyone to his muster point (the cut hides the jump)
+  const smooth = !!(I.shots[Math.min(I.i, I.shots.length - 1)] || {}).walkIn;   // the film ran out on the walk-in: no cut, no fade, no sweep — whoever is still walking finishes during the countdown (skipped earlier: the cut as before)
+  AF.introTail = smooth ? I : null; AF.noSweep = smooth;
+  for (const b of AF.bodies) {                             // everyone to his muster point (the cut hides the jump) — unless he is walking there
+    if (smooth && b.intro && b.intro.phase === 'go' && b.home && b.intro.route) { b.group.visible = true; continue; }
     if (b.home) { b.x = b.home.x; b.z = b.home.z; b.yaw = b.home.yaw; b.lookYaw = b.yaw; b.inp.yaw = b.yaw; b.tx = b.x; b.tz = b.z; b.tyaw = b.yaw; }
     b.vx = b.vz = 0; b.moving = false; b.group.visible = true; b.intro = null; b.yOff = 0;
     if (b.mounted && b.horse) { b.horse.x = b.x; b.horse.z = b.z; b.horse.yaw = b.yaw; if (b.parts.mount) b.parts.mount.userData.rig.speed01 = 0; }
@@ -19415,10 +19452,15 @@ function afIntroEnd() {
   }
   for (const G of AF.gates || []) { G.want = 0; G.light.intensity = 0; }
   for (const l of AF.gateLights || []) { if (l.parent) l.parent.remove(l); } AF.gateLights = [];
-  AF.phase = 'countdown'; AF.countdown = AF_F.countdown; AF.fov = CAM_BASE_FOV;
-  if (AF.me) { AF.cam.yaw = AF.me.yaw; AF.cam.pitch = 0.3; }
+  AF.phase = 'countdown'; AF.countdown = AF_F.countdown; AF.fov = smooth ? afBaseFov() : CAM_BASE_FOV;
+  if (AF.me) { AF.cam.yaw = AF.me.home ? AF.me.home.yaw : AF.me.yaw; AF.cam.pitch = 0.3; }
   afIntroUi(false); afHud();
-  const fade = document.getElementById('af-intro-fade'); if (fade) { fade.style.transition = 'none'; fade.style.opacity = '1'; setTimeout(() => { fade.style.transition = 'opacity .55s'; fade.style.opacity = '0'; }, 60); }
+  const fade = document.getElementById('af-intro-fade'); if (fade && !smooth) { fade.style.transition = 'none'; fade.style.opacity = '1'; setTimeout(() => { fade.style.transition = 'opacity .55s'; fade.style.opacity = '0'; }, 60); }
+}
+function afIntroTailEnd() {                                 // the bell: whoever is still on his way takes his mark now (a step at most — the walk-in waited for you, and the countdown for the rest)
+  if (!AF.introTail) return; AF.introTail = null;
+  for (const b of AF.bodies) { if (!b.intro) continue; if (b.home) { b.x = b.home.x; b.z = b.home.z; b.yaw = b.home.yaw; b.lookYaw = b.yaw; b.inp.yaw = b.yaw; b.tx = b.x; b.tz = b.z; b.tyaw = b.yaw; }
+    b.vx = b.vz = 0; b.moving = false; b.intro = null; b.yOff = 0; if (b.mounted && b.horse) { b.horse.x = b.x; b.horse.z = b.z; b.horse.yaw = b.yaw; if (b.parts.mount) b.parts.mount.userData.rig.speed01 = 0; } afCommit(b, 0.016); }
 }
 function afIntroSkip() { if (AF.phase === 'intro' && AF.intro) afIntroEnd(); else if (AF.outro) afOutroSkip(); }
 function afIntroUi(show, label) {
@@ -21228,14 +21270,16 @@ function afApplyRemotePose(b, dt) {
     case 7: b.rollT += dt; b.rollRel = (b.tmove || 0) / 100; afRollPose(b, clamp(b.rollT / AF_F.dodge.dur, 0, 1), dt); break;   // (tmove carries the heading, in hundredths of a radian)
     case 12: restLegs(b.parts, dt, true); break;              // blades locked — hold whatever the blade was doing
     case 13: b.tiltX = -1.35; b.roll = 0.45; setPose(b.anim, 'hurt', 0.08); restLegs(b.parts, dt, true); break;   // ridden down
+    case 14: { const J = AF_F.jump; b.airT = (b.airT || 0) + dt; b.airY = Math.max(0, J.v * b.airT - 0.5 * J.g * b.airT * b.airT); afAirPose(b, dt); setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.15); break; }   // in the air: the same leap everyone makes, timed from here
     case 9: setPose(b.anim, 'aimBow', 0.1); afRemoteLegs(b, dt, false); break;
     case 10: setPose(b.anim, 'looseBow', 0.05); afRemoteLegs(b, dt, false); break;
     default: setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.2); restLegs(b.parts, dt, true);
   }
   if (s !== 7) { b.rollT = 0; b.rollAng = 0; b.rollSq = 0; }
+  if (s !== 14) { b.airT = 0; b.airY = 0; }
 }
 function afApplySnap(s) {
-  if (s.ph === 'fight' && (AF.phase === 'countdown' || AF.phase === 'intro')) { if (AF.phase === 'intro') afIntroEnd(); AF.phase = 'fight'; AF.countdown = 0; afBanner('FIGHT', '', 1.0); afCrowdReact(false); }   // the host's bell rang while we were still watching the entrance
+  if (s.ph === 'fight' && (AF.phase === 'countdown' || AF.phase === 'intro')) { if (AF.phase === 'intro') afIntroEnd(); AF.phase = 'fight'; AF.countdown = 0; afIntroTailEnd(); afBanner('FIGHT', '', 1.0); afCrowdReact(false); }   // the host's bell rang while we were still watching the entrance
   AF.t = s.t || AF.t;
   const n = AF.net, nowS = performance.now() / 1000, st = +s.t || 0;
   if (n) {                                                   // the host's clock (afRenderTime) and the snap rate
@@ -21433,7 +21477,7 @@ function afFrame(now, noRaf) {
   afNetStats(Math.max(rawDt, 1e-3));
   let gdt = dt;                                              // hit-stop: the fight crawls for a few frames on impact; camera/FX stay real-time
   if (AF.hitstop > 0) { AF.hitstop -= dt; if (AF.role !== 'host') gdt = dt * 0.08; }   // (a host with guests never freezes the SHARED sim on his own blows — the shake, the kick and the FOV punch stay)
-  if (AF.phase === 'countdown') { AF.countdown -= dt; if (AF.countdown <= 0) { AF.phase = 'fight'; afBanner('FIGHT', '', 1.0); afCrowdReact(false); } } // guests count too (the host's snapshot also flips it)
+  if (AF.phase === 'countdown') { AF.countdown -= dt; if (AF.countdown <= 0) { AF.phase = 'fight'; afIntroTailEnd(); afBanner('FIGHT', '', 1.0); afCrowdReact(false); } } // guests count too (the host's snapshot also flips it)
   if (AF.me && !AF.me.dead && AF.phase === 'fight') { afReadLocalInput(); if (VR.on) vrInput(dt); } else { const I = AF.locIn; I.mx = I.mz = 0; I.block = false; }   // (VR: the head and the sticks fill the same struct)
   afGoResend(now);
   if (AF.phase === 'fight' || AF.phase === 'over') {
@@ -21441,7 +21485,8 @@ function afFrame(now, noRaf) {
     else afSubstep(afTick, gdt);
     afNetTick(dt);
   } else if (AF.phase === 'countdown') {
-    for (const b of AF.bodies) { restLegs(b.parts, dt, true); setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.3); afCommit(b, dt); }
+    for (const b of AF.bodies) { if (b.intro && AF.introTail) { afIntroBody(b, dt); if (b.intro && b.intro.phase === 'done') { b.intro = null; b.yOff = 0; } continue; }   // (still walking in from the film: he takes his mark, then his guard)
+      restLegs(b.parts, dt, true); setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.3); afCommit(b, dt); }
     if (AF.role === 'guest') afNetTick(dt);
   } else if (AF.phase === 'intro') {                         // the entrance: the march in and the cut run here, no sim
     afIntroStep(dt);
@@ -21490,7 +21535,7 @@ function afCamera(dt) {
     AF.camLift = lerp(AF.camLift || 0, blocked ? 1 : 0, clamp(dt * (blocked ? 6 : 2), 0, 1));
     const dist = cam.dist * (1 - 0.2 * AF.camLift), lift = 2.1 * AF.camLift;
     tmpV.set(me.x - Math.sin(cam.yaw) * dist * cp, hy + dist * Math.sin(cam.pitch) + 0.6 + lift, me.z - Math.cos(cam.yaw) * dist * cp);
-    if (AF.phase === 'countdown') {                          // the SWEEP: from high over the pit down onto your shoulder as the bell nears
+    if (AF.phase === 'countdown' && !AF.noSweep) {           // the SWEEP: from high over the pit down onto your shoulder as the bell nears (not after a film: its walk-in has already brought the lens here)
       const k = 1 - clamp(AF.countdown / AF_F.countdown, 0, 1), e = k * k * (3 - 2 * k), a = cam.yaw + Math.PI * 0.9 * (1 - e);
       const r = lerp(AF_F.radius * 1.12, cam.dist, e), h = lerp(AF.cfg.venue === 'pit' ? AF_PIT.roofY - 2.4 : clamp(AF_F.radius * 0.55 + 6, 12, 19), tmpV.y - hy, e);   // (from over the lower rows, under the sails, down onto the shoulder)
       tmpV2.set(me.x - Math.sin(a) * r, hy + h, me.z - Math.cos(a) * r);
@@ -21890,7 +21935,7 @@ function afClear() {
   for (const p of AF.props) { scene.remove(p); try { disposeGroup(p); } catch (e) {} }
   for (const h of AF.horses || []) { if (!h.rider && !h.gone) { scene.remove(h.group); try { disposeGroup(h.group); } catch (e) {} } if (h.tag) { scene.remove(h.tag); try { disposeGroup(h.tag); } catch (e) {} } }
   AF.horses = [];
-  AF.bodies.length = 0; AF.arrows.length = 0; AF.props.length = 0; AF.torches = []; AF.crowd = []; AF.gates = []; AF.gateLights = []; AF.intro = null; AF.timeScale = 1;
+  AF.bodies.length = 0; AF.arrows.length = 0; AF.props.length = 0; AF.torches = []; AF.crowd = []; AF.gates = []; AF.gateLights = []; AF.intro = null; AF.introTail = null; AF.timeScale = 1;
   if (AF.outro) { AF.outro = null; AF.fov = CAM_BASE_FOV; afIntroUi(false); } afOutroShift(false); AF.victory = null;   // (a rematch mid-film — the host's Rematch lands on a guest still watching — must drop the film's off-centre frame too, or the new fight plays shoved to one side) for (const b of AF.bodies) b.vic = null;
   for (const o of _afSplats) scene.remove(o.m); _afSplats.length = 0;
   if (AF.ground) { scene.remove(AF.ground); try { disposeGroup(AF.ground); } catch (e) {} AF.ground = null; }
@@ -21987,7 +22032,7 @@ function afBoot(spec) {
   AF.reportSeed = AF.cfg.daily ? 'd' + AF.cfg.daily + '-' + AF.seed.toString(16) + '-' + ((Math.random() * 0xffffff) >>> 0).toString(16) : null;   // (a bout of the day is the same seed for everyone — each try pays as its own fight)
   AF.firstBlood = false; AF.lastMan = false; AF.reveal = null; AF.xpBefore = AF.career ? AF.career.xp | 0 : null; AF.goldBefore = AF.career ? AF.career.gold | 0 : null;
   afHud();
-  AF.intro = null; AF.timeScale = 1;
+  AF.intro = null; AF.introTail = null; AF.noSweep = false; AF.timeScale = 1;
   if (!AF.introOff) { AF.phase = 'intro'; try { afIntroStart(); } catch (e) { console.warn('[arena] intro', e); AF.intro = null; AF.phase = 'countdown'; for (const b of AF.bodies) { if (b.home) { b.x = b.home.x; b.z = b.home.z; b.yaw = b.home.yaw; } b.intro = null; b.yOff = 0; b.group.visible = true; afCommit(b, 0.016); } } }   // the entrance: gates, the march in, the stars in slow motion (the pits: the stair and the drop)
   if (AF.phase !== 'intro') { if (inPit) afBanner('THE PITS', AF.bodies.length + ' in the ring — every man for himself', 2.6); else afBanner(AF.cfg.teams + ' TEAMS · ' + AF.cfg.per + ' EACH', AF.me ? 'you fight for ' + AF.me.teamDef.name + ' — steel yourself' : '', 2.6); }
   vrButton();                                                // a headset in the browser: the way into the pit in first person

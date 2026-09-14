@@ -17026,6 +17026,7 @@ const VR = {
   src: {}, grip: {}, ray: {}, headYaw: 0, snapArmed: true, dodgeWas: false, recWas: false, block: false, stick: 0,
   swing: null, spd: 0, tip: new THREE.Vector3(), hilt: new THREE.Vector3(), prevTip: null, trailT: 0,
   hud: null, ban: null, vig: null, vigK: 0, hudT: 0, banner: null, postWas: false, shadowWas: null, sword: null, shield: null,
+  film: null, capTxt: null, cap: null, black: null, fade: 0, skipWas: false, spot: null,   // THE FILMS in the headset (vrFilmCam): the shot the rig stands in, the caption plate, the black blink on a cut; spot: a dead man's seat
   swordPitch: (() => { try { return clamp(+localStorage.getItem('bv-vr-sword') || 0, -60, 60); } catch (e) { return 0; } })(),   // the blade's tilt off the controller's forward, degrees (right stick up/down tunes it)
   q: { fbScale: 1.0, shadow: 1024 },                      // the headset budget: framebuffer scale, shadow map (the phone tier's 2048 PCFSoft is too much for a Quest at 72 Hz × 2 eyes)
 };
@@ -17039,7 +17040,8 @@ const VR_SHIELD = { pos: new THREE.Vector3(-0.05, 0, 0.16), quat: new THREE.Quat
 // grip the limbs must stand along +Y and the belly face −Z (forward), so this rotation is put in front of the bow's own
 const VR_BOW = { pos: new THREE.Vector3(0, 0, 0), pre: (() => { const a = new THREE.Vector3(0, 0, 1), b = new THREE.Vector3(1, -1, 0).normalize(), c = a.clone().cross(b), A = new THREE.Vector3(0, 1, 0), B = new THREE.Vector3(0, 0, -1), C = A.clone().cross(B);
   const M1 = new THREE.Matrix4().makeBasis(a, b, c), M2 = new THREE.Matrix4().makeBasis(A, B, C); return new THREE.Quaternion().setFromRotationMatrix(M2.multiply(M1.transpose())); })() };
-const VR_BOWT = { near: 0.35, slack: 0.12, full: 0.5, cd: 0.45, saddle: 1.0 };   // a draw starts with the string hand within `near` m of the bow hand; k = (hands apart − slack) / full; the rider's eyes sit `saddle` units higher
+const VR_BOWT = { near: 0.35, slack: 0.12, full: 0.5, cd: 0.45, saddle: 1.0 };
+const VR_FILM = { maxPitch: 0.55, glide: 2.2 };             // the films in the headset: a lens looking steeper than this is brought to a glance; a shot may glide the rig this fast at most (m/s — the lens's own crane and orbit are faster; the rig lags, the next cut catches up)   // a draw starts with the string hand within `near` m of the bow hand; k = (hands apart − slack) / full; the rider's eyes sit `saddle` units higher
 if (/[?&]xrshim\b/.test(location.search)) { const s = document.createElement('script'); s.src = 'xr-shim.js?v=' + Date.now(); document.head.appendChild(s); }   // tests: a headset out of thin air (never cached)
 
 function vrSupported() {
@@ -17081,7 +17083,7 @@ async function vrStart(session) {
   VR.shadowWas = { size: sun.shadow.mapSize.x, type: renderer.shadowMap.type };
   vrShadows(VR.q.shadow, THREE.PCFShadowMap);
   trauma = 0; camKick.set(0, 0, 0); fovPunch = 0;
-  if (AF.on) { AF.introOff = true; AF.outroOff = true; if (AF.phase === 'intro' || AF.outro) afIntroSkip(); }   // you stand in the body from the first frame: no films, no sweep
+  VR.film = null; VR.capTxt = null; VR.spot = null; VR.fade = 1; VR.skipWas = true;   // a film already running carries on in the headset: its next frame is a cut into the shot (vrFilmCam)
   session.addEventListener('end', vrEnd);
   VR.loop = true; renderer.setAnimationLoop(vrLoop);          // the headset's clock drives the frame (afFrame's rAF chain lets go — see its tail)
   const el = document.getElementById('af-vr'); if (el) el.style.display = 'none';
@@ -17101,7 +17103,8 @@ function vrEnd() {
   if (VR.dressed) vrUndress();
   const rig = VR.rig; if (rig) { rig.remove(camera); scene.remove(rig); }
   if (VRM.hall) VRM.hall.visible = false; if (VRM.panel) VRM.panel.visible = false; if (VRM.ptr) VRM.ptr.visible = false; if (VRM.dot) VRM.dot.visible = false;
-  VR.hud.visible = VR.ban.visible = VR.vig.visible = false;
+  VR.hud.visible = VR.ban.visible = VR.vig.visible = false; if (VR.cap) VR.cap.visible = false; if (VR.black) VR.black.visible = false;
+  VR.film = null; VR.capTxt = null; VR.spot = null; VR.fade = 0;   // (the flat screen's own lens takes the film over from here — afCamera reads the same shot list)
   camera.position.set(0, 0, 0); camera.quaternion.identity(); camera.scale.setScalar(1); camera.aspect = window.innerWidth / Math.max(1, window.innerHeight); camera.fov = AF.on ? AF.fov : CAM_BASE_FOV; camera.updateProjectionMatrix();
   renderer.xr.enabled = false;
   try { renderer.setSize(window.innerWidth, window.innerHeight); } catch (e) {}
@@ -17135,7 +17138,11 @@ function vrBuildRig() {
     g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(0.55, 'rgba(0,0,0,0.6)'); g.addColorStop(1, 'rgba(0,0,0,1)'); x.fillStyle = g; x.fillRect(0, 0, 256, 256);
     const m = new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), transparent: true, opacity: 0, depthTest: false, depthWrite: false, fog: false });
     VR.vig = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 2.6), m); VR.vig.position.set(0, 0, -0.9); VR.vig.renderOrder = 998; VR.vig.frustumCulled = false; camera.add(VR.vig); }
-  VR.hud.visible = VR.ban.visible = VR.vig.visible = false;
+  // the films: a caption plate low under the eyes (what the letterbox says on the flat screen), and a black plane that blinks on every cut
+  VR.cap = vrPanel(1024, 220, 1.1, 0.236); VR.cap.position.set(0, -0.36, -1.5); camera.add(VR.cap);
+  { const m = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0, depthTest: false, depthWrite: false, fog: false });
+    VR.black = new THREE.Mesh(new THREE.PlaneGeometry(4, 4), m); VR.black.position.set(0, 0, -0.7); VR.black.renderOrder = 1010; VR.black.frustumCulled = false; camera.add(VR.black); }
+  VR.hud.visible = VR.ban.visible = VR.vig.visible = VR.cap.visible = VR.black.visible = false;
 }
 function vrPanel(w, h, mw, mh) {
   const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
@@ -17241,14 +17248,86 @@ function vrFrame(dt, gdt) {
   const me = AF.me, rig = VR.rig; if (!rig) return;
   if (!VR.eyeUser && camera.position.y > 0.8) {              // the first good pose: your eyes are this high; the fighter's are 2.95 units up
     VR.eyeUser = camera.position.y; VR.scale = VR_T.eyeWorld * (me ? me.footScale || 1 : 1) / VR.eyeUser; rig.scale.setScalar(VR.scale);
-    if (VR.dressed) vrFitHands(VR.dressed);
+    if (VR.dressed) vrFitHands(VR.dressed); VR.film = null;    // (a film placed before the scale was known is placed again — a cut)
   }
-  if (me) { if (VR.dressed !== me) vrDress(me); vrAnchor(); }
-  else { rig.position.y = afY(rig.position.x, rig.position.z); rig.updateMatrixWorld(true); }
+  const film = !!((AF.phase === 'intro' && AF.intro) || AF.outro);
+  if (film) vrFilmFrame(dt);                                 // THE FILMS: the entrance and the end-game play in the headset too — the shot list moves the rig (vrFilmCam) and your body marches with the others
+  else {
+    if (VR.film) vrFilmEnd();                                // the film is over: a cut back into your own body, facing where it faces
+    if (me) { if (VR.dressed !== me) vrDress(me); if (me.dead && VR.spot) vrSpecPlace(); else { VR.spot = null; vrAnchor(); } }   // (a dead man may take a seat: vrSpecWatch / vrSpecStands)
+    else { rig.position.y = afY(rig.position.x, rig.position.z); rig.updateMatrixWorld(true); }
+  }
   if (me && !me.dead && AF.phase === 'fight') { if (me.weapon === 'bow') { vrBow(dt); VR.swing = null; VR.prevTip = null; me.vrSwing = null; } else { vrBlade(gdt); VR.draw = null; me.vrDraw = 0; } }   // (a guest's blade and bow too: 'vrhit' / 'vrshot' go to the host)
   else { VR.swing = null; VR.prevTip = null; VR.draw = null; if (me) { me.vrSwing = null; me.vrDraw = 0; } }
-  VR.hud.visible = true; vrComfort(dt); vrHud(dt); vrMenuFrame(dt);   // (the panel shows itself again at the bell: the results, rematch, leave)
+  VR.hud.visible = !film; vrComfort(dt); vrHud(dt); vrMenuFrame(dt);   // (the panel shows itself again at the bell: the results, rematch, leave)
+  if (VR.black) { if (VR.fade > 0) { VR.fade = Math.max(0, VR.fade - dt * 7); VR.black.material.opacity = VR.fade; } VR.black.visible = VR.fade > 0.005; }   // the blink on a cut (~140 ms)
   AF.hurt = Math.max(0, AF.hurt - dt * 1.6);
+}
+// ---- THE FILMS IN THE HEADSET. The entrance (afIntroStart) and the end-game (afOutroCompose) are shot lists that
+// place a lens: position, look-at, focal length. In VR the lens is the player's head, so a shot places the RIG instead:
+// on a cut the rig is turned so the subject lands where the player is looking at that moment and moved so the head
+// stands where the lens stood; within a shot the rig glides along the lens's path, the head free to look and lean (the
+// offset measured at the cut is kept, never re-imposed). The rig is never rotated inside a shot. A lens looking steeply
+// down (the aerials, the top shot) is brought to a place a standing man can look from — the same distance, a 30°
+// glance down. Every cut blinks black for a frame or two (VR.fade). Captions go on a head-locked plate (VR.cap);
+// B / Y skips. Your own body is one of the men in the film: it is undressed (whole, sword in hand) for the length of it.
+function vrFilmFrame(dt) {
+  if (VR.dressed) vrUndress();
+  const rig = VR.rig, x0 = rig.position.x, y0 = rig.position.y, z0 = rig.position.z, was = !!VR.film; VR.filmDt = dt;
+  if (AF.phase === 'intro' && AF.intro) afIntroCamera(dt); else if (AF.outro) afOutroCamera(dt);   // (afIntroCam / afOutroCam route to vrFilmCam while presenting)
+  const F = VR.film; if (F) { const s = VR.scale || 1; F.spd = was && !F.cutNow && dt > 0 ? Math.hypot(rig.position.x - x0, rig.position.y - y0, rig.position.z - z0) / s / dt : 0; F.cutNow = false; }
+  const sk = vrPressed(vrPad('left'), 5) || vrPressed(vrPad('right'), 5); if (sk && !VR.skipWas) afIntroSkip(); VR.skipWas = sk;
+}
+function vrFilmCam(px, py, pz, lx, ly, lz, cut, inPit) {
+  const rig = VR.rig; if (!rig) return; const s = VR.scale || 1, c = camera.position;
+  let dx = lx - px, dz = lz - pz; const dy = ly - py, dh = Math.hypot(dx, dz), d3 = Math.hypot(dh, dy) || 1, pitch = Math.atan2(-dy, dh), maxP = VR_FILM.maxPitch;
+  if (Math.abs(pitch) > maxP) {                              // too steep for a head: the same distance from the subject, from a height a glance covers
+    const p2 = pitch > 0 ? maxP : -maxP, bx = dh > 1e-3 ? dx / dh : Math.sin(rig.rotation.y), bz = dh > 1e-3 ? dz / dh : Math.cos(rig.rotation.y);
+    px = lx - bx * Math.cos(p2) * d3; pz = lz - bz * Math.cos(p2) * d3; py = ly + Math.sin(p2) * d3; dx = lx - px; dz = lz - pz;
+  }
+  if (inPit) { const d = Math.hypot(px, pz), lim = AF_F.radius - 0.7; if (d > lim) { px *= lim / d; pz *= lim / d; } }
+  py = Math.max(py, afY(px, pz) + 0.4);
+  if (cut || !VR.film) {
+    camera.getWorldDirection(tmpV); const local = Math.atan2(tmpV.x, tmpV.z) - rig.rotation.y;
+    rig.rotation.y = Math.atan2(dx, dz) - local;              // the subject lands where you are looking now
+    const off = vrHeadOffset(tmpV2);
+    VR.film = { ox: off.x, oy: c.y * s, oz: off.z, spd: 0, cutNow: true }; VR.fade = 1;
+  }
+  const F = VR.film, tx = px - F.ox, ty = py - F.oy, tz = pz - F.oz;
+  if (F.cutNow || !(VR.filmDt > 0)) rig.position.set(tx, ty, tz);
+  else { const mx = tx - rig.position.x, my = ty - rig.position.y, mz = tz - rig.position.z, m = Math.hypot(mx, my, mz), cap = VR_FILM.glide * s * VR.filmDt; if (m <= cap) rig.position.set(tx, ty, tz); else rig.position.set(rig.position.x + mx / m * cap, rig.position.y + my / m * cap, rig.position.z + mz / m * cap); }   // (no faster than a brisk walk: a crane or an orbit is felt as a glide, not a fall)
+  rig.updateMatrixWorld(true);
+}
+function vrFilmEnd() {
+  VR.film = null; VR.capTxt = null; VR.fade = 1; VR.skipWas = true; const me = AF.me, rig = VR.rig;
+  if (me && rig) { camera.getWorldDirection(tmpV); const local = Math.atan2(tmpV.x, tmpV.z) - rig.rotation.y; rig.rotation.y = me.yaw - local; }
+}
+function vrPlain(h) {                                       // a caption's HTML as lines of text for the plate
+  if (!h) return null; const t = String(h).replace(/<br\s*\/?>/gi, '\n').replace(/<\/?div[^>]*>/gi, '\n').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+  const L = t.split('\n').map(x => x.trim()).filter(Boolean); return L.length ? L : null;
+}
+// A DEAD MAN'S SEAT: the flat screen rides a fighter's shoulder or a free camera; the headset takes a place instead — a
+// stride behind the fighter you pick (a cut, never a ride), or up in the stands on your corpse's bearing, facing the sand
+function vrSpecPlace() { const S = VR.spot, rig = VR.rig; rig.position.set(S.x, S.y, S.z); rig.updateMatrixWorld(true); }
+function vrSpecTo(x, y, z, yaw) {
+  const rig = VR.rig; if (!rig) return; camera.getWorldDirection(tmpV); const local = Math.atan2(tmpV.x, tmpV.z) - rig.rotation.y; rig.rotation.y = yaw - local;
+  const off = vrHeadOffset(tmpV2); VR.spot = { x: x - off.x, y, z: z - off.z }; VR.fade = 1; VRM.fresh = true;
+}
+function vrSpecWatch(dir) {
+  afSpecPick(dir); const t = AF.spec.target; if (!t) return;
+  const back = 4.2 * (t.footScale || 1), fx = Math.sin(t.yaw), fz = Math.cos(t.yaw); let x = t.x - fx * back, z = t.z - fz * back;
+  const d = Math.hypot(x, z), lim = AF_F.radius - 1.2; if (d > lim) { x *= lim / d; z *= lim / d; }
+  vrSpecTo(x, afY(x, z), z, Math.atan2(t.x - x, t.z - z));
+}
+function vrSpecStands() {
+  const me = AF.me, a = me ? Math.atan2(me.z, me.x) : 0, pit = AF.cfg.venue === 'pit', r = pit ? AF_PIT.r + 1.3 : AF_F.radius + 3.3, y = pit ? AF_PIT.lip : AF_AMPH.wall + 0.5;
+  const x = Math.cos(a) * r, z = Math.sin(a) * r; AF.spec.target = null; AF.spec.mode = 'orbit'; afSpecLabel(true); vrSpecTo(x, y, z, Math.atan2(-x, -z));
+}
+function vrSpecLeave() {                                    // the flat screen's afSpecLeave asks a host with guests through confirm() — invisible in a headset: the button asks twice instead
+  if (AF.role === 'host' && afOthersInFight() && !VRM.leaveArmed) { VRM.leaveArmed = true; return; }
+  VRM.leaveArmed = false;
+  if (AF.role === 'host' && afOthersInFight()) { if (AF.leaving) return; AF.leaving = true; afSpecLabel(true); afLeaveToMenu(); return; }
+  afSpecLeave();
 }
 // BLADE TRACKING: the tip's speed (in the player's metres) says whether this is a swing and how loaded it is; a fast committed
 // swing maps onto the sim's light→heavy scale. While swinging the blade segment is tested against every foe's capsule.
@@ -17313,9 +17392,10 @@ function vrSegDist(a, b, x, y0, z, y1) {                    // closest distance 
   const px = a.x + ux * s - x, py = a.y + uy * s - (y0 + vy * t), pz = a.z + uz * s - z;
   return Math.sqrt(px * px + py * py + pz * pz);
 }
-function vrComfort(dt) {                                    // the vignette closes in whenever the world moves you faster than you asked (a roll, a shove, a knockback)
+function vrComfort(dt) {                                    // the vignette closes in whenever the world moves you faster than you asked (a roll, a shove, a knockback; a film's dolly)
   const me = AF.me; let want = 0;
-  if (me && !me.dead) { const sp = Math.hypot(me.vx, me.vz), asked = VR.stick * AF_F.move * (me.moveMul || 1) + 0.6; want = clamp((sp - asked) / 8, 0, 0.85); }
+  if (VR.film) want = clamp((VR.film.spd - 0.6) / 3, 0, 0.85);
+  else if (me && !me.dead) { const sp = Math.hypot(me.vx, me.vz), asked = VR.stick * AF_F.move * (me.moveMul || 1) + 0.6; want = clamp((sp - asked) / 8, 0, 0.85); }
   VR.vigK = lerp(VR.vigK, want, clamp(dt * (want > VR.vigK ? 18 : 5), 0, 1));
   VR.vig.material.opacity = VR.vigK; VR.vig.visible = VR.vigK > 0.01;
 }
@@ -17344,10 +17424,18 @@ function vrHud(dt) {
   if (B && rtNow < B.until) {
     const bc = ban.userData.ctx, bw = ban.userData.cv.width, bh = ban.userData.cv.height;
     bc.clearRect(0, 0, bw, bh); bc.textAlign = 'center'; bc.textBaseline = 'top'; bc.shadowColor = 'rgba(0,0,0,.9)'; bc.shadowBlur = 18;
-    bc.font = '900 96px system-ui'; bc.fillStyle = '#ffe089'; bc.fillText(String(B.big).replace(/<[^>]*>/g, ''), bw / 2, 30);
-    if (B.sub) { bc.font = '600 34px system-ui'; bc.fillStyle = '#e8def8'; bc.fillText(String(B.sub).replace(/<[^>]*>/g, ''), bw / 2, 150); }
+    const big = String(B.big).replace(/<[^>]*>/g, ''); let fs = 96; bc.font = '900 96px system-ui'; while (fs > 40 && bc.measureText(big).width > bw - 40) { fs -= 8; bc.font = '900 ' + fs + 'px system-ui'; }   // (a long name shrinks to the plate)
+    bc.fillStyle = '#ffe089'; bc.fillText(big, bw / 2, 30 + (96 - fs) / 2);
+    if (B.sub) { const sub = String(B.sub).replace(/<[^>]*>/g, ''); let ss = 34; bc.font = '600 34px system-ui'; while (ss > 18 && bc.measureText(sub).width > bw - 40) { ss -= 4; bc.font = '600 ' + ss + 'px system-ui'; } bc.fillStyle = '#e8def8'; bc.fillText(sub, bw / 2, 150); }
     ban.userData.tex.needsUpdate = true; ban.visible = true;
   } else ban.visible = false;
+  const cp = VR.cap; if (cp) {                             // the film's caption plate: a small-caps header line, the name line big, and the way out
+    const on = !!(VR.film && VR.capTxt);
+    if (on) { const x = cp.userData.ctx, w = cp.userData.cv.width, h = cp.userData.cv.height; x.clearRect(0, 0, w, h); x.shadowColor = 'rgba(0,0,0,.9)'; x.shadowBlur = 14; x.textBaseline = 'top'; x.textAlign = 'left'; let y = 14;
+      for (const ln of VR.capTxt.slice(0, 3)) { const hd = ln === ln.toUpperCase() && /[A-Z]/.test(ln); x.font = hd ? '700 26px system-ui' : '800 44px system-ui'; x.fillStyle = hd ? '#c9bfda' : '#f3ead8'; x.fillText(ln, 24, y); y += hd ? 36 : 56; }
+      x.font = '600 20px system-ui'; x.fillStyle = '#8a8298'; x.textAlign = 'right'; x.fillText('B / Y · skip', w - 24, h - 30); x.textAlign = 'left'; cp.userData.tex.needsUpdate = true; }
+    cp.visible = on;
+  }
 }
 // ---- VR MENUS: the shell in the headset (2026-09-13). The DOM is invisible while presenting, so every page outside
 // the fight — home, sign-in, the marketplace, your career, the rankings, a fighter's profile, the lobby, a challenge,
@@ -17357,7 +17445,7 @@ function vrHud(dt) {
 // screen — sign-in and sign-out happen in place (client-net's `stay`), leaving a pit tears it down in place, and your
 // fighter stands beside the panel in what you own. ----
 const VRM = { panel: null, ptr: null, dot: null, hall: null, fig: null, items: [], uv: null, trigWas: false, t: 0, last: 0, yaw: 0, fresh: true, shown: false,
-  signin: false, kb: { field: 'user', user: '', pass: '', shift: false, msg: '', busy: false }, mkPg: 0, mkTab: null, ladPg: 0 };
+  signin: false, kb: { field: 'user', user: '', pass: '', shift: false, msg: '', busy: false, mode: 'auth' }, mkPg: 0, mkTab: null, ladPg: 0, hallTab: 'trophies', leaveArmed: false };   // kb.mode: 'auth' (sign in) or 'invite' (a name to invite)
 const VRM_PX = [1024, 768], VRM_M = [1.28, 0.96], VRM_DIST = 1.5;   // canvas px; metres in the rig (before the rig's scale); how far in front of the eyes
 const VRM_KEYS = ['1234567890', 'qwertyuiop', 'asdfghjkl', 'zxcvbnm', '-_.@'];   // the on-panel keyboard (a username, a password: letters, digits, the few symbols a name takes)
 const _vrRc = new THREE.Raycaster();
@@ -17382,17 +17470,17 @@ function vrMenuHall(on) {
   VRM.hall.visible = !!on;
 }
 function vrMenuPage() {
-  if (AF.on) return AF.over ? 'end' : null;
+  if (AF.on) return AF.over ? (AF.outro ? null : 'end') : (AF.me && AF.me.dead && AF.phase === 'fight' && !AF.leaving ? 'fallen' : null);   // (the end-game film runs before the results; a dead man gets his seat and his exits)
   if (AF.invite) return 'invite';
   if (VRM.signin) return 'signin';
   if (AF.lobby) return 'lobby';
-  const sp = SHELL.page; if (sp === 'market' || sp === 'career' || sp === 'ladder' || sp === 'profile' || sp === 'help') return sp;
+  const sp = SHELL.page; if (sp === 'market' || sp === 'career' || sp === 'ladder' || sp === 'profile' || sp === 'help' || sp === 'daily' || sp === 'hall') return sp;
   return 'home';
 }
 function vrMenuPlace() {                                    // in front of the eyes, at eye height, facing you — in the rig's metres, so it is the same size in the hall and in the pit
   const p = VRM.panel, rig = VR.rig; if (!p || !rig) return;
-  camera.getWorldDirection(tmpV); const ly = Math.atan2(tmpV.x, tmpV.z) - rig.rotation.y, c = camera.position;
-  p.position.set(c.x + Math.sin(ly) * VRM_DIST, Math.max(0.7, c.y - 0.12), c.z + Math.cos(ly) * VRM_DIST);
+  camera.getWorldDirection(tmpV); const ly = Math.atan2(tmpV.x, tmpV.z) - rig.rotation.y, c = camera.position, low = vrMenuPage() === 'fallen';   // (a dead man's card hangs under the eye line: the fight stays in view above it)
+  p.position.set(c.x + Math.sin(ly) * VRM_DIST, Math.max(0.7, c.y - (low ? 0.58 : 0.12)), c.z + Math.cos(ly) * VRM_DIST);
   camera.getWorldPosition(tmpV2); rig.updateMatrixWorld(true); p.lookAt(tmpV2); VRM.yaw = ly; VRM.t = 0;
 }
 // YOUR FIGHTER IN THE HALL: beside the panel, in what you own — or what you are trying on; on a profile page, that
@@ -17422,7 +17510,8 @@ function vrHallFigure(dt) {
 function vrRR(c, x, y, w, h, r) { c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r); c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath(); }
 function vrMenuDraw() {
   const p = VRM.panel; if (!p) return; const c = p.userData.ctx, W = VRM_PX[0], H = VRM_PX[1], page = vrMenuPage(); VRM.items = [];
-  c.clearRect(0, 0, W, H); c.fillStyle = 'rgba(14,10,22,.94)'; vrRR(c, 0, 0, W, H, 30); c.fill(); c.lineWidth = 4; c.strokeStyle = '#ffd34d'; vrRR(c, 2, 2, W - 4, H - 4, 28); c.stroke();
+  const bgH = page === 'fallen' ? 400 : H;                    // (a dead man's card is short: the rest of the panel stays clear)
+  c.clearRect(0, 0, W, H); c.fillStyle = 'rgba(14,10,22,.94)'; vrRR(c, 0, 0, W, bgH, 30); c.fill(); c.lineWidth = 4; c.strokeStyle = '#ffd34d'; vrRR(c, 2, 2, W - 4, bgH - 4, 28); c.stroke();
   c.textBaseline = 'top';
   const uv = VRM.uv, hx = uv ? uv.x * W : -1, hy = uv ? (1 - uv.y) * H : -1, ON = 'rgba(255,211,77,.45)', DIM = { bg: 'rgba(255,255,255,.08)', col: '#c9bfda' };
   const T = (s, x, y, font, col, al, maxW) => { c.font = font; c.fillStyle = col || '#f3ead8'; c.textAlign = al || 'left'; let str = String(s == null ? '' : s); if (maxW) while (str.length > 2 && c.measureText(str).width > maxW) str = str.slice(0, -2) + '…'; c.fillText(str, x, y); c.textAlign = 'left'; };
@@ -17434,29 +17523,135 @@ function vrMenuDraw() {
   };
   const back = (label) => B(label || '‹ Back', 800, 690, 190, 54, 'back', { fs: 22, ...DIM });
   const I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}, u = afSession();
-  if (page === 'home') {
-    T('BLADE VALE', W / 2, 54, '900 72px system-ui', '#ffd34d', 'center'); T('Arena Fights', W / 2, 136, '600 30px system-ui', '#c9bfda', 'center');
-    const cr = AF.career;
-    T(u ? 'Signed in as ' + u + (cr ? '  ·  ' + cr.rank.name + '  ·  ' + cr.gold + ' gold  ·  🏆 ' + cr.trophies : '') : 'Not signed in — the vale\'s men will fight you; sign in to keep a career and invite friends', W / 2, 190, '500 24px system-ui', '#e8def8', 'center', W - 80);
-    B('⚔ Enter the Arena', 112, 260, 800, 92, 'arena', { fs: 36 });
-    B('🛒 Marketplace', 112, 376, 388, 74, 'market', { fs: 28 }); B('🏆 Rankings', 524, 376, 388, 74, 'ladder', { fs: 28 });
-    if (u) { B('📜 My career', 112, 468, 388, 74, 'career', { fs: 28 }); B('Sign out', 524, 468, 388, 74, 'signout', { fs: 24, ...DIM }); }
-    else { B('🔑 Sign in / Create account', 112, 468, 800, 74, 'signin', { fs: 28 }); }
-    B('Exit VR', 362, 600, 300, 60, 'exit', { fs: 22, ...DIM });
+  if (page === 'home') {                                  // THE HOME: what the flat screen's HUD says (afHomeHud) — the rank bar, the purse, the bout of the day, the rival, the doors with a reason on each, the nearest achievement, your kit
+    const C = window.ARENA_CAT, cr = AF.career, m = (cr && cr.meta) || {}, card = (x, y, w, h, act) => { const hov = act && hx >= x && hx < x + w && hy >= y && hy < y + h; c.fillStyle = hov ? 'rgba(255,211,77,.12)' : 'rgba(255,255,255,.04)'; vrRR(c, x, y, w, h, 14); c.fill(); c.lineWidth = 1.5; c.strokeStyle = hov ? '#ffd34d' : 'rgba(255,211,77,.3)'; vrRR(c, x, y, w, h, 14); c.stroke(); return { x, y, w, h, act }; };
+    T('BLADE VALE', 40, 20, '900 34px system-ui', '#ffd34d'); T('Arena Fights', 258, 32, '600 20px system-ui', '#c9bfda');
+    if (u) {                                                 // the masthead: the name, the rank bar, the purse and the best streak
+      const r = cr ? cr.rank : null, lo = r && C ? C.ARENA_RANKS[r.idx][1] : 0, hi = r && r.nextAt ? r.nextAt : null, xp = cr ? cr.xp | 0 : 0, k = hi ? clamp((xp - lo) / (hi - lo), 0, 1) : cr ? 1 : 0;
+      T(u, 40, 64, '800 26px system-ui', '#f3ead8', 'left', 300); T(r ? r.name : '', 350, 70, '600 20px system-ui', '#ffe2a8', 'left', 140);
+      c.fillStyle = '#2a2438'; vrRR(c, 40, 100, 456, 12, 6); c.fill(); c.fillStyle = '#ffd34d'; vrRR(c, 40, 100, Math.max(12, 456 * k), 12, 6); c.fill();
+      T(xp.toLocaleString() + (hi ? ' / ' + hi.toLocaleString() + ' XP' : ' XP') + (r ? (r.next ? '  ·  → ' + r.next : '  ·  the top of the road') : cr ? '' : '  ·  reaching the war-net…'), 40, 118, '600 17px system-ui', '#c9bfda', 'left', 456);
+      T('◆ ' + (cr ? cr.gold.toLocaleString() : '—') + ' gold', 984, 26, '800 24px system-ui', '#ffe089', 'right'); T('▲ ' + (cr ? ((m.bests || {}).streak | 0) : '—') + ' best streak', 984, 60, '600 18px system-ui', '#c9bfda', 'right');
+      if (cr) T('🏆 ' + cr.trophies + '  ·  ' + cr.matches + ' fights  ·  ' + cr.wins + ' won  ·  #' + (cr.position || '—') + (cr.of ? ' of ' + cr.of : ''), 984, 90, '500 17px system-ui', '#9fb2cc', 'right', 440);
+    } else { T('Not signed in — the vale\'s men will fight you; sign in to keep a career, a name on the wall, and invite friends', 40, 68, '500 20px system-ui', '#e8def8', 'left', 944); }
+    // the bout of the day: the name, the sand, where you stand, and the clock to midnight
+    { const d = DAILY.data, spec = d ? d.spec : (C ? C.dailyOf() : null), it = card(40, 150, 456, 200, 'daily');
+      T('BOUT OF THE DAY', 56, 162, '700 15px system-ui', '#9fb2cc'); { const now = new Date(), end = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1), sec = Math.max(0, Math.floor((end - now) / 1000)), pd = n => String(n).padStart(2, '0'); T('◉ ' + pd(Math.floor(sec / 3600)) + ':' + pd(Math.floor(sec % 3600 / 60)) + ':' + pd(sec % 60), 480, 162, '600 15px system-ui', '#c9bfda', 'right'); }
+      if (spec) { T(spec.name, 56, 184, '800 28px system-ui', '#f3ead8', 'left', 424);
+        const tags = spec.venue === 'pit' ? ['The pits', spec.teams + ' fighters', 'night'] : ['Colosseum', spec.teams + ' × ' + spec.per, spec.time, spec.weather === 'rain' ? 'rain' : 'clear', spec.pit, spec.ground]; tags.push({ green: 'green foes', mixed: 'mixed foes', veteran: 'veteran foes' }[spec.xp] || spec.xp);
+        T(tags.join('  ·  '), 56, 222, '500 16px system-ui', '#c9bfda', 'left', 424);
+        let you; if (d && d.mine) { const above = (d.board || []).find(x => x.pos === d.mine.pos - 1); you = 'You\'re #' + d.mine.pos + ' of ' + d.total + (above ? ' · beat ' + above.score.toLocaleString() + ' for #' + above.pos : ' · ' + d.mine.score.toLocaleString() + ' points'); }
+        else if (d) you = d.total ? d.total + ' on the board' + (d.board && d.board[0] ? ' · top ' + d.board[0].score.toLocaleString() : '') : 'Nobody has fought it yet'; else you = u ? 'reaching the war-net…' : 'the same fight for everyone today';
+        T(you, 56, 250, '600 17px system-ui', '#ffe2a8', 'left', 424);
+        B('Fight it', 330, 292, 150, 44, 'daily:fight', { fs: 20, r: 10, col: '#ff6a5a' }); T('the board ›', 56, 306, '600 16px system-ui', '#9fb2cc'); }
+      else T(DAILY.err || 'reaching the war-net…', 56, 190, '600 20px system-ui', '#c9bfda', 'left', 424);
+      VRM.items.push(it); }
+    // the rival
+    { const rv = m.rival, it = card(40, 366, 456, 100, rv ? 'rival' : null);
+      c.fillStyle = rv ? 'rgba(255,106,90,.25)' : 'rgba(255,255,255,.06)'; c.beginPath(); c.arc(92, 416, 32, 0, TAU); c.fill(); T(rv ? (rv.name || '?').charAt(0).toUpperCase() : '?', 92, 398, '800 30px system-ui', rv ? '#ff9a8a' : '#6b5e7a', 'center');
+      T(rv ? 'YOUR RIVAL AWAITS' : 'NO RIVAL YET', 140, 376, '700 15px system-ui', '#9fb2cc'); T(rv ? rv.name : (cr ? 'nobody has felled you lately' : u ? 'reaching the war-net…' : 'sign in to keep a grudge'), 140, 396, '800 26px system-ui', rv ? '#f3ead8' : '#8a8298', 'left', 340);
+      if (rv) { const bn = C ? C.rivalBonus(rv) : { xp: 0, gold: 0 }; T('felled you' + (rv.times > 1 ? ' ' + rv.times + ' times' : '') + ' · beat him for +' + bn.xp + ' XP · +' + bn.gold + ' gold', 140, 432, '500 16px system-ui', '#c9bfda', 'left', 340); }
+      else if (cr) T('the man who does waits in your next pit', 140, 432, '500 16px system-ui', '#8a8298', 'left', 340);
+      if (rv) VRM.items.push(it); }
+    // your kit: a chip a slot — a press opens that stall of the market
+    { const gear = afGear(); T('You ride in with', 40, 486, '700 15px system-ui', '#9fb2cc');
+      ['sword', 'armor', 'bow', 'horse'].forEach((sl, i) => { const id = gear[sl], it = id && I[id]; B(it ? it.name : (sl === 'armor' ? 'no armour' : 'no ' + sl), 40 + i * 116, 508, 108, 44, 'gear:' + sl, { fs: 15, r: 10, bg: it ? undefined : 'rgba(255,255,255,.04)', col: it ? undefined : '#8a8298' }); }); }
+    // FIGHT, and the three doors with a reason on each
+    { const seen = new Set(), n = (AF.online || []).filter(pp => pp && pp.name !== u && !seen.has(pp.name) && seen.add(pp.name)).length;
+      B('', 520, 150, 464, 110, 'arena', { col: '#ff6a5a', bg: 'rgba(255,106,90,.22)' }); T('⚔ Fight', 752, 166, '900 40px system-ui', '#fff1e8', 'center'); T(n ? n + (n === 1 ? ' player online' : ' players online') + ' · invite them' : 'The vale\'s men wait · enter the arena', 752, 220, '600 18px system-ui', '#ffd9cf', 'center', 440);
+      const own = cr ? cr.items || [] : [], afford = cr && C ? Object.keys(I).filter(id => !I[id].unique && !own.includes(id) && !C.lockReason(id, cr)).length : 0;
+      let prev = null; try { prev = u ? JSON.parse(localStorage.getItem('bv-seen-' + u) || 'null') : null; } catch (e) {}
+      const dp = cr && prev && prev.position && cr.position ? prev.position - cr.position : 0, uniq = Object.keys(I).filter(id => I[id].unique), got = uniq.filter(id => own.includes(id)).length;
+      const tile = (x, icon, name, sub, act, hot, badge) => { B('', x, 276, 148, 100, act, {}); T(icon + ' ' + name, x + 74, 288, '800 20px system-ui', '#ffe9a8', 'center', 140); T(sub, x + 74, 326, '600 14px system-ui', hot ? '#ffe089' : '#c9bfda', 'center', 140); if (badge) { c.fillStyle = '#ff6a5a'; c.beginPath(); c.arc(x + 132, 292, 13, 0, TAU); c.fill(); T(badge, x + 132, 283, '800 15px system-ui', '#fff', 'center'); } };
+      tile(520, '◈', 'Market', cr ? (afford ? afford + ' you can afford' : 'nothing new to buy') : 'swords, mail, bows', 'market', afford > 0, afford ? 'New' : null);
+      tile(678, '♛', 'Rankings', dp > 0 ? '▲ ' + dp + ' since last time' : dp < 0 ? '▼ ' + (-dp) + ' since last time' : cr && cr.position ? '#' + cr.position + ' of ' + cr.of : 'every fighter by renown', 'ladder', dp !== 0, null);
+      tile(836, '✦', 'Trophies', cr ? got + ' / ' + uniq.length + ' uniques' : 'uniques, the belt, bests', 'hall', false, got ? String(got) : null);
+      // the nearest achievement, and how far it is
+      card(520, 392, 464, 90, null); let best = null;
+      if (cr && C) { const have = cr.achievements || []; for (const a of C.ARENA_ACHIEVEMENTS) { if (have.includes(a[0])) continue; const v = Math.min(a[3], C.statOf(cr, a[2])), k = v / a[3]; if (!best || k > best.k) best = { a, v, k }; } }
+      if (!cr) T(u ? 'reaching the war-net…' : 'Sign in to keep a career: XP, gold, gear, a name on the wall.', 536, 420, '500 17px system-ui', '#c9bfda', 'left', 432);
+      else if (!best) T('Every achievement is yours.', 536, 420, '700 18px system-ui', '#ffe089');
+      else { const [, label, stat, at] = best.a, left = at - best.v, one = left === 1, unit = { kills: one ? 'kill' : 'kills', matches: one ? 'fight' : 'fights', wins: one ? 'win' : 'wins', stars: one ? 'star of the match' : 'stars of the match', trophies: one ? 'trophy' : 'trophies', rivalsBeaten: one ? 'score settled' : 'scores settled', dailies: one ? 'bout of the day' : 'bouts of the day', dailyTops: 'bout of the day topped', belts: 'belt taken', streak: 'kills in a row' }[stat] || stat;
+        T('NEXT ACHIEVEMENT', 536, 402, '700 14px system-ui', '#9fb2cc'); T(label.replace(/ — .*$/, ''), 536, 420, '800 20px system-ui', '#f3ead8', 'left', 432); T(left + ' more ' + unit, 536, 448, '500 16px system-ui', '#c9bfda', 'left', 300);
+        const np = 5, lit = Math.min(np - 1, Math.floor(best.k * np)); for (let i = 0; i < np; i++) { c.fillStyle = i < lit ? '#ffd34d' : '#3a3247'; vrRR(c, 880 + i * 20, 452, 14, 10, 3); c.fill(); } } }
+    // the bottom bar
+    if (u) { B('📜 Career', 40, 690, 190, 54, 'career', { fs: 20 }); B('?', 250, 690, 70, 54, 'help', { fs: 24, ...DIM }); B('Sign out', 340, 690, 190, 54, 'signout', { fs: 20, ...DIM }); }
+    else { B('🔑 Sign in / Create account', 40, 690, 400, 54, 'signin', { fs: 22 }); B('?', 460, 690, 70, 54, 'help', { fs: 24, ...DIM }); }
+    B('Exit VR', 794, 690, 190, 54, 'exit', { fs: 20, ...DIM });
   } else if (page === 'signin') {
-    const K = VRM.kb;
-    T('SIGN IN', 40, 28, '900 40px system-ui', '#ffd34d'); T('or create an account — the same name keeps your career, gear and invitations', 40, 78, '500 21px system-ui', '#c9bfda', 'left', 700);
-    const field = (label, key, y) => { const on = K.field === key, v = key === 'pass' ? '•'.repeat(K.pass.length) : K.user; if (on) VRM.items.push({ x: 40, y, w: 600, h: 58, act: 'field:' + key }); else VRM.items.push({ x: 40, y, w: 600, h: 58, act: 'field:' + key });
+    const K = VRM.kb, inv = K.mode === 'invite';
+    if (inv) { T('INVITE A PLAYER', 40, 28, '900 40px system-ui', '#ffd34d'); T('by username — an invitation reaches them wherever they are on the war-net', 40, 78, '500 21px system-ui', '#c9bfda', 'left', 700); }
+    else { T('SIGN IN', 40, 28, '900 40px system-ui', '#ffd34d'); T('or create an account — the same name keeps your career, gear and invitations', 40, 78, '500 21px system-ui', '#c9bfda', 'left', 700); }
+    const field = (label, key, y) => { const on = K.field === key, v = key === 'pass' ? '•'.repeat(K.pass.length) : K.user; VRM.items.push({ x: 40, y, w: 600, h: 58, act: 'field:' + key });
       c.fillStyle = 'rgba(0,0,0,.45)'; vrRR(c, 40, y, 600, 58, 10); c.fill(); c.lineWidth = on ? 3 : 1.5; c.strokeStyle = on ? '#ffd34d' : '#6b5e7a'; vrRR(c, 40, y, 600, 58, 10); c.stroke();
       T(label, 56, y - 24, '700 18px system-ui', '#9fb2cc'); T(v + (on && Math.floor(rtNow * 2) % 2 ? '|' : ''), 56, y + 14, '600 28px system-ui', '#f3ead8', 'left', 570); };
-    field('Username', 'user', 136); field('Password', 'pass', 230);
-    B('Sign in', 670, 136, 300, 58, 'auth:login', { fs: 24, off: K.busy }); B('Create account', 670, 230, 300, 58, 'auth:register', { fs: 22, off: K.busy });
+    field('Username', 'user', 136);
+    if (inv) { B('Invite', 670, 136, 300, 58, 'invite:go', { fs: 24, off: !K.user.trim() }); const msg = (document.getElementById('al-msg') || {}).textContent || ''; if (msg) T(msg, 40, 230, '600 22px system-ui', '#ffe089', 'left', 930); }
+    else { field('Password', 'pass', 230); B('Sign in', 670, 136, 300, 58, 'auth:login', { fs: 24, off: K.busy }); B('Create account', 670, 230, 300, 58, 'auth:register', { fs: 22, off: K.busy }); }
     if (K.msg) T(K.msg, 40, 300, '600 22px system-ui', K.bad ? '#ff9a9a' : '#ffe089', 'left', 930);
     // the keyboard
     const kw = 88, kh = 60, gap = 8; let y = 340;
     for (const row of VRM_KEYS) { const x0 = (W - (row.length * (kw + gap) - gap)) / 2; [...row].forEach((ch, i) => B(K.shift ? ch.toUpperCase() : ch, x0 + i * (kw + gap), y, kw, kh, 'key:' + ch, { fs: 26, r: 10 })); y += kh + gap; }
-    B(K.shift ? '⇧ SHIFT' : '⇧ shift', 60, y, 170, kh, 'key:SHIFT', { fs: 20, r: 10, bg: K.shift ? ON : undefined }); B('space', 250, y, 320, kh, 'key:SP', { fs: 20, r: 10 }); B('⌫', 590, y, 120, kh, 'key:BS', { fs: 26, r: 10 }); B(K.field === 'user' ? 'next ⇥' : 'done ⏎', 730, y, 234, kh, 'key:NEXT', { fs: 20, r: 10 });
-    B('‹ Back', 40, 690, 190, 54, 'back', { fs: 22, ...DIM });
+    B(K.shift ? '⇧ SHIFT' : '⇧ shift', 60, y, 170, kh, 'key:SHIFT', { fs: 20, r: 10, bg: K.shift ? ON : undefined }); B('space', 250, y, 320, kh, 'key:SP', { fs: 20, r: 10 }); B('⌫', 590, y, 120, kh, 'key:BS', { fs: 26, r: 10 }); B(inv ? 'invite ⏎' : K.field === 'user' ? 'next ⇥' : 'done ⏎', 730, y, 234, kh, 'key:NEXT', { fs: 20, r: 10 });
+    B('‹ Back', 800, 24, 184, 46, 'back', { fs: 20, ...DIM });   // (top right: the keyboard's last row takes the bottom)
+  } else if (page === 'daily') {                          // THE BOUT OF THE DAY: the fight, your best, the board (afDailyRender)
+    const d = DAILY.data, C = window.ARENA_CAT, spec = d ? d.spec : (C ? C.dailyOf() : null);
+    T('BOUT OF THE DAY', 40, 24, '900 40px system-ui', '#ffd34d');
+    if (!spec) T(DAILY.err || 'reaching the war-net…', 40, 100, '600 24px system-ui', '#c9bfda');
+    else {
+      const foes = { green: 'green foes', mixed: 'a mixed lot', veteran: 'veterans' }[spec.xp] || spec.xp, ends = d ? Math.floor(d.endsIn / 3600) + ' h ' + Math.floor(d.endsIn % 3600 / 60) + ' min' : '';
+      T(spec.name, 40, 76, '800 34px system-ui', '#f3ead8', 'left', 700); T(spec.day + (ends ? '  ·  resets in ' + ends : ''), 40, 120, '600 19px system-ui', '#c9bfda', 'left', 700);
+      T((spec.venue === 'pit' ? 'The pits · ' + spec.teams + ' fighters, every man for himself' : 'The Colosseum · ' + spec.teams + ' teams of ' + spec.per + ' · ' + spec.pit + ' pit · ' + spec.time + (spec.weather === 'rain' ? ', rain' : '') + ' · ' + spec.ground) + ' · ' + foes, 40, 150, '500 20px system-ui', '#e8def8', 'left', 940);
+      T('The same men, the same sand, for everyone today. Your best try counts on the board; every try pays like any fight.' + (u ? '' : ' Sign in to be on the board.'), 40, 180, '500 17px system-ui', '#9fb2cc', 'left', 940);
+      B('⚔ Fight it', 40, 216, 280, 60, 'daily:fight', { fs: 26, col: '#ff6a5a' });
+      if (d && d.mine) T('Your best today: ' + d.mine.score + ' points — #' + d.mine.pos + ' of ' + d.total + ' · ' + d.mine.kills + ' kills · ' + Math.round(d.mine.dmg) + ' dealt' + (d.mine.won ? ' · won' : '') + ' · ' + d.mine.tries + ' tr' + (d.mine.tries === 1 ? 'y' : 'ies'), 340, 232, '600 18px system-ui', '#ffe089', 'left', 640);
+      T('The board' + (d ? ' · ' + d.total + (d.total === 1 ? ' fighter' : ' fighters') : ''), 40, 298, '700 22px system-ui', '#9fd6ff');
+      if (!d) T(DAILY.err || 'reaching the war-net…', 40, 336, '600 20px system-ui', '#c9bfda');
+      else if (!d.board.length) T('Nobody has fought it yet. Be the first name on the board.', 40, 336, '600 20px system-ui', '#c9bfda');
+      else { let y = 334; for (const r of d.board.slice(0, 8)) { const me = r.name === u; VRM.items.push({ x: 40, y, w: 944, h: 38, act: 'prof:player|' + r.name });
+        const hov = hx >= 40 && hx < 984 && hy >= y && hy < y + 38; c.fillStyle = hov ? 'rgba(255,211,77,.22)' : me ? 'rgba(255,211,77,.10)' : 'rgba(255,255,255,.03)'; vrRR(c, 40, y, 944, 38, 8); c.fill();
+        T(r.pos <= 3 ? ['🥇', '🥈', '🥉'][r.pos - 1] : '#' + r.pos, 56, y + 8, '800 20px system-ui', '#ffe089'); T(r.name, 130, y + 8, '800 21px system-ui', me ? '#ffd34d' : '#f3ead8', 'left', 280); T((r.won ? 'won' : 'fell') + (r.alive ? ' · stood at the bell' : ''), 430, y + 10, '500 17px system-ui', '#c9bfda', 'left', 200);
+        T(r.score + ' pts', 780, y + 9, '700 19px system-ui', '#ffe2a8', 'right'); T(r.kills + ' kills · ' + Math.round(r.dmg) + ' dealt · ' + r.tries + ' tr' + (r.tries === 1 ? 'y' : 'ies'), 970, y + 10, '500 16px system-ui', '#9fb2cc', 'right'); y += 42; } }
+      T('Points = 100 a kill + damage dealt + 150 for standing at the bell + 300 for the win.', 40, 656, '500 16px system-ui', '#8a8298', 'left', 940);
+    }
+    back();
+  } else if (page === 'hall') {                           // THE HALL OF TROPHIES: the belt, the rival, the bests, the uniques; the achievements with the road to each (afHallRender)
+    const cr = AF.career, C = window.ARENA_CAT, tab = VRM.hallTab;
+    T('HALL OF TROPHIES', 40, 24, '900 40px system-ui', '#ffd34d');
+    B('Trophies', 540, 30, 200, 46, 'hall:tab:trophies', { fs: 20, bg: tab === 'trophies' ? ON : undefined }); B('Achievements', 760, 30, 224, 46, 'hall:tab:ach', { fs: 20, bg: tab === 'ach' ? ON : undefined });
+    if (!cr || !C) T(u ? 'reaching the war-net…' : 'Sign in to keep a career — the hall is yours then.', 40, 100, '600 24px system-ui', '#c9bfda', 'left', 940);
+    else if (tab === 'trophies') {
+      const m = cr.meta || { bests: {} }, belt = cr.belt || {};
+      T(belt.holder === u ? '🏆 You hold the champion\'s belt — ' + (belt.defenses | 0) + ' defense' + (belt.defenses === 1 ? '' : 's') + ' · every win holds it, the first to pass your renown takes it' : belt.holder ? '🏆 The champion\'s belt: ' + belt.holder + ' holds it (' + (belt.defenses | 0) + ' defense' + (belt.defenses === 1 ? '' : 's') + ') · pass his renown and it is yours' : '🏆 The champion\'s belt has no holder yet — the first fight takes it', 40, 92, '600 19px system-ui', '#ffe2a8', 'left', 944);
+      if (belt.holder && belt.holder !== u) VRM.items.push({ x: 40, y: 88, w: 944, h: 28, act: 'prof:player|' + belt.holder });
+      T(m.rival ? '⚔ Your rival: ' + m.rival.name + ' — a ' + (m.rival.arch || 'swordsman') + ' of skill ' + (m.rival.skill | 0) + ', felled you ' + (m.rival.times | 0) + ' time' + (m.rival.times === 1 ? '' : 's') + ' · beat him for +' + C.rivalBonus(m.rival).xp + ' XP · +' + C.rivalBonus(m.rival).gold + ' gold' : '⚔ No rival — nobody has felled you lately.', 40, 124, '600 19px system-ui', m.rival ? '#ff9a8a' : '#c9bfda', 'left', 944);
+      if (m.rival) VRM.items.push({ x: 40, y: 120, w: 944, h: 28, act: 'rival' });
+      T('Personal bests', 40, 166, '700 20px system-ui', '#9fd6ff');
+      C.ARENA_BESTS.forEach(([k, label], i) => { const v = (m.bests || {})[k], x = 40 + i * 190; c.fillStyle = 'rgba(255,255,255,.04)'; vrRR(c, x, 194, 180, 66, 10); c.fill(); T(v ? (k === 'life' ? afFmtSecs(v) : v) : '—', x + 90, 200, '800 26px system-ui', '#f3ead8', 'center'); T(label, x + 90, 234, '500 14px system-ui', '#9fb2cc', 'center', 170); });
+      const odds = Math.round(C.uniqueChance(m.pity | 0) * 100), uniq = Object.keys(C.ARENA_ITEMS).filter(id => C.ARENA_ITEMS[id].unique), own = cr.items || [], eq = cr.equipped || {};
+      T('Uniques · ' + uniq.filter(id => own.includes(id)).length + ' of ' + uniq.length + '   ·   loot only, a roll on every win — a unique next win: ' + odds + '%' + (m.pity >= 3 ? ' (' + m.pity + ' wins without one)' : ''), 40, 278, '700 19px system-ui', '#9fd6ff', 'left', 944);
+      uniq.slice(0, 8).forEach((id, i) => { const it = C.ARENA_ITEMS[id], got = own.includes(id), worn = eq[it.slot] === id, col = it.plume != null ? it.plume : it.blade != null ? it.blade : 0xff7b4d, x = 40 + (i % 4) * 238, y = 310 + Math.floor(i / 4) * 150;
+        c.fillStyle = got ? 'rgba(255,211,77,.10)' : 'rgba(255,255,255,.03)'; vrRR(c, x, y, 226, 138, 12); c.fill(); c.fillStyle = '#' + col.toString(16).padStart(6, '0'); c.globalAlpha = got ? 1 : 0.35; c.beginPath(); c.arc(x + 26, y + 26, 14, 0, TAU); c.fill(); c.globalAlpha = 1;
+        T(it.name, x + 50, y + 14, '800 18px system-ui', got ? '#ffe089' : '#c9bfda', 'left', 168); T(it.desc, x + 12, y + 46, '500 13px system-ui', '#9fb2cc', 'left', 204);
+        if (got && worn) T('worn', x + 12, y + 108, '700 16px system-ui', '#ffe089'); else if (got) B('Wear it', x + 12, y + 96, 120, 34, 'hall:wear:' + id, { fs: 16, r: 8 }); else T('not yet', x + 12, y + 108, '600 16px system-ui', '#6b5e7a'); });
+      T('Bouts of the day fought: ' + (m.dailies | 0) + ' · topped: ' + (m.dailyTops | 0) + ' · belts taken: ' + (m.belts | 0), 40, 640, '500 16px system-ui', '#8a8298', 'left', 700);
+    } else {
+      const got = cr.achievements || [], A = C.ARENA_ACHIEVEMENTS; T('Achievements · ' + got.length + ' of ' + A.length, 40, 92, '700 20px system-ui', '#9fd6ff');
+      A.slice(0, 24).forEach(([id, label, stat, at], i) => { const has = got.includes(id), v = Math.min(at, C.statOf(cr, stat)), x = 40 + (i % 2) * 476, y = 128 + Math.floor(i / 2) * 46;
+        T((has ? '🏅 ' : '') + label, x, y, has ? '700 18px system-ui' : '500 18px system-ui', has ? '#ffe089' : '#e8def8', 'left', 300);
+        if (!has) { c.fillStyle = '#2a2438'; vrRR(c, x + 310, y + 6, 100, 10, 5); c.fill(); c.fillStyle = '#9fd6ff'; vrRR(c, x + 310, y + 6, Math.max(4, 100 * v / at), 10, 5); c.fill(); T(v + ' / ' + at, x + 420, y + 1, '500 15px system-ui', '#8a8298'); } });
+    }
+    back();
+  } else if (page === 'fallen') {                         // A DEAD MAN'S CARD: who put you down, who is left, a seat to watch from, the exits (the flat screen's spectator bar)
+    const me = AF.me, S = AF.spec, tgt = S && S.target; let mine = 0, foes = 0; for (const b of AF.bodies) if (!b.dead) { if (b.team === me.team) mine++; else foes++; }
+    T('YOU FELL', W / 2, 26, '900 40px system-ui', '#ffd34d', 'center');
+    T((me.killedBy ? me.killedBy.name + ' put you down' : 'the pit took you') + ' at ' + afFmtSecs(me.diedAt || 0) + '  ·  ' + mine + ' of yours and ' + foes + ' of theirs still standing', W / 2, 80, '600 21px system-ui', '#e8def8', 'center', W - 60);
+    T('Watching: ' + (tgt ? tgt.name + (tgt.kind === 'npc' && tgt.A ? ' · ' + tgt.A.label : '') : VR.spot ? 'from the stands' : 'where you fell'), W / 2, 122, '700 24px system-ui', tgt ? tgt.teamDef.col : '#c9bfda', 'center', W - 60);
+    B('◀ Watch', 60, 172, 250, 60, 'watch:-1', { fs: 22 }); B('From the stands', 330, 172, 364, 60, 'stands', { fs: 22, ...DIM }); B('Watch ▶', 714, 172, 250, 60, 'watch:1', { fs: 22 });
+    const skipOk = !AF.over && !AF.leaving && !afOthersInFight();
+    if (skipOk) B('⏭ Skip to the end', 60, 262, 420, 64, 'skip', { fs: 22, col: '#7fa8ff' });
+    B(VRM.leaveArmed ? 'Sure? The fight ends for everyone' : 'Leave the pit', skipOk ? 544 : 302, 262, 420, 64, 'leave-fight', { fs: VRM.leaveArmed ? 19 : 22, col: VRM.leaveArmed ? '#ff6a5a' : undefined, ...(VRM.leaveArmed ? {} : DIM) });
+    T('the panel hangs under your eyes — the fight goes on above it', W / 2, 348, '500 16px system-ui', '#6b5e7a', 'center');
   } else if (page === 'market') {
     const cr = AF.career, TABS = [['sword', 'Swords'], ['armor', 'Armor'], ['bow', 'Bows'], ['horse', 'Horses'], ['unique', 'Uniques']]; if (!AF.marketTab) AF.marketTab = 'sword'; const tab = AF.marketTab; if (VRM.mkTab !== tab) { VRM.mkTab = tab; VRM.mkPg = 0; }
     T('MARKETPLACE', 40, 24, '900 40px system-ui', '#ffd34d');
@@ -17495,7 +17690,7 @@ function vrMenuDraw() {
       const got = ARENA_CAT.ARENA_ACHIEVEMENTS.filter(([id]) => cr.achievements.includes(id)); T('Achievements · ' + got.length + ' of ' + ARENA_CAT.ARENA_ACHIEVEMENTS.length, 40, 404, '700 22px system-ui', '#9fd6ff');
       got.slice(0, 10).forEach(([, label], i) => T('🏅 ' + label, 40 + (i % 2) * 470, 440 + Math.floor(i / 2) * 32, '500 21px system-ui', '#ffe2a8', 'left', 450));
     }
-    B('🏆 Rankings', 40, 690, 220, 54, 'ladder', { fs: 22 }); if (u) B('My public profile', 280, 690, 260, 54, 'prof:player|' + u, { fs: 20 }); back();
+    B('🏆 Rankings', 40, 690, 200, 54, 'ladder', { fs: 21 }); if (u) B('My public profile', 260, 690, 250, 54, 'prof:player|' + u, { fs: 19 }); B('🏛 Trophies', 530, 690, 200, 54, 'hall', { fs: 20 }); back();
   } else if (page === 'ladder') {
     T('RANKINGS', 40, 24, '900 40px system-ui', '#ffd34d');
     B('Players', 320, 30, 170, 46, 'lad:kind:player', { fs: 20, bg: LADDER.kind === 'player' ? ON : undefined }); B('The vale\'s men', 500, 30, 200, 46, 'lad:kind:npc', { fs: 20, bg: LADDER.kind === 'npc' ? ON : undefined });
@@ -17541,50 +17736,87 @@ function vrMenuDraw() {
     T((m.name || 'Someone') + (pit ? ' calls you down to the pits' : ' challenges you to an arena fight'), W / 2, 160, '700 32px system-ui', '#f3ead8', 'center', W - 80);
     T(pit ? (cfg.teams || '?') + ' in the ring, every man for himself' : (cfg.teams || '?') + ' teams × ' + (cfg.per || '?') + ' fighters', W / 2, 215, '500 26px system-ui', '#c9bfda', 'center');
     B('Accept', 180, 330, 300, 90, 'accept', { fs: 32 }); B('Decline', 544, 330, 300, 90, 'decline', { fs: 32, ...DIM });
-  } else if (page === 'lobby') {
-    const L = AF.lobby, host = L.role === 'host', pit = L.venue === 'pit', LM = afLim(L);
-    T(host ? 'YOUR LOBBY' : 'LOBBY · ' + L.host, 40, 30, '900 40px system-ui', '#ffd34d', 'left', 700);
-    T('Venue', 40, 108, '700 24px system-ui', '#c9bfda');
-    B('🏛 Colosseum', 200, 96, 250, 54, 'venue:colosseum', { fs: 22, off: !host, bg: pit ? undefined : ON }); B('🕯 The Pits', 470, 96, 250, 54, 'venue:pit', { fs: 22, off: !host, bg: pit ? ON : undefined });
-    T('Teams', 40, 176, '700 24px system-ui', '#c9bfda'); B('−', 200, 164, 64, 54, 'teams:-1', { off: !host || L.teams <= LM.teamsMin }); T(L.teams, 300, 170, '800 34px system-ui', '#fff', 'center'); B('+', 336, 164, 64, 54, 'teams:1', { off: !host || L.teams >= LM.teamsMax });
-    if (!pit) { T('Per team', 470, 176, '700 24px system-ui', '#c9bfda'); B('−', 620, 164, 64, 54, 'per:-1', { off: !host || L.per <= LM.perMin }); T(L.per, 720, 170, '800 34px system-ui', '#fff', 'center'); B('+', 756, 164, 64, 54, 'per:1', { off: !host || L.per >= LM.perMax }); }
-    let y = 244;
-    if (!pit) {                                            // your class: sword / bow / horse (the pits are swords only) — a bow or a horse must be owned
+  } else if (page === 'lobby') {                          // THE LOBBY: every row the flat screen has (afLobbyRender) — the venue, the teams, your class, the pit's size, the hour, the sky, the ground, the foes, the wager; the seats, who is online, an invite by name
+    const L = AF.lobby, host = L.role === 'host', pit = L.venue === 'pit', LM = afLim(L), C = window.ARENA_CAT;
+    T(host ? 'YOUR LOBBY' : 'LOBBY · ' + L.host, 40, 22, '900 34px system-ui', '#ffd34d', 'left', 456);
+    const chips = (label, y, opts, cur, act, all, lockOf) => { T(label, 40, y + 13, '700 16px system-ui', '#c9bfda'); const n = opts.length, w = (356 - 6 * (n - 1)) / n;
+      opts.forEach(([k, l], i) => B(l, 140 + i * (w + 6), y, w, 44, act + ':' + k, { fs: n > 3 ? 15 : 17, r: 10, bg: String(cur) === String(k) ? ON : undefined, off: (!all && !host) || !!(lockOf && lockOf(k)) })); };
+    let y = 72;
+    chips('Venue', y, [['colosseum', '🏛 Colosseum'], ['pit', '🕯 The Pits']], pit ? 'pit' : 'colosseum', 'venue'); y += 52;
+    T('Teams', 40, y + 13, '700 16px system-ui', '#c9bfda'); B('−', 104, y, 40, 44, 'teams:-1', { r: 10, fs: 24, off: !host || L.teams <= LM.teamsMin }); T(L.teams, 170, y + 6, '800 28px system-ui', '#fff', 'center'); B('+', 196, y, 40, 44, 'teams:1', { r: 10, fs: 24, off: !host || L.teams >= LM.teamsMax });
+    if (!pit) { T('Per', 252, y + 13, '700 16px system-ui', '#c9bfda'); B('«', 292, y, 36, 44, 'per:-10', { r: 10, fs: 20, off: !host || L.per <= LM.perMin }); B('−', 332, y, 36, 44, 'per:-1', { r: 10, fs: 22, off: !host || L.per <= LM.perMin }); T(L.per, 394, y + 6, '800 28px system-ui', '#fff', 'center'); B('+', 420, y, 36, 44, 'per:1', { r: 10, fs: 22, off: !host || L.per >= LM.perMax }); B('»', 460, y, 36, 44, 'per:10', { r: 10, fs: 20, off: !host || L.per >= LM.perMax }); }
+    y += 52;
+    if (!pit) {                                            // your class: sword / bow / horse (the pits are swords only) — a bow or a horse must be owned; everyone picks his own
       const gs = afGearStats(afGear()), cur = L.weapon || 'sword';
-      T('You ride in with', 40, 240, '700 24px system-ui', '#c9bfda');
-      B('⚔ Sword', 260, 228, 150, 48, 'wpn:sword', { fs: 20, bg: cur === 'sword' ? ON : undefined }); B(gs.bow ? '🏹 Bow' : '🔒 Bow', 424, 228, 150, 48, 'wpn:bow', { fs: 20, bg: cur === 'bow' ? ON : undefined, off: !gs.bow }); B(gs.horse ? '🐎 Horse' : '🔒 Horse', 588, 228, 150, 48, 'wpn:horse', { fs: 20, bg: cur === 'horse' ? ON : undefined, off: !gs.horse });
-      if (!gs.bow || !gs.horse) T('the market sells ' + (!gs.bow && !gs.horse ? 'bows and horses' : !gs.bow ? 'bows' : 'horses'), 756, 240, '500 18px system-ui', '#8a8298', 'left', 230);
-      y = 296;
+      chips('You ride', y, [['sword', '⚔ Sword'], ['bow', gs.bow ? '🏹 Bow' : '🔒 Bow'], ['horse', gs.horse ? '🐎 Horse' : '🔒 Horse']], cur, 'wpn', true, k => (k === 'bow' && !gs.bow) || (k === 'horse' && !gs.horse)); y += 52;
+      chips('Pit', y, [['cosy', 'Cosy'], ['wide', 'Wide'], ['vast', 'Vast'], ['colossal', 'Colossal']], L.pit || 'wide', 'opt:pit'); y += 52;
+      chips('Hour', y, [['day', '☀ Day'], ['dusk', '🌇 Dusk'], ['night', '🌙 Night']], L.time || 'day', 'opt:time'); y += 52;
+      chips('Sky', y, [['clear', 'Clear'], ['rain', '🌧 Rain']], L.weather || 'clear', 'opt:weather'); y += 52;
+      chips('Ground', y, [['sand', 'Sand'], ['hills', '⛰ Hills'], ['rocks', '🪨 Rocks'], ['broken', 'Broken']], L.ground || 'broken', 'opt:ground'); y += 52;
     }
-    for (let t = 0; t < L.teams && y < 420; t++, y += 36) { const names = (L.slots[t] || []).map(s => s ? s.name + (s.kind === 'host' ? ' (host)' : '') : 'fighter of the vale'); T(AF_TEAMS[t].name, 40, y, '800 24px system-ui', AF_TEAMS[t].col); T(names.join(' · '), 220, y, '500 24px system-ui', '#e8def8', 'left', 760); }
+    chips('Foes', y, [['green', '🐣 Green'], ['mixed', '⚔ Mixed'], ['veteran', '💀 Veteran']], L.xp || 'mixed', 'xp'); y += 52;
+    if (u && C) { chips('Wager', y, C.WAGERS.map(w => [w, w ? String(w) : 'None']), L.wager | 0, 'wager'); y += 52; if (L.wager) T('Win: the stake back and as much again. Lose: the stake. Nobody stakes more than he has.', 40, y - 6, '500 14px system-ui', '#8a8298', 'left', 456); }
+    // the right column: the seats, who is online, the way in
+    let ry = 72;
+    for (let t = 0; t < L.teams && ry < 290; t++, ry += 34) { const names = (L.slots[t] || []).map(s => s ? s.name + (s.kind === 'host' ? ' (host)' : '') : 'fighter of the vale'); T(AF_TEAMS[t].name, 520, ry, '800 20px system-ui', AF_TEAMS[t].col, 'left', 120); T(names.join(' · '), 650, ry + 2, '500 18px system-ui', '#e8def8', 'left', 334); }
+    const oy = Math.max(ry + 8, 296);
     if (host) {
-      T('Players online', 40, 440, '700 22px system-ui', '#9fd6ff');
-      let yy = 476, n = 0;
-      for (const o of AF.online) { if (n++ >= 3) break; const st = L.invites.get(o.name); T(o.name + (o.busy ? ' · in a fight' : ''), 40, yy + 10, '500 24px system-ui', '#e8def8', 'left', 280); B(st === 'joined' ? 'joined' : st === 'declined' ? 'declined' : st === 'no seat' ? 'no seat' : st ? 'invited…' : 'Invite', 330, yy, 180, 46, 'invite:' + o.name, { fs: 20, off: !!st || !!o.busy }); yy += 54; }
-      if (!AF.online.length) T(u ? 'nobody else is on the war-net' : 'sign in to invite friends', 40, 480, '500 22px system-ui', '#8a8298');
-      B('Start Fight', 560, 560, 400, 84, 'start', { fs: 32 });
-    } else T('Waiting for ' + L.host + ' to start the fight…', 40, 460, '600 26px system-ui', '#c9bfda', 'left', 940);
-    const msg = (document.getElementById('al-msg') || {}).textContent || ''; if (msg) T(msg, 40, 690, '500 22px system-ui', '#ffe089', 'left', 500);
-    B('🛒 Market', 560, 660, 190, 64, 'market', { fs: 22, ...DIM }); B(host ? 'Leave lobby' : 'Leave', 770, 660, 190, 64, 'leave-lobby', { fs: 22, ...DIM });
-  } else if (page === 'end') {
+      T('Players online', 520, oy, '700 19px system-ui', '#9fd6ff');
+      let yy = oy + 30, n = 0;
+      for (const o of AF.online) { if (n++ >= 4) break; const st = L.invites.get(o.name); T(o.name + (o.busy ? ' · in a fight' : ''), 520, yy + 9, '500 20px system-ui', '#e8def8', 'left', 250); B(st === 'joined' ? 'joined' : st === 'declined' ? 'declined' : st === 'no seat' ? 'no seat' : st ? 'invited…' : 'Invite', 790, yy, 194, 40, 'invite:' + o.name, { fs: 18, r: 10, off: !!st || !!o.busy }); yy += 48; }
+      if (!AF.online.length) T(u ? 'nobody else is on the war-net' : 'sign in to invite friends', 520, oy + 34, '500 18px system-ui', '#8a8298', 'left', 460);
+      if (u) B('Invite by name…', 520, 536, 230, 44, 'invite-name', { fs: 18, r: 10, ...DIM, off: !(window.coop && window.coop.connected) });
+      B('Start Fight', 520, 592, 464, 80, 'start', { fs: 32, col: '#ff6a5a', bg: 'rgba(255,106,90,.22)' });
+    } else T('Waiting for ' + L.host + ' to start the fight…', 520, oy + 24, '600 22px system-ui', '#c9bfda', 'left', 460);
+    const msg = (document.getElementById('al-msg') || {}).textContent || ''; if (msg) T(msg, 40, 646, '500 17px system-ui', '#ffe089', 'left', 456);
+    B('🛒 Market', 40, 690, 210, 54, 'market', { fs: 20, ...DIM }); B(host ? 'Leave lobby' : 'Leave', 270, 690, 210, 54, 'leave-lobby', { fs: 20, ...DIM });
+  } else if (page === 'end') {                            // THE END: the result, how close it was, the whole purse (what afRevealStart tells one line at a time), the standings
     const st = AF.standings || afStandings(), w = AF.winner, pit = AF.cfg.venue === 'pit', mine = AF.me ? AF.me.team : -1;
     const wName = w >= 0 && pit ? ((AF.bodies.find(b => b.team === w) || {}).name || AF_TEAMS[w].name) : (w >= 0 ? AF_TEAMS[w].name : '');
-    T(w < 0 ? 'DRAW' : wName + ' holds the pit', W / 2, 46, '900 46px system-ui', '#ffd34d', 'center', W - 60);
-    T((AF.me ? (mine === w ? (pit ? 'You won.' : 'Your team won.') : (pit ? 'You fell.' : 'Your team fell.')) : '') + (AF.starName ? '   ★ Star of the match: ' + AF.starName : ''), W / 2, 112, '600 28px system-ui', '#e8def8', 'center', W - 60);
+    T(w < 0 ? 'DRAW' : wName + ' holds the pit', W / 2, 36, '900 44px system-ui', '#ffd34d', 'center', W - 60);
+    T((AF.me ? (mine === w ? (pit ? 'You won.' : 'Your team won.') : (pit ? 'You fell.' : 'Your team fell.')) : '') + (AF.starName ? '   ★ Star of the match: ' + AF.starName : ''), W / 2, 96, '600 26px system-ui', '#e8def8', 'center', W - 60);
+    if (AF.starName) VRM.items.push({ x: 200, y: 92, w: 624, h: 32, act: 'prof:|' + AF.starName });
+    const nm = AF.me ? afNearMiss() : ''; if (nm) T(nm, W / 2, 134, '500 19px system-ui', '#c9bfda', 'center', W - 60);
+    let y = 168;
     if (AF.me && u) {
       const r = AF.reward;
-      if (!r) T('tallying the purse…', W / 2, 168, '500 26px system-ui', '#8a8298', 'center');
-      else if (r.error) T(r.error, W / 2, 168, '500 24px system-ui', '#8a8298', 'center', W - 60);
-      else { T('+' + r.xp + ' XP  ·  +' + r.gold + ' gold' + (r.trophies ? '  ·  +' + r.trophies + ' 🏆' : ''), W / 2, 164, '800 32px system-ui', '#ffe089', 'center');
-        const more = [r.star ? '★ Star of the match — the purse is half again' : '', r.rankUp ? 'Rank up — you are now ' + r.rankUp : '', r.loot ? '✦ Loot: ' + afItemName(r.loot) + ' — yours, and already worn' : ''].filter(Boolean);
-        more.forEach((s, i) => T(s, W / 2, 210 + i * 30, '600 22px system-ui', '#ffd34d', 'center', W - 60)); }
+      if (!r) T('tallying the purse…', W / 2, y, '500 24px system-ui', '#8a8298', 'center');
+      else if (r.error) T(r.error, W / 2, y, '500 22px system-ui', '#8a8298', 'center', W - 60);
+      else { T('+' + r.xp + ' XP  ·  +' + r.gold + ' gold' + (r.trophies ? '  ·  +' + r.trophies + ' 🏆' : ''), W / 2, y, '800 30px system-ui', '#ffe089', 'center'); y += 40;
+        for (const [s, col] of vrRewardLines(r).slice(0, 6)) { T(s, W / 2, y, '600 19px system-ui', col, 'center', W - 60); y += 26; } }
     }
-    let y = 320;
-    st.slice(0, 5).forEach((s, i) => { T((i + 1) + '. ' + AF_TEAMS[s.team].name, 80, y, '800 26px system-ui', AF_TEAMS[s.team].col); T((s.names || []).slice(0, 4).join(', '), 330, y, '500 24px system-ui', '#c9bfda', 'left', 560); T((s.alive || 0) + ' standing · ' + (s.kills || 0) + ' kills', 944, y, '500 24px system-ui', '#e8def8', 'right'); y += 40; });
+    y = Math.max(y + 12, 330);
+    st.slice(0, 4).forEach((s, i) => { T((i + 1) + '. ' + AF_TEAMS[s.team].name, 60, y, '800 24px system-ui', AF_TEAMS[s.team].col); T((s.names || []).slice(0, 4).join(', '), 300, y + 1, '500 21px system-ui', '#c9bfda', 'left', 560); T((s.alive || 0) + ' standing · ' + (s.kills || 0) + ' kills', 964, y + 1, '500 21px system-ui', '#e8def8', 'right'); y += 36; });
     if (AF.role !== 'guest') B('↻ Rematch', 150, 620, 340, 84, 'rematch', { fs: 30 }); else T('the host may call a rematch', 320, 650, '500 22px system-ui', '#8a8298', 'center');
     B('Leave the pit', 534, 620, 340, 84, 'leave-pit', { fs: 28, ...DIM });
   }
   p.userData.tex.needsUpdate = true;
+}
+function vrRewardLines(r) {                                 // the purse as lines: what the flat screen reveals one line at a time (afRevealStart)
+  const C = window.ARENA_CAT, L = [];
+  if (r.star) L.push(['★ Star of the match — the purse is half again', '#ffe089']);
+  if (r.rankUp) L.push(['⬆ Rank up — you are now ' + r.rankUp, '#9fd6ff']);
+  if (r.wager) L.push([r.wager > 0 ? '🎲 The wager: +' + r.wager + ' gold — the stake back, and as much again' : '🎲 The wager: ' + r.wager + ' gold — the stake is gone', r.wager > 0 ? '#ffd34d' : '#ff9a9a']);
+  if (r.purse) L.push([r.purse > 0 ? 'Taken from the beaten players\' purses: +' + r.purse + ' gold' : 'The winners took ' + (-r.purse) + ' gold from your purse', '#e8def8']);
+  if (r.loot) L.push(['✦ Loot: ' + afItemName(r.loot) + ' — a unique, yours, and already worn', '#ffd34d']); else if (r.lootGold) L.push(['Loot: a purse of ' + r.lootGold + ' gold', '#e8def8']);
+  else if (r.won && C) L.push(['Loot: nothing this time · a unique next win: ' + Math.round(C.uniqueChance(r.pity | 0) * 100) + '%', '#8a8298']);
+  for (const b of r.bests || []) { const lb = C ? (C.ARENA_BESTS.find(x => x[0] === b.k) || [])[1] : b.k; L.push(['🏅 New personal best — ' + (b.k === 'life' ? afFmtSecs(b.v) : b.v) + ' ' + (lb || b.k), '#ffe089']); }
+  if (r.rival) L.push([r.rival.beaten ? '⚔ A score settled — ' + r.rival.name + ' is beaten: +' + r.rival.xp + ' XP · +' + r.rival.gold + ' gold' : '⚔ ' + r.rival.name + ' felled you' + (r.rival.times > 1 ? ' — ' + r.rival.times + ' times now' : '') + '. He waits in your next pit.', r.rival.beaten ? '#ffd34d' : '#ff9a9a']);
+  if (r.belt) L.push([r.belt.held ? '🏆 The champion\'s belt stays yours — ' + r.belt.defenses + ' defense' + (r.belt.defenses === 1 ? '' : 's') : '🏆 You took the champion\'s belt' + (r.belt.taken ? ' from ' + r.belt.taken : ''), '#ffd34d']);
+  if (r.passed) L.push(['📈 You passed ' + r.passed.name + (r.passed.n > 1 ? ' and ' + (r.passed.n - 1) + ' other' + (r.passed.n > 2 ? 's' : '') : '') + ' on the ladder' + (r.position ? ' — you are #' + r.position : ''), '#9fd6ff']);
+  if (r.daily) L.push(['📅 The bout of the day: ' + r.daily.score + ' points' + (r.daily.top ? ' — the top of the board' : r.daily.best > r.daily.score ? ' (your best today: ' + r.daily.best + ')' : r.daily.toBeat ? ' · ' + r.daily.toBeat + ' more takes the board' : ''), r.daily.top ? '#ffd34d' : '#e8def8']);
+  if (r.achievements) L.push(['🏅 ' + r.achievements.join(' · '), '#ffe089']);
+  return L;
+}
+function vrLobbyOpt(key, v) {                               // the host's rows the DOM sets through setOpt: the pit's size, the hour, the sky, the ground
+  const L = AF.lobby; if (!L || L.role !== 'host' || !['pit', 'time', 'weather', 'ground'].includes(key)) return; L[key] = v; afLobbyRender(); afLobbyBroadcast();
+}
+function vrInviteByName() {
+  const n = VRM.kb.user.trim(); if (!n) return; afInvite(n); VRM.signin = false; VRM.kb.mode = 'auth'; VRM.kb.user = '';
+}
+function vrHallWear(id) {
+  const C = window.ARENA_CAT, it = C && C.ARENA_ITEMS[id]; if (!it || !window.net || !window.net.arenaEquip) return;
+  window.net.arenaEquip(it.slot, id).then(r => { if (r && r.career) { AF.career = Object.assign(AF.career || {}, r.career); try { afHallRender(); afShellFigure(); } catch (e) {} } }).catch(() => {});
 }
 function vrLobbyBump(key, d) {                              // (the DOM's bump lives in afWireLobbyUi's closure)
   const L = AF.lobby; if (!L || L.role !== 'host') return; const LM = afLim(L), lim = key === 'teams' ? [LM.teamsMin, LM.teamsMax] : [LM.perMin, LM.perMax];
@@ -17610,7 +17842,7 @@ function vrKey(k) {
   if (k === 'SHIFT') K.shift = !K.shift;
   else if (k === 'BS') { if (K.field === 'pass') K.pass = K.pass.slice(0, -1); else K.user = K.user.slice(0, -1); }
   else if (k === 'SP') { if (K.field === 'pass') put(' '); }
-  else if (k === 'NEXT') { if (K.field === 'user') K.field = 'pass'; else vrAuth('login'); }
+  else if (k === 'NEXT') { if (K.mode === 'invite') vrInviteByName(); else if (K.field === 'user') K.field = 'pass'; else vrAuth('login'); }
   else { put(K.shift ? k.toUpperCase() : k); K.shift = false; }
 }
 function vrAuth(kind) {
@@ -17625,12 +17857,28 @@ function vrMenuAct(act) {
     else if (act === 'exit') { if (VR.session) VR.session.end(); }
     else if (act === 'accept') afAcceptInvite();
     else if (act === 'decline') afDeclineInvite();
-    else if (act === 'back') { if (VRM.signin) { VRM.signin = false; VRM.kb.msg = ''; } else afShellBack(); }
+    else if (act === 'back') { if (VRM.signin) { VRM.signin = false; VRM.kb.msg = ''; VRM.kb.mode = 'auth'; } else afShellBack(); }
     else if (act === 'market') afMarketOpen();
     else if (act === 'career') { afHomeRender(); afShellPage('career'); }
+    else if (act === 'help') afShellPage('help');
+    else if (act === 'daily') afDailyOpen();
+    else if (act === 'daily:fight') { try { SFX.init && SFX.init(); } catch (e) {} afDailyStart(); }
+    else if (act === 'hall') afHallOpen();
+    else if (A[0] === 'hall') { if (A[1] === 'tab') VRM.hallTab = A[2]; else if (A[1] === 'wear') vrHallWear(A[2]); }
+    else if (act === 'rival') { const rv = AF.career && AF.career.meta && AF.career.meta.rival; if (rv) afProfileOpen(rv.name, 'npc'); }
+    else if (A[0] === 'gear') { AF.marketTab = A[1]; afMarketOpen(); }
+    else if (A[0] === 'opt') vrLobbyOpt(A[1], A[2]);
+    else if (A[0] === 'xp') { const L = AF.lobby; if (L && L.role === 'host') { L.xp = A[1]; afRollNpcMix(L); afLobbyRender(); afLobbyBroadcast(); } }
+    else if (A[0] === 'wager') { const L = AF.lobby; if (L && L.role === 'host') { L.wager = +A[1] || 0; afLobbyRender(); afLobbyBroadcast(); } }
+    else if (act === 'invite-name') { VRM.signin = true; VRM.kb.mode = 'invite'; VRM.kb.field = 'user'; VRM.kb.user = ''; VRM.kb.msg = ''; }
+    else if (act === 'invite:go') vrInviteByName();
+    else if (A[0] === 'watch') vrSpecWatch(+A[1] || 1);
+    else if (act === 'stands') vrSpecStands();
+    else if (act === 'skip') afSpecSkip();
+    else if (act === 'leave-fight') vrSpecLeave();
     else if (A[0] === 'ladder') { afLadderOpen(A.includes('network') ? 'network' : 'global', A.includes('npc') ? 'npc' : 'player'); VRM.ladPg = 0; }
     else if (A[0] === 'prof') { const s = act.slice(5), i = s.indexOf('|'); afProfileOpen(s.slice(i + 1), s.slice(0, i) || undefined); }
-    else if (act === 'signin') { VRM.signin = true; VRM.kb.field = 'user'; VRM.kb.msg = ''; }
+    else if (act === 'signin') { VRM.signin = true; VRM.kb.mode = 'auth'; VRM.kb.field = 'user'; VRM.kb.msg = ''; }
     else if (act === 'signout') vrSignOut();
     else if (A[0] === 'field') VRM.kb.field = A[1];
     else if (A[0] === 'key') vrKey(act.slice(4));
@@ -17654,6 +17902,7 @@ function vrMenuAct(act) {
 function vrLeavePit() {
   try { if (window.coop && window.coop.connected) window.coop.leave(); } catch (e) {}
   AF.leaving = true; afClear(); AF.on = false; AF.over = false; AF.phase = 'lobby'; AF.role = 'solo'; AF.hostPeer = null; AF.roster = []; AF.goSpec = null; AF.lobby = null; AF.me = null; AF.inputs.clear(); AF.leaving = false; AF.reward = null; AF.victory = null;
+  VR.film = null; VR.capTxt = null; VR.spot = null; VRM.leaveArmed = false; if (VR.cap) VR.cap.visible = false;
   try { SFX.bed('murmur_loop', 0); SFX.bed('crowd_loop', 0); } catch (e) {}
   afCloseLobbyUi(); afShellPage(afSession() ? 'home' : 'title'); try { afHomeResume(); } catch (e) {}
   vrMenuHall(true); VRM.fresh = true;
@@ -18934,7 +19183,9 @@ function afIntroDrop(b, S, wp, sdt) {
   afCommit(b, sdt);
 }
 function afIntroCam(px, py, pz, lx, ly, lz, fov, smooth) {
-  const I = AF.intro; tmpV.set(px, py, pz);
+  const I = AF.intro;
+  if (VR.on) { vrFilmCam(px, py, pz, lx, ly, lz, I.cut, AF.cfg.venue === 'pit'); I.cut = false; if (fov) AF.fov = fov; return; }   // (a headset: the shot places the rig — see THE FILMS IN THE HEADSET)
+  tmpV.set(px, py, pz);
   if (I.cut || !smooth) camera.position.copy(tmpV); else camera.position.lerp(tmpV, clamp(smooth, 0, 1));
   I.cut = false; camera.lookAt(lx, ly, lz); if (fov) AF.fov = fov;
 }
@@ -18942,6 +19193,7 @@ function afIntroApplyShot() {
   const I = AF.intro, s = I.shots[I.i]; if (!s) return;
   I.shotT = 0; I.cut = true; AF.timeScale = s.ts || 1; if (s.onStart) s.onStart();
   const cap = document.getElementById('af-intro-cap'); if (cap) { cap.innerHTML = s.cap || ''; cap.style.opacity = s.cap ? '1' : '0'; }
+  VR.capTxt = vrPlain(s.cap);                                // (the headset's caption plate)
 }
 function afIntroCamera(dt) { const I = AF.intro, s = I.shots[I.i]; if (s) s.cam(clamp(I.shotT / s.dur, 0, 1), dt); }
 function afIntroStep(dt) {
@@ -19067,6 +19319,7 @@ function afVictoryBody(b, dt) {
   afCommit(b, dt);
 }
 function afOutroCam(px, py, pz, lx, ly, lz, fov, inPit) {
+  if (VR.on) { const O = AF.outro; vrFilmCam(px, py, pz, lx, ly, lz, !!(O && O.cut), inPit); if (O) O.cut = false; if (fov) AF.fov = fov; return; }   // (a headset: the shot places the rig)
   camera.position.set(px, py, pz);
   if (inPit) { afCamInPit(); afCamAboveGround(0.5); }
   camera.lookAt(lx, ly, lz); if (fov) AF.fov = fov;
@@ -19155,8 +19408,9 @@ function afOutroStart() {
 }
 function afOutroApplyShot() {
   const O = AF.outro, s = O.shots[O.i]; if (!s) return;
-  O.shotT = 0; if (s.onStart) s.onStart();
+  O.shotT = 0; O.cut = true; if (s.onStart) s.onStart();
   const cap = document.getElementById('af-intro-cap'); if (cap) { cap.innerHTML = s.cap || ''; cap.style.opacity = s.cap ? '1' : '0'; }
+  VR.capTxt = vrPlain(s.cap);                                // (the headset's caption plate)
 }
 function afOutroStep(dt) {
   const O = AF.outro; if (!O) return;
@@ -19164,7 +19418,7 @@ function afOutroStep(dt) {
   AF.roar = Math.max(AF.roar, O.i >= 1 ? 2.0 : 1.2);        // the house stays on its feet for the whole film
   if (O.shotT >= O.shots[O.i].dur) { O.i++; if (O.i >= O.shots.length) { afOutroEnd(); return; } afOutroApplyShot(); }
 }
-function afOutroCamera(dt) { const O = AF.outro, s = O.shots[O.i]; if (s) s.cam(clamp(O.shotT / s.dur, 0, 1), dt); afOutroShift(true); }
+function afOutroCamera(dt) { const O = AF.outro, s = O.shots[O.i]; if (s) s.cam(clamp(O.shotT / s.dur, 0, 1), dt); if (!VR.on) afOutroShift(true); }   // (the off-centre frame is the flat screen's — a headset has no board beside the film)
 function afOutroEnd() {
   if (!AF.outro) return; AF.outro = null; AF.fov = CAM_BASE_FOV; afOutroShift(false);
   afIntroUi(false); afHud(); afSpecLabel(true);
@@ -20719,7 +20973,7 @@ function afFinish(winner, standings) {
   afBanner(winner < 0 ? 'DRAW' : winner === mine ? 'VICTORY' : AF_TEAMS[winner].name + ' WINS', winner === mine ? 'your team holds the pit' : winner < 0 ? 'the bell rang on a stalemate' : 'the pit belongs to them', 3.5);
   try { document.exitPointerLock && document.exitPointerLock(); } catch (e) {}
   afVictoryStart();                                          // the living freeze where they stand, the winners' blades go up (afVictoryBody)
-  if (!AF.leaving && !AF.hurry && !AF.outroOff && !VR.on && afOutroStart()) return;   // the film ends on the panel; skipped, hurried or off: the panel as before
+  if (!AF.leaving && !AF.hurry && !AF.outroOff && afOutroStart()) return;   // the film ends on the panel (in a headset too — vrFilmCam); skipped, hurried or off: the panel as before
   setTimeout(() => { if (!AF.leaving) afEndPanel(); }, 1600);
 }
 
@@ -21563,7 +21817,7 @@ function afBoot(spec) {
   AF.firstBlood = false; AF.lastMan = false; AF.reveal = null; AF.xpBefore = AF.career ? AF.career.xp | 0 : null; AF.goldBefore = AF.career ? AF.career.gold | 0 : null;
   afHud();
   AF.intro = null; AF.timeScale = 1;
-  if (!AF.introOff && !VR.on) { AF.phase = 'intro'; try { afIntroStart(); } catch (e) { console.warn('[arena] intro', e); AF.intro = null; AF.phase = 'countdown'; for (const b of AF.bodies) { if (b.home) { b.x = b.home.x; b.z = b.home.z; b.yaw = b.home.yaw; } b.intro = null; b.yOff = 0; b.group.visible = true; afCommit(b, 0.016); } } }   // the entrance: gates, the march in, the stars in slow motion (the pits: the stair and the drop)
+  if (!AF.introOff) { AF.phase = 'intro'; try { afIntroStart(); } catch (e) { console.warn('[arena] intro', e); AF.intro = null; AF.phase = 'countdown'; for (const b of AF.bodies) { if (b.home) { b.x = b.home.x; b.z = b.home.z; b.yaw = b.home.yaw; } b.intro = null; b.yOff = 0; b.group.visible = true; afCommit(b, 0.016); } } }   // the entrance: gates, the march in, the stars in slow motion (the pits: the stair and the drop)
   if (AF.phase !== 'intro') { if (inPit) afBanner('THE PITS', AF.bodies.length + ' in the ring — every man for himself', 2.6); else afBanner(AF.cfg.teams + ' TEAMS · ' + AF.cfg.per + ' EACH', AF.me ? 'you fight for ' + AF.me.teamDef.name + ' — steel yourself' : '', 2.6); }
   vrButton();                                                // a headset in the browser: the way into the pit in first person
   if (AF.role === 'guest') afSend({ k: 'go-ack', seed: AF.seed });   // tell the host the start got here (it re-sends until we do)

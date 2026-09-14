@@ -935,7 +935,7 @@ What this pass did **not** do, and why: binary frames (JSON rows are ~1.5× the 
 bottleneck), a Durable Object per room, WebRTC or a dedicated sim server — those cost money or
 weeks; see the measurements first. Loose horses still use the old lerp toward the latest row.
 
-A guest in a **headset** (`VR.md`) sends `{k:'vrhit', i, w, heavy}` when his blade touches a man — the host checks reach and a per-target cooldown and lands it as his blow — and his `{k:'in'}` carries `px, pz` (where his head walked him), believed within three units.
+A guest in a **headset** (`VR.md`) sends `{k:'vrhit', i, w, heavy}` when his blade touches a man — the host checks reach and a per-target cooldown and lands it as his blow — and his `{k:'in'}` carries `px, pz` (where his head walked him), believed within three units. The entrance and the end-game films play in the headset too: the same shot lists, `afIntroCam` / `afOutroCam` placing the rig instead of the camera (`vrFilmCam` — a cut turns the rig so the subject is where the player looks; within a shot the rig only glides).
 
 Lobby messages (`{k:'lobby'}` host→guests, `{k:'team'}` / `{k:'weapon'}` guest→host,
 `{k:'invite-declined'}` via `dm`) ride the same room.

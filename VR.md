@@ -1,12 +1,16 @@
 # Blade Vale VR — first-person arena fighting on a WebXR headset
 
-Status: **BUILT, v1.2 (2026-09-13) — VR FIRST.** The headset goes on at the title screen and nothing sends you back
-to the flat screen: home, **sign-in with an on-panel keyboard**, the **marketplace** (try on, buy, wear, take off),
-your **career**, the **rankings**, any fighter's **profile**, the controls, the lobby, a challenge and the end of the
-fight are one **panel in the headset** with a laser pointer; your fighter stands beside it in what you own. Guests
-fight in VR too (`vrhit`, `px/pz`). Sign-in / sign-out and leaving a pit happen in place (no page reload — a reload
-would end the session). Verified end to end against a fake headset (`?xrshim`), host and guest; not yet felt on real
-hardware. The original plan (Rift, six phases) is kept at the bottom.
+Status: **BUILT, v1.4 (2026-09-14) — VR FIRST, the same game as the phone.** The headset goes on at the title screen
+and nothing sends you back to the flat screen: the home with everything the phone's HUD says (the rank bar, the purse,
+the **bout of the day**, the **rival**, the doors with a reason on each, the nearest achievement, your kit), **sign-in
+with an on-panel keyboard**, the **marketplace** (try on, buy, wear, take off), your **career**, the **hall of
+trophies**, the **rankings**, any fighter's **profile**, the controls, the **whole lobby** (venue, teams, class, the
+pit's size, hour, sky, ground, foes, wager, invites by name), a challenge, a **dead man's seat** and the end of the
+fight are one **panel in the headset** with a laser pointer; your fighter stands beside it in what you own. **The
+films play in the headset** — the entrance and the end-game, shot for shot, with you standing where the lens stood
+(section 3, "The films"). Guests fight in VR too (`vrhit`, `px/pz`). Sign-in / sign-out and leaving a pit happen in
+place (no page reload — a reload would end the session). Verified end to end against a fake headset (`?xrshim`),
+host and guest; not yet felt on real hardware. The original plan (Rift, six phases) is kept at the bottom.
 
 ## 1. Try it on a Quest
 
@@ -18,18 +22,24 @@ bladevale.com is https, and the Quest's own browser has WebXR, so nothing is ins
 2. You stand in a dark hall with a **panel** in front of you: point the right controller at it, squeeze the trigger.
    **Enter the Arena** opens the lobby on the panel — venue, teams, fighters a side, the seats, who is online with an
    Invite button each, Start Fight. A challenge from a friend arrives on the panel too, Accept / Decline.
-3. Start (or the host's start, if you were invited): the panel goes, the entrance film and the countdown sweep are
-   skipped, and you are standing in your fighter. The **pits** venue is the safest first try — small, dark, few bodies.
-4. At the bell the panel comes back with the result, the purse when it lands, the standings, **Rematch** (host) and
-   **Leave the pit** — which tears the pit down in place and puts you back in the hall, headset still on.
-5. The headset's own system gesture ends the session at any point; the flat screen carries on from the same state.
+3. Start (or the host's start, if you were invited): the panel goes and the **entrance film** plays round you — the
+   gates, the column, the stars, or the stair and the drop in the pits — a cut at a time, each one placing you where
+   the lens stood, facing the subject; **B / Y skips**. Then a cut into your fighter for the countdown (no sweep). The
+   **pits** venue is the safest first try — small, dark, few bodies.
+4. If you fall, a short card hangs under your eyes: **Watch** a fighter (a cut to a stride behind him), **From the
+   stands** (the balustrade, or the flagstones over the pit's lip), **Skip to the end** (alone) or **Leave**.
+5. At the bell the **end-game film** plays (the star, the line, the house, the crane), then the panel comes back with
+   the result, how close it was, the whole purse, the standings, **Rematch** (host) and **Leave the pit** — which
+   tears the pit down in place and puts you back in the hall, headset still on.
+6. The headset's own system gesture ends the session at any point; the flat screen carries on from the same state.
 
 A PC headset works the same way from Chrome/Edge on Windows with the Oculus/SteamVR OpenXR runtime
 active, at `https://bladevale.com` (or `http://localhost:8787` from the node server; a LAN IP over plain
 http will NOT expose WebXR).
 
 **Not yet true:** a guest's blade seen moving by the others, the market's picture cards (the panel lists wares as
-rows; the try-on shows on the figure beside the panel), the string pulled back on the bow as you draw.
+rows; the try-on shows on the figure beside the panel), the string pulled back on the bow as you draw, the home's
+graphics pick and net readout (flat-screen settings; the headset has its own budget, `VR.q`), the Share button.
 
 ## 2. How it plays
 
@@ -69,9 +79,41 @@ banner for what `afBanner` says (FIGHT, VICTORY…). NPCs read a fast blade as a
   back (`userData.vrHome`); it runs on session end and in `afClear`.
 - **Blade.** `vrBlade` samples hilt and tip in world space, smooths the tip speed, spawns the blade trail
   while fast, and `vrStrike` runs a segment-vs-capsule test (`vrSegDist`) against foes within 6 units.
-- **What is bypassed while presenting:** `afCamera` (and so the shake/kick/FOV punch), `afJuice`
-  (haptics instead), `AF_POST` (XR owns the framebuffer), the entrance and end-game films, the resize
-  handler, and the rAF chain (`renderer.setAnimationLoop` drives `afFrame(now, true)`).
+- **What is bypassed while presenting:** `afCamera` (and so the shake/kick/FOV punch and the countdown sweep),
+  `afJuice` (haptics instead), `AF_POST` (XR owns the framebuffer), the end film's off-centre frame
+  (`afOutroShift`), the resize handler, and the rAF chain (`renderer.setAnimationLoop` drives `afFrame(now, true)`).
+
+### The films in the headset (2026-09-14)
+
+The entrance (`afIntroStart`, `afPitIntroStart`) and the end-game (`afOutroCompose`) are shot lists that place a
+lens — position, look-at, focal length — through `afIntroCam` / `afOutroCam`. While presenting both route to
+`vrFilmCam`, which places the **rig** instead of the camera:
+
+- **A cut** (`I.cut` / `O.cut`, set by the apply-shot functions) turns the rig so the subject lands exactly where the
+  player is looking at that moment (`rig.rotation.y = lookYaw − headLocalYaw`) and moves it so the head stands where
+  the lens stood; the head's offset from the rig at that moment is remembered (`VR.film.ox/oy/oz`) and kept for the
+  shot, so the player's own leaning and looking stay free — nothing is ever re-imposed on the head. Every cut blinks
+  black for ~140 ms (`VR.fade`, a head-locked plane).
+- **Within a shot** the rig glides along the lens's path but is **never rotated**, and no faster than
+  `VR_FILM.glide` (2.2 m/s; the lens's own crane and orbit are faster — the rig lags, the next cut catches up); the
+  comfort vignette rises with the glide speed. A lens looking steeper than `VR_FILM.maxPitch` (0.55 rad — the aerials,
+  the top shot over a block) is brought to a place a standing man can look from: the same distance, a 30° glance down.
+- Captions go on a head-locked plate under the eyes (`VR.cap`, `vrPlain` turns the letterbox's HTML into lines — an
+  all-caps line is a small header). **B / Y skips** (`afIntroSkip`, the same as the flat screen's button).
+- Your own body is one of the men in the film: it is **undressed** for the length of it (whole, sword in hand, it marches
+  with the others) and dressed again at the cut back — `vrFilmEnd` turns the rig so the head faces the body's yaw.
+  The panel stays hidden through the end film; the results page follows it.
+- Entering VR mid-film (the Enter VR button during the entrance) carries the film on in the headset from the next cut.
+
+### A dead man's seat
+
+The flat screen's spectator bar rides a fighter's shoulder or a free camera; a headset must not be ridden. Fallen, a
+short card hangs under the eye line (`fallen` page, the panel placed 0.58 m under the eyes, only its top painted):
+**Watch ◀ / ▶** picks a fighter (`afSpecPick`) and cuts you to a stride behind him, facing him (`vrSpecWatch` — a
+cut, never a ride; press again to catch up with him), **From the stands** puts you at the podium's balustrade (the
+pits: the flagstones over the lip) on your corpse's bearing, facing the sand (`vrSpecStands`), **Skip to the end**
+is `afSpecSkip` (alone in the pit), **Leave the pit** asks twice when you host guests (`vrSpecLeave` — `confirm()`
+is invisible in a headset). The seat is `VR.spot`; `vrFrame` puts the rig there instead of on the corpse.
 - **Quality on entry:** shadow map 1024 PCF (restored on exit), framebuffer scale 1.0 (`VR.q`). Nothing
   has been measured on a Quest; if the colosseum cannot hold 72 Hz, lower `VR.q.fbScale`, drop shadows,
   or make the pits the VR venue.
@@ -79,11 +121,24 @@ banner for what `afBanner` says (FIGHT, VICTORY…). NPCs read a fast blade as a
 
 ### The menus in the headset (`VR MENUS` in game.js, after the VR section)
 
-- **One panel, every page.** `vrMenuPage()` reads the same state the DOM shows: a fight that is over → `end`; no
-  fight and `AF.invite` → `invite`; `VRM.signin` → `signin`; `AF.lobby` → `lobby`; `SHELL.page` market / career /
-  ladder / profile / help → that page; else `home`. During a fight the panel is hidden. The sub-pages are opened
-  through the DOM's own functions (`afMarketOpen`, `afLadderOpen`, `afProfileOpen`, `afShellPage('career')`) and
-  read their data where the DOM does (`AF.career`, `LADDER`, `AF.profile`, `ARENA_CAT`); Back is `afShellBack`.
+- **One panel, every page.** `vrMenuPage()` reads the same state the DOM shows: a fight that is over → `end` (once
+  the end film is done); a fight you fell in → `fallen`; no fight and `AF.invite` → `invite`; `VRM.signin` →
+  `signin` (sign-in, or an invite by name — `VRM.kb.mode`); `AF.lobby` → `lobby`; `SHELL.page` market / career /
+  ladder / profile / help / daily / hall → that page; else `home`. During a fight the panel is hidden. The sub-pages
+  are opened through the DOM's own functions (`afMarketOpen`, `afLadderOpen`, `afProfileOpen`, `afDailyOpen`,
+  `afHallOpen`, `afShellPage('career')`) and read their data where the DOM does (`AF.career`, `LADDER`, `AF.profile`,
+  `DAILY`, `ARENA_CAT`); Back is `afShellBack`.
+- **The home is the phone's HUD** (2026-09-14, `afHomeHud` mirrored): the rank bar and the XP to the next rank, gold,
+  best streak, the record; the **bout of the day** card (name, sand, the clock to midnight, where you stand; **Fight
+  it** = `afDailyStart`, the card = the day's page and board); the **rival** card (→ his profile); **Fight** with who
+  is online; the three doors — Market (what you can afford), Rankings (▲/▼ since last time), Trophies (uniques) —
+  the nearest achievement with its pips; your kit as chips (a press opens that stall). The **hall of trophies** page
+  has two tabs: the belt, the rival, the bests, the uniques with **Wear it** (`vrHallWear` → `net.arenaEquip`), and
+  every achievement with the road to it. The **lobby** page carries every row the flat screen has: venue, teams, per
+  (±1, ±10), your class, pit size, hour, sky, ground, foes, wager (`vrLobbyOpt`, `afRollNpcMix` for the foes),
+  the seats, who is online (four, Invite each), **Invite by name…** (the keyboard), Start. The **end** page adds how
+  close it was (`afNearMiss`) and the whole purse (`vrRewardLines`: star, rank up, wager, purse, loot, bests, rival,
+  belt, whom you passed, the bout of the day, achievements).
 - **Sign-in in place.** `client-net.js`: `net.login / register(u, p, stay)` and `net.logout(stay)` — with `stay`
   the session (and the player token) change in place instead of reloading the page; `vrSignedIn` then runs what
   the reload used to: the auth gate, the home, presence on the war-net, the career. The keyboard is `VRM_KEYS`
@@ -117,7 +172,10 @@ banner for what `afBanner` says (FIGHT, VICTORY…). NPCs read a fast blade as a
   back. A VR guest's `{k:'in'}` also carries `px, pz` (where the head walked him); the host believes it within
   three units, and the guest's own body skips the snapshot's soft correction (only a real disagreement snaps).
 - **Hooks.** `BV.vrMenu()` reads the panel (page, visible, items, pointer uv); `BV.vrMenu('start')` presses a
-  button by name; `BV.VRM` is the live state.
+  button by name (`'daily:fight'`, `'hall:tab:ach'`, `'opt:time:night'`, `'wager:50'`, `'watch:1'`, `'stands'`,
+  `'skip'`, `'leave-fight'`…); `BV.VRM` is the live state. The films: `BV.VR.film` (the shot the rig stands in,
+  `spd` its glide), `BV.VR.capTxt`, `BV.VR.fade`; the panel canvas can be read back with
+  `BV.VRM.panel.userData.cv.toDataURL()` for a look at any page.
 
 ## 4. Testing without a headset
 
@@ -138,7 +196,9 @@ Stereo frames were read back from the canvas and checked as images.
 ## 5. Next
 
 1. **Hardware feel pass** — the whole reason to own a headset: swing thresholds (`VR_T`), the blade's
-   default tilt, the shield's position on the forearm (`VR_SHIELD`), snap angle, vignette strength.
+   default tilt, the shield's position on the forearm (`VR_SHIELD`), snap angle, vignette strength; the films'
+   glide cap and pitch (`VR_FILM`) — whether a 2.2 m/s glide and a 30° glance down sit well, or the films want
+   still shots only.
 2. Perf on Quest 2/3: measure; crowd LOD and shadow budget if needed.
 3. Arm IK so the figure's arms reach the controllers (they are collapsed now; looking down shows chest
    and legs only).

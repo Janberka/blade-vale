@@ -40,7 +40,8 @@ function buy(acctId, id) {
   write(acctId, c); return { ok: true, career: view(c) };
 }
 function setLook(acctId, look) {                            // the barber: skin, hair, hair colour, beard — kept in the career's meta
-  const c = parse(row(acctId)), L = cleanLook(look); if (!L) return { ok: false, error: 'no such look', career: view(c) };
+  const c = parse(row(acctId)), L = cleanLook(look); if (look && look.clear) { c.meta.look = null; write(acctId, c); return { ok: true, career: view(c) }; }   // (back to the rolled face)
+  if (!L) return { ok: false, error: 'no such look', career: view(c) };
   c.meta.look = Object.assign({}, c.meta.look || {}, L); write(acctId, c); return { ok: true, career: view(c) };
 }
 function equip(acctId, slot, id) {

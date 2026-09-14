@@ -22937,7 +22937,7 @@ BV.ladder = (scope, kind) => { afLadderOpen(scope, kind); return LADDER; };     
 // ---- THE SHELL: one layout for every screen outside the fight — the fighter on the left, the page on the right,
 // Back always in the same place, ? a page like any other. #start IS the shell (so everything that hid the title
 // screen still hides it); the pages are its .page children (afShellPage shows one). ----
-const SHELL = { page: null, stack: [], bootHash: (typeof location !== 'undefined' && location.hash) || '', titles: { title: 'Blade Vale', home: 'Blade Vale', career: 'Career & stats', lobby: 'Arena Fights', market: 'Marketplace', help: 'Controls', profile: 'Fighter', ladder: 'Rankings', daily: 'Bout of the day', hall: 'Hall of trophies' } };
+const SHELL = { page: null, stack: [], bootHash: (typeof location !== 'undefined' && location.hash) || '', titles: { title: 'Blade Vale', home: 'Blade Vale', career: 'Career & stats', lobby: 'Arena Fights', market: 'Marketplace', barber: 'The barber', help: 'Controls', profile: 'Fighter', ladder: 'Rankings', daily: 'Bout of the day', hall: 'Hall of trophies' } };
 function afShellVisible() { const st = document.getElementById('start'); return !!(st && !st.classList.contains('hidden') && SHELL.page); }
 function afShellPage(name, o) {
   const st = document.getElementById('start'); if (!st || !document.getElementById('page-' + name)) return;
@@ -23035,31 +23035,40 @@ function afHomeHud() {
         const n = 5, lit = Math.min(n - 1, Math.floor(best.k * n)); pips.innerHTML = Array.from({ length: n }, (_, i) => '<i class="' + (i < lit ? 'on' : '') + '"></i>').join(''); } } }
   // his kit: what he rides in with, a chip a slot — a tap opens that stall of the market
   { const gear = afGear(), el = g('hm-gear'); el.innerHTML = '<span class="look" data-look="1" title="Your face: skin, hair, beard">✂ Look</span>' + ['sword', 'armor', 'helm', 'shield', 'bow', 'horse'].map(sl => gear[sl] && I[gear[sl]] ? '<span data-slot="' + sl + '">' + escHtml(I[gear[sl]].name) + '</span>' : '<span class="none" data-slot="' + sl + '" title="no ' + (sl === 'armor' ? 'armour' : sl) + ' yet — the market has one">—</span>').join('');
-    const lb = el.querySelector('[data-look]'); if (lb) lb.onclick = e => { e.stopPropagation(); afLookPanel(); }; }
+    const lb = el.querySelector('[data-look]'); if (lb) lb.onclick = e => { e.stopPropagation(); afBarberOpen(); }; }
 }
-// THE BARBER: your own face — skin tone, hair style and colour, beard. Saved with the career (the server keeps it in the
-// career's meta, every guest paints the same man) and in this browser; the figure changes as you tap.
+// THE BARBER: your own face — skin tone, hair style and colour, beard. A page of the shell (the figure on the left, the
+// choices on the right, Back where it always is). Saved with the career (the server keeps it in the career's meta, every
+// guest paints the same man) and in this browser; the figure changes as you tap.
 function afLookGet() { const c = AF.career; return Object.assign({}, (c && c.meta && c.meta.look) || AF.myLook || {}); }
 function afLookSet(patch) {
   const L = Object.assign(afLookGet(), patch); AF.myLook = L; try { localStorage.setItem('bv-look', JSON.stringify(L)); } catch (e) {}
   if (AF.career && AF.career.meta) AF.career.meta.look = L;                                              // (so afGear sees it at once)
   if (window.net && net.session && net.arenaLook) net.arenaLook(L).then(r => { if (r && r.career) AF.career = r.career; }).catch(() => {});
-  if (typeof afShellFigure === 'function') afShellFigure(); afHomeHud(); afLookPanel(true);
+  if (typeof afShellFigure === 'function') afShellFigure(); afHomeHud(); if (SHELL.page === 'barber') afBarberRender();
 }
-function afLookPanel(keep) {
-  const p = document.getElementById('hm-look'); if (!p) return; if (!keep && !p.hidden) { p.hidden = true; return; }
-  const L = afLookGet(), sw = (k, hexes, names) => hexes.map((h, i) => '<button class="sw' + (L[k] === i ? ' on' : '') + '" data-k="' + k + '" data-i="' + i + '" title="' + names[i] + '" style="background:#' + h.toString(16).padStart(6, '0') + '"></button>').join('');
-  const chips = (k, names) => names.map((n, i) => '<button class="ch' + (L[k] === i ? ' on' : '') + '" data-k="' + k + '" data-i="' + i + '">' + n + '</button>').join('');
-  p.innerHTML = '<div class="hm-look-row"><label>Skin</label><div>' + sw('s', LOOK_SKIN, LOOK_SKIN_NAMES) + '</div></div>'
-    + '<div class="hm-look-row"><label>Hair</label><div>' + chips('h', LOOK_HAIR_STYLES) + '</div></div>'
-    + '<div class="hm-look-row"><label>Colour</label><div>' + sw('c', LOOK_HAIR_PICK, LOOK_HAIR_PICK.map(h => '#' + h.toString(16))) + '</div></div>'
-    + '<div class="hm-look-row"><label>Beard</label><div>' + chips('b', LOOK_BEARD_STYLES) + '</div></div>'
-    + '<div class="hm-look-foot"><span>' + (window.net && net.session ? 'saved with your career' : 'saved in this browser — sign in to keep it') + '</span><button class="x" data-x="1">done</button></div>';
-  p.hidden = false;
-  for (const b of p.querySelectorAll('button')) b.onclick = e => { e.stopPropagation(); if (b.dataset.x) { p.hidden = true; return; } afLookSet({ [b.dataset.k]: +b.dataset.i }); };
+function afBarberOpen() { afShellPage('barber'); afBarberRender(); }
+function afBarberRender() {
+  const p = document.getElementById('barber-body'); if (!p) return; const L = afLookGet();
+  const sw = (k, hexes, names) => hexes.map((h, i) => '<button class="bb-sw' + (L[k] === i ? ' on' : '') + '" data-k="' + k + '" data-i="' + i + '" title="' + names[i] + '" style="background:#' + h.toString(16).padStart(6, '0') + '"><span>' + names[i] + '</span></button>').join('');
+  const chips = (k, names) => names.map((n, i) => '<button class="bb-ch' + (L[k] === i ? ' on' : '') + '" data-k="' + k + '" data-i="' + i + '">' + n + '</button>').join('');
+  const row = (label, sub, inner) => '<div class="bb-row"><div class="bb-lbl"><b>' + label + '</b><span>' + sub + '</span></div><div class="bb-opts">' + inner + '</div></div>';
+  p.innerHTML = '<div class="mk-head">' + (window.net && net.session ? 'Your face, kept with your career — every fighter in the pit sees it' : 'Kept in this browser — sign in and it follows your career') + '</div>'
+    + row('Skin', 'the tone', sw('s', LOOK_SKIN, LOOK_SKIN_NAMES))
+    + row('Hair', 'the cut', chips('h', LOOK_HAIR_STYLES))
+    + row('Colour', 'hair and beard', sw('c', LOOK_HAIR_PICK, ['black', 'dark brown', 'brown', 'auburn', 'red', 'fair', 'blond', 'grey', 'white']))
+    + row('Beard', 'the chin', chips('b', LOOK_BEARD_STYLES))
+    + '<div class="bb-foot"><button class="bb-reset" data-reset="1">Let the barber choose</button><span>(the face your name rolls)</span></div>';
+  for (const b of p.querySelectorAll('button')) b.onclick = e => { e.stopPropagation(); if (b.dataset.reset) { afLookClear(); return; } afLookSet({ [b.dataset.k]: +b.dataset.i }); };
+}
+function afLookClear() {                                    // back to the rolled face: the picks go (the server keeps an empty look as none)
+  AF.myLook = null; try { localStorage.removeItem('bv-look'); } catch (e) {}
+  if (AF.career && AF.career.meta) AF.career.meta.look = null;
+  if (window.net && net.session && net.arenaLook) net.arenaLook({ clear: true }).then(r => { if (r && r.career) AF.career = r.career; }).catch(() => {});
+  if (typeof afShellFigure === 'function') afShellFigure(); afHomeHud(); if (SHELL.page === 'barber') afBarberRender();
 }
 try { AF.myLook = (window.ARENA_CAT && ARENA_CAT.cleanLook(JSON.parse(localStorage.getItem('bv-look') || 'null'))) || null; } catch (e) { AF.myLook = null; }
-BV.look.set = afLookSet; BV.look.get = afLookGet;
+BV.look.set = afLookSet; BV.look.get = afLookGet; BV.barber = () => { afBarberOpen(); return afLookGet(); };
 function afHomeClock() {                                    // the bout of the day ends at midnight UTC — the card counts down to it
   const el = document.getElementById('hm-daily-clock'); if (!el) return;
   const now = new Date(), end = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1), sec = Math.max(0, Math.floor((end - now) / 1000)), p = n => String(n).padStart(2, '0');

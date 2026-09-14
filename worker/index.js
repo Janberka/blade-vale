@@ -127,7 +127,8 @@ async function buy(db, acctId, id) {
   await saveStmt(db, acctId, c).run(); return { ok: true, career: view(c) };
 }
 async function setLook(db, acctId, look) {                 // the barber: skin, hair, hair colour, beard — kept in the career's meta
-  const c = parse(await careerRow(db, acctId)), L = cleanLook(look); if (!L) return { ok: false, error: 'no such look', career: view(c) };
+  const c = parse(await careerRow(db, acctId)), L = cleanLook(look); if (look && look.clear) { c.meta.look = null; await saveStmt(db, acctId, c).run(); return { ok: true, career: view(c) }; }   // (back to the rolled face)
+  if (!L) return { ok: false, error: 'no such look', career: view(c) };
   c.meta.look = Object.assign({}, c.meta.look || {}, L); await saveStmt(db, acctId, c).run(); return { ok: true, career: view(c) };
 }
 async function equip(db, acctId, slot, id) {

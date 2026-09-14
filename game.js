@@ -1182,6 +1182,12 @@ function lookRuggedHead(geo, pj) {
 }
 const LOOK_HAIR = [0x1a1210, 0x1a1210, 0x2a1a12, 0x3a2416, 0x3a2416, 0x5c3a1e, 0x8a5a2e, 0x6a6a68, 0x4a3a3a];   // black, black, near-black, dark brown ×2, brown, auburn, grey, ash — cropped and dark, mostly
 const LOOK_SKIN = [0xf0d4b8, 0xe4c4a4, 0xd8b090, 0xc89a78, 0xa87858, 0x8a5c40];
+// THE BARBER (gear.look = { s, h, c, b }, indexes below; ARENA_LOOK in arena-items.js holds the ranges): what a player picks
+// for his own face; the vale's men roll theirs from the name
+const LOOK_HAIR_PICK = [0x1a1210, 0x3a2416, 0x5c3a1e, 0x8a5a2e, 0xa04a20, 0xb08040, 0xd0b078, 0x8a8a88, 0xd8d4cc];   // black, dark brown, brown, auburn, red, fair, blond, grey, white
+const LOOK_HAIR_STYLES = ['shaved', 'short crop', 'crown', 'long', 'mohawk'];
+const LOOK_BEARD_STYLES = ['clean', 'stubble', 'full beard', 'goatee', 'moustache'];
+const LOOK_SKIN_NAMES = ['fair', 'light', 'tan', 'olive', 'brown', 'dark'];
 // per armour: the odds of each loose piece and of a helm (NPCs — a player's helm is a ware), the paint of each piece's
 // STEEL (a multiplier on the palette grey — white leaves it steel; the names are the look's own colours) and of its CLOTH
 const LOOK_ARMOR = {
@@ -1214,9 +1220,14 @@ function lookRoll(name, arch, gear, pal, o = {}) {
   const c = new THREE.Color(), team = new THREE.Color(pal ? pal.cloth : 0x8a8a8a);
   const look = { kind, hide: [], paint: {}, clothOf: {}, cloth: 0, cloakC: 0, leather: pick(LOOK_LEATHER), skin: 0, hair: null, beard: null, cloak: false, shield: 'none', helmet: false, plume: false, round: 0 };
   // the man: skin, hair, beard (rolled first, so a change of kit never changes his face)
-  look.skin = c.setHex(pick(LOOK_SKIN)).lerp(new THREE.Color(0xc89070), r() * 0.35).getHex();   // weathered: every tone pulled toward a sun-browned red
-  const bald = r() < 0.28, hairC = pick(LOOK_HAIR), skinC = new THREE.Color(look.skin);
-  look.hair = bald ? null : hairC; look.beard = r() < 0.75 ? c.setHex(hairC).lerp(skinC, r() < 0.65 ? 0.08 : 0.4).getHex() : null;   // most wear a beard, most of those a full one
+  const LK = (gear && gear.look) || null, has = k => !!(LK && LK[k] != null);   // (the barber's picks, if he made any)
+  const skinPick = pick(LOOK_SKIN), weather = r() * 0.35;
+  look.skin = c.setHex(has('s') ? LOOK_SKIN[LK.s] : skinPick).lerp(new THREE.Color(0xc89070), has('s') ? 0.15 : weather).getHex();   // weathered: every tone pulled toward a sun-browned red
+  const bald = r() < 0.28, hairRoll = pick(LOOK_HAIR), hairC = has('c') ? LOOK_HAIR_PICK[LK.c] : hairRoll, skinC = new THREE.Color(look.skin);
+  const beardOn = r() < 0.75, fullBeard = r() < 0.65, styleRoll = r(), beardKind = r();
+  look.hairStyle = has('h') ? LK.h : bald ? 0 : styleRoll < 0.64 ? 1 : styleRoll < 0.74 ? 2 : styleRoll < 0.94 ? 3 : 4;   // most cropped, some long, a mohawk now and then
+  look.beardStyle = has('b') ? LK.b : !beardOn ? 0 : beardKind < 0.12 ? 3 : beardKind < 0.17 ? 4 : fullBeard ? 2 : 1;      // most wear a beard, most of those a full one
+  look.hair = look.hairStyle === 0 ? null : hairC; look.beard = look.beardStyle ? c.setHex(hairC).lerp(skinC, 0.08).getHex() : null; look.stubble = c.setHex(hairC).lerp(skinC, 0.45).getHex();
   look.brow = c.setHex(hairC).lerp(skinC, 0.3).getHex(); look.socket = c.copy(skinC).multiplyScalar(0.78).getHex(); look.lip = c.copy(skinC).multiplyScalar(0.88).getHex();   // heavy dark brows, eyes deep in shadow, a hard mouth
   const scar = r(); look.scar = scar < 0.18 ? 'scarL' : scar < 0.36 ? 'scarR' : null; look.scarC = c.copy(skinC).lerp(new THREE.Color(0xe8a0a0), 0.45).multiplyScalar(1.05).getHex();
   // the kit
@@ -1236,6 +1247,17 @@ function lookRoll(name, arch, gear, pal, o = {}) {
   look.cloakC = O.cloakC ? resolve(O.cloakC) : look.cloth;
   return look;
 }
+// the face: hair and beard styles are regions of the bald head — the baked hair/beard classes cut by position (bind pose,
+// model units, the face looks +z): a crown alone, a strip for a mohawk, the neck's back for long hair, the chin for a goatee
+function lookFaceColour(look, cls, mt, x, y, z) {
+  const hs = look.hairStyle | 0, bs = look.beardStyle | 0;
+  if (look.hair != null) { const on = cls === 'hair' ? (hs === 1 || hs === 3 || (hs === 2 && y > 1.775) || (hs === 4 && Math.abs(x) < 0.04 && y > 1.72)) : (hs === 3 && cls === 'head' && z < -0.005 && y < 1.71 && y > 1.45);
+    if (on) return look.hair; }
+  if (cls === 'beard' && look.beard != null) { const on = bs === 2 || bs === 1 || (bs === 3 && Math.abs(x) < 0.05) || (bs === 4 && y > 1.585 && z > 0.1); if (on) return bs === 1 ? look.stubble : look.beard; }
+  if (cls === 'brow') return look.brow; if (cls === 'socket') return look.socket; if (cls === 'scarL' || cls === 'scarR') return look.scar === cls ? look.scarC : look.skin; if (cls === 'eye') return 0xd8d0c8;
+  if (mt === 'leather') return look.lip;                     // (the palette's lip/brow brown: no painted lips)
+  return look.skin;
+}
 function lookColour(look, cls, mt) {
   if (mt === 'cloth') return look.clothOf[cls] != null ? look.clothOf[cls] : look.cloth; if (mt === 'dark') return 0xffffff;
   if (mt === 'leather') return cls === 'brow' ? look.brow : cls === 'beard' ? (look.beard != null ? look.beard : look.lip) : (cls === 'head' || cls === 'socket' || cls === 'scarL' || cls === 'scarR') ? look.lip : look.leather;   // (the palette's lip/brow brown on the face: no painted lips)
@@ -1254,7 +1276,8 @@ function lookApply(L, look) {
       for (let v = 0; v < nv; v++) { if (pj.vclass[v] === cuI && pj.vmat[v] === stI) uv.setXY(v, LOOK_WHITE_UV[0], LOOK_WHITE_UV[1]); else uv.setXY(v, uv0.getX(v), uv0.getY(v)); } uv.needsUpdate = true; }
     else if (sm.userData.ownUv) { sm.geometry.setAttribute('uv', uv0); sm.userData.ownUv = false; }
     // skin vertices carry a per-vertex colour, so the palette's skin (~#ffdcb4) × tint: the tint is chosen so tint × skin ≈ the tone wanted
-    for (let v = 0; v < nv; v++) { const cls = pj.classes[pj.vclass[v]], mt = pj.mats[pj.vmat[v]]; c.setHex(lookColour(look, cls, mt)); if (skinTint && mt === 'skin' && cls !== 'eye') { c.r = Math.min(1, c.r / 1.0); c.g = Math.min(1, c.g / 0.86); c.b = Math.min(1, c.b / 0.70); } col.setXYZ(v, c.r * 255, c.g * 255, c.b * 255); } col.needsUpdate = true;
+    const pos = sm.userData.geo0.getAttribute('position');
+    for (let v = 0; v < nv; v++) { const cls = pj.classes[pj.vclass[v]], mt = pj.mats[pj.vmat[v]]; c.setHex(skinTint ? lookFaceColour(look, cls, mt, pos.getX(v), pos.getY(v), pos.getZ(v)) : lookColour(look, cls, mt)); if (skinTint && mt === 'skin' && cls !== 'eye') { c.r = Math.min(1, c.r / 1.0); c.g = Math.min(1, c.g / 0.86); c.b = Math.min(1, c.b / 0.70); } col.setXYZ(v, c.r * 255, c.g * 255, c.b * 255); } col.needsUpdate = true;
     const i0 = sm.userData.geo0.index.array, tri = pj.tri, idx = sm.geometry.index; let n = 0;
     for (let t = 0; t < tri.length; t++) { if (hide.has(pj.classes[tri[t]])) continue; idx.array[n] = i0[t * 3]; idx.array[n + 1] = i0[t * 3 + 1]; idx.array[n + 2] = i0[t * 3 + 2]; n += 3; }
     idx.needsUpdate = true; sm.geometry.setDrawRange(0, n); }
@@ -1296,7 +1319,7 @@ function lookRoundPaint(col, pt, look) {
   const faceOf = i => look.round === 0 ? team : look.round === 1 ? (i < N / 2 ? team : dev) : look.round === 2 ? (Math.floor(i / (N / 4)) % 2 ? dev : team) : (i % 2 ? dev : team);
   for (let v = 0; v < col.count; v++) { const p = pt[v]; c.copy(p < N ? faceOf(p) : p === N ? rim : p === N + 1 ? boss : backC); col.setXYZ(v, c.r * 255, c.g * 255, c.b * 255); } col.needsUpdate = true;
 }
-BV.look = { roll: lookRoll, apply: lookApply, live: () => MODEL_LIVE.map(L => ({ name: L.P.lookName, arch: L.P.lookArch, full: !!L.P.lookFull, shield: L.shieldKind, look: L.look && { kind: L.look.kind, hide: L.look.hide, helmet: L.look.helmet, cloak: L.look.cloak, plume: L.look.plume, hair: L.look.hair, beard: L.look.beard, skin: L.look.skin } })) };   // (test: every live figure's look)
+BV.look = { roll: lookRoll, apply: lookApply, live: () => MODEL_LIVE.map(L => ({ name: L.P.lookName, arch: L.P.lookArch, full: !!L.P.lookFull, shield: L.shieldKind, look: L.look && { kind: L.look.kind, hide: L.look.hide, helmet: L.look.helmet, cloak: L.look.cloak, plume: L.look.plume, hair: L.look.hair, beard: L.look.beard, skin: L.look.skin, hairStyle: L.look.hairStyle, beardStyle: L.look.beardStyle } })) };   // (test: every live figure's look)
 const MODEL_ON = !/[?&]plastic\b/.test(location.search);   // the warrior is the base soldier; ?plastic brings the plastic figures back
 const MODEL_NAME = 'warrior';
 BV.modelLoad = MODEL_ON ? loadModelRig(MODEL_NAME).then(() => { BV.modelReady = true; console.log('[model] warrior ready'); }, e => console.error('[model] load failed', e)) : Promise.resolve();   // (the home / market figure waits on this — the plastic placeholder is never shown)
@@ -19837,12 +19860,13 @@ function afCareerLoad(seed) {
 function afGear() {                                        // my loadout as the roster carries it
   const c = AF.career, eq = c ? c.equipped : AF_GEAR_FREE, I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}, g = {};
   for (const k of (window.ARENA_CAT ? ARENA_CAT.ARENA_SLOTS : [])) if (eq[k] && I[eq[k]] && I[eq[k]].slot === k) g[k] = eq[k];
+  const lk = (c && c.meta && c.meta.look) || AF.myLook; if (lk) g.look = lk;   // the barber's picks travel with the loadout
   if (!g.sword) g.sword = c ? 'wood_sword' : 'iron_sword'; if (!g.shield) g.shield = AF_GEAR_LENT.shield; if (c) { g.rank = c.rank.name; g.bowLv = c.skills && c.skills.bow ? c.skills.bow.level | 0 : 0; } return g;
 }
 function afGearClean(g) {                                  // (a guest's word for his loadout — only real items, in their own slots)
   const I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}, out = {}; if (!g || typeof g !== 'object') g = AF_GEAR_FREE;
   for (const k of (window.ARENA_CAT ? ARENA_CAT.ARENA_SLOTS : [])) { const id = g[k]; if (typeof id === 'string' && I[id] && I[id].slot === k) out[k] = id; }
-  if (!out.sword) out.sword = 'iron_sword'; if (typeof g.rank === 'string') out.rank = g.rank.slice(0, 12); if (typeof g.bowLv === 'number') out.bowLv = clamp(g.bowLv | 0, 0, 12); return out;
+  if (!out.sword) out.sword = 'iron_sword'; if (typeof g.rank === 'string') out.rank = g.rank.slice(0, 12); const lk = window.ARENA_CAT && ARENA_CAT.cleanLook(g.look); if (lk) out.look = lk; if (typeof g.bowLv === 'number') out.bowLv = clamp(g.bowLv | 0, 0, 12); return out;
 }
 function afGearStats(g) {                                  // what the loadout does in the pit
   const I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}, sw = I[g.sword] || { dmg: 1 }, ar = g.armor && I[g.armor], hm = g.helm && I[g.helm], sh = g.shield && I[g.shield], bw = g.bow && I[g.bow], hs = g.horse && I[g.horse], pl = g.plume && I[g.plume], tr = g.trim && I[g.trim];
@@ -22704,7 +22728,7 @@ function afProfLink(who, kind) {                            // a name as a link 
   return '<span class="prof-link" data-prof="' + kind + '|' + escHtml(name) + '">' + escHtml(name) + '</span>';
 }
 function afProfileGear(p) {                                 // what the figure on the left wears: a player's loadout; one of the vale's men in the kit his skill earns
-  if (p.kind === 'player') return afGearClean(Object.assign({}, p.equipped || {}, { rank: p.rank ? p.rank.name : undefined }));
+  if (p.kind === 'player') return afGearClean(Object.assign({}, p.equipped || {}, { rank: p.rank ? p.rank.name : undefined, look: p.look || undefined }));
   let h = 2166136261; for (const ch of p.name) h = Math.imul(h ^ ch.charCodeAt(0), 16777619);
   return afGearClean(afNpcGear({ arch: p.arch }, p.skill | 0, _mulberry32(h >>> 0)));
 }
@@ -22979,8 +23003,32 @@ function afHomeHud() {
         el.innerHTML = '<b>' + escHtml(label.replace(/ — .*$/, '')) + '</b> — ' + left + ' more ' + unit + ' for the achievement';
         const n = 5, lit = Math.min(n - 1, Math.floor(best.k * n)); pips.innerHTML = Array.from({ length: n }, (_, i) => '<i class="' + (i < lit ? 'on' : '') + '"></i>').join(''); } } }
   // his kit: what he rides in with, a chip a slot — a tap opens that stall of the market
-  { const gear = afGear(), el = g('hm-gear'); el.innerHTML = ['sword', 'armor', 'helm', 'shield', 'bow', 'horse'].map(sl => gear[sl] && I[gear[sl]] ? '<span data-slot="' + sl + '">' + escHtml(I[gear[sl]].name) + '</span>' : '<span class="none" data-slot="' + sl + '" title="no ' + (sl === 'armor' ? 'armour' : sl) + ' yet — the market has one">—</span>').join(''); }
+  { const gear = afGear(), el = g('hm-gear'); el.innerHTML = '<span class="look" data-look="1" title="Your face: skin, hair, beard">✂ Look</span>' + ['sword', 'armor', 'helm', 'shield', 'bow', 'horse'].map(sl => gear[sl] && I[gear[sl]] ? '<span data-slot="' + sl + '">' + escHtml(I[gear[sl]].name) + '</span>' : '<span class="none" data-slot="' + sl + '" title="no ' + (sl === 'armor' ? 'armour' : sl) + ' yet — the market has one">—</span>').join('');
+    const lb = el.querySelector('[data-look]'); if (lb) lb.onclick = e => { e.stopPropagation(); afLookPanel(); }; }
 }
+// THE BARBER: your own face — skin tone, hair style and colour, beard. Saved with the career (the server keeps it in the
+// career's meta, every guest paints the same man) and in this browser; the figure changes as you tap.
+function afLookGet() { const c = AF.career; return Object.assign({}, (c && c.meta && c.meta.look) || AF.myLook || {}); }
+function afLookSet(patch) {
+  const L = Object.assign(afLookGet(), patch); AF.myLook = L; try { localStorage.setItem('bv-look', JSON.stringify(L)); } catch (e) {}
+  if (AF.career && AF.career.meta) AF.career.meta.look = L;                                              // (so afGear sees it at once)
+  if (window.net && net.session && net.arenaLook) net.arenaLook(L).then(r => { if (r && r.career) AF.career = r.career; }).catch(() => {});
+  if (typeof afShellFigure === 'function') afShellFigure(); afHomeHud(); afLookPanel(true);
+}
+function afLookPanel(keep) {
+  const p = document.getElementById('hm-look'); if (!p) return; if (!keep && !p.hidden) { p.hidden = true; return; }
+  const L = afLookGet(), sw = (k, hexes, names) => hexes.map((h, i) => '<button class="sw' + (L[k] === i ? ' on' : '') + '" data-k="' + k + '" data-i="' + i + '" title="' + names[i] + '" style="background:#' + h.toString(16).padStart(6, '0') + '"></button>').join('');
+  const chips = (k, names) => names.map((n, i) => '<button class="ch' + (L[k] === i ? ' on' : '') + '" data-k="' + k + '" data-i="' + i + '">' + n + '</button>').join('');
+  p.innerHTML = '<div class="hm-look-row"><label>Skin</label><div>' + sw('s', LOOK_SKIN, LOOK_SKIN_NAMES) + '</div></div>'
+    + '<div class="hm-look-row"><label>Hair</label><div>' + chips('h', LOOK_HAIR_STYLES) + '</div></div>'
+    + '<div class="hm-look-row"><label>Colour</label><div>' + sw('c', LOOK_HAIR_PICK, LOOK_HAIR_PICK.map(h => '#' + h.toString(16))) + '</div></div>'
+    + '<div class="hm-look-row"><label>Beard</label><div>' + chips('b', LOOK_BEARD_STYLES) + '</div></div>'
+    + '<div class="hm-look-foot"><span>' + (window.net && net.session ? 'saved with your career' : 'saved in this browser — sign in to keep it') + '</span><button class="x" data-x="1">done</button></div>';
+  p.hidden = false;
+  for (const b of p.querySelectorAll('button')) b.onclick = e => { e.stopPropagation(); if (b.dataset.x) { p.hidden = true; return; } afLookSet({ [b.dataset.k]: +b.dataset.i }); };
+}
+try { AF.myLook = (window.ARENA_CAT && ARENA_CAT.cleanLook(JSON.parse(localStorage.getItem('bv-look') || 'null'))) || null; } catch (e) { AF.myLook = null; }
+BV.look.set = afLookSet; BV.look.get = afLookGet;
 function afHomeClock() {                                    // the bout of the day ends at midnight UTC — the card counts down to it
   const el = document.getElementById('hm-daily-clock'); if (!el) return;
   const now = new Date(), end = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1), sec = Math.max(0, Math.floor((end - now) / 1000)), p = n => String(n).padStart(2, '0');

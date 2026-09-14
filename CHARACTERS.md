@@ -91,3 +91,12 @@ a man carries one at all is still his class (`AF_ARCH.shield`). NPCs roll all of
 `lookOdds`). Plate is heavy now: plate −22 % speed, champion's −25 %, dragon −30 %, mail −6 % (arena-items `move`).
 Adding a ware: an entry in ARENA_ITEMS (slot, price, rank, stats), a `LOOK_ARMOR` row if it is armour (paint per piece,
 `bare: true` for skin), the plastic fallback in `AF_LOOK.armor`, and a thumbnail branch in `afThumb` if the slot is new.
+
+## The barber (2026-09-14, "we should be able to edit the hair style, hair color, beard style, skin color")
+The "✂ Look" chip in the home's gear row opens a panel: skin tone (6), hair style (shaved, short crop, crown, long,
+mohawk), hair colour (9) and beard style (clean, stubble, full beard, goatee, moustache). Every tap repaints the figure
+and saves: `gear.look = { s, h, c, b }` (indexes; ranges in `ARENA_LOOK`, validated by `cleanLook` in arena-items.js)
+travels with the loadout, so guests and profile pages paint the same face; the server keeps it in the career's meta
+(`POST /api/v1/arena/look`, both server/arena.js and worker/index.js) and this browser keeps a copy (`bv-look`). Styles
+are regions of the baked head classes cut by position in `lookFaceColour` (a crown alone, a strip for the mohawk, the
+neck's back for long hair, the chin for a goatee, the upper lip for a moustache). The vale's men roll their own.

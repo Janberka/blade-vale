@@ -665,6 +665,18 @@
   .hm-gear span { cursor: pointer; font-size: 9.5px; letter-spacing: 2px; text-transform: uppercase; font-weight: 600; padding: 4px 9px; border-radius: 4px; border: 1px solid var(--bv-green); color: var(--bv-green); background: rgba(0,0,0,.45); white-space: nowrap; touch-action: manipulation; }
   .hm-gear span.none { border-color: rgba(255,255,255,.18); color: var(--bv-ink2); }
   .hm-gear span:hover { background: rgba(143,232,154,.12); }
+  .hm-gear span.look { border-color: #ffd34d; color: #ffd34d; }
+  /* THE BARBER: skin, hair, colour, beard — a panel over the figure's feet */
+  .hm-look { position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%); z-index: 6; width: min(420px, calc(100vw - 32px)); display: grid; gap: 8px; padding: 12px 14px; background: rgba(12,9,14,.94); border: 1px solid rgba(255,211,77,.4); border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,.6); }
+  .hm-look-row { display: grid; grid-template-columns: 58px 1fr; align-items: center; gap: 8px; }
+  .hm-look-row label { font-size: 9.5px; letter-spacing: 2px; text-transform: uppercase; color: #ffd34d; font-weight: 700; }
+  .hm-look-row div { display: flex; flex-wrap: wrap; gap: 6px; }
+  .hm-look button.sw { width: 24px; height: 24px; border-radius: 50%; border: 2px solid rgba(255,255,255,.18); cursor: pointer; padding: 0; touch-action: manipulation; }
+  .hm-look button.sw.on { border-color: #ffd34d; box-shadow: 0 0 0 2px rgba(255,211,77,.35); }
+  .hm-look button.ch { font: 600 10.5px/1 system-ui, sans-serif; letter-spacing: 1px; text-transform: uppercase; color: #e8def8; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.16); border-radius: 5px; padding: 6px 8px; cursor: pointer; touch-action: manipulation; }
+  .hm-look button.ch.on { color: #1a1408; background: #ffd34d; border-color: #ffd34d; }
+  .hm-look-foot { display: flex; justify-content: space-between; align-items: center; font-size: 10.5px; color: var(--bv-ink2); }
+  .hm-look-foot button.x { font: 700 10.5px system-ui, sans-serif; letter-spacing: 1.5px; text-transform: uppercase; color: #ffd34d; background: none; border: 1px solid rgba(255,211,77,.5); border-radius: 5px; padding: 5px 10px; cursor: pointer; }
   #start.home #home-world-btn { font-size: 13px; padding: 9px 14px; margin: 0; }
   @media (min-width: 1100px) and (min-height: 620px) { #start.home #page-home.on, #start.home #home-char { zoom: 1.25; } }
   @media (min-width: 1500px) and (min-height: 820px) { #start.home #page-home.on, #start.home #home-char { zoom: 1.5; } }
@@ -1050,6 +1062,7 @@
           <button class="btn world-only" id="home-world-btn">Enter the Vale</button>
         </div>
         <div class="hm-gear" id="hm-gear" title="What you ride in with — tap a piece for its stall in the market"></div>
+        <div class="hm-look" id="hm-look" hidden></div>
         <div id="home-foot">Signed in as <b id="home-name"></b> · <button id="home-logout">sign out</button> · <label title="During a fight: round trip, jitter, snap rate, the host's sim rate — bottom right"><input type="checkbox" id="home-net"> net readout</label> · <label title="Auto: phones fight at low and step down further if the frame rate can't hold. Low: 1× pixels, hard shadows, half the crowd, no bloom. High: everything.">graphics <select id="home-gfx"><option value="auto">auto</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label></div>
         <div class="sfx-credit">Crowd sounds by Gregor Quendel (CC-BY 4.0) · bow shot by dorkster, from sounds by qubodup (CC-BY-SA 3.0) · more in assets/sfx/CREDITS.md</div>
       </div>
@@ -1251,10 +1264,10 @@
 <script src="sim/terra.js?v=2"></script>
 <script src="sim/settle.js?v=1"></script>
 <script src="sim/battle.js?v=1"></script>
-<script src="client-net.js?v=11"></script>
-<script src="arena-items.js?v=4"></script>
+<script src="client-net.js?v=12"></script>
+<script src="arena-items.js?v=5"></script>
 <script src="net-battle.js?v=5"></script>
 <script src="real-skin.js?v=1"></script>
-<script src="game.js?v=160"></script>
+<script src="game.js?v=161"></script>
 </body>
 </html>

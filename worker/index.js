@@ -12,7 +12,7 @@
 // Node server do not carry over — bladevale.com starts with a fresh ledger.
 import ARENA from '../arena-items.js';
 import SIM from '../arena-sim.js';
-const { ARENA_RANKS, ARENA_ITEMS, ARENA_SLOTS, ARENA_ACHIEVEMENTS, ARENA_BESTS, PITY_AT, WAGERS, skillLevel, rankOf, rankInfo, renownOf, lockReason, statOf, uniqueChance, rivalBonus, dayKey, dailyOf, dailyScore } = ARENA;
+const { ARENA_RANKS, ARENA_ITEMS, ARENA_SLOTS, cleanLook, ARENA_ACHIEVEMENTS, ARENA_BESTS, PITY_AT, WAGERS, skillLevel, rankOf, rankInfo, renownOf, lockReason, statOf, uniqueChance, rivalBonus, dayKey, dailyOf, dailyScore } = ARENA;
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -116,7 +116,7 @@ function view(c, seed) {
   const m = c.meta || metaOf('{}');
   return { xp: c.xp, gold: c.gold, trophies: c.trophies, matches: c.matches, wins: c.wins, kills: c.kills, deaths: c.deaths, damage: c.damage, stars: c.stars,
     items: c.items, equipped: c.equipped, skills, achievements: c.achievements, rank: rankInfo(c.xp), lastSeed: c.lastSeed, lastReward: (!seed || c.lastSeed === String(seed)) ? c.lastReward : null,
-    meta: { bests: m.bests || {}, rival: m.rival || null, pity: m.pity | 0, pityAt: PITY_AT, rivalsBeaten: m.rivalsBeaten | 0, dailies: m.dailies | 0, dailyTops: m.dailyTops | 0, belts: m.belts | 0 } };
+    meta: { bests: m.bests || {}, rival: m.rival || null, pity: m.pity | 0, pityAt: PITY_AT, rivalsBeaten: m.rivalsBeaten | 0, dailies: m.dailies | 0, dailyTops: m.dailyTops | 0, belts: m.belts | 0, look: m.look || null } };
 }
 async function beltRow(db) { return (await q(db, 'SELECT holder, renown, since, defenses FROM arena_belt WHERE id=1').first()) || { holder: null, renown: 0, since: 0, defenses: 0 }; }
 async function career(db, acctId, seed) { const c = parse(await careerRow(db, acctId)), v = view(c, seed); v.renown = renownOf(c); Object.assign(v, await position(db, 'player', v.renown, c.matches)); v.belt = await beltRow(db); return v; }
@@ -125,6 +125,10 @@ async function buy(db, acctId, id) {
   if (why) return { ok: false, error: why, career: view(c) };
   const it = ARENA_ITEMS[id]; c.gold -= it.price; c.items.push(id); c.equipped[it.slot] = id;
   await saveStmt(db, acctId, c).run(); return { ok: true, career: view(c) };
+}
+async function setLook(db, acctId, look) {                 // the barber: skin, hair, hair colour, beard — kept in the career's meta
+  const c = parse(await careerRow(db, acctId)), L = cleanLook(look); if (!L) return { ok: false, error: 'no such look', career: view(c) };
+  c.meta.look = Object.assign({}, c.meta.look || {}, L); await saveStmt(db, acctId, c).run(); return { ok: true, career: view(c) };
 }
 async function equip(db, acctId, slot, id) {
   const c = parse(await careerRow(db, acctId));
@@ -308,7 +312,7 @@ async function profile(db, name, kind) {
     if (a) { const c = parse((await q(db, 'SELECT * FROM arena_careers WHERE account_id=?', a.id).first()) || BLANK_ROW);
       const skills = {}; for (const k of ['sword', 'bow', 'riding']) skills[k] = { level: skillLevel(c.skills[k]) };
       p = { name: a.handle, kind: 'player', rank: rankInfo(c.xp), title: rankInfo(c.xp).name, xp: c.xp, matches: c.matches, wins: c.wins, losses: Math.max(0, c.matches - c.wins), kills: c.kills, deaths: c.deaths, damage: c.damage, stars: c.stars, trophies: c.trophies,
-        skills, achievements: c.achievements, equipped: c.equipped, renown: renownOf(c), since: a.created_at, bests: c.meta.bests || {}, rivalsBeaten: c.meta.rivalsBeaten | 0, dailyTops: c.meta.dailyTops | 0 };
+        skills, achievements: c.achievements, equipped: c.equipped, look: c.meta.look || null, renown: renownOf(c), since: a.created_at, bests: c.meta.bests || {}, rivalsBeaten: c.meta.rivalsBeaten | 0, dailyTops: c.meta.dailyTops | 0 };
       const belt = await beltRow(db); if (belt.holder === a.handle) p.belt = { since: belt.since, defenses: belt.defenses }; }
   }
   if (!p && kind !== 'player') {
@@ -358,6 +362,7 @@ async function api(request, env, url) {
     if (method === 'GET' && p === '/api/v1/arena/career') return json(200, { ok: true, career: await career(db, acct.id, url.searchParams.get('seed')) });
     if (method === 'POST' && p === '/api/v1/arena/buy') { const b = await readBody(request); return json(200, await buy(db, acct.id, String(b.item || ''))); }
     if (method === 'POST' && p === '/api/v1/arena/equip') { const b = await readBody(request); return json(200, await equip(db, acct.id, String(b.slot || ''), b.item == null ? null : String(b.item))); }
+    if (method === 'POST' && p === '/api/v1/arena/look') { const b = await readBody(request); return json(200, await setLook(db, acct.id, b)); }
     if (method === 'POST' && p === '/api/v1/arena/result') { const b = await readBody(request); return json(200, await applyResult(db, acct, b)); }
     return json(404, { ok: false, error: 'no such arena call' });
   }

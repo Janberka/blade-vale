@@ -51,6 +51,10 @@
     black_night:    { slot: 'sword', name: 'Black Night',       unique: true, dmg: 1.12, desc: 'a black curve with a violet gleam' },
   };
   var ARENA_SLOTS = ['sword', 'armor', 'helm', 'shield', 'bow', 'horse', 'plume', 'trim'];
+  // YOUR LOOK (the barber): skin tone, hair style, hair colour, beard style — indexes into the client's lists; the
+  // server keeps them in the career's meta and every guest paints the same face
+  var ARENA_LOOK = { s: 6, h: 5, c: 9, b: 5 };
+  function cleanLook(l) { if (!l || typeof l !== 'object') return null; var o = {}, any = false; for (var k in ARENA_LOOK) { var v = l[k]; if (typeof v === 'number' && v === (v | 0) && v >= 0 && v < ARENA_LOOK[k]) { o[k] = v; any = true; } } return any ? o : null; }
   // THE VALE'S MEN — the NPC name pool. A name is an NPC's identity (his profile, his record), so the lobby, the
   // world's warbands and the server's own simulated bouts all draw from this one list.
   var NPC_GIVEN = ['Aldric','Bram','Cedwyn','Doran','Eadric','Falk','Garrec','Hale','Ivo','Joren','Kell','Lorne','Maddoc','Nael','Osric','Perrin','Quenn','Roderic','Sefton','Tomas','Ulf','Varin','Wend','Yorin','Ansel','Brand','Corin','Dunmar','Edra','Freya','Gerda','Halla','Ingrid','Jorah','Kara','Linnet','Mira','Nessa','Orla','Petra','Romilda','Sigrun','Thora','Ysolde'];
@@ -123,6 +127,6 @@
     if ((career.gold | 0) < it.price) return 'needs ' + it.price + ' gold';
     return null;
   }
-  var api = { ARENA_RANKS: ARENA_RANKS, ARENA_ITEMS: ARENA_ITEMS, ARENA_SLOTS: ARENA_SLOTS, ARENA_ACHIEVEMENTS: ARENA_ACHIEVEMENTS, ARENA_BESTS: ARENA_BESTS, RENOWN: RENOWN, NPC_GIVEN: NPC_GIVEN, NPC_BYNAMES: NPC_BYNAMES, PITY_AT: PITY_AT, WAGERS: WAGERS, skillLevel: skillLevel, rankOf: rankOf, rankInfo: rankInfo, renownOf: renownOf, lockReason: lockReason, statOf: statOf, uniqueChance: uniqueChance, rivalBonus: rivalBonus, dayKey: dayKey, dailyOf: dailyOf, dailyScore: dailyScore, fnv: fnv, mulberry: mulberry };
+  var api = { ARENA_RANKS: ARENA_RANKS, ARENA_ITEMS: ARENA_ITEMS, ARENA_SLOTS: ARENA_SLOTS, ARENA_LOOK: ARENA_LOOK, cleanLook: cleanLook, ARENA_ACHIEVEMENTS: ARENA_ACHIEVEMENTS, ARENA_BESTS: ARENA_BESTS, RENOWN: RENOWN, NPC_GIVEN: NPC_GIVEN, NPC_BYNAMES: NPC_BYNAMES, PITY_AT: PITY_AT, WAGERS: WAGERS, skillLevel: skillLevel, rankOf: rankOf, rankInfo: rankInfo, renownOf: renownOf, lockReason: lockReason, statOf: statOf, uniqueChance: uniqueChance, rivalBonus: rivalBonus, dayKey: dayKey, dailyOf: dailyOf, dailyScore: dailyScore, fnv: fnv, mulberry: mulberry };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.ARENA_CAT = api;
 })(typeof window !== 'undefined' ? window : this);

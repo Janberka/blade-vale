@@ -229,6 +229,7 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'GET' && p === '/api/v1/arena/career') return send(res, 200, { ok: true, career: arena.career(acct.id, url.searchParams.get('seed')) });
       if (req.method === 'POST' && p === '/api/v1/arena/buy') { const b = await readBody(req); return send(res, 200, arena.buy(acct.id, String(b.item || ''))); }
       if (req.method === 'POST' && p === '/api/v1/arena/equip') { const b = await readBody(req); return send(res, 200, arena.equip(acct.id, String(b.slot || ''), b.item == null ? null : String(b.item))); }
+      if (req.method === 'POST' && p === '/api/v1/arena/look') { const b = await readBody(req); return send(res, 200, arena.setLook(acct.id, b)); }
       if (req.method === 'POST' && p === '/api/v1/arena/result') { const b = await readBody(req); return send(res, 200, arena.applyResult(acct, b)); }
       return send(res, 404, { ok: false, error: 'no such arena call' });
     }

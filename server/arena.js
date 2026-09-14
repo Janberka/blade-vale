@@ -2,7 +2,7 @@
 // trophies, achievements, PvP purse and loot. The host reports a finished match ONCE (POST /arena/result)
 // and the server pays every player named in it; each player's client then reads its own career.
 const { db } = require('./db');
-const { ARENA_RANKS, ARENA_ITEMS, ARENA_SLOTS, ARENA_ACHIEVEMENTS: ACHIEVEMENTS, ARENA_BESTS, PITY_AT, WAGERS, skillLevel, rankOf, rankInfo, renownOf, lockReason, statOf, uniqueChance, rivalBonus, dayKey, dailyOf, dailyScore } = require('../arena-items');
+const { ARENA_RANKS, ARENA_ITEMS, ARENA_SLOTS, cleanLook, ARENA_ACHIEVEMENTS: ACHIEVEMENTS, ARENA_BESTS, PITY_AT, WAGERS, skillLevel, rankOf, rankInfo, renownOf, lockReason, statOf, uniqueChance, rivalBonus, dayKey, dailyOf, dailyScore } = require('../arena-items');
 
 const SIM = require('../arena-sim');
 const PVP_CUT = 0.08, PVP_CAP = 60;                       // a beaten player pays 8% of his purse (at most 60) to the winners
@@ -28,7 +28,7 @@ function view(c, seed) {
   const skills = {}; for (const k of ['sword', 'bow', 'riding']) skills[k] = { count: c.skills[k] | 0, level: skillLevel(c.skills[k]) }; const m = c.meta || metaOf('{}');
   return { xp: c.xp, gold: c.gold, trophies: c.trophies, matches: c.matches, wins: c.wins, kills: c.kills, deaths: c.deaths, damage: c.damage, stars: c.stars,
     items: c.items, equipped: c.equipped, skills, achievements: c.achievements, rank: rankInfo(c.xp), lastSeed: c.lastSeed, lastReward: (!seed || c.lastSeed === String(seed)) ? c.lastReward : null,
-    meta: { bests: m.bests || {}, rival: m.rival || null, pity: m.pity | 0, pityAt: PITY_AT, rivalsBeaten: m.rivalsBeaten | 0, dailies: m.dailies | 0, dailyTops: m.dailyTops | 0, belts: m.belts | 0 } };
+    meta: { bests: m.bests || {}, rival: m.rival || null, pity: m.pity | 0, pityAt: PITY_AT, rivalsBeaten: m.rivalsBeaten | 0, dailies: m.dailies | 0, dailyTops: m.dailyTops | 0, belts: m.belts | 0, look: m.look || null } };
 }
 function beltRow() { return db.prepare('SELECT holder, renown, since, defenses FROM arena_belt WHERE id=1').get() || { holder: null, renown: 0, since: 0, defenses: 0 }; }
 function career(acctId, seed) { const c = parse(row(acctId)), v = view(c, seed); v.renown = renownOf(c); Object.assign(v, position('player', v.renown, c.matches)); v.belt = beltRow(); return v; }
@@ -38,6 +38,10 @@ function buy(acctId, id) {
   if (why) return { ok: false, error: why, career: view(c) };
   const it = ARENA_ITEMS[id]; c.gold -= it.price; c.items.push(id); c.equipped[it.slot] = id;   // a new piece is worn at once
   write(acctId, c); return { ok: true, career: view(c) };
+}
+function setLook(acctId, look) {                            // the barber: skin, hair, hair colour, beard — kept in the career's meta
+  const c = parse(row(acctId)), L = cleanLook(look); if (!L) return { ok: false, error: 'no such look', career: view(c) };
+  c.meta.look = Object.assign({}, c.meta.look || {}, L); write(acctId, c); return { ok: true, career: view(c) };
 }
 function equip(acctId, slot, id) {
   const c = parse(row(acctId));
@@ -202,7 +206,7 @@ function profile(name, kind) {
     if (a) { const c = parse(db.prepare('SELECT * FROM arena_careers WHERE account_id=?').get(a.id) || BLANK_ROW);
       const skills = {}; for (const k of ['sword', 'bow', 'riding']) skills[k] = { level: skillLevel(c.skills[k]) };
       p = { name: a.handle, kind: 'player', rank: rankInfo(c.xp), title: rankInfo(c.xp).name, xp: c.xp, matches: c.matches, wins: c.wins, losses: Math.max(0, c.matches - c.wins), kills: c.kills, deaths: c.deaths, damage: c.damage, stars: c.stars, trophies: c.trophies,
-        skills, achievements: c.achievements, equipped: c.equipped, renown: renownOf(c), since: a.created_at, bests: c.meta.bests || {}, rivalsBeaten: c.meta.rivalsBeaten | 0, dailyTops: c.meta.dailyTops | 0 };
+        skills, achievements: c.achievements, equipped: c.equipped, look: c.meta.look || null, renown: renownOf(c), since: a.created_at, bests: c.meta.bests || {}, rivalsBeaten: c.meta.rivalsBeaten | 0, dailyTops: c.meta.dailyTops | 0 };
       const belt = beltRow(); if (belt.holder === a.handle) p.belt = { since: belt.since, defenses: belt.defenses }; }
   }
   if (!p && kind !== 'player') {
@@ -215,4 +219,4 @@ function profile(name, kind) {
   p.recent = db.prepare('SELECT seed, team, won, draw, kills, dmg, alive, star, venue, size, created_at FROM arena_bouts WHERE kind=? AND fighter=? ORDER BY created_at DESC LIMIT 10').all(p.kind, p.name);
   return { ok: true, profile: p };
 }
-module.exports = { career, buy, equip, applyResult, profile, rankings, dailyBoard, simulateRound, ACHIEVEMENTS };
+module.exports = { career, buy, equip, setLook, applyResult, profile, rankings, dailyBoard, simulateRound, ACHIEVEMENTS };

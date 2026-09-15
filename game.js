@@ -1521,7 +1521,8 @@ const POSES = {
   windupHeavy:{ shRx: -3.05, shRz:  0.05, elR: -0.95, shLx: -2.20, shLz:  0.30, elL: -0.95, leanX: -0.40, twistY:  0.05, wristX: 0.10 },
   strikeHeavy:{ shRx:  0.05, shRz:  0.00, elR: -0.30, shLx:  0.00, shLz:  0.30, elL: -0.35, leanX: 0.70,  twistY:  0.00, wristX: 1.95 },
   hurt:       { shRx: -0.30, shRz:  0.55, elR: -1.00, shLx: -0.50, shLz:  0.60, elL: -1.20, leanX: -0.28, twistY:  0.15, wristX: 0 },
-  dive:       { shRx: -1.10, shRz:  1.30, elR: -0.15, shLx: -1.10, shLz: -1.30, elL: -0.15, leanX:  0.30, twistY:  0.00, wristX: 0 },   // the running leap: head first, both arms flung open (the body's pitch is the group's — afCommit's diveAng)
+  dive:       { shRx: -1.10, shRz:  1.30, elR: -0.15, shLx: -1.10, shLz: -1.30, elL: -0.15, leanX:  0.30, twistY:  0.00, wristX: 0 },
+  charge:     { shRx: -0.55, shRz:  0.55, elR: -1.15, shLx: -1.55, shLz:  0.25, elL: -0.95, leanX:  0.14, twistY: -0.15, wristX: 0.40 },   // the shield charge: the shield UP before the face, the head tucked behind it, the sword hand cocked back — the body only a little forward (the user: head-first behind a shield 'looks stupid')   // the running leap: head first, both arms flung open (the body's pitch is the group's — afCommit's diveAng)
   block:      { shRx: -1.05, shRz: -0.45, elR: -1.30, shLx: -0.80, shLz:  0.40, elL: -1.25, leanX:  0.26, twistY: -0.20, wristX: 0.55 },   // shield at the chest, not the face; the body tucks forward and the head drops behind it
   // archery: bow arm (left) extended at the target, string hand drawn to the cheek
   aimBow:     { shRx: -1.35, shRz:  0.30, elR: -2.20, shLx: -1.50, shLz:  0.10, elL: -0.12, leanX: 0,     twistY:  0.70, wristX: 0 },
@@ -20101,7 +20102,7 @@ function afCommit(b, dt) {
   if (b.flashT > 0) { b.flashT -= dt; if (!b.flashWhite) { setTint(p, 0xfff0e0); b.flashWhite = true; } if (b.flashT <= 0) { b.flashWhite = false; b.tinted = false; setTint(p, null); } }
   if (!b.dead) {
     const ex = b.maxStam ? 1 - b.stam / b.maxStam : 0;      // (spent: the breath deepens and quickens — bent over it when winded)
-    const leanX = 0.16 * (b.run01 || 0) + (b.rushT > 0 ? 0.3 : 0);   // THE SPRINT: the body goes down over the stride — and further behind the shield in a charge
+    const leanX = 0.16 * (b.run01 || 0) + (b.rushT > 0 ? 0.05 : 0);   // THE SPRINT: the body goes down over the stride (a charge keeps the back up: the shield is before the face, not the head — POSES.charge)
     p.upperBody.rotation.x += clamp(fwd / F.move, -1, 1) * (0.14 + leanX) + Math.sin(rtNow * (2.1 + 2.6 * ex) + b.phase0) * (0.012 + 0.04 * ex * ex) + (b.winded ? 0.12 : 0); // lean into the run + breathe
     if (!b.moving && !b.atk && b.dodgeT <= 0 && !(b.downT > 0)) {   // standing guard: the weight shifts from foot to foot
       const w = Math.sin(rtNow * 0.9 + b.sway); p.upperBody.rotation.z += w * 0.03; p.hipL.rotation.x += w * 0.05; p.hipR.rotation.x -= w * 0.05; b.roll = w * 0.015;
@@ -20110,7 +20111,7 @@ function afCommit(b, dt) {
       b.hitT -= dt; const k = clamp(b.hitT / 0.25, 0, 1);
       p.upperBody.rotation.x -= k * 0.32; p.upperBody.rotation.z += b.hitSide * k * 0.22;
       if (p.headPivot) p.headPivot.rotation.x = -k * 0.35;
-    } else if (p.headPivot) p.headPivot.rotation.x = lerp(p.headPivot.rotation.x, -leanX * 0.8 - (b.diveAng ? 0.6 : 0), clamp(dt * 8, 0, 1));   // (the head comes up as the back goes down: eyes on the man — and up out of a dive)
+    } else if (p.headPivot) p.headPivot.rotation.x = lerp(p.headPivot.rotation.x, -leanX * 0.8 - (b.diveAng ? 0.6 : 0) + (b.rushT > 0 ? 0.2 : 0), clamp(dt * 8, 0, 1));   // (the head comes up as the back goes down: eyes on the man — and up out of a dive)
     if (b.rushT > 0 && !b.mounted) p.upperBody.rotation.y -= 0.22;   // the shield shoulder leads
     if (b.mounted && !b.dead) {                              // the RIDER turns in the saddle: shoulders follow the aim (a torso's travel), legs stay astride
       const tw = b.aimYaw != null ? clamp(angleDelta(b.yaw, afAimOf(b)), -1.25, 1.25) : 0;
@@ -20416,7 +20417,7 @@ function afDrive(b, dt, sim) {
     else if (a.hit && a.t > a.wind + a.strike + a.rec * 0.5 && !a.bow) { b.anim.ease = null; setPose(b.anim, 'guard', 0.3); }
     b.blocking = false;
   } else b.blocking = !!I.block;
-  if (b.blocking) setPose(b.anim, 'block', 0.1);
+  if (b.blocking) setPose(b.anim, b.rushT > 0 ? 'charge' : 'block', 0.1);   // (a charge: the shield up before the face)
   else if (!b.atk && !b.charge) setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.22);
   const canMove = !b.atk || (!b.atk.heavy && !b.atk.bow && !b.atk.hit);
   if (b.mounted) { afRide(b, dt, I, mm, canMove || !!(b.atk && b.atk.bow), sim); afIntegrate(b, dt); afCommit(b, dt); return; }   // (a shot from the saddle is the rider's arms — the horse runs on under him; a sword cut still checks it)
@@ -20448,7 +20449,7 @@ function afDrive(b, dt, sim) {
     if (b === AF.me) { if (b.run01 > 0.98 && !b._strode) { b._strode = true; afPopup(b.group.position, 'FULL STRIDE', '#ffe089'); } else if (b.run01 < 0.5) b._strode = false; }
     const g = b.gait = (b.blocking && !rush) || b.atk || b.charge ? GAIT.walk : GAIT.run;
     b.phase += dt * g.tempo * (fwdDot < -0.1 ? -1 : 1) * Math.min(1.15, spd / F.move + 0.3);
-    walkLegs(b.parts, b.phase, g.leg * (g === GAIT.run ? 0.72 + 0.28 * b.run01 : 1), landK + (rush ? 0.18 : 0));   // (a charge runs low)
+    walkLegs(b.parts, b.phase, g.leg * (g === GAIT.run ? 0.72 + 0.28 * b.run01 : 1), landK + (rush ? 0.12 : 0));   // (a charge runs a little low)
     if (rush && b === AF.me) addShake(0.006);                  // the ground under a charge
   } else { if (b.rushT > 0) afRushEnd(b, false); b.run01 = Math.max(0, b.run01 - dt / R.down); restLegs(b.parts, dt, true, landK); }
   afIntegrate(b, dt); afCommit(b, dt);
@@ -21507,7 +21508,7 @@ function afApplyRemotePose(b, dt) {
     case 14: { const J = AF_F.jump; b.airT = (b.airT || 0) + dt; b.airY = Math.max(0, J.v * b.airT - 0.5 * J.g * b.airT * b.airT); b.dive = b.tmove === 1; afAirPose(b, dt); setPose(b.anim, b.dive ? 'dive' : b.weapon === 'bow' ? 'relax' : 'guard', 0.15); break; }   // in the air: the same leap everyone makes, timed from here (a dive if the move slot says so)
     case 16: b.rollT += dt; b.rollRel = (b.tmove || 0) / 100; afRollPose(b, clamp(b.rollT / AF_F.jump.roll, 0, 1), dt); break;   // the dive's landing roll
     case 17: { const J = AF_F.jump; b.airT = (b.airT || 0) + dt; b.airY = Math.max(0, J.v * b.airT - 0.5 * J.g * b.airT * b.airT); b.dive = false; b.diveAng = 0; if (!b.airAtk) b.airAtk = { t: 0, hit: false }; afAirPose(b, dt); setPose(b.anim, b.tmove === 1 ? 'strikeHeavy' : 'windupHeavy', 0.1); break; }   // the jump attack: the blade overhead, then down with him
-    case 15: b.rushT = 1; b.gait = GAIT.run; walkLegs(b.parts, b.phase += dt * GAIT.run.tempo, GAIT.run.leg, 0.18); setPose(b.anim, 'block', 0.1); break;   // the shield charge (rushT: the lean in afCommit)
+    case 15: b.rushT = 1; b.gait = GAIT.run; walkLegs(b.parts, b.phase += dt * GAIT.run.tempo, GAIT.run.leg, 0.12); setPose(b.anim, 'charge', 0.1); break;   // the shield charge (rushT: the lean in afCommit)
     case 9: setPose(b.anim, 'aimBow', 0.1); afRemoteLegs(b, dt, false); break;
     case 10: setPose(b.anim, 'looseBow', 0.05); afRemoteLegs(b, dt, false); break;
     default: setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.2); restLegs(b.parts, dt, true);

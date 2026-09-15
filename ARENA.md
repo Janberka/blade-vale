@@ -638,8 +638,9 @@ same arc. NPCs never jump (yet).
 
 **The shield charge** (`AF_F.rush`, afDrive's movement branch, `afRushHit` / `afRushEnd`): block held at `at` 0.85 of
 the stride (forward, along the line, feet on the ground, `stam` in hand) starts `rushT`; the stride is kept (× `speed`)
-instead of the guard's walk, `straight` still climbs, the legs run low (`walkLegs` crouch 0.18), the back goes down a
-further 0.3 rad and the shield shoulder leads (afCommit), the stamina drain doubles. Every host tick `afRushHit` looks
+instead of the guard's walk, `straight` still climbs, the legs run a little low (`walkLegs` crouch 0.12), the shield
+comes UP before the face with the head tucked behind it and the sword hand cocked back (`POSES.charge` — not the sprint's
+head-first lean: the back stays up, the shield shoulder leads, afCommit), the stamina drain doubles. Every host tick `afRushHit` looks
 `reach` ahead in a `cone`: square on (within 0.75 of the line) a man on foot takes 8–16 and the trample's `downT`
 (1–1.4 s) with a shove along the line ("RUN DOWN"); a man blocking toward you takes half through `afDamage`'s heavy on a
 raised guard (GUARD BREAK, on his feet); off the line he is only shouldered (a third, a flinch, a shove); a friend is

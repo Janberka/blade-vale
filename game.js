@@ -17102,7 +17102,7 @@ const AF_F = { hp: 100, move: 5.6, reach: 2.5, cone: 0.3, radius: 34, timeLimit:
   stam: { max: 100, run: 11, draw: 7, light: 7, heavy: 16, loose: 4, dodge: 14, jump: 12, regen: 12, regenMove: 7, recover: 35, winded: { move: 0.6, dmg: 0.65 }, aiRest: 22 },
   // THE LEAP (Space / JUMP): v up, g down (a ~1.2-unit hop, 0.73 s in the air), a bent-knee landing of `land` seconds with
   // no blow in it. Come down on a man at `tackleAt` of the full run or better and he is FLOORED like a man ridden down.
-  jump: { v: 6.6, g: 18, land: 0.22, tackleAt: 0.75, tackleR: 1.15 },
+  jump: { v: 6.6, g: 18, land: 0.22, tackleAt: 0.75, tackleR: 1.3, knot: 1.6, men: 3 },   // (knot / men: come down on a man and the men within `knot` of him go too, up to three)
   // THE SHIELD CHARGE (2026-09-14, the user: "running really fast charging the enemies should be a very good animation —
   // go block mode, shield in front of the body, and hit as hard as possible; a good hit and 2 men can fall, or even a horse"):
   // hold BLOCK at `at` of the full stride and the shield comes down in front (a shoulder, for a man without one) and you
@@ -20152,18 +20152,21 @@ function afAirPose(b, dt) {                                  // knees drawn up t
 function afTackle(b) {
   const F = AF_F, J = F.jump, sp = Math.hypot(b.vx, b.vz), took = b.leapSp || 0; if (took < F.move * J.tackleAt || sp < 1) return;   // (no stride behind it: just a hop)
   const q = clamp((took / F.move - J.tackleAt) / (F.run.top - J.tackleAt), 0, 1), ux = b.vx / sp, uz = b.vz / sp;   // q: how much of the full stride was behind it
-  for (const o of AF.bodies) {
-    if (o.dead || o === b || o.mounted || o.downT > 0 || o.airT > 0 || o.team === b.team) continue;
-    const dx = o.x - b.x, dz = o.z - b.z, dd = Math.hypot(dx, dz); if (dd > J.tackleR || (dx * ux + dz * uz) / (dd || 1) < -0.2) continue;   // (on him, or nearly under him — never a man behind)
-    const side = (dx * uz - dz * ux) >= 0 ? 1 : -1;
+  const foe = o => !(o.dead || o === b || o.mounted || o.downT > 0 || o.airT > 0 || o.team === b.team);
+  let first = null, bd = J.tackleR;                          // the man you come down on: the nearest in reach, never one behind you
+  for (const o of AF.bodies) { if (!foe(o)) continue; const dx = o.x - b.x, dz = o.z - b.z, dd = Math.hypot(dx, dz); if (dd > bd || (dx * ux + dz * uz) / (dd || 1) < -0.2) continue; bd = dd; first = o; }
+  if (!first) return;
+  const knot = AF.bodies.filter(o => o !== first && foe(o) && Math.hypot(o.x - first.x, o.z - first.z) <= J.knot).sort((p, r) => Math.hypot(p.x - first.x, p.z - first.z) - Math.hypot(r.x - first.x, r.z - first.z));
+  const men = [first, ...knot].slice(0, J.men);            // …and the men at his shoulder go with him, up to J.men
+  for (const o of men) {
+    const dx = o.x - b.x, dz = o.z - b.z, side = (dx * uz - dz * ux) >= 0 ? 1 : -1;
     afDamage(o, 5 + 9 * q, b, false, false, false, 0.3 * q);
-    if (!o.dead) { o.downT = 1.0 + 0.5 * q; o.downSide = side; o.atk = null; o.charge = null; o.blocking = false; o.stagger = 0; o.flinch = 0; o.queued = false; o.run01 = 0; o.vx += ux * (3 + 4 * q); o.vz += uz * (3 + 4 * q); afPopup(o.group.position, 'FLOORED', '#ffb347'); }
-    b.vx = ux * sp * 0.3; b.vz = uz * sp * 0.3; b.vy = Math.min(b.vy, -2.5); b.landT = J.land * 1.6;   // he comes down on him, and off him: his own way spent
-    try { SFX.hit(o.group.position, true); } catch (e) {}
+    if (!o.dead) { o.downT = 1.0 + 0.5 * q; o.downSide = side; o.atk = null; o.charge = null; o.blocking = false; o.stagger = 0; o.flinch = 0; o.queued = false; o.run01 = 0; o.rushT = 0; o.vx += ux * (3 + 4 * q) + (o === first ? 0 : (o.x - first.x) * 2); o.vz += uz * (3 + 4 * q) + (o === first ? 0 : (o.z - first.z) * 2); afPopup(o.group.position, 'FLOORED', '#ffb347'); }
     afSparks(tmpV.set(o.x, afY(o.x, o.z) + 0.2, o.z), 0xc9b79a, 8);
-    if (b === AF.me) addShake(0.18); else if (o === AF.me) addShake(0.28);
-    break;                                                   // one man per leap
   }
+  b.vx = ux * sp * 0.3; b.vz = uz * sp * 0.3; b.vy = Math.min(b.vy, -2.5); b.landT = J.land * 1.6;   // he comes down on them, and off them: his own way spent
+  try { SFX.hit(first.group.position, true); } catch (e) {}
+  if (b === AF.me) addShake(0.18 + 0.05 * men.length); else if (men.includes(AF.me)) addShake(0.28);
 }
 // THE SHIELD CHARGE. afDrive's movement branch starts it (block held at full stride) and ends it (guard dropped, stick
 // eased, wall, wind, time, or enough men); afRushHit (host / solo, every tick of it) is the impact: square on and a man on

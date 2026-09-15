@@ -630,7 +630,7 @@ wide through a turn. A hit, a stagger, a clash or being ridden down zero it. The
 button, edge-triggered like the roll and carried on the wire) needs both feet on the ground and no blow in hand:
 `v` 6.6 up under `g` 18 (a ~1.2-unit hop, 0.73 s), nothing steers in the air and there is no ground to drag on, so
 you fly where you left it; the landing bends the knees for `land` 0.22 s with no load allowed. `afTackle` (host,
-in the air): with `leapSp` ≥ `tackleAt` × move behind the leap, the first foe within `tackleR` and not behind you
+in the air): with `leapSp` ≥ `tackleAt` × move behind the leap, the nearest foe within `tackleR` and not behind you — and the men within `knot` 1.6 of him, up to `men` 3 (a knot of soldiers goes down under you) —
 takes 5–14 damage and the trample's `downT` (1–1.5 s) plus a shove along your line; your own speed is cut to 30 %
 and the landing is half again as long. The press ignores a man in the air (`afShove`), which is how he comes down
 ON a man. Remote bodies play the leap from state code 14 on their own clock (`afApplyRemotePose`) — it is always the

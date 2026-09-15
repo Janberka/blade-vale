@@ -629,7 +629,7 @@ same terminal speed, a slower response (0.14 s → 0.47 s), so a sprinter slides
 wide through a turn. A hit, a stagger, a clash or being ridden down zero it. The leap (`I.jump`, Space / the JUMP
 button, edge-triggered like the roll and carried on the wire) needs both feet on the ground and no blow in hand:
 `v` 6.6 up under `g` 18 (a ~1.2-unit hop, 0.73 s), nothing steers in the air and there is no ground to drag on, so
-you fly where you left it; the landing bends the knees for `land` 0.22 s with no load allowed. `afTackle` (host,
+you fly where you left it. A standing hop draws the knees up and lands on bent knees (`land` 0.22 s, no load allowed); a RUNNING leap (2026-09-15) is a **dive** — the body pitches head-first about the hips (`diveAng` 1.15 rad by mid-flight, the 'dive' pose flings both arms open, legs trail) and lands in a **roll** over the shoulder along the line of flight (`roll` 0.5 s, `afRollPose`, state code 16) and comes up through the crouch. `afTackle` (host,
 in the air): with `leapSp` ≥ `tackleAt` × move behind the leap, the nearest foe within `tackleR` and not behind you — and the men within `knot` 1.6 of him, up to `men` 3 (a knot of soldiers goes down under you) —
 takes 5–14 damage and the trample's `downT` (1–1.5 s) plus a shove along your line; your own speed is cut to 30 %
 and the landing is half again as long. The press ignores a man in the air (`afShove`), which is how he comes down

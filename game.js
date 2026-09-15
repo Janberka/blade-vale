@@ -17103,7 +17103,7 @@ const AF_F = { hp: 100, move: 5.6, reach: 2.5, cone: 0.3, radius: 34, timeLimit:
   stam: { max: 100, run: 11, draw: 7, light: 7, heavy: 16, loose: 4, dodge: 14, jump: 12, regen: 12, regenMove: 7, recover: 35, winded: { move: 0.6, dmg: 0.65 }, aiRest: 22 },
   // THE LEAP (Space / JUMP): v up, g down (a ~1.2-unit hop, 0.73 s in the air), a bent-knee landing of `land` seconds with
   // no blow in it. Come down on a man at `tackleAt` of the full run or better and he is FLOORED like a man ridden down.
-  jump: { v: 6.6, g: 18, land: 0.22, tackleAt: 0.75, tackleR: 1.3, knot: 1.6, men: 3, diveAng: 1.15, roll: 0.5 },   // (diveAng / roll: a RUNNING leap is a head-first dive, arms open, and lands in a roll of `roll` seconds — then up through the crouch)   // (knot / men: come down on a man and the men within `knot` of him go too, up to three)
+  jump: { v: 6.6, g: 18, land: 0.22, tackleAt: 0.75, tackleR: 1.3, knot: 1.6, men: 3, diveAng: 1.15, roll: 0.5, atkBy: 0.4, strikeY: 0.5, atkReach: 0.6 },   // (diveAng / roll: a RUNNING leap is a head-first dive, arms open, and lands in a roll of `roll` seconds — then up through the crouch)   // (knot / men: come down on a man and the men within `knot` of him go too, up to three)
   // THE SHIELD CHARGE (2026-09-14, the user: "running really fast charging the enemies should be a very good animation —
   // go block mode, shield in front of the body, and hit as hard as possible; a good hit and 2 men can fall, or even a horse"):
   // hold BLOCK at `at` of the full stride and the shield comes down in front (a shoulder, for a man without one) and you
@@ -19711,7 +19711,7 @@ function afMakeBody(entry, idx, r) {
     x: sp.cx + rgx * off - Math.sin(sp.yaw) * back, z: sp.cz + rgz * off - Math.cos(sp.yaw) * back, yaw: sp.yaw, phase: r() * TAU, tiltX: 0,
     hp: A.hp + G.hp, maxHp: A.hp + G.hp, state: 'idle', atk: null, combo: 0, comboT: 0, blocking: false,
     stam: AF_F.stam.max, maxStam: AF_F.stam.max, winded: false, stamRegen: 1 + clamp(G.move, -0.4, 0) * 1.5,   // (plate: −22 % speed is a third off the breath coming back)
-    dodgeT: 0, dodgeCd: 0, ddx: 0, ddz: 0, iframes: 0, flinch: 0, stagger: 0, dead: false, deadT: 0, tinted: false, kills: 0, run01: 0, airT: 0, airY: 0, vy: 0, landT: 0, seenJump: 0, landRollT: 0, dive: false, diveAng: 0, rushT: 0, rushHits: 0, rushHitT: 0,
+    dodgeT: 0, dodgeCd: 0, ddx: 0, ddz: 0, iframes: 0, flinch: 0, stagger: 0, dead: false, deadT: 0, tinted: false, kills: 0, run01: 0, airT: 0, airY: 0, vy: 0, landT: 0, seenJump: 0, landRollT: 0, dive: false, diveAng: 0, airAtk: null, rushT: 0, rushHits: 0, rushHitT: 0,
     // (a PLAYER is the hero: ×1.6 poise, so four jabs break it, not three)
     vx: 0, vz: 0, poise: A.poise * (entry.kind !== 'npc' ? 1.6 : 1) + G.poise, maxPoise: A.poise * (entry.kind !== 'npc' ? 1.6 : 1) + G.poise, queued: false, cd: 0, waiting: false, slotAngle: 0, retreatT: 0, bob: 0,
     gait: null, hitT: 0, hitSide: 0, lookYaw: 0, headYaw: 0, capeX: 0.12, phase0: r() * TAU, roll: 0, lastStep: 0, flashT: 0, sway: r() * TAU, clashT: 0, clashAtk: false, clashDx: 0, clashDz: 0,
@@ -20057,7 +20057,7 @@ function afStateCode(b) {
   if (b.flinch > 0) return 5;
   if (b.dodgeT > 0) return 7;                                // (the roll's heading rides the snapshot's move slot)
   if (b.landRollT > 0) return 16;                            // the dive's landing roll (heading in the move slot, as the dodge)
-  if (b.airT > 0) return 14;                                 // in the air (the guest plays the arc himself: it is always the same leap)
+  if (b.airT > 0) return b.airAtk ? 17 : 14;                 // in the air (the guest plays the arc himself: it is always the same leap; the move slot says whether it is a dive) — 17: the blade coming down with him
   if (b.rushT > 0) return 15;                                // the shield charge (block pose, running legs, the lean)
   if (b.charge) return b.weapon === 'bow' ? 9 : 2;
   if (b.atk) { if (b.atk.bow) return b.atk.hit ? 10 : 9; return b.atk.hit ? (b.atk.t > b.atk.wind + b.atk.strike ? 4 : 3) : 2; }
@@ -20078,7 +20078,7 @@ function afIntegrate(b, dt) {                              // friction + slope +
       if (b.dive) {                                          // the dive lands in a ROLL over the shoulder along the line of flight, then up through the crouch (afDrive's landRoll branch)
         const sp = Math.hypot(b.vx, b.vz), ux = sp > 0.1 ? b.vx / sp : Math.sin(b.yaw), uz = sp > 0.1 ? b.vz / sp : Math.cos(b.yaw), v = clamp(sp, 2.5, 4.5);
         b.dive = false; b.diveAng = 0; b.landRollT = J.roll; b.rollRel = angleDelta(b.yaw, Math.atan2(ux, uz)); b.vx = ux * v; b.vz = uz * v;
-      } else { b.landT = Math.max(b.landT || 0, J.land); b.vx *= 0.75; b.vz *= 0.75; }
+      } else { b.landT = Math.max(b.landT || 0, b.airAtk ? J.land * 1.6 : J.land); if (b.airAtk) { b.airAtk = null; b.cd = Math.max(b.cd || 0, 0.25); b.anim.ease = null; setPose(b.anim, 'guard', 0.3); } b.vx *= 0.75; b.vz *= 0.75; }   // (a jump attack: a hard landing, a breath)
     }
   }
   if (AF.terr.hills.length) {                                // a hill takes the legs out of a run: uphill drags, downhill gives a little
@@ -20159,13 +20159,14 @@ function afJump(b) {
 }
 function afAirPose(b, dt) {                                  // a hop: knees drawn up, straightening for the ground. A running leap: THE DIVE — the whole body pitches over head first (diveAng, the group's pitch about the hips in afCommit), arms flung open (the 'dive' pose), legs trailing
   const J = AF_F.jump, total = 2 * J.v / J.g, k = clamp(b.airT / total, 0, 1), p = b.parts; b.tiltX = 0;
-  if (b.dive) {
+  if (b.airAtk) { b.diveAng = 0; restLegs(p, dt * 2.5, true, 0.45); }   // the jump attack: upright, knees up, the blade overhead (the pose is the drive's)
+  else if (b.dive) {
     b.diveAng = J.diveAng * Math.sin(Math.min(1, k / 0.55) * Math.PI / 2);   // over by mid-flight, held to the ground
     if (!p.mount) { const s = clamp(dt * 10, 0, 1); p.hipL.rotation.x = lerp(p.hipL.rotation.x, -0.3, s); p.hipR.rotation.x = lerp(p.hipR.rotation.x, -0.12, s); p.kneeL.rotation.x = lerp(p.kneeL.rotation.x, 0.35, s); p.kneeR.rotation.x = lerp(p.kneeR.rotation.x, 0.55, s); }
   } else { b.diveAng = 0; restLegs(p, dt * 2.5, true, Math.sin(Math.PI * clamp((k - 0.05) / 0.9, 0, 1)) * 0.8); }
 }
 function afTackle(b) {
-  const F = AF_F, J = F.jump, sp = Math.hypot(b.vx, b.vz), took = b.leapSp || 0; if (took < F.move * J.tackleAt || sp < 1) return;   // (no stride behind it: just a hop)
+  const F = AF_F, J = F.jump, sp = Math.hypot(b.vx, b.vz), took = b.leapSp || 0; if (b.airAtk || took < F.move * J.tackleAt || sp < 1) return;   // (no stride behind it: just a hop; a blade in the air is the blow's, not the body's)
   const q = clamp((took / F.move - J.tackleAt) / (F.run.top - J.tackleAt), 0, 1), ux = b.vx / sp, uz = b.vz / sp;   // q: how much of the full stride was behind it
   const foe = o => !(o.dead || o === b || o.mounted || o.downT > 0 || o.airT > 0 || o.team === b.team);
   let first = null, bd = J.tackleR;                          // the man you come down on: the nearest in reach, never one behind you
@@ -20326,9 +20327,32 @@ function afDrive(b, dt, sim) {
   }
   if (human) b.lookYaw = I.yaw; else if (b.target && !b.target.dead) b.lookYaw = Math.atan2(b.target.x - b.x, b.target.z - b.z); else b.lookYaw = b.yaw;
   if (b.airT > 0) {                                          // IN THE AIR: the knees come up, the aim still turns — no blow, no guard, no steering (the way you left the ground with is the way you go)
-    b.charge = null; b.blocking = false; b.queued = false; b.prevHold = !!I.hold; b.seenAtk = I.atk; if (!human) b.aiHoldT = 0;
-    afAirPose(b, dt); setPose(b.anim, b.dive ? 'dive' : b.weapon === 'bow' ? 'relax' : 'guard', b.dive ? 0.12 : 0.15);
-    if (sim && b.airT > 0.1) afTackle(b);
+    b.charge = null; b.blocking = false; b.queued = false; if (!human) b.aiHoldT = 0;
+    // THE JUMP ATTACK (2026-09-15, the user: "if I click attack right after jump the animation should swing the sword
+    // instead"): a tap or a press in the first `atkBy` of the flight turns the leap into an overhead blow — no dive, no
+    // tackle — the blade coiled over the head on the way up and brought down with the body at `strikeY` on the way down:
+    // a HEAVY (k = 1, so it cracks a raised guard) with a little more reach, then a hard landing (landT × 1.6, a breath before the next blow).
+    const J = F.jump, bow = b.weapon === 'bow';
+    if (!b.airAtk && !bow && b.swapT <= 0 && b.airT < J.atkBy && !b.winded && (I.atk !== b.seenAtk || (!!I.hold && !b.prevHold))) {
+      b.airAtk = { t: 0, hit: false }; b.dive = false; b.diveAng = 0; b.anim.ease = null; setPose(b.anim, 'windupHeavy', 0.1); afStamCost(b, F.stam.heavy);
+    }
+    b.prevHold = !!I.hold; b.seenAtk = I.atk;
+    if (b.airAtk) {
+      const a = b.airAtk; a.t += dt;
+      if (!a.hit && b.vy < 0 && (b.airY < J.strikeY || afNearestFoeInCone(b, F.reach * 1.25 + J.atkReach, 0.4))) {   // the blade comes down with the body — or the moment a man is under it on the way down (a full-stride leap overflies the man you jumped at otherwise)
+        a.hit = true; const mv = MOVES.heavy, col = AF_TEAM_HEX[b.team];
+        b.anim.ease = AF_EASE_BACK; setPose(b.anim, mv.strike, 0.09);
+        try { spawnSlashArc(b.group.position, afAimOf(b), mv, 1.6, col); spawnTrail(b, 1.7, col); } catch (e) {}
+        if (b === AF.me) addShake(0.16); try { SFX.swing(b.group.position); } catch (e) {}
+        const rb = b.reachBonus || 0; b.reachBonus = rb + J.atkReach;
+        if (sim) afStrike(b, true, 1); else if (b === AF.me && AF.role === 'guest') afPredictStrike(b, true, 1);
+        b.reachBonus = rb;
+      }
+      afAirPose(b, dt);
+    } else {
+      afAirPose(b, dt); setPose(b.anim, b.dive ? 'dive' : bow ? 'relax' : 'guard', b.dive ? 0.12 : 0.15);
+      if (sim && b.airT > 0.1) afTackle(b);
+    }
     afIntegrate(b, dt); afCommit(b, dt); return;
   }
   if (I.swap !== b.seenSwap) { b.seenSwap = I.swap; if (!b.atk && b.clashT <= 0) afSetWeapon(b, b.weapon === 'bow' ? 'sword' : 'bow'); }
@@ -21481,13 +21505,14 @@ function afApplyRemotePose(b, dt) {
     case 13: b.tiltX = -1.35; b.roll = 0.45; setPose(b.anim, 'hurt', 0.08); restLegs(b.parts, dt, true); break;   // ridden down
     case 14: { const J = AF_F.jump; b.airT = (b.airT || 0) + dt; b.airY = Math.max(0, J.v * b.airT - 0.5 * J.g * b.airT * b.airT); b.dive = b.tmove === 1; afAirPose(b, dt); setPose(b.anim, b.dive ? 'dive' : b.weapon === 'bow' ? 'relax' : 'guard', 0.15); break; }   // in the air: the same leap everyone makes, timed from here (a dive if the move slot says so)
     case 16: b.rollT += dt; b.rollRel = (b.tmove || 0) / 100; afRollPose(b, clamp(b.rollT / AF_F.jump.roll, 0, 1), dt); break;   // the dive's landing roll
+    case 17: { const J = AF_F.jump; b.airT = (b.airT || 0) + dt; b.airY = Math.max(0, J.v * b.airT - 0.5 * J.g * b.airT * b.airT); b.dive = false; b.diveAng = 0; if (!b.airAtk) b.airAtk = { t: 0, hit: false }; afAirPose(b, dt); setPose(b.anim, b.tmove === 1 ? 'strikeHeavy' : 'windupHeavy', 0.1); break; }   // the jump attack: the blade overhead, then down with him
     case 15: b.rushT = 1; b.gait = GAIT.run; walkLegs(b.parts, b.phase += dt * GAIT.run.tempo, GAIT.run.leg, 0.18); setPose(b.anim, 'block', 0.1); break;   // the shield charge (rushT: the lean in afCommit)
     case 9: setPose(b.anim, 'aimBow', 0.1); afRemoteLegs(b, dt, false); break;
     case 10: setPose(b.anim, 'looseBow', 0.05); afRemoteLegs(b, dt, false); break;
     default: setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.2); restLegs(b.parts, dt, true);
   }
   if (s !== 7 && s !== 16) { b.rollT = 0; b.rollAng = 0; b.rollSq = 0; }
-  if (s !== 14) { b.airT = 0; b.airY = 0; b.dive = false; b.diveAng = 0; }
+  if (s !== 14 && s !== 17) { b.airT = 0; b.airY = 0; b.dive = false; b.diveAng = 0; b.airAtk = null; }
   if (s !== 15) b.rushT = 0;
 }
 function afApplySnap(s) {
@@ -21591,7 +21616,7 @@ function afNetTick(dt) {
     for (const b of AF.bodies) {
       if (b.dead) { if (b.sentDead && !full) continue; b.sentDead = true; }   // a corpse: one row when he falls, then only with the full refresh
       else { b.sentDead = false; if (half && b.ctrl === 'ai' && !full && ((b.idx + snapNo) & 1)) continue; }   // the rank and file of a big fight go out on alternate snaps (10 Hz) — the men with a player behind them every time
-      const row = [b.idx, Math.round(b.x * 100), Math.round(b.z * 100), Math.round(b.yaw * 100), Math.round(b.hp), afStateCode(b), (b.dodgeT > 0 || b.landRollT > 0) ? Math.round((b.rollRel || 0) * 100) : b.airT > 0 ? (b.dive ? 1 : 0) : b.atk ? b.atk.move : b.charge ? (b.charge.heavyPose ? 3 : b.chargeMove) : 0];
+      const row = [b.idx, Math.round(b.x * 100), Math.round(b.z * 100), Math.round(b.yaw * 100), Math.round(b.hp), afStateCode(b), (b.dodgeT > 0 || b.landRollT > 0) ? Math.round((b.rollRel || 0) * 100) : b.airT > 0 ? (b.airAtk ? (b.airAtk.hit ? 1 : 0) : b.dive ? 1 : 0) : b.atk ? b.atk.move : b.charge ? (b.charge.heavyPose ? 3 : b.chargeMove) : 0];
       if (b.mounted) row.push(Math.round(angleDelta(b.yaw, afAimOf(b)) * 100));   // (a rider's twist in the saddle rides an 8th slot)
       rows.push(row);
       const mk = b.kills + (b.weapon === 'bow' ? 'b' : 's'); if (full || mk !== b.sentMeta) { b.sentMeta = mk; meta.push([b.idx, b.kills, b.weapon === 'bow' ? 1 : 0]); }

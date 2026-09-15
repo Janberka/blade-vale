@@ -20215,7 +20215,7 @@ function afRushHit(b) {
       b.vx *= 0.9; b.vz *= 0.9; continue;
     }
     b.rushHits++; b.rushLastHit = b.rushT;
-    if (o.blocking && facing > 0.15) afDamage(o, amt * 0.5, b, true, false, false, 0.9);   // shield on shield: his guard breaks (afDamage's heavy on a raised guard), he keeps his feet
+    if (o.blocking && facing > 0.15) { afDamage(o, amt * 0.5, b, true, false, false, 0.9); if (!o.dead) { o.vx += rgx * 5 + fx * 2.5; o.vz += rgz * 5 + fz * 2.5; } }   // shield on shield: his guard breaks (afDamage's heavy on a raised guard), he keeps his feet — but is shouldered off the line, so the charge goes on to the man behind him
     else {
       afDamage(o, amt, b, false, false, false, 0.5);
       if (!o.dead) { o.downT = lerp(RU.down[0], RU.down[1], q); o.downSide = side; o.atk = null; o.charge = null; o.blocking = false; o.stagger = 0; o.flinch = 0; o.queued = false; o.run01 = 0; o.rushT = 0; o.vx += fx * (4 + 4 * q) + rgx * 2; o.vz += fz * (4 + 4 * q) + rgz * 2; afPopup(pos, 'RUN DOWN', '#ffb347'); }
@@ -21257,6 +21257,7 @@ function afSeparate() {
 function afHorseWeight(b) { return b.mounted ? 1.6 + 18.4 * clamp((b.sp01 - 0.45) / 0.35, 0, 1) : b.ctrl === 'ai' ? 1 : 2; }
 function afShove(b, o) {
   if ((b.airY || 0) > 0.35 || (o.airY || 0) > 0.35) return;   // a man in the air is over the press, not in it (he can come down ON a man — afTackle)
+  if ((b.rushT > 0 && o.downT > 0) || (o.rushT > 0 && b.downT > 0)) return;   // a charge steps over the man it has just put down
   const R = 1.1 + (b.mounted ? 0.7 : 0) + (o.mounted ? 0.7 : 0), R2 = R * R;
   const dx = o.x - b.x, dz = o.z - b.z, d2 = dx * dx + dz * dz; if (d2 >= R2 || d2 < 1e-6) return;
   const d = Math.sqrt(d2), ov = R - d, nx = dx / d, nz = dz / d, wb = afHorseWeight(b), wo = afHorseWeight(o), tot = wb + wo;

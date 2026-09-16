@@ -22,7 +22,7 @@ Two commanded hosts meet on real terrain and fight as **armies**, not mobs:
   the rear when his nerve breaks**, rallying if he reaches safety.
 - Bodies take up space: a spatial-hash shove pass (`battleSeparate`) turns two lines meeting
   into a **shoving crush**, not overlapping ghosts.
-- Archers hold the rear ranks, loose **ballistic arrows**, and kite when threatened.
+- Archers stay behind, loose **lobbed volleys** (a real arc that comes down on the mark, led by his pace), and kite when threatened — but only as far as their own rear line.
 - Battles end the way real ones do: a host **breaks and quits the field** when it's gutted or
   mostly routing — or its leader **refuses a hopeless fight and withdraws in good order**, which
   is scored as *his* win (he saved the army), even though the enemy holds the field.
@@ -123,7 +123,7 @@ A division is an **anchor** (`ax,az`) + facing that the commander maneuvers
 | `flank` | run to a waypoint wide on the valley shoulder, then convert to `charge` |
 | `hold` | ease back to the planned home position |
 | `fallback` | withdraw toward its own rear |
-| `skirmish` | archer standoff — keep ~62% of bow range: give ground when pressed, creep forward when out of range |
+| `skirmish` | archer standoff — keep ~75% of bow range (`BATTLE_ARCHER.stand`): give ground when pressed (down to `behind` = 8 behind the rearmost sword division, never further — a kite at march pace from a line advancing at march pace was a chase nobody won), creep forward when out of range |
 
 ### The commander's running read (`battleCommanderThink`, every ~0.7–1.4 s)
 
@@ -161,9 +161,15 @@ Per-man state machine (`battleStepBody`), all constants in `BATTLE_MELEE` / `BAT
   knockback shoves. Otherwise dress back into line and face the enemy. A commanded `fallback`
   will not turn to fight.
 - **Archer** (`battleStepArcher`): threatened inside min range (11) → kite backward. Otherwise
-  hold slot and work the bow: draw 0.55 s, loose a ballistic arrow (gravity 9, speed 47) at the
-  nearest foe within range 60, cooldown 1.6–2.7 s. Arrows are physically simulated and hit by
-  proximity — they can miss.
+  hold slot and work the bow: draw 0.55 s, loose a **lobbed** arrow at the nearest foe within
+  range 60, cooldown 1.6–2.7 s. The arrow is flown on an arc (`arrowLob`, gravity 9): the loft
+  climbs with the range (8° at the muzzle, 38° at full range — a far mark gets a volley arc
+  ~12 m high that hangs ~3 s and comes DOWN on him), the launch speed is solved so the arc lands
+  on the mark uphill or down, capped by the bow's power (47) beyond which it falls short. The
+  mark is led by the man's pace over the last tick (damped 0.85, solved twice). Arrows are
+  physically simulated: coming down through head height one hits its mark if he is under it,
+  else any foe standing where it falls (`battleArrowVictim`, radius 1.3) — a volley into a
+  block finds a man; a lob at a walking man who turned is a miss.
 - **Morale** (`battleAssessMorale`, every 0.3–0.55 s): target nerve =
   `0.12 + 0.48·localOdds + 0.22·hpFrac + 0.24·armyFrac + bravery`, −0.15 when personally
   outnumbered. **Fear strikes fast, courage returns slow** (asymmetric smoothing). Break below

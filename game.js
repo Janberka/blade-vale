@@ -15047,7 +15047,23 @@ const BATTLE_MORALE = { break: 0.30, rally: 0.60, senseR: 8, fallbackDepth: 16, 
                         hitShock: 0.14, allyDeathShock: 0.05 };
 // archers: hang back in the rear ranks and loose ballistic arrows; if a foe closes to melee they give
 // ground to keep their distance (kite) rather than stand and trade blows.
-const BATTLE_ARCHER = { range: 60, minRange: 11, cd: [1.6, 2.7], drawTime: 0.55, projSpeed: 47, dmg: [9, 17], hpMul: 0.8 };
+const BATTLE_ARCHER = { range: 60, minRange: 11, stand: 0.75, behind: 8, cd: [1.6, 2.7], drawTime: 0.55, projSpeed: 47, dmg: [9, 17], hpMul: 0.8, hitR: 1.3 };   // stand: the archer divisions' stand-off, as a fraction of the bow's range (they stay behind and try the long shot; the swords go on past them); behind: how far behind their own rearmost swords a kiting division stops
+// THE LOB (2026-09-16, the user: "Archers are not shooting arches. They try to shoot direct all the time. Archers can stay
+// behind and try long shots"). An arrow is flown on an ARC, not a line: the loft climbs with the range (a man at ten paces
+// is shot nearly flat; the far mark gets a proper volley arc that comes DOWN on him), and the launch speed is solved so the
+// arc lands on the mark, uphill or down. Past the bow's power (vmax) the arrow leaves at full speed and falls short. The same
+// solver flies the valley battle's volleys, the arena's bows (afSpawnArrow) and the arena's line-of-flight test (afShotBlocker).
+const ARROW_LOB = { grav: 9, loftNear: 8 * Math.PI / 180, loftFar: 38 * Math.PI / 180 };
+function arrowLob(sx, sy, sz, tx, ty, tz, range, vmax) {
+  const dx = tx - sx, dz = tz - sz, dy = ty - sy, d = Math.hypot(dx, dz), g = ARROW_LOB.grav, ux = d > 1e-4 ? dx / d : 0, uz = d > 1e-4 ? dz / d : 1;
+  let th = lerp(ARROW_LOB.loftNear, ARROW_LOB.loftFar, clamp(d / range, 0, 1));
+  const up = Math.atan2(dy, Math.max(d, 0.5)); if (th < up + 0.15) th = Math.min(up + 0.15, 1.45);   // an uphill mark: the loft must clear the rise
+  const c = Math.cos(th), sn = Math.sin(th), dd = Math.max(d, 0.5);
+  let v = Math.sqrt(g * dd * dd / (2 * c * c * Math.max(dd * Math.tan(th) - dy, 0.05)));
+  if (vmax && v > vmax) v = vmax;                          // beyond the bow's reach: full draw, and it falls short
+  const flight = dd / (v * c);
+  return { vx: ux * v * c, vy: v * sn, vz: uz * v * c, flight, grav: g, loft: th, speed: v };
+}
 // commanders: a brief deploy phase where the planned array stands before the advance is ordered.
 const BATTLE_CMD = { deploySecs: 1.8 };
 // the two hosts: AZURE musters at -Z facing +Z, CRIMSON at +Z facing -Z, and they close down the valley
@@ -15409,6 +15425,7 @@ function battleStepFallback(b, dt, slot) {
 }
 function battleStepBody(b, dt) {
   if (b.dead) { battleStepDead(b, dt); return; }
+  if (dt > 1e-4) { b.vx = (b.x - (b.px != null ? b.px : b.x)) / dt; b.vz = (b.z - (b.pz != null ? b.pz : b.z)) / dt; } b.px = b.x; b.pz = b.z;   // his pace over the last tick (shoves included) — what an archer leads him by
   if (b === BATTLE.possessed) { battleControlPossessed(b, dt); return; } // you drive him, not the AI
   if (b.isCommander && b.watching) { battleStepCommanderWatch(b, dt); } // a general who commands from the rear
   else {
@@ -15431,11 +15448,21 @@ function battleShootArrow(from, target) {
   const head = new THREE.Mesh(cachedGeo('proj-head', () => new THREE.ConeGeometry(0.06, 0.16, 4)), mat(0xb9c2cc, { metal: 0.5 }));
   head.rotation.x = Math.PI / 2; head.position.z = 0.5; g.add(head);
   const sx = from.x, sy = battleValleyY(from.x, from.z) + 1.6, sz = from.z;
-  const tx = target.x, tz = target.z, ty = battleValleyY(tx, tz) + 1.1;
-  const dist = Math.hypot(tx - sx, tz - sz), flight = Math.max(0.12, dist / BATTLE_ARCHER.projSpeed), grav = 9;
-  const vel = new THREE.Vector3((tx - sx) / flight, (ty - sy) / flight + 0.5 * grav * flight, (tz - sz) / flight);
+  // a lobbed arrow hangs for seconds: the mark is where the man WILL be (his last tick's pace, damped — men stop and turn),
+  // solved twice since the hang time itself moves with the mark
+  let tx = target.x, tz = target.z, L = arrowLob(sx, sy, sz, tx, battleValleyY(tx, tz) + 1.1, tz, BATTLE_ARCHER.range, BATTLE_ARCHER.projSpeed);
+  if (target.vx || target.vz) for (let i = 0; i < 2; i++) { tx = target.x + (target.vx || 0) * L.flight * 0.85; tz = target.z + (target.vz || 0) * L.flight * 0.85; L = arrowLob(sx, sy, sz, tx, battleValleyY(tx, tz) + 1.1, tz, BATTLE_ARCHER.range, BATTLE_ARCHER.projSpeed); }
+  const vel = new THREE.Vector3(L.vx, L.vy, L.vz), grav = L.grav, flight = L.flight;
   g.position.set(sx, sy, sz); scene.add(g);
-  BATTLE.arrows.push({ g, vel, grav, team: from.team, target, dmg: rand(BATTLE_ARCHER.dmg[0], BATTLE_ARCHER.dmg[1]), life: flight + 0.5 });
+  BATTLE.arrows.push({ g, vel, grav, team: from.team, target, dmg: rand(BATTLE_ARCHER.dmg[0], BATTLE_ARCHER.dmg[1]), life: flight + 0.6 });
+}
+function battleArrowVictim(a, gy) {
+  const ax = a.g.position.x, az = a.g.position.z, ay = a.g.position.y, R2 = BATTLE_ARCHER.hitR * BATTLE_ARCHER.hitR;
+  if (Math.abs(ay - (gy + 1.1)) >= 1.8) return null;
+  const t = a.target; if (t && !t.dead) { const dx = t.x - ax, dz = t.z - az; if (dx * dx + dz * dz < R2) return t; }
+  const foes = (BATTLE._live && BATTLE._live[a.team === BATTLE_TEAMS[0] ? 1 : 0]) || BATTLE.bodies;
+  for (const o of foes) { if (o.dead || o.team === a.team) continue; const dx = o.x - ax, dz = o.z - az; if (dx * dx + dz * dz < R2) return o; }
+  return null;
 }
 function battleStepArrows(dt) {
   for (let i = BATTLE.arrows.length - 1; i >= 0; i--) {
@@ -15445,11 +15472,9 @@ function battleStepArrows(dt) {
     a.life -= dt;
     const gy = battleValleyY(a.g.position.x, a.g.position.z);
     let done = a.life <= 0 || a.g.position.y <= gy;
-    if (a.target && !a.target.dead) {                                   // proximity hit on the mark
-      const dx = a.target.x - a.g.position.x, dz = a.target.z - a.g.position.z;
-      if (dx * dx + dz * dz < 1.7 && Math.abs(a.g.position.y - (gy + 1.1)) < 1.8) {
-        battleDamage(a.target, a.dmg, a.g.position.x - a.vel.x * 0.02, a.g.position.z - a.vel.z * 0.02); done = true;
-      }
+    if (!done && a.g.position.y < gy + 2.9) {                             // coming down through head height: whoever stands there takes it — the mark first, else any foe under the fall (a volley into a block finds a man)
+      const v = battleArrowVictim(a, gy);
+      if (v) { battleDamage(v, a.dmg, a.g.position.x - a.vel.x * 0.02, a.g.position.z - a.vel.z * 0.02); done = true; }
     }
     if (done) { scene.remove(a.g); try { disposeGroup(a.g); } catch (e) {} BATTLE.arrows.splice(i, 1); }
   }
@@ -15457,6 +15482,11 @@ function battleStepArrows(dt) {
 // ---- commanders maneuver their divisions ----
 function battleUnitAlive(u) { let n = 0; for (const b of u.bodies) if (!b.dead) n++; return n; }
 // move each division's anchor per its standing order; bodies then dress to their slots on the new anchor
+function battleRearLine(A) {                              // the line a kiting archer division stops at: `behind` behind its army's rearmost living sword division (null: no swords left — it kites free)
+  let rear = null;
+  for (const v of A.units) { if (v.role !== 'melee' || v.kind === 'command' || !battleUnitAlive(v)) continue; if (rear == null || (v.az - rear) * A.sign < 0) rear = v.az; }
+  return rear == null ? null : rear - A.sign * BATTLE_ARCHER.behind;
+}
 function battleAdvanceUnits(dt) {
   if (BATTLE.phase !== 'battle') return;                  // during the deploy phase everyone stands in the array
   for (const A of BATTLE.armies) for (const u of A.units) { u.wx = u.ax + battleFloorCx(u.az); u.wz = u.az; }
@@ -15476,8 +15506,9 @@ function battleAdvanceUnits(dt) {
           if (wd < 3) { u.order = 'charge'; u.wp = null; } else { u.ax += (wx / wd) * M * 1.15 * dt; u.az += (wz / wd) * M * 1.15 * dt; face(Math.atan2(wx, wz)); } }
           else u.order = 'charge'; break;
       case 'fallback': u.az -= A.sign * BATTLE_MORALE.fallbackSpeed * 0.6 * dt; face(bearing); break;
-      case 'skirmish': { const stand = BATTLE_ARCHER.range * 0.62;
-          if (bd < stand - 2) u.az -= (bz / bd) * M * dt; else if (bd > stand + 3) u.az += (bz / bd) * M * 0.7 * dt; face(bearing); break; }
+      case 'skirmish': { const stand = BATTLE_ARCHER.range * BATTLE_ARCHER.stand;   // the bows stay behind and try the long shot (2026-09-16): they give ground down to `behind` behind their own rearmost swords, and no further (kiting at march pace from a line advancing at march pace was a chase nobody won — the fight ran to the clock)
+          if (bd < stand - 2) { const rear = battleRearLine(A); u.az -= (bz / bd) * M * dt; if (rear != null && (u.az - rear) * A.sign < 0) u.az = rear; }
+          else if (bd > stand + 3) u.az += (bz / bd) * M * 0.7 * dt; face(bearing); break; }
     }
   }
 }
@@ -21638,7 +21669,7 @@ function afShoot(b, k) {                                    // a longer draw fli
     if (dd < anyD) { anyD = dd; anyB = o; } if (dd < bd && !afShotBlocker(b.x, b.z, o.x, o.z, w)) { bd = dd; best = o; } }
   if (!best && anyB) { best = anyB; bd = anyD; }
   let tx = best ? best.x : b.x + fdx * 30, tz = best ? best.z : b.z + fdz * 30;
-  if (best && b.ctrl === 'ai') { const sk = afBowSk(b), fly = bd / (AF_F.bow.speed * (0.8 + w * 0.4)); tx += (best.vx || 0) * fly * sk; tz += (best.vz || 0) * fly * sk; }   // an NPC leads a moving mark as well as he knows how
+  if (best && b.ctrl === 'ai') { const sk = lerp(0.6, 1, afBowSk(b)), fly = afArrowArc(b.x, afY(b.x, b.z) + 1.6, b.z, tx, afY(tx, tz) + 1.1, tz, w).flight; tx += (best.vx || 0) * fly * sk; tz += (best.vz || 0) * fly * sk; }   // an NPC leads a moving mark as well as he knows how (by the lob's real hang time — a long arc hangs for seconds)
   { const err = afBowScatter(b, best ? bd : 30, w), ea = Math.random() * TAU, er = err * Math.sqrt(Math.random()); tx += Math.cos(ea) * er; tz += Math.sin(ea) * er; }   // and EVERY hand wanders by its skill (afBowScatter) — a master's barely, a recruit's by paces
   if (b.ctrl === 'ai') {                                     // the moment of release (the draw was checked; men move while he draws, and the lead and the scatter
     let K = afShotBlocker(b.x, b.z, tx, tz, w);               // shift the point): a scattered point behind a stone → the true mark; that blocked too → he holds the arrow
@@ -21649,11 +21680,13 @@ function afShoot(b, k) {                                    // a longer draw fli
   afSpawnArrow(b.team, b.idx, b.x, afY(b.x, b.z) + (b.mounted ? 2.6 : 1.6), b.z, tx, afY(tx, tz) + 1.1, tz, true, w); return true;
 }
 function afSpawnArrow(team, owner, sx, sy, sz, tx, ty, tz, announce, k) {
-  const dist = Math.hypot(tx - sx, tz - sz), flight = Math.max(0.12, dist / (AF_F.bow.speed * (0.75 + 0.45 * (k || 0)))), grav = 9;
-  const vel = new THREE.Vector3((tx - sx) / flight, (ty - sy) / flight + 0.5 * grav * flight, (tz - sz) / flight);
+  const L = afArrowArc(sx, sy, sz, tx, ty, tz, k), vel = new THREE.Vector3(L.vx, L.vy, L.vz), grav = L.grav, flight = L.flight;
   afAddArrow(team, owner, sx, sy, sz, vel, grav, flight + 0.6, k || 0);
-  if (announce) AF.events.push({ k: 'arrow', t: team, o: owner, p: [+sx.toFixed(2), +sy.toFixed(2), +sz.toFixed(2)], v: [+vel.x.toFixed(2), +vel.y.toFixed(2), +vel.z.toFixed(2)], l: +(flight + 0.6).toFixed(2) });
+  if (announce) AF.events.push({ k: 'arrow', t: team, o: owner, p: [+sx.toFixed(2), +sy.toFixed(2), +sz.toFixed(2)], v: [+vel.x.toFixed(2), +vel.y.toFixed(2), +vel.z.toFixed(2)], l: +(flight + 0.6).toFixed(2), g: grav });
 }
+// the arena's arrow: the shared lob (arrowLob), lofted by the range and capped by the draw — a short draw has less power
+// behind it and falls short of a far mark, where a full draw carries; the loft itself is the range's, not the draw's
+function afArrowArc(sx, sy, sz, tx, ty, tz, k) { return arrowLob(sx, sy, sz, tx, ty, tz, AF_F.bow.range, AF_F.bow.speed * (0.75 + 0.45 * (k == null ? 0.5 : k))); }
 function afAddArrow(team, owner, sx, sy, sz, vel, grav, life, k) {
   const g = new THREE.Group();
   const shaft = new THREE.Mesh(cachedGeo('proj-shaft', () => new THREE.CylinderGeometry(0.03, 0.03, 0.85, 5)), mat(0x7a5a36, { smooth: true }));
@@ -21688,7 +21721,7 @@ function afStepArrows(dt, sim) {
    at a walk, release the charge at contact, send the riders wide to flank, regroup when the line has scattered,
    and fall back to a wall when losing badly. Humans are never commanded, but see their captain's order. ---- */
 const AF_TACT = { formSecs: 1.6, walk: 0.62, contact: 10, regroupAfter: 8, rallyRatio: 0.45, rallySecs: 3.5, pursueRatio: 1.7, engageMin: 16, engageMax: 60, riderEngageMul: 1.7, wpTimeout: 6,
-  bowGap: 6, bowNear: 11, bowFar: 22, bowShot: 28, bowRoom: 5.5,
+  bowGap: 6, bowNear: 11, bowFar: 30, bowShot: 38, bowRoom: 5.5,   // (bowFar 22 → 30, bowShot 28 → 38, bowVolley 34 → 40, 2026-09-16, the user: "Archers can stay behind and try long shots" — with the lob the far arrow comes DOWN on the line)
   hbNear: 9, hbFar: 16, hbPace: 0.8,   // the HORSE ARCHER's ring (afHorseArcher): the band he rides round his mark, and his throttle (a canter — the gallop would cancel his draw)
   // THE PLAN (2026-09-16, the user: "if I have a 5v5 it will be almost the same pattern … we need to put some intelligence to this"):
   holdSecs: 14, holdOut: 16, holdIdle: 4,   // a holding line stands while its bows have someone to shoot (2026-09-16, the user: "infantry can decide to just stay behind, let the archers kill as much as enemy before they meet"); once the bows have been idle this long past holdSecs the stronger side goes to them; with no bows left it charges their foot at holdOut
@@ -21698,7 +21731,7 @@ const AF_TACT = { formSecs: 1.6, walk: 0.62, contact: 10, regroupAfter: 8, rally
   flankOff: 7, huntOff: 8, screenOff: 5, flankMax: 24,   // the squadron's marks: off the END of the enemy line / beside the enemy's BOWS / beside our own bows — scaled to the line's width, never a fixed trip across the pit
   screenR: 18,                         // a screening squadron goes when an enemy rider comes this close to the bows
   stallSecs: 26,                       // a fight with no blood for this long is pressed, not re-formed
-  bowVolley: 34 };                     // the approach volley: a bowman walking in with the line looses from farther out (a longer draw)
+  bowVolley: 40 };                     // the approach volley: a bowman walking in with the line looses from farther out (a longer draw)
   // archers: the gap behind the swords at muster; give ground inside bowNear, close beyond bowFar, loose out to bowShot, and keep bowRoom of clear sand from their own swordsmen
 function afClampPit(x, z, margin) { const d = Math.hypot(x, z); const max = AF_F.radius - margin; if (d > max && d > 1e-4) { const k = max / d; x *= k; z *= k; } return AF.terr && AF.terr.rocks.length ? afFreePoint(x, z, 1.2) : { x, z }; }
 function afCen(arr) { if (!arr.length) return null; let x = 0, z = 0; for (const b of arr) { x += b.x; z += b.z; } return { x: x / arr.length, z: z / arr.length }; }
@@ -22034,10 +22067,10 @@ function afBowScatter(b, dist, k) {                         // the radius (paces
 function afShotBlocker(sx, sz, tx, tz, k) {
   const T = AF.terr; if (!T || (!T.rocks.length && !T.hills.length)) return null;
   const sy = afY(sx, sz) + 1.6, ty = afY(tx, tz) + 1.1, dist = Math.hypot(tx - sx, tz - sz);
-  const flight = Math.max(0.12, dist / (AF_F.bow.speed * (0.75 + 0.45 * (k == null ? 0.5 : k)))), grav = 9, vy0 = (ty - sy) / flight + 0.5 * grav * flight;
+  const L = afArrowArc(sx, sy, sz, tx, ty, tz, k), flight = L.flight, grav = L.grav, vy0 = L.vy;
   const n = Math.max(2, Math.ceil(dist / 0.8));
   for (let i = 1; i < n; i++) {
-    const f = i / n, t = flight * f, x = sx + (tx - sx) * f, z = sz + (tz - sz) * f, y = sy + vy0 * t - 0.5 * grav * t * t;
+    const f = i / n, t = flight * f, x = sx + L.vx * t, z = sz + L.vz * t, y = sy + vy0 * t - 0.5 * grav * t * t;
     if (T.rocks.length) { const K = afRockAt(x, z, 0); if (K && y < K.top) return K; }
     if (T.hills.length && y <= afY(x, z)) return { x, z, r: 0, hill: true };
   }
@@ -22705,7 +22738,7 @@ function afApplyEvent(ev) {
     if (by === AF.me || b === AF.me) { addShake(FEEL.killShake); AF.hitstop = Math.max(AF.hitstop, FEEL.killStop); addFovPunch(FEEL.fovPunchKill); }
     if (b === AF.me && !b.dead) afKill(b, null, true);
   } else if (ev.k === 'arrow') {
-    afAddArrow(ev.t, ev.o, ev.p[0], ev.p[1], ev.p[2], new THREE.Vector3(ev.v[0], ev.v[1], ev.v[2]), 9, ev.l);
+    afAddArrow(ev.t, ev.o, ev.p[0], ev.p[1], ev.p[2], new THREE.Vector3(ev.v[0], ev.v[1], ev.v[2]), ev.g != null ? ev.g : 9, ev.l);
   } else if (ev.k === 'order') {
     afLogLine(AF_TEAMS[ev.t].name + ' ' + (AF_ORDER_TEXT[ev.o] || ev.o), AF_TEAMS[ev.t].col); if (AF.me && AF.me.team === ev.t && ev.o.slice(0, 5) !== 'plan:') AF.myOrder = ev.o;
   } else if (ev.k === 'hhit') {

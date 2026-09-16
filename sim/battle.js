@@ -40,6 +40,7 @@
     mBreak: 0.30, mRally: 0.60, senseR: 8, fallbackDepth: 16, fallbackSpeed: 6.2, hitShock: 0.14, allyDeathShock: 0.05,
     mBase: 0.12, mLocal: 0.48, mHp: 0.22, mArmy: 0.24, mOutnumber: 0.15,
     archRange: 60, archMin: 11, archCdMin: 1.6, archCdMax: 2.7, archDraw: 0.55, archSpeed: 47, archDmgMin: 9, archDmgMax: 17, archHpMul: 0.8,
+    archStand: 0.75, archBehind: 8, archGrav: 9, archLoftNear: 8 * Math.PI / 180, archLoftFar: 38 * Math.PI / 180, archHitR: 1.3,   // the archers' stand-off (of range) and THE LOB: an arrow flies an arc that climbs with the range and comes down on the mark
   };
   function defaultSoldierGenome() {
     return {
@@ -70,6 +71,7 @@
       mBase: B.mBase, mLocal: g.mLocal, mHp: g.mHp, mArmy: g.mArmy, mOutnumber: B.mOutnumber,
       archRange: B.archRange * g.archRangeMul, archMin: B.archMin, archCdMin: B.archCdMin * g.archCdMul, archCdMax: B.archCdMax * g.archCdMul,
       archDraw: B.archDraw, archSpeed: B.archSpeed, archDmgMin: B.archDmgMin * g.archDmgMul, archDmgMax: B.archDmgMax * g.archDmgMul, archHpMul: B.archHpMul,
+      archStand: B.archStand, archBehind: B.archBehind, archGrav: B.archGrav, archLoftNear: B.archLoftNear, archLoftFar: B.archLoftFar, archHitR: B.archHitR,
     };
   }
   var DOCTRINES = ['line', 'wings', 'oblique', 'defensive', 'skirmish'];
@@ -83,6 +85,21 @@
     };
   }
   function resolveCommander(g) { return Object.assign(defaultCommanderGenome(), g || {}); }
+
+  // ---------- the lob (mirrors game.js arrowLob) ----------
+  // An arrow is flown on an ARC, not a line: the loft climbs with the range (a man at ten paces is shot nearly flat; the far
+  // mark gets a volley arc that comes DOWN on him) and the launch speed is solved so the arc lands on the mark, uphill or
+  // down. Past the bow's power (vmax) the arrow leaves at full speed and falls short.
+  function arrowLob(sx, sy, sz, tx, ty, tz, range, vmax, g, loftNear, loftFar) {
+    var dx = tx - sx, dz = tz - sz, dy = ty - sy, d = Math.hypot(dx, dz), ux = d > 1e-4 ? dx / d : 0, uz = d > 1e-4 ? dz / d : 1;
+    var th = loftNear + (loftFar - loftNear) * clamp(d / range, 0, 1);
+    var up = Math.atan2(dy, Math.max(d, 0.5)); if (th < up + 0.15) th = Math.min(up + 0.15, 1.45);
+    var c = Math.cos(th), sn = Math.sin(th), dd = Math.max(d, 0.5);
+    var v = Math.sqrt(g * dd * dd / (2 * c * c * Math.max(dd * Math.tan(th) - dy, 0.05)));
+    if (vmax && v > vmax) v = vmax;
+    var flight = dd / (v * c);
+    return { vx: ux * v * c, vy: v * sn, vz: uz * v * c, flight: flight, grav: g };
+  }
 
   // ---------- terrain (pure) ----------
   function rollTerrain(rng) {
@@ -321,6 +338,7 @@
     }
     function stepBody(b, dt) {
       if (b.dead) { b.deadT += dt; return; }
+      if (dt > 1e-4) { b.vx = (b.x - (b.px != null ? b.px : b.x)) / dt; b.vz = (b.z - (b.pz != null ? b.pz : b.z)) / dt; } b.px = b.x; b.pz = b.z;   // his pace over the last tick — what an archer leads him by
       if (b.isCommander && b.watching) { stepCommanderWatch(b, dt); return; }
       if ((b.moraleCd -= dt) <= 0) { assessMorale(b); b.moraleCd = rand(0.3, 0.55); }
       var s = slot(b);
@@ -334,22 +352,40 @@
     // ---- arrows (ballistic, pure) ----
     function shootArrow(from, target) {
       var S = from.army.S, sx = from.x, sy = valleyY(T, from.x, from.z) + 1.6, sz = from.z;
-      var tx = target.x, tz = target.z, ty = valleyY(T, tx, tz) + 1.1;
-      var dist = Math.hypot(tx - sx, tz - sz), flight = Math.max(0.12, dist / S.archSpeed), grav = 9;
-      B.arrows.push({ x: sx, y: sy, z: sz, vx: (tx - sx) / flight, vy: (ty - sy) / flight + 0.5 * grav * flight, vz: (tz - sz) / flight,
-                      grav: grav, team: from.team, from: from, target: target, dmg: rand(S.archDmgMin, S.archDmgMax), life: flight + 0.5 });
+      var lob = function (tx, tz) { return arrowLob(sx, sy, sz, tx, valleyY(T, tx, tz) + 1.1, tz, S.archRange, S.archSpeed, S.archGrav, S.archLoftNear, S.archLoftFar); };
+      // a lobbed arrow hangs for seconds: the mark is where the man WILL be (his last tick's pace, damped), solved twice
+      var tx = target.x, tz = target.z, L = lob(tx, tz);
+      if (target.vx || target.vz) for (var i = 0; i < 2; i++) { tx = target.x + (target.vx || 0) * L.flight * 0.85; tz = target.z + (target.vz || 0) * L.flight * 0.85; L = lob(tx, tz); }
+      B.arrows.push({ x: sx, y: sy, z: sz, vx: L.vx, vy: L.vy, vz: L.vz,
+                      grav: L.grav, team: from.team, ti: from.ti, from: from, target: target, dmg: rand(S.archDmgMin, S.archDmgMax), life: L.flight + 0.6 });
+    }
+    // an arrow coming down through head height hits whoever stands there: the mark first, else any foe under the fall
+    function arrowVictim(a, gy) {
+      if (Math.abs(a.y - (gy + 1.1)) >= 1.8) return null;
+      var R2 = a.from.army.S.archHitR * a.from.army.S.archHitR, t = a.target;
+      if (t && !t.dead) { var dx = t.x - a.x, dz = t.z - a.z; if (dx * dx + dz * dz < R2) return t; }
+      var foes = B.teamLive[a.ti ^ 1];
+      for (var i = 0; i < foes.length; i++) { var o = foes[i]; if (o.dead) continue; var ox = o.x - a.x, oz = o.z - a.z; if (ox * ox + oz * oz < R2) return o; }
+      return null;
     }
     function stepArrows(dt) {
       for (var i = B.arrows.length - 1; i >= 0; i--) {
         var a = B.arrows[i]; a.vy -= a.grav * dt; a.x += a.vx * dt; a.y += a.vy * dt; a.z += a.vz * dt; a.life -= dt;
         var gy = valleyY(T, a.x, a.z), done = a.life <= 0 || a.y <= gy;
-        if (a.target && !a.target.dead) { var dx = a.target.x - a.x, dz = a.target.z - a.z; if (dx * dx + dz * dz < 1.7 && Math.abs(a.y - (gy + 1.1)) < 1.8) { damage(a.target, a.dmg, a.x - a.vx * 0.02, a.z - a.vz * 0.02, a.from); done = true; } }
+        if (!done && a.y < gy + 2.9) { var v = arrowVictim(a, gy); if (v) { damage(v, a.dmg, a.x - a.vx * 0.02, a.z - a.vz * 0.02, a.from); done = true; } }
         if (done) B.arrows.splice(i, 1);
       }
     }
 
     // ---- commander maneuver + think ----
     function unitAlive(u) { var n = 0; for (var i = 0; i < u.bodies.length; i++) if (!u.bodies[i].dead) n++; return n; }
+    // the line a kiting archer division stops at: archBehind behind its army's rearmost living sword division (null: no swords left — it kites free).
+    // Kiting at march pace from a line advancing at march pace was a chase nobody won: the fight ran to the clock.
+    function rearLine(A, S) {
+      var rear = null;
+      for (var i = 0; i < A.units.length; i++) { var v = A.units[i]; if (v.role !== 'melee' || v.kind === 'command' || !unitAlive(v)) continue; if (rear == null || (v.az - rear) * A.sign < 0) rear = v.az; }
+      return rear == null ? null : rear - A.sign * S.archBehind;
+    }
     function advanceUnits(dt) {
       if (B.phase !== 'battle') return;
       var S0 = B.armies[0].S; // marchSpeed shared feel
@@ -369,7 +405,9 @@
             case 'charge': if (bd > S.contactGap + 1) { u.az += (bz / bd) * M * 1.7 * dt; u.ax += (bx / bd) * M * 1.7 * dt; } break;
             case 'flank': if (u.wp) { var wx = u.wp.ax - u.ax, wz = u.wp.az - u.az, wd = Math.hypot(wx, wz); if (wd < 3) { u.order = 'charge'; u.wp = null; } else { u.ax += (wx / wd) * M * 1.15 * dt; u.az += (wz / wd) * M * 1.15 * dt; } } else u.order = 'charge'; break;
             case 'fallback': u.az -= A.sign * S.fallbackSpeed * 0.6 * dt; break;
-            case 'skirmish': var stand = S.archRange * 0.62; if (bd < stand - 2) u.az -= (bz / bd) * M * dt; else if (bd > stand + 3) u.az += (bz / bd) * M * 0.7 * dt; break;
+            case 'skirmish': var stand = S.archRange * S.archStand;   // the bows stay behind and try the long shot: they give ground down to archBehind behind their own rearmost swords, and no further
+              if (bd < stand - 2) { var rear = rearLine(A, S); u.az -= (bz / bd) * M * dt; if (rear != null && (u.az - rear) * A.sign < 0) u.az = rear; }
+              else if (bd > stand + 3) u.az += (bz / bd) * M * 0.7 * dt; break;
           }
         }
       }

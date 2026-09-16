@@ -124,8 +124,9 @@ mark's rear arc and committing only from behind, where guards can't reach. In a 
 closes at a charge and circles near contact, keeps the blade's length between blows, cracks a raised
 guard with a heavy or goes around it, **punishes** a foe's follow-through or stagger, rolls away from
 heavies, blocks or dodges a seen light by skill, and when badly hurt and outnumbered backs off toward
-his team with his guard up. Archers hold range (`AF_TACT.bowNear`–`bowFar`, 11–22 paces from the nearest
-foe, loosing out to `bowShot`), drift sideways between shots, keep `bowRoom` of clear sand from their own
+his team with his guard up. Archers stay behind and try the long shot: they hold range (`AF_TACT.bowNear`–`bowFar`,
+11–30 paces from the nearest foe, loosing out to `bowShot` = 38, the approach volley from `bowVolley` = 40 — 2026-09-16,
+the user: "Archers can stay behind and try long shots"), drift sideways between shots, keep `bowRoom` of clear sand from their own
 swordsmen (`afArcherRoom` — a bowman in the press is neither seen nor useful), and when a foe comes inside
 `bowNear` leave the line and give ground away from the enemy's mass, shooting a swordsman who keeps coming.
 
@@ -446,8 +447,13 @@ The brain as first tuned plays at about **90**. XP sets:
 * **Archers.** The bow is a skill (`AF_BOW`, `afBowSk`): a full draw takes 2.4 s for a recruit and 0.55 s for a
   master (`afDrawSecs`), the arrow wanders by skill, range and how far it was drawn (`afBowScatter` — measured
   at 20 paces on a standing man: a recruit lands about 1 in 16, a middling archer half, the very experienced 4 in 5,
-  a master nearly all), a recruit fumbles the nock between shots, and target lead grows with XP. An under-drawn
-  arrow is slow and weak. A player's bow skill is the career's `skills.bow.level` (carried in the gear as `bowLv`,
+  a master nearly all), a recruit fumbles the nock between shots, and target lead grows with XP (from 60 % of the
+  hang time for a recruit to all of it for a master). An under-drawn arrow is weak, and falls short of a far mark.
+  **The arrow is LOBBED** (`arrowLob`, shared with the valley battle — 2026-09-16, the user: "Archers are not shooting
+  arches. They try to shoot direct all the time"): the loft climbs with the range (8° at the muzzle, 38° at the bow's
+  `range`), the launch speed is solved so the arc comes DOWN on the mark, uphill or down, capped by the draw's power
+  (`AF_F.bow.speed` × 0.75–1.2), and the same arc is what `afShotBlocker` samples against the stones and the hills.
+  A guest replays the arrow under the gravity the event carries (`g`). A player's bow skill is the career's `skills.bow.level` (carried in the gear as `bowLv`,
   `AF_BOW.masterLv` = 6 is a master); the draw meter fills at his own pace. An NPC never looses at a stone: the arc
   is tested before the draw and again at release (`afShotBlocker`, `afArcherLoose`); with no line he sidesteps for
   one, or, holding a place in the line, waits. The aim assist prefers a foe with a clear line.

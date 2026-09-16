@@ -161,6 +161,13 @@ alone (`fragHeadInk` / `fragMapInk`: the kind attribute and one mask sample, no 
 (`ARENA_LOOK.i`, 0 none / 1 wolf knotwork / 2 blood marks) is a row in the barber, free, saved with the look like the face; the
 market's Ink tab is gone, 'ink' is no slot (the server refuses to sell or equip it), and the two wares stay in the catalogue as
 `retired` only so a career that bought one still reads — the vale's northerners roll theirs onto their look in `afNpcGear`.
+Same day, "they work but look so lame — big abstract shapes that go through your arms and face": the knotwork is the ENGRAVING's
+now (`tKnot`, the bracers, at its own fixed tile), and the ink has a bold mask of its own (`tInk`, 512 px on a 70 cm tile): a great
+wave that runs across the whole tile and round again (its ends meet, so it wraps without a seam), a thinner second wave, a curling fan
+of five spikes, a crescent, three claw marks and bold dots — round-brush strokes that swell and taper, every shape drawn wrapped so the
+tile's edges cut nothing. Projected by position (triplanar), one stroke runs off the chest onto an arm, and the great wave crosses the
+face at the eyes. THE FACE AND THE HANDS take the ink now (`lookApply`, the head mesh on its own copy of the kinds): the face, the eye
+sockets, a scar, the hands, the chin where no beard grows and the scalp when it is shaved; the eyes, hair, beard and brows never.
 
 ## The surface pass (2026-09-16, "our chars look too low poly")
 

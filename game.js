@@ -1034,7 +1034,7 @@ const MODEL_RIGS = new Map(), MODEL_LIVE = [];
 // plate steel, the mail under it, cloth, leather, skin), and normals averaged across the split vertices under a crease limit so
 // the plate reads as curved metal and keeps its rims. The low tier keeps the cheap Phong (modelMaterial hands either out;
 // modelRefreshMaterials swaps them when the tier changes). BV.modelDetail({ tile, mailTile, str, ... }) tunes the uniforms live.
-const MODEL_DETAIL = { tile: 2.2, mailTile: 11.0, str: 0.8, plateTile: 3.0, plateStr: 0.3, plateR0: 0.28, plateR1: 0.30, inkTile: 3.5, envI: 0.9, crease: 55 };   // (inkTile 3.5: at 1.4 a whole torso got one band of rings under the pauldrons and one rune — "the ink does literally nothing visually")
+const MODEL_DETAIL = { tile: 2.2, mailTile: 11.0, str: 0.8, plateTile: 3.0, plateStr: 0.3, plateR0: 0.28, plateR1: 0.30, inkTile: 1.4, envI: 0.9, crease: 55 };   // (inkTile 1.4: the ink's tile is 70 cm — its shapes are big, one wave crosses the face at the eyes; the engraving's knotwork has its own fixed tile in the shader)
 const MODEL_KIND = { steel: 0, mail: 1, cloth: 2, leather: 3, skin: 4, flat: 5, inkWolf: 6, inkBlood: 7, engraved: 8 };   // (8: steel with knotwork cut into it — the berserker's bracers)   // (6, 7: skin under blue-black knotwork / red war-marks — the ink wares)
 const MODEL_DETAIL_U = {};                                   // the shared uniforms (one object across every program, so a tune lands everywhere)
 for (const k of ['tile', 'mailTile', 'str', 'plateTile', 'plateStr', 'plateR0', 'plateR1', 'inkTile']) MODEL_DETAIL_U['u' + k[0].toUpperCase() + k.slice(1)] = { value: MODEL_DETAIL[k] };
@@ -1069,8 +1069,22 @@ function modelDetailTextures() {                             // drawn once: heig
   const tri = (cx, cy, r) => { for (let k = 0; k < 3; k++) { const a = k * Math.PI * 2 / 3; g.beginPath(); g.arc(cx + Math.cos(a) * r * 0.5, cy + Math.sin(a) * r * 0.5, r * 0.5, a + Math.PI, a + Math.PI * 2.15); g.stroke(); } }; tri(70, 172, 48); tri(196, 196, 40);
   g.lineWidth = 5; for (let i = 0; i < 5; i++) { g.beginPath(); g.moveTo(126 + i * 24, 108); g.lineTo(138 + i * 24, 132); g.lineTo(150 + i * 24, 108); g.stroke(); }   // chevrons
   for (const [x, y] of [[22, 232], [126, 238], [224, 120], [246, 22]]) { g.beginPath(); g.moveTo(x, y - 18); g.lineTo(x, y + 18); g.moveTo(x, y - 10); g.lineTo(x + 14, y); g.stroke(); }   // runes
-  const inkT = new THREE.CanvasTexture(ic); inkT.wrapS = inkT.wrapT = THREE.RepeatWrapping;
-  MODEL_DTEX = { mailN: normalOf(mail, 3.0), mailC: greyOf(mailC), plateN: normalOf(plate, 1.2), plateR: greyOf(plateR), clothN: normalOf(cloth, 1.5), inkT };
+  const knotT = new THREE.CanvasTexture(ic); knotT.wrapS = knotT.wrapT = THREE.RepeatWrapping;   // (the knotwork: the engraving on the berserker's bracers)
+  // THE INK proper: BIG abstract shapes — swooshes, a fan of spikes, a crescent, claw marks, a lozenge — as islands on a tile the size of a man
+  // (inkTile 1.0), so one stroke runs off the chest and onto an arm, up the neck and over the face. Round-brush strokes that taper; islands, so
+  // the tile's edges never cut a shape ("the knotwork looks so lame — big abstract shapes that go through your arms and face")
+  const B = 512, bc = document.createElement('canvas'); bc.width = bc.height = B; const q = bc.getContext('2d'); q.fillStyle = '#000'; q.fillRect(0, 0, B, B); q.fillStyle = '#fff'; q.strokeStyle = '#fff'; q.lineCap = 'round';
+  const dot = (x, y, r) => { for (const ox of [-B, 0, B]) for (const oy of [-B, 0, B]) { q.beginPath(); q.arc(x + ox, y + oy, r, 0, Math.PI * 2); q.fill(); } };   // (drawn wrapped, so a shape leaving one edge comes in at the other: the tile is seamless)
+  const brush = (pts, wf, n = 110) => { const [a, b, c, d] = pts; for (let i = 0; i <= n; i++) { const t = i / n, u = 1 - t, x = u * u * u * a[0] + 3 * u * u * t * b[0] + 3 * u * t * t * c[0] + t * t * t * d[0], y = u * u * u * a[1] + 3 * u * u * t * b[1] + 3 * u * t * t * c[1] + t * t * t * d[1]; dot(x, y, wf(t) / 2); } };   // a cubic bezier laid with a round brush, wf(t) wide
+  const taper = (w0, w1) => t => w0 + (w1 - w0) * t, swell = (w0, w1) => t => w0 + (w1 - w0) * Math.sin(t * Math.PI);
+  brush([[0, 380], [170, 250], [340, 510], [512, 380]], swell(34, 78));                                // THE GREAT WAVE: across the whole tile and round again (its ends meet), swelling in the middle
+  brush([[0, 150], [200, 60], [300, 240], [512, 150]], swell(22, 46));                                 // a second wave, thinner
+  for (let k = 0; k < 5; k++) { const a = -1.2 + k * 0.42, L = 210 - k * 22; brush([[150, 120], [150 + Math.cos(a) * L * 0.4, 120 + Math.sin(a) * L * 0.4], [150 + Math.cos(a + 0.22) * L * 0.8, 120 + Math.sin(a + 0.22) * L * 0.8], [150 + Math.cos(a + 0.32) * L, 120 + Math.sin(a + 0.32) * L]], taper(54, 4), 70); }   // a fan of spikes, curling
+  q.lineWidth = 34; for (const ox of [-B, 0, B]) for (const oy of [-B, 0, B]) { q.beginPath(); q.arc(400 + ox, 170 + oy, 96, Math.PI * 0.75, Math.PI * 2.1); q.stroke(); }   // the crescent
+  for (let k = 0; k < 3; k++) brush([[300 + k * 44, 250], [318 + k * 44, 310], [330 + k * 44, 370], [312 + k * 44, 440]], taper(30, 4), 60);              // claw marks
+  for (const [x, y, r] of [[60, 470], [470, 470], [250, 20], [40, 40]]) dot(x, y, 26);                                                            // bold dots in the gaps
+  const inkT = new THREE.CanvasTexture(bc); inkT.wrapS = inkT.wrapT = THREE.RepeatWrapping;
+  MODEL_DTEX = { mailN: normalOf(mail, 3.0), mailC: greyOf(mailC), plateN: normalOf(plate, 1.2), plateR: greyOf(plateR), clothN: normalOf(cloth, 1.5), inkT, knotT };
   return MODEL_DTEX;
 }
 function modelSmoothNormals(geo, creaseDeg) {               // average the normals of every vertex sharing a position — but only with faces within the crease angle, so plate rims stay rims
@@ -1102,7 +1116,7 @@ const MODEL_DETAIL_GLSL = {
   vertPos: `#include <worldpos_vertex>\n vTri = transformed; vKind = kind;`,
   fragHead: `#include <common>
 varying float vKind; varying vec3 vTri; varying vec3 vTriN; varying mat3 vTriM;
-uniform sampler2D tPlateN, tMailN, tClothN, tPlateR, tMailC, tInk; uniform float uTile, uMailTile, uStr, uPlateTile, uPlateStr, uPlateR0, uPlateR1, uInkTile;
+uniform sampler2D tPlateN, tMailN, tClothN, tPlateR, tMailC, tInk, tKnot; uniform float uTile, uMailTile, uStr, uPlateTile, uPlateStr, uPlateR0, uPlateR1, uInkTile;
 vec3 triW(vec3 n) { vec3 w = pow(abs(n), vec3(4.0)); return w / (w.x + w.y + w.z); }
 vec3 triNormal(sampler2D t, vec3 p, vec3 wn, float s, float str) { vec3 w = triW(wn);
   vec3 nx = texture2D(t, p.zy * s).xyz * 2.0 - 1.0, ny = texture2D(t, p.xz * s).xyz * 2.0 - 1.0, nz = texture2D(t, p.xy * s).xyz * 2.0 - 1.0;
@@ -1117,23 +1131,23 @@ float triGray(sampler2D t, vec3 p, vec3 wn, float s) { vec3 w = triW(wn); return
   normal = normalize(vTriM * pn); }`,
   fragRough: `float roughnessFactor = roughness; { int k = int(vKind + 0.5);
   if (k == 0) roughnessFactor = uPlateR0 + uPlateR1 * triGray(tPlateR, vTri, vTriN, uTile * uPlateTile * 1.7);
-  else if (k == 8) roughnessFactor = uPlateR0 + 0.1 + 0.5 * smoothstep(0.2, 0.6, triGray(tInk, vTri, vTriN, uInkTile * 2.4));
+  else if (k == 8) roughnessFactor = uPlateR0 + 0.1 + 0.5 * smoothstep(0.2, 0.6, triGray(tKnot, vTri, vTriN, 3.4));
   else if (k == 1) roughnessFactor = 0.45 + 0.35 * (1.0 - triGray(tMailC, vTri, vTriN, uMailTile));
   else if (k == 2) roughnessFactor = 0.92; else if (k == 3) roughnessFactor = 0.70; else if (k == 4 || k >= 6) roughnessFactor = 0.55; else roughnessFactor = 0.4; }`,
   fragMetal: `float metalnessFactor = metalness; { int k = int(vKind + 0.5); metalnessFactor = (k == 0 || k == 8) ? 0.88 : (k == 1) ? 0.80 : 0.0; }`,
   fragIbl: `{ if (int(vKind + 0.5) >= 2) iblIrradiance *= 0.45; }
 #include <lights_fragment_end>`,   // (the sky's ambient washed the dyed cloth pink: cloth, leather and skin take less of it)
   fragHeadInk: `#include <common>
-varying float vKind; varying vec3 vTri; varying vec3 vTriN; varying mat3 vTriM; uniform sampler2D tInk; uniform float uInkTile;
+varying float vKind; varying vec3 vTri; varying vec3 vTriN; varying mat3 vTriM; uniform sampler2D tInk, tKnot; uniform float uInkTile;
 vec3 triW(vec3 n) { vec3 w = pow(abs(n), vec3(4.0)); return w / (w.x + w.y + w.z); }
 float triGray(sampler2D t, vec3 p, vec3 wn, float s) { vec3 w = triW(wn); return texture2D(t, p.zy * s).r * w.x + texture2D(t, p.xz * s).r * w.y + texture2D(t, p.xy * s).r * w.z; }`,
   fragMapInk: `#include <map_fragment>
-{ int k = int(vKind + 0.5); if (k == 8) { float m = smoothstep(0.2, 0.6, triGray(tInk, vTri, vTriN, uInkTile * 2.4)); diffuseColor.rgb *= 1.0 - 0.6 * m; }
-  if (k == 6 || k == 7) { float m = triGray(tInk, vTri, vTriN, uInkTile); vec3 ic = (k == 6) ? vec3(0.07, 0.10, 0.15) : vec3(0.42, 0.08, 0.07); diffuseColor.rgb = mix(diffuseColor.rgb, ic, smoothstep(0.2, 0.6, m) * 0.9); } }`,   // (the low tier's share of fragMap: the engraving and the ink)
+{ int k = int(vKind + 0.5); if (k == 8) { float m = smoothstep(0.2, 0.6, triGray(tKnot, vTri, vTriN, 3.4)); diffuseColor.rgb *= 1.0 - 0.6 * m; }
+  if (k == 6 || k == 7) { float m = triGray(tInk, vTri, vTriN, uInkTile); vec3 ic = (k == 6) ? vec3(0.07, 0.10, 0.15) : vec3(0.42, 0.08, 0.07); diffuseColor.rgb = mix(diffuseColor.rgb, ic, smoothstep(0.35, 0.55, m) * 0.92); } }`,   // (the low tier's share of fragMap: the engraving and the ink)
   fragMap: `#include <map_fragment>
 { int k = int(vKind + 0.5); if (k == 1) { float g = triGray(tMailC, vTri, vTriN, uMailTile); diffuseColor.rgb *= mix(0.55, 1.25, g); } if (k == 0) { float g = triGray(tPlateR, vTri, vTriN, uTile * uPlateTile * 1.7); diffuseColor.rgb *= mix(0.92, 1.04, g); }
-  if (k == 8) { float m = smoothstep(0.2, 0.6, triGray(tInk, vTri, vTriN, uInkTile * 2.4)); diffuseColor.rgb *= 1.0 - 0.6 * m; }   // engraved: the knotwork as dark grooves in the steel
-  if (k == 6 || k == 7) { float m = triGray(tInk, vTri, vTriN, uInkTile); vec3 ic = (k == 6) ? vec3(0.07, 0.10, 0.15) : vec3(0.42, 0.08, 0.07); diffuseColor.rgb = mix(diffuseColor.rgb, ic, smoothstep(0.2, 0.6, m) * 0.9); } }`,   // the ink: a knotwork mask over the skin tone   // the rings read at a distance: the palette grey shaded by the ring mask
+  if (k == 8) { float m = smoothstep(0.2, 0.6, triGray(tKnot, vTri, vTriN, 3.4)); diffuseColor.rgb *= 1.0 - 0.6 * m; }   // engraved: the knotwork as dark grooves in the steel
+  if (k == 6 || k == 7) { float m = triGray(tInk, vTri, vTriN, uInkTile); vec3 ic = (k == 6) ? vec3(0.07, 0.10, 0.15) : vec3(0.42, 0.08, 0.07); diffuseColor.rgb = mix(diffuseColor.rgb, ic, smoothstep(0.35, 0.55, m) * 0.92); } }`,   // the ink: the bold mask over the skin tone   // the rings read at a distance: the palette grey shaded by the ring mask
 };
 function modelMaterial(R, o = {}) {                          // the figure's material for a context: Phong on the low tier / thumbnails, the surface pass otherwise; cached per rig unless it carries its own colour
   const ctx = o.ctx || 'main', det = modelDetailOn(), col = o.color != null ? o.color : 0xffffff, noMap = o.map === false;
@@ -1142,13 +1156,13 @@ function modelMaterial(R, o = {}) {                          // the figure's mat
   let m;
   if (!det) { m = new THREE.MeshPhongMaterial(noMap ? { color: col, shininess: 4, specular: 0x050505, skinning: !!o.skinning } : { map: R.tex, color: col, shininess: 6, specular: 0x111111, skinning: !!o.skinning, vertexColors: !!o.vc });
     if (!noMap && o.vc) { const T = modelDetailTextures(), G = MODEL_DETAIL_GLSL;   // THE INK on the low tier too: the plain material takes just the kind attribute and the mask — no normal maps, no sky — so a tattooed man is tattooed on a phone ("the ink does literally nothing visually")
-      m.onBeforeCompile = sh => { Object.assign(sh.uniforms, { tInk: { value: T.inkT }, uInkTile: MODEL_DETAIL_U.uInkTile });
+      m.onBeforeCompile = sh => { Object.assign(sh.uniforms, { tInk: { value: T.inkT }, tKnot: { value: T.knotT }, uInkTile: MODEL_DETAIL_U.uInkTile });
         sh.vertexShader = sh.vertexShader.replace('#include <common>', G.vertHead).replace('#include <defaultnormal_vertex>', G.vertNormal).replace('#include <worldpos_vertex>', G.vertPos);
         sh.fragmentShader = sh.fragmentShader.replace('#include <common>', G.fragHeadInk).replace('#include <map_fragment>', G.fragMapInk); };
       m.customProgramCacheKey = () => 'bv-ink'; } }
   else { const T = modelDetailTextures(); modelEnvFor(ctx);
     m = new THREE.MeshStandardMaterial({ map: noMap ? null : R.tex, color: col, metalness: 1, roughness: 1, skinning: !!o.skinning, vertexColors: !!o.vc, envMapIntensity: MODEL_DETAIL.envI });
-    m.onBeforeCompile = sh => { const G = MODEL_DETAIL_GLSL; Object.assign(sh.uniforms, MODEL_DETAIL_U, { tPlateN: { value: T.plateN }, tMailN: { value: T.mailN }, tClothN: { value: T.clothN }, tPlateR: { value: T.plateR }, tMailC: { value: T.mailC }, tInk: { value: T.inkT } });
+    m.onBeforeCompile = sh => { const G = MODEL_DETAIL_GLSL; Object.assign(sh.uniforms, MODEL_DETAIL_U, { tPlateN: { value: T.plateN }, tMailN: { value: T.mailN }, tClothN: { value: T.clothN }, tPlateR: { value: T.plateR }, tMailC: { value: T.mailC }, tInk: { value: T.inkT }, tKnot: { value: T.knotT } });
       sh.vertexShader = sh.vertexShader.replace('#include <common>', G.vertHead).replace('#include <defaultnormal_vertex>', G.vertNormal).replace('#include <worldpos_vertex>', G.vertPos);
       sh.fragmentShader = sh.fragmentShader.replace('#include <common>', G.fragHead).replace('#include <normal_fragment_maps>', G.fragNormal).replace('#include <roughnessmap_fragment>', G.fragRough).replace('#include <metalnessmap_fragment>', G.fragMetal).replace('#include <map_fragment>', G.fragMap).replace('#include <lights_fragment_end>', G.fragIbl); };
     m.customProgramCacheKey = () => 'bv-surface'; }
@@ -1599,6 +1613,10 @@ function lookApply(L, look) {
     const kd0 = sm.userData.geo0.getAttribute('kind');           // this body's own kinds, following the paint (lookKind)
     if (kd0 && !skinTint) { if (!sm.userData.ownKind) { sm.geometry.setAttribute('kind', kd0.clone()); sm.userData.ownKind = true; } const kd = sm.geometry.getAttribute('kind');
       for (let v = 0; v < nv; v++) kd.setX(v, lookKind(look, pj.classes[pj.vclass[v]], pj.mats[pj.vmat[v]], kd0.getX(v))); kd.needsUpdate = true; }
+    else if (kd0 && skinTint) {                                  // THE FACE AND THE HANDS take the ink too ("shapes that go through your arms and face"): the head mesh's skin — the face, the sockets, a scar, the hands, the chin where no beard grows, the scalp when it is shaved — on its own copy of the kinds
+      if (look.ink) { if (!sm.userData.ownKind) { sm.geometry.setAttribute('kind', kd0.clone()); sm.userData.ownKind = true; } const kd = sm.geometry.getAttribute('kind'), ik = lookInkKind(look, MODEL_KIND), on = new Set(['head', 'socket', 'scarL', 'scarR', 'hand']); if (look.beard == null) on.add('beard'); if (!(look.hairStyle | 0)) on.add('hair');
+        for (let v = 0; v < nv; v++) kd.setX(v, pj.mats[pj.vmat[v]] === 'skin' && on.has(pj.classes[pj.vclass[v]]) ? ik : kd0.getX(v)); kd.needsUpdate = true; }
+      else if (sm.userData.ownKind) { sm.geometry.setAttribute('kind', kd0); sm.userData.ownKind = false; } }
   }
   lookDraw(L, look); if (lookHelmBuild(L)) lookHelmPaint(L);
   if (L.inst.skinned.naked) L.inst.skinned.naked.visible = !!look.naked;

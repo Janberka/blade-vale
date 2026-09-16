@@ -3357,18 +3357,24 @@ if (TOUCH) {
   const TJ_R = 60; // stick radius in px
   let moveId = null, lookId = null;
   let tjAnchor = { x: 0, y: 0 }, lookLast = { x: 0, y: 0 };
-  // THE ROLL LIVES ON THE STICK: double-tap it and push — the roll goes the way you push (forward, back, either side,
-  // or anything between). A tap is a touch that comes and goes inside TAP_MS without leaving the deadzone; a second
-  // touch landing within DBL_MS of it is ARMED, and the first push past ROLL_MAG fires the roll (once per touch —
-  // keep holding and you simply run on). Nothing fires on a plain drag, so ordinary running never rolls by accident.
-  const TAP_MS = 250, DBL_MS = 320, ARM_MS = 450, ROLL_MAG = 0.55;
-  let tapEndT = -1e9, tapDownT = 0, tapMoved = false, rollArmed = false;
-  function stickRoll(s, f) {                       // s: right (+), f: forward (+) — the stick's axes, relative to the camera
-    if (AF.on) {
-      if (!AF.me || AF.me.dead) return;
-      const yaw = AF.cam.yaw, x = Math.sin(yaw) * f - Math.cos(yaw) * s, z = Math.cos(yaw) * f + Math.sin(yaw) * s;
-      AF.locIn.rollDir = Math.atan2(x, z); AF.locIn.dodge++;   // (a world heading — host and guest read the same one)
-    } else requestDodge();                         // the vale: the roll follows the stick anyway
+  // THE ROLL IS A DOUBLE-TAP OF JUMP (2026-09-16, the user: "removing rolling with the joystick, if we double tap the
+  // jump button we should roll to the direction joystick shows"). The stick only runs now — no tap on it means anything,
+  // so a thumb that lands twice in a hurry never tumbles you by accident. A tap of JUMP waits JUMP_DBL_MS before it
+  // leaps (the sim refuses a roll to a man in the air, so the leap can't go first); a second tap inside that window is
+  // the ROLL instead, the way the stick leans — forward, back, either side or anything between — or, with the stick
+  // at rest, what a C-roll takes: the way you move, else a side. The leap's edge and the roll's both ride the wire as
+  // they always did (locIn.jump / locIn.dodge + rollDir), so host and guest agree.
+  const JUMP_DBL_MS = 280;
+  let jumpPend = 0;                                // the timer of a first tap still waiting to become a leap (0 = none)
+  function stickHeading() {                        // the stick's lean as a world heading (rad), or null with the stick at rest
+    if (!touchMove.active) return null;
+    const yaw = AF.cam.yaw, s = touchMove.s, f = touchMove.f;   // s: right (+), f: forward (+) — relative to the camera
+    return Math.atan2(Math.sin(yaw) * f - Math.cos(yaw) * s, Math.cos(yaw) * f + Math.sin(yaw) * s);
+  }
+  function jumpTap() {
+    if (!AF.on || !AF.me || AF.me.dead) return;
+    if (jumpPend) { clearTimeout(jumpPend); jumpPend = 0; AF.locIn.rollDir = stickHeading(); AF.locIn.dodge++; return; }   // the second tap: a roll, not a leap
+    jumpPend = setTimeout(() => { jumpPend = 0; if (AF.on && AF.me && !AF.me.dead) AF.locIn.jump++; }, JUMP_DBL_MS);
   }
 
   function controllable() {
@@ -3394,22 +3400,16 @@ if (TOUCH) {
     touchMove.s = (dx / len) * m;   // right = strafe right (D)
     touchMove.f = -(dy / len) * m;  // up    = forward (W)
     touchMove.active = m > 0;
-    if (m > 0) tapMoved = true;
-    if (rollArmed && m >= ROLL_MAG) { rollArmed = false; if (performance.now() - tapDownT < ARM_MS) stickRoll(dx / len, -dy / len); }
   }
   function showStick(x, y) {
     tjAnchor = { x, y };
     tj.style.left = (x - 66) + 'px'; tj.style.top = (y - 66) + 'px'; tj.style.bottom = 'auto';
     touchRoot.classList.add('dragging');
-    const now = performance.now();
-    rollArmed = now - tapEndT < DBL_MS; tapDownT = now; tapMoved = false;
   }
   function hideStick() {
     tj.style.left = ''; tj.style.top = ''; tj.style.bottom = '';
     tjKnob.style.transform = ''; touchRoot.classList.remove('dragging');
     touchMove.f = touchMove.s = 0; touchMove.active = false;
-    const now = performance.now();
-    tapEndT = !tapMoved && now - tapDownT < TAP_MS ? now : -1e9; rollArmed = false;
   }
 
   canvas.addEventListener('touchstart', (e) => {
@@ -3451,8 +3451,8 @@ if (TOUCH) {
   }
   bindBtn('tb-attack', requestAttack, () => { if (AF.on) AF.locIn.atk++; }); // arena: the release swings
   bindBtn('tb-heavy', requestHeavyAttack);
-  bindBtn('tb-dodge', requestDodge);               // (the pit hides it: there the roll is the stick's double-tap-and-push)
-  bindBtn('tb-jump', () => { if (AF.on && AF.me && !AF.me.dead) AF.locIn.jump++; });   // the pit's LEAP (only the pit shows it)
+  bindBtn('tb-dodge', requestDodge);               // (the pit hides it: there the roll is JUMP's double-tap)
+  bindBtn('tb-jump', jumpTap);                     // the pit's LEAP — and, tapped twice, its ROLL (only the pit shows it)
   bindBtn('tb-block', () => { keys['ShiftLeft'] = true; }, () => { keys['ShiftLeft'] = false; });
   bindBtn('tb-weapon', toggleWeapon);
   // The ONE zoom control a phone has (no wheel, no pinch), so it has to land on a rung, not nudge
@@ -18017,7 +18017,7 @@ const AF = {
   on: false, role: 'solo',                 // 'solo' (no peers) | 'host' | 'guest'
   phase: 'lobby',                          // 'lobby' | 'countdown' | 'fight' | 'over'
   bodies: [], arrows: [], ground: null, props: [], seed: 1, cfg: { teams: 2, per: 3 }, roster: [],
-  me: null, keys: new Set(), locIn: { mx: 0, mz: 0, yaw: 0, atk: 0, heavy: 0, dodge: 0, rollDir: null, block: false, hold: false, swap: 0, jump: 0 },   // rollDir: the roll's world heading (rad), or null = the way you move
+  me: null, keys: new Set(), locIn: { mx: 0, mz: 0, yaw: 0, atk: 0, heavy: 0, dodge: 0, rollDir: null, block: false, hold: false, swap: 0, jump: 0 },   // rollDir: the roll's world heading (rad), or null = the way you move (Q / E, or JUMP's double-tap on touch, set it)
   cam: { yaw: 0, pitch: 0.3, dist: 6.5 }, orbit: { theta: 0.4, phi: 0.9, r: 62, drag: false }, spec: { mode: 'orbit', target: null, fx: 0, fz: 0, touched: false },
   last: 0, t: 0, countdown: 0, over: false, winner: -1, standings: null, hudEl: null, events: [],
   inputs: new Map(), snapAcc: 0, inAcc: 0, lastSnap: 0, installed: false, log: [], torches: [], motes: null, hurt: 0, fov: CAM_BASE_FOV,
@@ -21179,7 +21179,7 @@ function afDrive(b, dt, sim) {
     if (b.mounted) { if (b.dodgeCd <= 0) { b.dodgeCd = 1.2; b.vx += Math.sin(b.yaw) * 6; b.vz += Math.cos(b.yaw) * 6; b.iframes = 0.15; try { SFX.foot(b.group.position); } catch (e) {} } }
     else if (b.dodgeCd <= 0 && !(b.atk && b.atk.hit) && b.airT <= 0 && b.landT <= 0 && b.landRollT <= 0 && !b.winded) {   // (winded: no roll in him)
       b.dodgeT = F.dodge.dur; b.iframes = F.dodge.iframes; b.dodgeCd = F.dodge.dur + F.dodge.cd; b.atk = null; b.charge = null; b.queued = false; b.blocking = false; afStamCost(b, F.stam.dodge);
-      // THE ROLL'S HEADING: the one asked for (Q / E, the stick's double-tap-and-push), else — a player — the way he is
+      // THE ROLL'S HEADING: the one asked for (Q / E, JUMP's double-tap the way the stick leans), else — a player — the way he is
       // moving, else a SIDE: the side the stick leans, else a coin. (An NPC always takes a side: he closes on his man,
       // and a roll along his line of advance would carry him onto the blade he is dodging.)
       const rgx = -Math.cos(b.yaw), rgz = Math.sin(b.yaw), lean = mm > 1e-3 ? ux * rgx + uz * rgz : 0;

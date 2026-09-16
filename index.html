@@ -417,7 +417,7 @@
   .al-cfg .al-wpn button.locked { opacity: .35; cursor: not-allowed; }
   .al-btns { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; }
   .al-btns .btn { font-size: 16px; padding: 10px 28px; }
-  #touch.arenamode #tb-heavy, #touch.arenamode #tb-dodge { display: none; }   /* the pit: one attack button — hold to load, release to swing; the roll is on the stick (double-tap, push); SWAP changes sword <-> bow (archers only) */
+  #touch.arenamode #tb-heavy, #touch.arenamode #tb-dodge { display: none; }   /* the pit: one attack button — hold to load, release to swing; the roll is a double-tap of JUMP (the way the stick leans); SWAP changes sword <-> bow (archers only) */
   #arena-invite { position: fixed; top: 18px; left: 50%; transform: translateX(-50%); z-index: 70; pointer-events: auto;
     background: rgba(16,12,24,.96); border: 1px solid #ff8a5b; border-radius: 12px; padding: 12px 18px; color: #f3ead8;
     box-shadow: 0 10px 40px rgba(0,0,0,.6); display: flex; gap: 14px; align-items: center; font-size: 14px; max-width: 92vw; }
@@ -831,7 +831,7 @@
   #tb-heavy  { width: 66px; height: 66px; right: 112px; bottom: 178px; border-color: rgba(255,120,80,.6);  color: #ffc7a8; }
   #tb-block  { width: 66px; height: 66px; right: 120px; bottom: 100px; border-color: rgba(125,255,154,.55); color: #c8ffd6; }
   #tb-dodge  { width: 62px; height: 62px; right: 30px;  bottom: 154px; border-color: rgba(120,210,255,.6);  color: #cfeaff; }
-  #tb-jump   { width: 62px; height: 62px; right: 30px;  bottom: 154px; border-color: rgba(120,210,255,.6);  color: #cfeaff; display: none; }   /* the pit's leap: DODGE's spot (the pit hides DODGE — the roll is on the stick) */
+  #tb-jump   { width: 62px; height: 62px; right: 30px;  bottom: 154px; border-color: rgba(120,210,255,.6);  color: #cfeaff; display: none; }   /* the pit's leap: DODGE's spot (the pit hides DODGE — tap JUMP twice to roll) */
   #touch.arenamode #tb-jump { display: flex; }
   #tb-weapon { width: 52px; height: 52px; right: 96px;  bottom: 250px; font-size: 11px; }
   /* map-mode kingdom actions — stacked pills, right side */
@@ -1140,7 +1140,8 @@
     <div class="touch-keys">
       <h4>On foot</h4>
       <div class="row"><b>Left thumb</b><span>Move (a stick appears where you touch)</span></div>
-      <div class="row"><b>Double-tap the stick, push</b><span>Roll that way</span></div>
+      <div class="row"><b>JUMP</b><span>Jump — at full stride, dive onto a man and he is floored; attack in the air for an overhead blow instead</span></div>
+      <div class="row"><b>Tap JUMP twice</b><span>Roll the way the stick leans (a side if it rests)</span></div>
       <div class="row"><b>Drag the right side</b><span>Aim</span></div>
       <div class="row"><b>Hold ATK, drag, release</b><span>Load, aim and swing — a tap is light, a long hold is heavy</span></div>
       <div class="row"><b>Hold BLOCK</b><span>Block (drag to turn while guarding)</span></div>
@@ -1273,6 +1274,6 @@
 <script src="arena-items.js?v=12"></script>
 <script src="net-battle.js?v=6"></script>
 <script src="real-skin.js?v=1"></script>
-<script src="game.js?v=222"></script>
+<script src="game.js?v=223"></script>
 </body>
 </html>

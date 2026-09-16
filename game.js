@@ -22906,7 +22906,7 @@ function afPreviewSet(gear, pal, mounted) {
   } else P.gen = (P.gen || 0) + 1;
   const showBow = !!(t && t.slot === 'bow');                 // trying a bow: he draws it so you can see it
   if (P.rig.parts.shield) P.rig.parts.shield.visible = !showBow; if (P.rig.parts.bow) P.rig.parts.bow.visible = showBow; if (P.rig.parts.sword) P.rig.parts.sword.visible = !showBow;
-  afDressGear(P.rig.parts, gear, pal); lookHelmOff(P.rig.parts.modelRig, afPreviewHelmOff()); P.scene.add(P.rig.group);
+  afDressGear(P.rig.parts, gear, pal); afPreviewHelm(P.rig.parts.modelRig); P.scene.add(P.rig.group);
   if (P.mounted) saddleRider(P.rig.parts); else restLegs(P.rig.parts, 1, true);
   const anim = makeAnimator(P.rig.parts); P.anim = anim; afPreviewPose();
   P.gear = gear; P.pal = pal; P.W = 0;                        // (W=0: the frame re-fits the camera to the canvas)
@@ -22924,7 +22924,8 @@ function afPreviewSet(gear, pal, mounted) {
 // THE HOME FLOOR: on the home his sword stands in the sand before him, tip buried, and the shield leans on it. He
 // stands empty-handed until you tap one — then he stoops, takes it up, and stands with it (the market always shows him
 // armed; what he has not picked up is back in the sand when you return). A tap on the canvas without a drag is a pick.
-function afPreviewHelmOff() { return typeof SHELL !== 'undefined' && (SHELL.page === 'home' || SHELL.page === 'barber'); }   // where he stands bareheaded (his kit page and the market show the helm he wears)
+function afPreviewHelmOff() { const P = AF.preview; return typeof SHELL !== 'undefined' && (SHELL.page === 'barber' || (SHELL.page === 'home' && !(P && P.helmOn))); }   // where he stands bareheaded: the barber's chair, and the home until he has set his helm on to take up his sword (his kit page and the market show the helm he wears)
+function afPreviewHelm(L) { if (!L) return; lookHelmOff(L, afPreviewHelmOff()); const P = AF.preview, armed = !!(P && P.floor && P.floor.held.sword); L.helmHand = !!(L.helmOff && !armed && L.lookBase && L.lookBase.helmet && lookHelmBuild(L)); if (!L.helmHand) L.helmK = null; }   // bareheaded, his helm is in his sword hand (if he owns one, and that hand is not holding his sword) — as on the walk into the pit
 function afPreviewFloor(pal, gear) {
   const P = AF.preview, R = MODEL_RIGS.get(MODEL_NAME); if (!P || !R || !MODEL_ON) return;
   if (!P.floor) {
@@ -22971,12 +22972,16 @@ function afPreviewClick(e) {
 function afPreviewPickup(kind) {
   const P = AF.preview, F = P && P.floor; if (!F || !F[kind] || F.held[kind] || F.busy || !P.anim) return false;
   F.busy = kind; P.yawTo = Math.atan2(F.at.x, F.at.z);       // he turns to it, stoops, closes his hand on it, and rises with it
-  setPose(P.anim, kind === 'sword' ? 'pickR' : 'pickL', 0.5); P.crouch = 0.3;
-  clearTimeout(F.t1); clearTimeout(F.t2);
-  F.t1 = setTimeout(() => { F.held[kind] = true; afPreviewPose(0.7); P.crouch = 0; }, 560);
-  F.t2 = setTimeout(() => { F.busy = null; }, 700);
+  const L = P.rig && P.rig.parts.modelRig, lift = kind === 'sword' && L && L.helmHand ? 600 : 0;   // his helm is in that hand: he sets it on his head first (the same lift as the pit's — afDonStep), then stoops for the blade
+  if (lift) { setPose(P.anim, 'donHelm', 0.5); P.helmLift = { t: 0, dur: 0.55 }; }
+  clearTimeout(F.t0); clearTimeout(F.t1); clearTimeout(F.t2);
+  const stoop = () => { setPose(P.anim, kind === 'sword' ? 'pickR' : 'pickL', 0.5); P.crouch = 0.3; };
+  if (lift) F.t0 = setTimeout(stoop, lift); else stoop();
+  F.t1 = setTimeout(() => { F.held[kind] = true; afPreviewHelmLand(P); afPreviewPose(0.7); P.crouch = 0; }, 560 + lift);
+  F.t2 = setTimeout(() => { F.busy = null; }, 700 + lift);
   return true;
 }
+function afPreviewHelmLand(P) { if (!P.helmLift) return; P.helmLift = null; P.helmOn = true; const L = P.rig && P.rig.parts.modelRig; if (L) afDonHelmOn(L); }   // the helm settles on his head and stays there (afPreviewHelmOff)
 function afHomeVisible() { const st = document.getElementById('start'); return !!(AF.homeOpen && st && !st.classList.contains('hidden')); }
 function afPreviewRun() { const P = AF.preview; if (!P || P.loop) return; P.loop = true; requestAnimationFrame(afPreviewFrame); }
 // the pose of the figure: at ease on the home (sword and shield down), a guard in the market, drawing a bow he tries on
@@ -23010,6 +23015,7 @@ function afPreviewFrame() {
     P.rig.group.position.y = -0.012 * (1 - br2) * 0.5;                                               // a hair of give at the knees with each breath
     if (!P.mounted) restLegs(p, dt, !!P.fighting, P.crouch || 0);                                    // the knees ease into a stoop and back
   }
+  if (P.helmLift && P.rig) { const H = P.helmLift, L = P.rig.parts.modelRig; H.t += dt; if (L) L.helmK = Math.min(1, H.t / H.dur); if (H.t >= H.dur) afPreviewHelmLand(P); }   // the helm rides his rising hand onto his head
   if (P.floor) {                                            // the floor: what he has not taken up lies there (on the home); his hands show only what he holds
     const F = P.floor, home = !AF.marketOpen, p = P.rig.parts;
     if (F.sword) F.sword.visible = home && !F.held.sword; if (F.shield) F.shield.visible = home && !F.held.shield;
@@ -23309,7 +23315,7 @@ function afShellFigure() {                                  // the figure on the
   const prof = SHELL.page === 'profile' && AF.profile && AF.profile.gear;   // on a fighter's page the figure is that fighter, in his own kit
   const pal = prof ? (AF.profile.kind === 'npc' ? AF_TEAMS[1] : AF_TEAMS[0]) : (AF.lobby && afHostSeat() ? AF_TEAMS[AF.lobby.slots.findIndex(r => r.includes(afHostSeat()))] : AF_TEAMS[0]) || AF_TEAMS[0];
   const gear = prof ? AF.profile.gear : afPreviewGear(); if (!AF.preview.rig || JSON.stringify(AF.preview.gear) !== JSON.stringify(afGearClean(gear)) || AF.preview.pal !== pal.pal) afPreviewSet(gear, pal.pal, prof ? !!gear.horse : AF.preview.mounted);
-  AF.preview.W = 0; afPreviewPose(0.3); if (AF.preview.rig) lookHelmOff(AF.preview.rig.parts.modelRig, afPreviewHelmOff());   // (the same figure, helm off on the home and at the barber's)
+  AF.preview.W = 0; afPreviewPose(0.3); if (AF.preview.rig) afPreviewHelm(AF.preview.rig.parts.modelRig);   // (the same figure: helm in hand on the home and at the barber's, on his head once he has armed)
   if (AF.preview.disc) AF.preview.disc.material.color.setHex(SHELL.page === 'home' ? 0x120d0c : 0xc9b79a);   // (the home lights him from the HUD's gold ring, not from the sand)
 }
 function afShellBack() {
@@ -23581,7 +23587,7 @@ BV.arenaDon = () => (AF.bodies || []).map(b => ({ name: b.name, weapon: b.weapon
 BV.helmHand = o => { Object.assign(MODEL_HELM_HAND, o || {}); return { ...MODEL_HELM_HAND }; };   // test: re-hang the carried helm in the hand (model units, hand-bone frame)
 BV.previewHelm = (hand, k) => { const L = AF.preview && AF.preview.rig && AF.preview.rig.parts.modelRig; if (!L) return null; lookHelmBuild(L); L.helmHand = !!hand; L.helmK = k == null ? null : k; return { built: !!L.mHelm, helmOff: !!L.helmOff, hand: L.helmHand, k: L.helmK }; };   // test: the home figure carries his helm (k: 0..1 lifts it onto his head)
 BV.hipSword = o => { Object.assign(MODEL_HIP, o || {}); for (const L of MODEL_LIVE) if (L.mHip) modelHipPlace(L.mHip); return { ...MODEL_HIP }; };   // test: re-hang the sheathed blade on every live figure
-BV.previewPick = (kind) => { const P = AF.preview; return P && P.floor ? { ok: kind ? afPreviewPickup(kind) : null, held: { ...P.floor.held }, busy: P.floor.busy, yaw: +P.yaw.toFixed(2), sword: P.floor.sword && P.floor.sword.visible, shield: P.floor.shield && P.floor.shield.visible, helm: !(P.rig && P.rig.parts.modelRig && P.rig.parts.modelRig.helmOff) } : null; };   // test: the home floor — pick 'sword' | 'shield', or read it
+BV.previewPick = (kind) => { const P = AF.preview; return P && P.floor ? { ok: kind ? afPreviewPickup(kind) : null, held: { ...P.floor.held }, busy: P.floor.busy, yaw: +P.yaw.toFixed(2), sword: P.floor.sword && P.floor.sword.visible, shield: P.floor.shield && P.floor.shield.visible, helm: !(P.rig && P.rig.parts.modelRig && P.rig.parts.modelRig.helmOff), inHand: !!(P.rig && P.rig.parts.modelRig && P.rig.parts.modelRig.mHelm && P.rig.parts.modelRig.mHelm.visible), lift: P.helmLift ? +P.helmLift.t.toFixed(2) : null } : null; };   // test: the home floor — pick 'sword' | 'shield', or read it
 BV.previewPose = (name) => { const P = AF.preview; if (P && P.anim) { setPose(P.anim, name, 0.01); updateAnimator(P.anim, 1); } return !!P; };   // test: pose the market figure
 BV.arenaHorses = () => AF.horses.map(h => ({ id: h.id, hp: Math.round(h.hp), dead: h.dead, rider: h.rider ? h.rider.name : null, x: +h.x.toFixed(1), z: +h.z.toFixed(1), sp: +h.sp01.toFixed(2), pace: h.pace }));
 BV.arenaAutoMe = (xp) => { const b = AF.me; if (!b) return null; b.ctrl = 'ai'; b.inp = afFreshInput(); b.inp.yaw = b.yaw; if (xp != null) { b.xp = xp; b.skill = xp / 100; } AF.me = null; return b.idx; }; // test: hand my fighter to the brain

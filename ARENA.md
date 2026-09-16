@@ -274,7 +274,9 @@ hand comes down, crosses to the hip (`drawHip`), the blade comes out and up (`dr
 helm skips the first, an archer keeps the bow. Whoever is still walking in at the bell does it all at once (`afDonAll`
 in `afIntroTailEnd`). Test: `BV.arenaDon()` (each man's sheathed / bareheaded / in-hand / beat), `BV.previewHelm(true, k)`
 puts the home figure's helm in his hand (k lifts it onto his head), `BV.helmHand({x,y,z,rx,ry,rz})` and
-`BV.hipSword({...})` re-hang the pieces on every live figure. Every act
+`BV.hipSword({...})` re-hang the pieces on every live figure. The HOME figure carries his helm the same way
+(`afPreviewHelm`), and when he takes up his sword from the floor he sets the helm on first with the same lift
+(`afPreviewPickup`, `P.helmLift`) and keeps it on (`P.helmOn`); the barber's chair is always bareheaded. Every act
 is built from the same lens kit (`afIntroLens`: pen, gate,
 star, profile, backlit, ride, behind, column, dolly, front, stands, crane, aerial, top, orbit, face-off, walk-in) and the same
 route system (`afIntroRoute`: waypoints with speed, gait, a pause and a facing). The **stars rally** their men

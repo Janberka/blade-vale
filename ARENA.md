@@ -85,7 +85,7 @@ blade trails on the strike, **hit-stop**, camera shake, a directional kick and a
 own hits and wounds, a queued **3-hit combo** that chains from the follow-through, **block-cancel**
 out of a light windup, aim assist that tracks a foe in front while you wind up, and the run/walk
 gaits with backpedal. Damage (`afDamage`) runs the **poise** model: light hits chip poise and
-flinch, a raised guard eats 85% from the front, a heavy on a guard is a *guard break*, and when
+flinch, a raised guard stops a light from the front (see *Steel on steel* below), a heavy on a guard is a *guard break*, and when
 poise runs out the fighter is **staggered** for 1.2 s — any hit on a staggered fighter is an
 **execution** (2.2× damage). Arrows only chip poise lightly.
 
@@ -693,6 +693,33 @@ yields the moment you move the aim yourself.
 **Blade locks**: a light blow into a raised guard is a *clash* — steel bites steel with a white flare,
 both fighters freeze for a beat, then shove apart, the attacker further and reeling (his swing is
 spent and he is open for a riposte; the NPC brain punishes exactly that window).
+
+**Steel on steel, the shield's side, the bare head** (2026-09-16, the user: "if a sword comes to another sword it
+should stop, that's like another guard. Even if we don't guard, if a sword hits our shield we shouldn't get damage. If I
+get a sword to my naked head that's big damage, it should make me fall"). All three live in `afDamage`, tuned in `AF_F`:
+
+* **A blade out in front is a guard.** A man whose own swing is in its wind, its strike or the first `steel.after` (0.10 s)
+  of the follow-through meets a blow from the front (facing > 0.15) as a raised guard would: a light is a *blade lock*
+  (`PARRY` — both swings spent, both men in the clash, no wound), a heavy *beats a light aside* (`BEATEN`: the guard-break
+  stagger, half damage), heavy on heavy locks. A light thrown at a man in a **heavy's** wind is parried and the heavy comes
+  on — the heavier steel wins, as it does against a guard. Not an arrow (it flies past a blade), not on a staggered man,
+  not from the saddle, not with a bow or a sheathed sword. Event `b: 4`; a parry sets the riposte window like a block.
+* **The shield is on his arm whether he guards or not.** A blow from his LEFT flank — its side component past
+  `shield.side` (0.5) of the way round from his front and not from behind him (`shield.behind`, −0.25) — rings on the
+  shield: no wound, a clang, `shield`. A light glances off; a heavy drives the shield into him (half the knock, a flinch of
+  `shield.heavyFlinch` 0.3 s, his load lost). Only while he stands: a staggered or floored man's shield hangs, and a brute
+  (`noShield`) or a man with his bow out has none. Event `b: 3`. (The rig: `makeArm(1)` is the left arm at local +x, so the
+  side is `ax·cos yaw − az·sin yaw` — the same expression as `hitSide`.)
+* **A raised shield stops a light whole**: `blockMul` 0.15 → 0. The heavy's guard break and the bash are the answers to a
+  wall, not a trickle.
+* **The bare head.** An OVERHEAD cut — the chain's third blow (the chop, `atk.move` 2) or any heavy — that lands
+  unblocked on a man with NO HELM ON (`afBareHead`: none in his look, or the one he owns still in his hand during the
+  don) is a blow to the skull: `head.mul` 1.7 × the wound and he is **floored** (the trample's `downT`, `head.down`
+  1.1 s light / 1.5 s heavy, `HEAD`), his load, guard and chain gone. A side slash is not a head blow. Not a bash, a
+  tackle or a charge (no `from.atk`); a rider's blow finds the horse first as before. The don matters: a slow walk in
+  and the first chop finds your naked head; a helm is a marketplace item. Event `hd: 1` (the guest shows `HEAD` and the
+  pose row carries the fall). Test: `BV.arenaBare(idx, off)` takes a fighter's helm off / puts it on (if he owns one) and
+  reports `bare`; `BV.arenaSwing(idx, heavy)` throws an instant swing (set `b.combo = 2` first for the chop).
 
 **Cloth**: the cape is a chain of five hinged panels (`afCape`); each hinge is a damped spring
 chasing a target set by its parent, pushed out by the air flowing past a running body, tugged by a

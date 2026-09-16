@@ -1341,7 +1341,7 @@ function lookHelmPaint(L) {                                  // the same paint a
   for (let o = 0; o < map.length; o++) { const v = map[o] * 3, w = o * 3; dst.array[w] = src.array[v]; dst.array[w + 1] = src.array[v + 1]; dst.array[w + 2] = src.array[v + 2]; } dst.needsUpdate = true;
 }
 // where the helm hangs in the sword hand (model units, in the hand bone's frame) — BV.helmHand(o) to re-hang it live
-const MODEL_HELM_HAND = { x: 0, y: -0.12, z: 0.06, rx: Math.PI, ry: 0, rz: 0 };
+const MODEL_HELM_HAND = { x: 0.03, y: 0.12, z: -0.08, rx: 0, ry: 0, rz: 0 };   // (hand frame: +x up the forearm, +y down past the fingers, +z toward the body — the rim at the fingers, the helm hanging crown-down below the fist)
 const _hm = { A: new THREE.Matrix4(), B: new THREE.Matrix4(), O: new THREE.Matrix4(), pa: new THREE.Vector3(), pb: new THREE.Vector3(), qa: new THREE.Quaternion(), qb: new THREE.Quaternion(), sa: new THREE.Vector3(), sb: new THREE.Vector3() };
 function modelHelmPlace(L) {                                 // every render while the helm is in play: in the hand (helmK null), or on its way from the hand to the head (helmK 0→1)
   const m = L.mHelm, hand = L.helmHandBone, head = L.helmHead; if (!m || !hand || !head) return;

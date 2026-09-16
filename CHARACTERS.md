@@ -142,3 +142,27 @@ at a third of its density), and the governor's step-down was saved for ever — 
 Now low is 1.5× with MSAA (the governor falls to 1× only as a last resort below low), the saved tier holds for the day it
 happened (`bv-quality` = tier@date), and the home page has a resolution pick (`bv-res`: auto / sharp = the screen's full
 density up to 3× / soft = 1×) next to the graphics pick — `afSetRes`, `resRatio`.
+
+## The north (2026-09-16, "make it possible to have a look like this" — a Viking berserker reference)
+
+The reference: a bare, tattooed chest under a grey wolf mantle, a blond mohawk and a long beard, engraved steel bracers, a
+sash and wool breeches, a curved axe. Everything is a ware, on the one warrior mesh:
+
+- **Berserker's mantle** (`berserker`, armor): `bare: true` like the pelt, pauldrons always on and painted grey fur (the
+  mantle), vambraces iron, straps and pouch leather, the skirt's cloth a `sash` (the team dye deepened — teams must
+  still read), skirt plates and greaves wool, boots leather, cloak seldom. The plastic fallback is in `AF_LOOK.armor`.
+- **Ink**, a slot of its own (`ARENA_SLOTS` has `ink`; both backends validate against the shared list, nothing to migrate):
+  `wolf_ink` (blue-black knotwork) and `blood_ink` (red war-marks). Cosmetic. It shows wherever the kit leaves skin bare —
+  the pelt, the mantle — through the surface pass: `lookKind` hands skin-painted vertices the `inkWolf` / `inkBlood`
+  kinds (6, 7) and the shader lays a knotwork mask (`modelDetailTextures().inkT`, drawn with the 2D canvas: rings on
+  a line, triskeles, chevrons, runes) over the skin tone. The market's Ink tab shows it on a bare-chested bust; the
+  thumbnails' renderer now takes the surface pass too (its own sky, `modelEnvFor('thumb')`).
+- **Seax, bearded axe, Dane axe** (swords): `afBuildSword` grew an `axe` silhouette — a haft, a socket, the bit forward,
+  the beard hooking down, a bright edge; the Dane axe adds a poll. The seax is a short `cleaver`.
+- The vale's men roll it: a northerner (`afNpcGear`, ~14 %) wears the pelt or the mantle, most are inked, and from 25 XP
+  most swing an axe. Hair and beard are the barber's (mohawk, full beard) — nothing new needed there.
+
+Two fixes on the way: a bare chest read as cream because its steel is re-pointed at the WHITE cell while the face is
+palette skin × a tint — the bare-skin paint is now skin × (0.98, 0.76, 0.74) so both land on the same colour; and the
+bake files the cloth showing at the elbows under "skirt" (one connected cloth component), so a sash coloured the elbows —
+`lookClassOf` calls skirt cloth past |x| 0.24 a sleeve (arms hang at waist height in the bind pose; only the flank tells).

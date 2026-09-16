@@ -1034,10 +1034,10 @@ const MODEL_RIGS = new Map(), MODEL_LIVE = [];
 // plate steel, the mail under it, cloth, leather, skin), and normals averaged across the split vertices under a crease limit so
 // the plate reads as curved metal and keeps its rims. The low tier keeps the cheap Phong (modelMaterial hands either out;
 // modelRefreshMaterials swaps them when the tier changes). BV.modelDetail({ tile, mailTile, str, ... }) tunes the uniforms live.
-const MODEL_DETAIL = { tile: 2.2, mailTile: 11.0, str: 0.8, plateTile: 3.0, plateStr: 0.3, plateR0: 0.28, plateR1: 0.30, envI: 0.9, crease: 55 };
-const MODEL_KIND = { steel: 0, mail: 1, cloth: 2, leather: 3, skin: 4, flat: 5 };
+const MODEL_DETAIL = { tile: 2.2, mailTile: 11.0, str: 0.8, plateTile: 3.0, plateStr: 0.3, plateR0: 0.28, plateR1: 0.30, inkTile: 1.4, envI: 0.9, crease: 55 };
+const MODEL_KIND = { steel: 0, mail: 1, cloth: 2, leather: 3, skin: 4, flat: 5, inkWolf: 6, inkBlood: 7 };   // (6, 7: skin under blue-black knotwork / red war-marks — the ink wares)
 const MODEL_DETAIL_U = {};                                   // the shared uniforms (one object across every program, so a tune lands everywhere)
-for (const k of ['tile', 'mailTile', 'str', 'plateTile', 'plateStr', 'plateR0', 'plateR1']) MODEL_DETAIL_U['u' + k[0].toUpperCase() + k.slice(1)] = { value: MODEL_DETAIL[k] };
+for (const k of ['tile', 'mailTile', 'str', 'plateTile', 'plateStr', 'plateR0', 'plateR1', 'inkTile']) MODEL_DETAIL_U['u' + k[0].toUpperCase() + k.slice(1)] = { value: MODEL_DETAIL[k] };
 let MODEL_DTEX = null;
 function modelDetailOn() { return qualityTier !== 'low'; }
 function modelDetailTextures() {                             // drawn once: height fields → tangent-space normal maps (RepeatWrapping), plus a grey ring mask for the mail
@@ -1062,7 +1062,14 @@ function modelDetailTextures() {                             // drawn once: heig
   const plateR = new Float32Array(N * N); for (let i = 0; i < N * N; i++) plateR[i] = 0.5 + (plate[i] - 0.5) * 0.9;
   // CLOTH: a plain weave
   const cloth = new Float32Array(N * N); for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) cloth[y * N + x] = 0.5 + 0.25 * (Math.sin(x * Math.PI / 4) + Math.sin(y * Math.PI / 4));
-  MODEL_DTEX = { mailN: normalOf(mail, 3.0), mailC: greyOf(mailC), plateN: normalOf(plate, 1.2), plateR: greyOf(plateR), clothN: normalOf(cloth, 1.5) };
+  // INK: knotwork, a triskele, chevrons and runes as a white-on-black mask (drawn with the 2D canvas, tiled on the skin)
+  const ic = document.createElement('canvas'); ic.width = ic.height = N; const g = ic.getContext('2d'); g.fillStyle = '#000'; g.fillRect(0, 0, N, N); g.strokeStyle = '#fff'; g.lineCap = 'round'; g.lineJoin = 'round'; g.lineWidth = 6;
+  for (let i = 0; i < 6; i++) { g.beginPath(); g.arc(28 + i * 40, 60, 21, 0, Math.PI * 2); g.stroke(); } g.beginPath(); g.moveTo(0, 60); g.lineTo(N, 60); g.stroke();   // a band of linked rings on a line
+  const tri = (cx, cy, r) => { for (let k = 0; k < 3; k++) { const a = k * Math.PI * 2 / 3; g.beginPath(); g.arc(cx + Math.cos(a) * r * 0.5, cy + Math.sin(a) * r * 0.5, r * 0.5, a + Math.PI, a + Math.PI * 2.15); g.stroke(); } }; tri(70, 172, 48); tri(196, 196, 40);
+  g.lineWidth = 5; for (let i = 0; i < 5; i++) { g.beginPath(); g.moveTo(126 + i * 24, 108); g.lineTo(138 + i * 24, 132); g.lineTo(150 + i * 24, 108); g.stroke(); }   // chevrons
+  for (const [x, y] of [[22, 232], [126, 238], [224, 120], [246, 22]]) { g.beginPath(); g.moveTo(x, y - 18); g.lineTo(x, y + 18); g.moveTo(x, y - 10); g.lineTo(x + 14, y); g.stroke(); }   // runes
+  const inkT = new THREE.CanvasTexture(ic); inkT.wrapS = inkT.wrapT = THREE.RepeatWrapping;
+  MODEL_DTEX = { mailN: normalOf(mail, 3.0), mailC: greyOf(mailC), plateN: normalOf(plate, 1.2), plateR: greyOf(plateR), clothN: normalOf(cloth, 1.5), inkT };
   return MODEL_DTEX;
 }
 function modelSmoothNormals(geo, creaseDeg) {               // average the normals of every vertex sharing a position — but only with faces within the crease angle, so plate rims stay rims
@@ -1084,6 +1091,7 @@ function modelKindAttr(m) {                                  // per vertex: what
   m.geo.setAttribute('kind', new THREE.BufferAttribute(k, 1));
 }
 function modelEnvFor(ctx) {                                  // the sky the steel reflects: the main scene's (the pit's hour rebuilds it) or the preview's own renderer's
+  if (ctx === 'thumb') { if (TH.r && TH.scene && !TH.scene.environment) { TH.envGen = TH.envGen || new THREE.PMREMGenerator(TH.r); TH.scene.environment = makeEnvMap(0x3f78bd, 0x8fb6e0, 0xe9dfd0, new THREE.Vector3(3, 6, 5), 0xfff0d0, TH.envGen); } return; }   // (the thumbnails' own renderer: an ink ware shows nothing under Phong)
   if (ctx === 'preview') { const P = AF.preview; if (P && P.renderer && !P.scene.environment) { P.envGen = P.envGen || new THREE.PMREMGenerator(P.renderer); P.scene.environment = makeEnvMap(0x3f78bd, 0x8fb6e0, 0xe9dfd0, new THREE.Vector3(3, 6, 4), 0xfff0d0, P.envGen); } return; }
   MODEL_DETAIL_LIVE = true; if (!ENV_CUR) setEnvMap(envDefault());
 }
@@ -1093,7 +1101,7 @@ const MODEL_DETAIL_GLSL = {
   vertPos: `#include <worldpos_vertex>\n vTri = transformed; vKind = kind;`,
   fragHead: `#include <common>
 varying float vKind; varying vec3 vTri; varying vec3 vTriN; varying mat3 vTriM;
-uniform sampler2D tPlateN, tMailN, tClothN, tPlateR, tMailC; uniform float uTile, uMailTile, uStr, uPlateTile, uPlateStr, uPlateR0, uPlateR1;
+uniform sampler2D tPlateN, tMailN, tClothN, tPlateR, tMailC, tInk; uniform float uTile, uMailTile, uStr, uPlateTile, uPlateStr, uPlateR0, uPlateR1, uInkTile;
 vec3 triW(vec3 n) { vec3 w = pow(abs(n), vec3(4.0)); return w / (w.x + w.y + w.z); }
 vec3 triNormal(sampler2D t, vec3 p, vec3 wn, float s, float str) { vec3 w = triW(wn);
   vec3 nx = texture2D(t, p.zy * s).xyz * 2.0 - 1.0, ny = texture2D(t, p.xz * s).xyz * 2.0 - 1.0, nz = texture2D(t, p.xy * s).xyz * 2.0 - 1.0;
@@ -1109,22 +1117,23 @@ float triGray(sampler2D t, vec3 p, vec3 wn, float s) { vec3 w = triW(wn); return
   fragRough: `float roughnessFactor = roughness; { int k = int(vKind + 0.5);
   if (k == 0) roughnessFactor = uPlateR0 + uPlateR1 * triGray(tPlateR, vTri, vTriN, uTile * uPlateTile * 1.7);
   else if (k == 1) roughnessFactor = 0.45 + 0.35 * (1.0 - triGray(tMailC, vTri, vTriN, uMailTile));
-  else if (k == 2) roughnessFactor = 0.92; else if (k == 3) roughnessFactor = 0.70; else if (k == 4) roughnessFactor = 0.55; else roughnessFactor = 0.4; }`,
+  else if (k == 2) roughnessFactor = 0.92; else if (k == 3) roughnessFactor = 0.70; else if (k == 4 || k >= 6) roughnessFactor = 0.55; else roughnessFactor = 0.4; }`,
   fragMetal: `float metalnessFactor = metalness; { int k = int(vKind + 0.5); metalnessFactor = (k == 0) ? 0.88 : (k == 1) ? 0.80 : 0.0; }`,
   fragIbl: `{ if (int(vKind + 0.5) >= 2) iblIrradiance *= 0.45; }
 #include <lights_fragment_end>`,   // (the sky's ambient washed the dyed cloth pink: cloth, leather and skin take less of it)
   fragMap: `#include <map_fragment>
-{ int k = int(vKind + 0.5); if (k == 1) { float g = triGray(tMailC, vTri, vTriN, uMailTile); diffuseColor.rgb *= mix(0.55, 1.25, g); } if (k == 0) { float g = triGray(tPlateR, vTri, vTriN, uTile * uPlateTile * 1.7); diffuseColor.rgb *= mix(0.92, 1.04, g); } }`,   // the rings read at a distance: the palette grey shaded by the ring mask
+{ int k = int(vKind + 0.5); if (k == 1) { float g = triGray(tMailC, vTri, vTriN, uMailTile); diffuseColor.rgb *= mix(0.55, 1.25, g); } if (k == 0) { float g = triGray(tPlateR, vTri, vTriN, uTile * uPlateTile * 1.7); diffuseColor.rgb *= mix(0.92, 1.04, g); }
+  if (k >= 6) { float m = triGray(tInk, vTri, vTriN, uInkTile); vec3 ic = (k == 6) ? vec3(0.07, 0.10, 0.15) : vec3(0.42, 0.08, 0.07); diffuseColor.rgb = mix(diffuseColor.rgb, ic, smoothstep(0.2, 0.6, m) * 0.9); } }`,   // the ink: a knotwork mask over the skin tone   // the rings read at a distance: the palette grey shaded by the ring mask
 };
 function modelMaterial(R, o = {}) {                          // the figure's material for a context: Phong on the low tier / thumbnails, the surface pass otherwise; cached per rig unless it carries its own colour
-  const ctx = o.ctx || 'main', det = ctx !== 'thumb' && modelDetailOn(), col = o.color != null ? o.color : 0xffffff, noMap = o.map === false;
+  const ctx = o.ctx || 'main', det = modelDetailOn(), col = o.color != null ? o.color : 0xffffff, noMap = o.map === false;
   const key = [det ? 'd' : 'p', o.vc ? 'vc' : '', o.skinning ? 'sk' : '', noMap ? 'nomap' : '', ctx].join('|');
   R.mats = R.mats || {}; if (o.color == null && R.mats[key]) return R.mats[key];
   let m;
   if (!det) m = new THREE.MeshPhongMaterial(noMap ? { color: col, shininess: 4, specular: 0x050505, skinning: !!o.skinning } : { map: R.tex, color: col, shininess: 6, specular: 0x111111, skinning: !!o.skinning, vertexColors: !!o.vc });
   else { const T = modelDetailTextures(); modelEnvFor(ctx);
     m = new THREE.MeshStandardMaterial({ map: noMap ? null : R.tex, color: col, metalness: 1, roughness: 1, skinning: !!o.skinning, vertexColors: !!o.vc, envMapIntensity: MODEL_DETAIL.envI });
-    m.onBeforeCompile = sh => { const G = MODEL_DETAIL_GLSL; Object.assign(sh.uniforms, MODEL_DETAIL_U, { tPlateN: { value: T.plateN }, tMailN: { value: T.mailN }, tClothN: { value: T.clothN }, tPlateR: { value: T.plateR }, tMailC: { value: T.mailC } });
+    m.onBeforeCompile = sh => { const G = MODEL_DETAIL_GLSL; Object.assign(sh.uniforms, MODEL_DETAIL_U, { tPlateN: { value: T.plateN }, tMailN: { value: T.mailN }, tClothN: { value: T.clothN }, tPlateR: { value: T.plateR }, tMailC: { value: T.mailC }, tInk: { value: T.inkT } });
       sh.vertexShader = sh.vertexShader.replace('#include <common>', G.vertHead).replace('#include <defaultnormal_vertex>', G.vertNormal).replace('#include <worldpos_vertex>', G.vertPos);
       sh.fragmentShader = sh.fragmentShader.replace('#include <common>', G.fragHead).replace('#include <normal_fragment_maps>', G.fragNormal).replace('#include <roughnessmap_fragment>', G.fragRough).replace('#include <metalnessmap_fragment>', G.fragMetal).replace('#include <map_fragment>', G.fragMap).replace('#include <lights_fragment_end>', G.fragIbl); };
     m.customProgramCacheKey = () => 'bv-surface'; }
@@ -1133,7 +1142,7 @@ function modelMaterial(R, o = {}) {                          // the figure's mat
 }
 function modelRefreshMaterials() {                          // a tier change: every figure piece takes the material its tier wants (the cache hands the same few out)
   const walk = root => root && root.traverse(x => { const mm = x.userData && x.userData.mm, R = mm && MODEL_RIGS.get(x.userData.mmR); if (R && x.material) x.material = modelMaterial(R, mm); });
-  walk(scene); if (AF.preview) walk(AF.preview.scene);
+  walk(scene); if (AF.preview) walk(AF.preview.scene); if (typeof TH !== 'undefined' && TH.scene) walk(TH.scene);
 }
 BV.modelDetail = o => { for (const k in (o || {})) { if (k === 'envI') { MODEL_DETAIL.envI = o[k]; scene.traverse(x => { if (x.material && x.material.isMeshStandardMaterial && x.userData.mm) x.material.envMapIntensity = o[k]; }); } else if (MODEL_DETAIL_U['u' + k[0].toUpperCase() + k.slice(1)]) { MODEL_DETAIL[k] = o[k]; MODEL_DETAIL_U['u' + k[0].toUpperCase() + k.slice(1)].value = o[k]; } } return Object.assign({ on: modelDetailOn() }, MODEL_DETAIL); };   // test/tune: BV.modelDetail({ tile: 3 })
 
@@ -1338,6 +1347,7 @@ const LOOK_ARMOR = {
   none:           { helm: 0.08, pauldron: 0,    elbow: 0,    knee: 0,    cloak: 0.12, plume: 0,    straps: 0.3, pouch: 0.5, cloth: 0.5,  base: 'shirt',   paint: { skirt: 'breeches', greaves: 'breeches', boot: 'leather', helmet: 'iron' }, clothOf: { skirt: 'breeches' } },   // a linen shirt and wool breeches
   gambeson:       { helm: 0.15, pauldron: 0,    elbow: 0.3,  knee: 0.15, cloak: 0.25, plume: 0,    straps: 0.6, pouch: 0.5, cloth: 0.35, base: 'leather', paint: { cuirass: 'jack', skirt: 'jack', boot: 'leather', helmet: 'iron' } },
   wolf_pelt:      { helm: 0.02, pauldron: 1,    elbow: 0,    knee: 0,    cloak: 1,    plume: 0,    straps: 0.7, pouch: 0.6, cloth: 0,    base: 'fur',     bare: true, paint: { cuirass: 'skin', vambrace: 'leather', pauldron: 'furDark', boot: 'leather', helmet: 'iron' }, clothOf: { sleeve: 'skin', skirt: 'fur' }, cloakC: 'furDark' },   // bare-chested under the pelt
+  berserker:      { helm: 0.02, pauldron: 1,    elbow: 0,    knee: 0,    cloak: 0.35, plume: 0,    straps: 1,   pouch: 0.7, cloth: 0.1,  base: 'breeches', bare: true, paint: { cuirass: 'skin', vambrace: 'iron', pauldron: 'furGrey', boot: 'leather', helmet: 'iron', straps: 'leather', pouch: 'leather' }, clothOf: { sleeve: 'skin', skirt: 'sash' }, cloakC: 'furGrey' },   // the northern raider (2026-09-16): a grey wolf mantle on the shoulders, a bare inked chest, steel bracers, a sash in the team dye, wool breeches
   leather:        { helm: 0.25, pauldron: 0.2,  elbow: 0.5,  knee: 0.3,  cloak: 0.35, plume: 0,    straps: 0.6, pouch: 0.5, cloth: 0.35, base: 'leather', paint: { helmet: 'iron' } },
   brigandine:     { helm: 0.5,  pauldron: 0.35, elbow: 0.7,  knee: 0.5,  cloak: 0.4,  plume: 0.1,  straps: 0.6, pouch: 0.5, cloth: 0.15, base: 0x606268,  paint: { cuirass: 0xa03030, skirt: 'leather' } },
   mail:           { helm: 0.6,  pauldron: 0.4,  elbow: 0.8,  knee: 0.6,  cloak: 0.5,  plume: 0.15, straps: 0.6, pouch: 0.5, cloth: 0.1,  base: 0xa8acb4,  paint: { helmet: 0xb4b8c0 } },
@@ -1384,12 +1394,13 @@ function lookRoll(name, arch, gear, pal, o = {}) {
   look.cloth = c.copy(team).lerp(new THREE.Color(0x8a8480), O.cloth || 0).getHex(); if (kind === 'dragon_plate') look.cloth = c.copy(team).lerp(new THREE.Color(0x000000), 0.4).getHex();
   const bare = skinC.clone().multiplyScalar(1.28); bare.r = Math.min(1, bare.r); bare.g = Math.min(1, bare.g); bare.b = Math.min(1, bare.b);   // (the palette's steel is a mid grey: lift the tone so a bare chest matches the face)
   const named = { shirt: c.copy(team).lerp(new THREE.Color(0xd8cfb8), 0.5).getHex(), breeches: pick(LOOK_WOOL), jack: c.copy(team).lerp(new THREE.Color(0x6a6460), 0.45).multiplyScalar(0.9).getHex(),
-    leather: look.leather, fur: pick(LOOK_FUR), furDark: 0x33241a, skin: bare.getHex(), plate: pick(LOOK_PLATE), iron: 0x6a6c72 };
-  look.bare = !!O.bare; if (look.bare) { const t = skinC.clone().multiply(new THREE.Color(1.075, 1.01, 1.0)); named.skin = t.setRGB(Math.min(1, t.r), Math.min(1, t.g), Math.min(1, t.b)).getHex(); }   // (a bare chest: its steel is re-pointed at the white cell — lookApply — so the face's own tone paints it)
+    leather: look.leather, fur: pick(LOOK_FUR), furDark: 0x33241a, furGrey: 0x6e685e, sash: c.copy(team).multiplyScalar(0.72).getHex(), skin: bare.getHex(), plate: pick(LOOK_PLATE), iron: 0x6a6c72 };   // (the sash: the team dye, deepened)
+  look.bare = !!O.bare; if (look.bare) { const t = skinC.clone().multiply(new THREE.Color(0.92, 0.71, 0.68)); named.skin = t.setRGB(Math.min(1, t.r), Math.min(1, t.g), Math.min(1, t.b)).getHex(); }   // (a bare chest: its steel is re-pointed at the WHITE cell — lookApply — so this tint × white must equal the face's skin cell × the face tint (lookApply divides by 1 / 0.86 / 0.70); it read as cream before)
   const resolve = v => typeof v === 'string' ? named[v] : v, base = resolve(O.base);
   for (const pc of LOOK_PIECES) look.paint[pc] = O.paint && O.paint[pc] != null ? resolve(O.paint[pc]) : base;
   for (const k in (O.clothOf || {})) look.clothOf[k] = resolve(O.clothOf[k]);
   look.cloakC = O.cloakC ? resolve(O.cloakC) : look.cloth;
+  const II = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}; look.ink = gear && gear.ink && II[gear.ink] && II[gear.ink].ink ? II[gear.ink].ink : null;   // THE INK (a ware): tattoos on whatever skin his kit leaves bare — lookKind hands those vertices the inked-skin kind
   return look;
 }
 // the face: beard styles are regions of the bald head — the baked beard class cut by position (bind pose, model units,
@@ -1414,12 +1425,16 @@ function lookColour(look, cls, mt) {
 // "cuirass" is painted as a linen shirt, a gambeson's as a quilted jack, the pelt-wearer's chest is his skin, and a mail
 // hauberk's body pieces are rings — so the kind follows the paint, not the swatch
 const LOOK_MAIL_PIECES = new Set(['cuirass', 'skirt', 'sleeve', 'greaves']);
+// the bake files the cloth showing at the ELBOWS under "skirt" (one connected cloth component); a fighter's arms hang at
+// waist height in the bind pose, so only the flanks tell them apart: skirt cloth out past |x| 0.24 is the arm's
+function lookClassOf(pj, v, pos) { const cls = pj.classes[pj.vclass[v]]; return cls === 'skirt' && pj.mats[pj.vmat[v]] === 'cloth' && Math.abs(pos.getX(v)) >= 0.24 ? 'sleeve' : cls; }
+function lookInkKind(look, K) { return look.ink === 'wolf' ? K.inkWolf : look.ink === 'blood' ? K.inkBlood : K.skin; }   // bare skin, or bare skin under a tattoo (the ink ware)
 function lookKind(look, cls, mt, kd0) {
   const O = LOOK_ARMOR[look.kind] || LOOK_ARMOR.none, K = MODEL_KIND;
   if (mt === 'steel') { const p = O.paint && O.paint[cls] != null ? O.paint[cls] : O.base;
-    if (p === 'shirt' || p === 'breeches' || p === 'jack') return K.cloth; if (p === 'leather' || p === 'fur' || p === 'furDark') return K.leather; if (p === 'skin') return K.skin;
+    if (p === 'shirt' || p === 'breeches' || p === 'jack') return K.cloth; if (p === 'leather' || p === 'fur' || p === 'furDark' || p === 'furGrey') return K.leather; if (p === 'skin') return lookInkKind(look, K);
     return look.kind === 'mail' && LOOK_MAIL_PIECES.has(cls) ? K.mail : K.steel; }
-  if (mt === 'cloth') { const c = O.clothOf && O.clothOf[cls]; return c === 'skin' ? K.skin : c === 'fur' ? K.leather : K.cloth; }
+  if (mt === 'cloth') { const c = O.clothOf && O.clothOf[cls]; return c === 'skin' ? lookInkKind(look, K) : c === 'fur' ? K.leather : K.cloth; }
   if (mt === 'dark') return (typeof O.base === 'number' || O.base === 'plate') ? K.mail : K.leather;   // the dark under-layer at the joints: mail under plate, padding under anything softer
   return kd0;
 }
@@ -1437,10 +1452,10 @@ function lookApply(L, look) {
     // skin vertices carry a per-vertex colour, so the palette's skin (~#ffdcb4) × tint: the tint is chosen so tint × skin ≈ the tone wanted
     if (skinTint) lookFaceApply(sm, look, pj);                 // (the bones: this body's own head positions)
     const pos = sm.userData.geo0.getAttribute('position');
-    for (let v = 0; v < nv; v++) { const cls = pj.classes[pj.vclass[v]], mt = pj.mats[pj.vmat[v]]; c.setHex(skinTint ? lookFaceColour(look, cls, mt, pos.getX(v), pos.getY(v), pos.getZ(v)) : lookColour(look, cls, mt)); if (skinTint && mt === 'skin' && cls !== 'eye') { c.r = Math.min(1, c.r / 1.0); c.g = Math.min(1, c.g / 0.86); c.b = Math.min(1, c.b / 0.70); } col.setXYZ(v, c.r * 255, c.g * 255, c.b * 255); } col.needsUpdate = true;
+    for (let v = 0; v < nv; v++) { const cls = lookClassOf(pj, v, pos), mt = pj.mats[pj.vmat[v]]; c.setHex(skinTint ? lookFaceColour(look, cls, mt, pos.getX(v), pos.getY(v), pos.getZ(v)) : lookColour(look, cls, mt)); if (skinTint && mt === 'skin' && cls !== 'eye') { c.r = Math.min(1, c.r / 1.0); c.g = Math.min(1, c.g / 0.86); c.b = Math.min(1, c.b / 0.70); } col.setXYZ(v, c.r * 255, c.g * 255, c.b * 255); } col.needsUpdate = true;
     const kd0 = sm.userData.geo0.getAttribute('kind');           // this body's own kinds, following the paint (lookKind)
     if (kd0 && !skinTint) { if (!sm.userData.ownKind) { sm.geometry.setAttribute('kind', kd0.clone()); sm.userData.ownKind = true; } const kd = sm.geometry.getAttribute('kind');
-      for (let v = 0; v < nv; v++) kd.setX(v, lookKind(look, pj.classes[pj.vclass[v]], pj.mats[pj.vmat[v]], kd0.getX(v))); kd.needsUpdate = true; }
+      for (let v = 0; v < nv; v++) kd.setX(v, lookKind(look, lookClassOf(pj, v, pos), pj.mats[pj.vmat[v]], kd0.getX(v))); kd.needsUpdate = true; }
   }
   lookDraw(L, look); if (lookHelmBuild(L)) lookHelmPaint(L);
   const cloak = L.inst.skinned[M.cloak]; if (cloak) { cloak.visible = !!look.cloak; if (cloak.material && cloak.material.color && !cloak.material.map) cloak.material.color.setHex(look.cloakC); }
@@ -18200,7 +18215,7 @@ function vrMenuDraw() {
     B(VRM.leaveArmed ? 'Sure? The fight ends for everyone' : 'Leave the pit', skipOk ? 544 : 302, 262, 420, 64, 'leave-fight', { fs: VRM.leaveArmed ? 19 : 22, col: VRM.leaveArmed ? '#ff6a5a' : undefined, ...(VRM.leaveArmed ? {} : DIM) });
     T('the panel hangs under your eyes — the fight goes on above it', W / 2, 348, '500 16px system-ui', '#6b5e7a', 'center');
   } else if (page === 'market') {
-    const cr = AF.career, TABS = [['sword', 'Swords'], ['armor', 'Armor'], ['helm', 'Helms'], ['shield', 'Shields'], ['bow', 'Bows'], ['horse', 'Horses'], ['unique', 'Uniques']]; if (!AF.marketTab) AF.marketTab = 'sword'; const tab = AF.marketTab; if (VRM.mkTab !== tab) { VRM.mkTab = tab; VRM.mkPg = 0; }
+    const cr = AF.career, TABS = [['sword', 'Swords'], ['armor', 'Armor'], ['helm', 'Helms'], ['shield', 'Shields'], ['ink', 'Ink'], ['bow', 'Bows'], ['horse', 'Horses'], ['unique', 'Uniques']]; if (!AF.marketTab) AF.marketTab = 'sword'; const tab = AF.marketTab; if (VRM.mkTab !== tab) { VRM.mkTab = tab; VRM.mkPg = 0; }
     T('MARKETPLACE', 40, 24, '900 40px system-ui', '#ffd34d');
     T(cr ? cr.rank.name + '  ·  ' + cr.gold + ' gold  ·  🏆 ' + cr.trophies : u ? 'reaching the war-net…' : 'sign in to buy — until then the pit lends plain gear', 400, 34, '600 24px system-ui', '#ffe2a8', 'left', 580);
     TABS.forEach(([k, l], i) => B(l, 40 + i * 136, 84, 130, 46, 'mk:tab:' + k, { fs: 18, bg: tab === k ? ON : undefined }));
@@ -20265,10 +20280,12 @@ function afNpcGear(entry, xp, r) {
   const pick = a => a[Math.floor(r() * a.length)], A = AF_ARCH[entry.arch] || AF_ARCH.swordsman, g = {};
   g.sword = xp < 25 ? pick(['wood_sword', 'iron_sword']) : xp < 45 ? pick(['iron_sword', 'falchion']) : xp < 60 ? pick(['steel_sword', 'cleaver', 'rapier']) : xp < 82 ? pick(['vale_blade', 'scimitar', 'flamberge']) : xp < 95 ? pick(['doomsword', 'master_sword']) : pick(['master_sword', 'sun_blade', 'ember_blade', 'frost_fang', 'black_night']);
   if (A.weapon === 'longsword' && xp >= 45) g.sword = xp < 82 ? 'cleaver' : 'doomsword';     // a brute swings something broad
-  const pelt = A.weapon !== 'bow' && r() < 0.12;                                                 // a northerner in a wolf pelt, now and then
+  const pelt = A.weapon !== 'bow' && r() < 0.14, north = pelt ? (r() < 0.5 ? 'wolf_pelt' : 'berserker') : null;   // a northerner in a wolf pelt or a berserker's mantle, now and then
+  if (north && xp >= 25 && r() < 0.65) g.sword = xp < 60 ? pick(['bearded_axe', 'seax']) : 'dane_axe';      // and he swings an axe
+  if (north && r() < 0.6) g.ink = r() < 0.7 ? 'wolf_ink' : 'blood_ink';                                     // most northerners are inked
   if (xp < 20) g.armor = r() < 0.3 ? 'gambeson' : undefined;                                     // (nothing = a shirt and breeches)
-  else if (xp < 40) g.armor = pelt ? 'wolf_pelt' : r() < 0.55 ? 'leather' : r() < 0.5 ? 'gambeson' : undefined;
-  else g.armor = xp < 60 ? (pelt ? 'wolf_pelt' : 'mail') : xp < 82 ? (r() < 0.4 ? 'brigandine' : 'plate') : xp < 95 ? 'champion_plate' : (r() < 0.35 ? 'dragon_plate' : 'champion_plate');
+  else if (xp < 40) g.armor = pelt ? north : r() < 0.55 ? 'leather' : r() < 0.5 ? 'gambeson' : undefined;
+  else g.armor = xp < 60 ? (pelt ? north : 'mail') : xp < 82 ? (r() < 0.4 ? 'brigandine' : 'plate') : xp < 95 ? 'champion_plate' : (r() < 0.35 ? 'dragon_plate' : 'champion_plate');
   if (r() < lookOdds(g.armor || 'none', entry.arch, 'helm')) g.helm = 'sallet';                   // a helm by his armour and his class (lookOdds)
   g.shield = xp < 45 ? 'round_shield' : r() < 0.65 ? 'heater_shield' : 'round_shield';
   if (A.weapon === 'bow') g.bow = xp < 40 ? 'hunting_bow' : xp < 70 ? 'longbow' : xp < 90 ? 'warbow' : 'recurve';
@@ -20284,6 +20301,7 @@ const AF_LOOK = {
   armor: { none: null,
     gambeson:       null,                                    // (null = the padded jack the plastic rig builds)
     wolf_pelt:      { torso: 0x5a4432, pad: 0x33241a, metal: 0, straps: true },
+    berserker:      { torso: 0xc89070, pad: 0x6e685e, metal: 0, straps: true },
     leather:        { torso: 0x6b4a2a, pad: 0x5a3d22, metal: 0, straps: true },
     brigandine:     { torso: 0x8a2a2a, pad: 0x3a3a44, metal: 0, rivets: true, sleeves: 0x3a3a44 },
     mail:           { torso: 0x7a808a, pad: 0x6e747e, metal: 1, sleeves: 0x7a808a, coif: true },
@@ -20307,6 +20325,10 @@ const AF_LOOK = {
     ember_blade:  { style: 'wavy',     blade: 0xff7a2a, len: 1.1,  w: 0.2, glow: 0xff3a00, guard: 0x2a1a12 },
     frost_fang:   { style: 'serrated', blade: 0xd8f2ff, len: 1.1,  w: 0.2, glow: 0x4ab8ff, guard: 0x9ad0ff },
     black_night:  { style: 'curved',   blade: 0x16141c, len: 1.15, w: 0.22, glow: 0x5a2aa0, guard: 0x5a1a1a, pommel: 0x5a1a1a },
+    // THE NORTH (2026-09-16): a broken-back knife and two axes — 'axe' is a haft with a bearded head, the edge forward
+    seax:         { style: 'cleaver',  blade: 0xb0b4ba, len: 0.62, w: 0.19, grip: 0x4a3420, guard: 0x4a3420 },
+    bearded_axe:  { style: 'axe',      blade: 0xa8adb4, len: 0.95, w: 0.42, grip: 0x5a3d22, guard: 0x3a2a18 },
+    dane_axe:     { style: 'axe',      blade: 0xb8bcc4, len: 1.45, w: 0.56, grip: 0x4a3420, guard: 0x2a2226, great: true },
   },
   bow: { hunting_bow: { scale: 1, wood: 0x6b4a2e }, longbow: { scale: 1.15, wood: 0x4e3620, wrap: true }, warbow: { scale: 1.3, wood: 0x2e2116, wrap: true, tips: 0xd9b24a }, recurve: { scale: 1.1, wood: 0xe8dcc0, wrap: true, tips: 0x2a1a12, horn: true } },
   horse: { nag: { scale: 0.9, coat: 0x8a7a66, droop: 0.28, thin: true }, courser: { scale: 1 }, destrier: { scale: 1.08, coat: 0x3e3630, caparison: true }, warhorse: { scale: 1.14, coat: 0x1e1a18, caparison: true, chamfron: true, crinet: true } },
@@ -20395,6 +20417,14 @@ function afBuildSword(g, sw, tint) {
       const slab = boxMesh(ww, seg * 1.15, t, bladeM); slab.position.set(x + seg / 2 * Math.sin(ang) + (wavy ? 0 : ww * 0.2), y + seg / 2 * Math.cos(ang), 0); slab.rotation.z = -ang; slab.castShadow = i < 3; g.add(slab);   // (−z rotation tips +y toward +x: slab and step agree)
       y += seg * Math.cos(ang); x += wavy ? 0 : seg * Math.sin(ang); }
     const tip = addTip(0, 0); tip.rotation.z = -ang; tip.position.set(x + 0.12 * Math.sin(ang) + (sw.style === 'curved' ? w * 0.2 : 0), y + 0.12 * Math.cos(ang), 0);
+  } else if (sw.style === 'axe') {                                       // a haft with a bearded head: the socket round the wood, the bit forward (+x), the beard hooking down behind the edge
+    const haft = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.05, len, 8), gripM); haft.position.y = y0 + len / 2 - 0.12; g.add(haft);
+    const hy = y0 + len - 0.3, hw = w, dark = mat(sw.guard || 0x3a2a18, { metal: 1, shared: false });
+    const sock = boxMesh(hw * 0.5, 0.36, t * 1.8, dark); sock.position.set(hw * 0.08, hy, 0); g.add(sock);
+    const bit = boxMesh(hw, 0.5, t, bladeM); bit.position.set(hw * 0.5, hy - 0.04, 0); bit.castShadow = true; g.add(bit);
+    const beard = boxMesh(hw * 0.5, 0.38, t, bladeM); beard.position.set(hw * 0.78, hy - 0.42, 0); beard.rotation.z = 0.3; g.add(beard);
+    const edge = boxMesh(0.05, 0.98, t * 0.55, mat(0xe8ecf0, { metal: 1, shared: false })); edge.position.set(hw + 0.01, hy - 0.2, 0); g.add(edge);
+    if (sw.great) { const back = boxMesh(hw * 0.3, 0.2, t * 1.2, dark); back.position.set(-hw * 0.18, hy + 0.02, 0); g.add(back); }
   } else if (sw.style === 'thin') {
     const blade = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.045, len, 6), bladeM); blade.position.y = y0 + len / 2 + 0.02; blade.castShadow = true; g.add(blade);
     const tip = new THREE.Mesh(new THREE.ConeGeometry(0.03, 0.14, 6), bladeM); tip.position.y = y0 + len + 0.09; g.add(tip);
@@ -23220,6 +23250,10 @@ function afThumb(id) {
       m.geometry.computeBoundingBox(); const cc = m.geometry.boundingBox.getCenter(new THREE.Vector3()); m.position.set(-cc.x, -cc.y, -cc.z);
       const wrap = new THREE.Group(); wrap.add(m); wrap.rotation.y = -Math.PI / 2; wrap.rotation.z = 0.35; wrap.scale.setScalar(3);   // (the face looks +x in bind space: turned to the lens, tilted a little)
       url = afThumbShot(wrap); }
+    else if (it.slot === 'ink') {                            // the ink on a bare-chested bust (the berserker's mantle shows the most skin)
+      if (MODEL_ON && !BV.modelReady) { BV.modelLoad.then(() => { if (AF.marketOpen) afMarketRender(); }); return null; }
+      const h = afThumbRig(); afDressGear(h.parts, { armor: 'berserker', ink: id }, pal); h.group.rotation.y = 0.4;
+      url = afThumbShot(h.group, new THREE.Box3(new THREE.Vector3(-0.95, 1.55, -3), new THREE.Vector3(0.95, 3.45, 3))); }
     else if (it.slot === 'armor' || it.slot === 'helm') {    // a bust of the figure wearing it (the warrior, tinted — so it waits for him); a helm over a leather jerkin
       if (MODEL_ON && !BV.modelReady) { BV.modelLoad.then(() => { if (AF.marketOpen) afMarketRender(); }); return null; }
       const h = afThumbRig(); afDressGear(h.parts, it.slot === 'helm' ? { helm: id, armor: 'leather' } : { armor: id }, pal); h.group.rotation.y = 0.4;
@@ -23658,12 +23692,12 @@ function afMarketRender() {
     '<div id="af-market-msg" style="display:' + (AF.marketMsg ? '' : 'none') + ';margin-bottom:6px;padding:6px 9px;border-radius:8px;background:rgba(255,211,77,.12);border:1px solid rgba(255,207,91,.5);font-size:12px;font-weight:700;color:' + (AF.marketMsg && AF.marketMsg.bad ? '#ff9a9a' : '#ffe089') + '">' + (AF.marketMsg ? AF.marketMsg.t : '') + '</div>' +
     '';
   // RIGHT: one tab at a time — a picture card per ware; the card is a TRY-ON, its button the buy
-  const TABS = [['sword', 'Swords'], ['armor', 'Armor'], ['helm', 'Helms'], ['shield', 'Shields'], ['bow', 'Bows'], ['horse', 'Horses'], ['unique', 'Uniques']]; if (!AF.marketTab) AF.marketTab = 'sword'; const tab = AF.marketTab;
+  const TABS = [['sword', 'Swords'], ['armor', 'Armor'], ['helm', 'Helms'], ['shield', 'Shields'], ['ink', 'Ink'], ['bow', 'Bows'], ['horse', 'Horses'], ['unique', 'Uniques']]; if (!AF.marketTab) AF.marketTab = 'sword'; const tab = AF.marketTab;
   let html = '<div class="mk-tabs">' + TABS.map(([k, l]) => '<button data-act="tab:' + k + '" class="' + (tab === k ? 'on' : '') + '">' + l + '</button>').join('') + '</div>';
   const statOf = it => [it.dmg ? '×' + it.dmg + ' dmg' : '', it.reach ? (it.reach > 0 ? '+' : '') + it.reach + ' reach' : '', it.hp ? (it.slot === 'horse' ? it.hp + ' hp' : '+' + it.hp + ' hp') : '', it.poise ? '+' + it.poise + ' poise' : '', it.move ? Math.round(it.move * 100) + '% speed' : '', it.speed && it.speed !== 1 ? '×' + it.speed + ' pace' : ''].filter(Boolean).join(' · ');
   const ids = Object.keys(I).filter(id => tab === 'unique' ? I[id].unique : I[id].slot === tab && !I[id].unique);
   if (tab !== 'unique') { const eq = c ? (c.equipped[tab] || AF_GEAR_LENT[tab] || null) : (AF_GEAR_FREE[tab] || null);
-    html += '<div class="mk-head">' + (eq ? 'Wearing <b>' + I[eq].name + '</b>' + (tab !== 'sword' && c && c.equipped[tab] ? ' ' + btn('unequip:' + tab, 'take off') : '') : tab === 'armor' ? 'A linen shirt and wool breeches — no armour yet' : tab === 'helm' ? 'Bareheaded — no helm yet' : 'None yet — ' + (tab === 'bow' ? 'a bow lets you ride in as an archer' : 'a horse lets you ride in')) + '</div>'; }
+    html += '<div class="mk-head">' + (eq ? 'Wearing <b>' + I[eq].name + '</b>' + (tab !== 'sword' && c && c.equipped[tab] ? ' ' + btn('unequip:' + tab, 'take off') : '') : tab === 'armor' ? 'A linen shirt and wool breeches — no armour yet' : tab === 'helm' ? 'Bareheaded — no helm yet' : tab === 'ink' ? 'Bare skin — no ink yet. It shows wherever your kit leaves skin bare: the wolf pelt, the berserker\'s mantle' : 'None yet — ' + (tab === 'bow' ? 'a bow lets you ride in as an archer' : 'a horse lets you ride in')) + '</div>'; }
   else html += '<div class="mk-head">Loot only — a look, and a hair of power.</div>';
   html += '<div class="mk-grid">' + ids.map(id => {
     const it = I[id], owned = !!(c && c.items.includes(id)), eq = c ? (c.equipped[it.slot] === id || (!c.equipped[it.slot] && AF_GEAR_LENT[it.slot] === id)) : (!it.unique && AF_GEAR_FREE[it.slot] === id), trying = AF.tryItem === id, why = it.unique ? null : (c ? ARENA_CAT.lockReason(id, c) : 'sign in'), th = afThumb(id);

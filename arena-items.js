@@ -23,6 +23,7 @@
     sun_blade:      { slot: 'sword', name: 'Sun-forged blade',  price: 6000, rank: 5, skill: ['sword', 5], dmg: 1.4, reach: 0.2, desc: 'it glows — the pit falls quiet when it is drawn' },
     gambeson:       { slot: 'armor', name: 'Padded gambeson',   price: 60,   rank: 0, hp: 8,  desc: 'a quilted jack in the team cloth — the poor man\'s armour' },
     wolf_pelt:      { slot: 'armor', name: 'Wolf pelt',         price: 220,  rank: 0, hp: 10, poise: 5, desc: 'bare-chested under a pelt, fur boots, a fur cloak — the northern look' },
+    berserker:      { slot: 'armor', name: "Berserker's mantle", price: 380,  rank: 0, hp: 12, poise: 8, desc: 'a grey wolf mantle on the shoulders, a bare chest, steel bracers, a sash and wool breeches — the raider from the north (ink shows on him)' },
     leather:        { slot: 'armor', name: 'Leather jerkin',    price: 150,  rank: 0, hp: 15, desc: 'turns a glancing cut' },
     mail:           { slot: 'armor', name: 'Mail hauberk',      price: 500,  rank: 1, hp: 35, poise: 5, move: -0.06, desc: 'rings over padding' },
     plate:          { slot: 'armor', name: 'Plate harness',     price: 1500, rank: 2, hp: 60, poise: 15, move: -0.22, desc: 'heavy, and worth it — you will not be running' },
@@ -49,8 +50,14 @@
     ember_blade:    { slot: 'sword', name: 'Ember blade',       unique: true, dmg: 1.12, desc: 'a wavy blade that smoulders orange' },
     frost_fang:     { slot: 'sword', name: 'Frost fang',        unique: true, dmg: 1.12, reach: 0.1, desc: 'serrated ice-steel with a cold light' },
     black_night:    { slot: 'sword', name: 'Black Night',       unique: true, dmg: 1.12, desc: 'a black curve with a violet gleam' },
+    // THE NORTH (2026-09-16): the berserker's kit — a knife, two axes, and INK, a slot of its own: tattoos wherever the armour leaves skin bare
+    seax:           { slot: 'sword', name: 'Seax',              price: 180,  rank: 0, dmg: 0.95, reach: -0.15, desc: 'a broken-back northern knife — short, quick, close' },
+    bearded_axe:    { slot: 'sword', name: 'Bearded axe',       price: 450,  rank: 1, dmg: 1.18, reach: -0.05, desc: 'a northern axe with a hooked beard — it bites deep' },
+    dane_axe:       { slot: 'sword', name: 'Dane axe',          price: 1800, rank: 2, dmg: 1.28, reach: 0.25, desc: 'a long-hafted broad axe, swung with the whole body' },
+    wolf_ink:       { slot: 'ink',   name: 'Wolf ink',          price: 150,  rank: 0, ink: 'wolf', desc: 'blue-black knotwork over chest and arms — it shows on bare skin (the wolf pelt, the berserker\'s mantle)' },
+    blood_ink:      { slot: 'ink',   name: 'Blood ink',         price: 150,  rank: 0, ink: 'blood', desc: 'red war-marks over chest and arms — it shows on bare skin' },
   };
-  var ARENA_SLOTS = ['sword', 'armor', 'helm', 'shield', 'bow', 'horse', 'plume', 'trim'];
+  var ARENA_SLOTS = ['sword', 'armor', 'helm', 'shield', 'ink', 'bow', 'horse', 'plume', 'trim'];   // (ink: cosmetic, bought like the rest)
   // YOUR LOOK (the barber): skin tone, face shape, hair style, hair colour, beard style — indexes into the client's lists;
   // the server keeps them in the career's meta and every guest paints the same face
   var ARENA_LOOK = { s: 6, f: 6, h: 5, c: 9, b: 5 };

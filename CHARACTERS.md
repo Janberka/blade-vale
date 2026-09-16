@@ -176,6 +176,14 @@ sternum, a sun there, one spike down the belly, a hook under each pec — that m
 the face (two lines to the eyes, a band across them, three stripes down one cheek); a back piece of two wings off the spine; a sleeve that
 spirals once and a half down the arm with spikes off it and a cuff. Strokes are drawn wrapped in their panel (the bearing wraps), the
 atlas clamps (panels never bleed), and its black corner is what the belt, the hands and the armour sample. The hands stay bare.
+Then "I should be able to pick the color of the ink, and there should be more shapes, some curves and asymmetric": FIVE DESIGNS
+(`LOOK_INK`: wolf, serpent, tide, sun, thorn — the atlas is five bands tall, `INK_N`, the shader picks the band) and EIGHT COLOURS
+(`LOOK_INK_COLOURS`: blue-black, black, blood, bone, moss, ochre, violet, teal; `gear.look.k`, a swatch row in the barber). The
+material is shared by every figure, so the colour and the band ride a vertex attribute (`inkCol`, rgb + band) on the inked body's
+own geometry. Each arm has its own panel (the atlas is 1280 wide: torso, left arm, right arm, head) so a design can leave one arm
+bare: the serpent coils from the right hip over the chest, over the left shoulder and down the left arm alone; the tide's waves cross
+the body on a slant; the sun burns on the left pec with rays that curl, a moon on the right blade; the thorn climbs the right arm,
+crosses the collarbone to the left pec and runs down the belly, thorns along it, over the right eye. The wolf keeps both sleeves.
 
 ## The surface pass (2026-09-16, "our chars look too low poly")
 

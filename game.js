@@ -23529,7 +23529,7 @@ function afPreviewGear() {                                  // what the figure w
 }
 function afPreviewSet(gear, pal, mounted) {
   const P = AF.preview; if (!P || !window.ARENA_CAT) return;
-  if (P.rig) { P.scene.remove(P.rig.group); try { disposeGroup(P.rig.group); } catch (e) {} P.rig = null; }
+  if (P.rig) { P.scene.remove(P.rig.group); try { disposeGroup(P.rig.group); } catch (e) {} P.rig = null; } if (P.focus) afPreviewFocus(null);
   gear = afGearClean(gear || afPreviewGear()); pal = pal || AF_TEAMS[0].pal; const G = afGearStats(gear), I = ARENA_CAT.ARENA_ITEMS, t = AF.tryItem && I[AF.tryItem];
   if (t && t.slot === 'horse') mounted = true;
   P.mounted = !!(mounted && G.horse);
@@ -23599,15 +23599,57 @@ function afPreviewFloor(pal, gear) {
   }
 }
 function afPreviewClick(e) {
-  const P = AF.preview, F = P && P.floor; if (!F || F.busy || AF.marketOpen || !P.camera) return;
+  const P = AF.preview, F = P && P.floor; if (!P || !P.camera || !P.rig) return;
   const r = P.cv.getBoundingClientRect(); if (!r.width || !r.height) return;
   const nd = new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), rc = new THREE.Raycaster(); rc.setFromCamera(nd, P.camera);
+  if (!F || F.busy || AF.marketOpen) { afPreviewFocus(afPreviewPartAt(nd)); return; }   // (the market, the barber's chair, a fighter's page: a tap looks closer at a part of him)
   // a blade is thin and a thumb is not: the sword is picked by the ray's distance to its axis, the shield by its box
   const ray = rc.ray, S = F.S; let best = null, bd = Infinity;
   if (F.sword && F.sword.visible) { const bb = new THREE.Box3().setFromObject(F.sword), c = bb.getCenter(new THREE.Vector3()), a = new THREE.Vector3(c.x, bb.min.y, c.z), b = new THREE.Vector3(c.x, bb.max.y, c.z);   // it stands vertical either way
     const d = Math.sqrt(ray.distanceSqToSegment(a, b)); if (d < 0.28 * S) { best = 'sword'; bd = d; } }
   if (F.shield && F.shield.visible) { const box = new THREE.Box3().setFromObject(F.shield).expandByScalar(0.06); if (ray.intersectsBox(box) && !(best === 'sword' && bd < 0.12 * S)) best = 'shield'; }   // a square hit on the blade wins over the shield's box behind it
-  if (best) afPreviewPickup(best);
+  if (best) afPreviewPickup(best); else afPreviewFocus(afPreviewPartAt(nd));   // (nothing on the floor under the tap: a part of him, on the home too)
+}
+// ---- LOOK CLOSER (2026-09-16, "let me click the head and focus and zoom in") ----
+// Wherever the figure stands — the home, the market, the barber's chair, a fighter's page — a tap on a part of him brings the lens to it: the head framed with the upper body,
+// a hand close, the chest, the legs. A tap on the same part, or on nothing, steps back. The part is picked by its pivot on screen
+// (a skinned mesh raycasts its bind pose in r128; the pivots are where he stands), the lens eases to it and follows it every frame
+// as he breathes and turns under a drag. [name, the pivot, an offset from it (world units, ×his scale), the lens's distance, the pick radius]
+const AF_PREVIEW_PARTS = [                                   // the pick points: [part, the bone, an offset from it (world units, ×his scale, turned with him), the pick radius]
+  ['head', 'head', [0, 0.30, 0], 0.5], ['chest', 'upperBody', [0, 0.30, 0.1], 0.5], ['handL', 'handL', [0, -0.12, 0], 0.36], ['handR', 'handR', [0, -0.12, 0], 0.36],
+  ['legs', 'kneeL', [0, 0, 0], 0.42], ['legs', 'kneeR', [0, 0, 0], 0.42], ['legs', 'kneeL', [0, -0.75, 0.1], 0.4], ['legs', 'kneeR', [0, -0.75, 0.1], 0.4],
+];
+const AF_PREVIEW_FOCUS = {                                   // where the lens looks for a part, and from how far
+  head: { at: P => afPreviewBoneAt(P, 'head', [0, 0.30, 0]), dist: 2.7 }, chest: { at: P => afPreviewBoneAt(P, 'upperBody', [0, 0.30, 0.1]), dist: 3.4 },
+  handL: { at: P => afPreviewBoneAt(P, 'handL', [0, -0.12, 0]), dist: 1.7 }, handR: { at: P => afPreviewBoneAt(P, 'handR', [0, -0.12, 0]), dist: 1.7 },
+  legs: { at: P => { const a = afPreviewBoneAt(P, 'kneeL', [0, -0.1, 0]), b = afPreviewBoneAt(P, 'kneeR', [0, -0.1, 0]); return a && b ? a.lerp(b, 0.5) : a || b; }, dist: 3.6 },
+};
+function afPreviewBone(p, key) {                             // the figure's own bone for a rig key (the warrior's proportions, not the plastic pivot's), or the plastic pivot when he has no figure
+  const L = p.modelRig, R = L && MODEL_RIGS.get(L.g.userData.model), b = R && R.spec.map[key] && L.inst.byName[R.spec.map[key]]; if (b) return b;
+  if (key === 'head') return p.headPivot; if (key === 'handL' || key === 'handR') return afPreviewHandOf(p, key.slice(-1)); return p[key];
+}
+function afPreviewHandOf(p, side) { const e = p['elbow' + side]; return e && e.children.find(c => c.type === 'Group'); }
+function afPreviewBoneAt(P, key, off) {                      // the bone's point in the preview scene, plus the offset turned with him
+  const b = afPreviewBone(P.rig.parts, key); if (!b) return null; const S = P.rig.group.scale.x || 1, v = new THREE.Vector3(); b.getWorldPosition(v);
+  return v.add(new THREE.Vector3().fromArray(off).multiplyScalar(S).applyAxisAngle(new THREE.Vector3(0, 1, 0), P.yaw));
+}
+function afPreviewPartPos(P, spec) { return afPreviewBoneAt(P, spec[1], spec[2]); }
+function afPreviewPartAt(nd) {                               // which part a tap at nd (normalized device coords) lands on: the nearest pivot within its radius on screen
+  const P = AF.preview; if (!P || !P.rig || P.mounted) return null; let best = null, bd = Infinity; const q = new THREE.Vector3();
+  for (const spec of AF_PREVIEW_PARTS) { const v = afPreviewPartPos(P, spec); if (!v) continue; q.copy(v).project(P.camera); if (q.z > 1) continue;
+    const dist = v.distanceTo(P.camera.position), rr = spec[3] * (P.rig.group.scale.x || 1) / (dist * Math.tan(P.camera.fov * Math.PI / 360)), dx = (q.x - nd.x) * (P.camera.aspect || 1), dy = q.y - nd.y, d = Math.hypot(dx, dy) / rr;   // (rr: the radius in NDC y units; x scaled by the aspect so the circle is round)
+    if (d < 1 && d < bd) { bd = d; best = spec; } }
+  return best ? best[0] : null;
+}
+function afPreviewFocus(part) {                              // toggle: the part named, or (the same part again / nothing) the full figure
+  const P = AF.preview; if (!P) return null; P.focus = !part || (P.focus && P.focus.part === part) ? null : { part }; P.cv.style.cursor = P.focus ? 'zoom-out' : 'grab'; return P.focus ? P.focus.part : null;
+}
+function afPreviewLens(P, dt) {                              // every frame: where the lens wants to be (the page's framing, or the part in focus), eased
+  let pos, look; const F = P.focus && AF_PREVIEW_FOCUS[P.focus.part];
+  if (F && P.rig && !P.mounted) { const at = F.at(P); if (at) { look = at; pos = at.clone().add(new THREE.Vector3(0, 0.12, 1).normalize().multiplyScalar(F.dist * (P.rig.group.scale.x || 1) * Math.sqrt(Math.max(1, 1 / Math.max(0.4, P.camera.aspect))))); } }   // (a narrow canvas backs off a little — a head is not wide, so less than the page's framing does)
+  if (!pos) { if (P.focus) P.focus = null; pos = P.camDef.pos; look = P.camDef.look; }
+  if (!P.camPos) { P.camPos = pos.clone(); P.camLook = look.clone(); }
+  const k = dt == null ? 1 : clamp(dt * 7, 0, 1); P.camPos.lerp(pos, k); P.camLook.lerp(look, k); P.camera.position.copy(P.camPos); P.camera.lookAt(P.camLook);
 }
 function afPreviewPickup(kind) {
   const P = AF.preview, F = P && P.floor; if (!F || !F[kind] || F.held[kind] || F.busy || !P.anim) return false;
@@ -23637,7 +23679,8 @@ function afPreviewFrame() {
   const P = AF.preview; if (!P || !afShellVisible() || !P.renderer || !P.rig) { if (P) P.loop = false; return; }
   const w = P.cv.clientWidth, h = P.cv.clientHeight;
   if (w && h && (w !== P.W || h !== P.H)) { P.W = w; P.H = h; P.renderer.setSize(w, h, false); P.camera.aspect = w / h; P.camera.updateProjectionMatrix();
-    const k = Math.max(1, 1 / P.camera.aspect) * 1.08 * (SHELL.page === 'home' ? 1.42 : 1); P.camera.position.set(0, P.mounted ? 2.9 : 2.1, (P.mounted ? 9.4 : 6.4) * k);   /* (on the home his canvas is the whole screen with the HUD round him: he stands back so the cards frame him) */ P.camera.lookAt(0, P.mounted ? 1.9 : 1.45, 0); }   // a narrow canvas backs off so he fits; he sits a little high, clear of the strip along the bottom
+    const k = Math.max(1, 1 / P.camera.aspect) * 1.08 * (SHELL.page === 'home' ? 1.42 : 1); P.camDef = { pos: new THREE.Vector3(0, P.mounted ? 2.9 : 2.1, (P.mounted ? 9.4 : 6.4) * k), look: new THREE.Vector3(0, P.mounted ? 1.9 : 1.45, 0) };   /* (on the home his canvas is the whole screen with the HUD round him: he stands back so the cards frame him) */
+    P.focus = null; P.cv.style.cursor = 'grab'; afPreviewLens(P, null); }   // a narrow canvas backs off so he fits; he sits a little high, clear of the strip along the bottom (a new page or size: the full figure again, at once)
   if (P.yawTo != null && !P.drag) { P.yaw = angleLerp(P.yaw, P.yawTo, clamp(dt0(P) * 6, 0, 1)); if (Math.abs(angleDelta(P.yaw, P.yawTo)) < 0.01) P.yawTo = null; }   // (only a pick turns him; a drag is yours)
   P.rig.group.rotation.y = P.yaw;                           // (he stands where you left him — drag turns him, nothing else does)
   // STANDING: the pose holds, and on top of it he breathes hard, like a man just out of the pit — the chest heaves,
@@ -23664,6 +23707,7 @@ function afPreviewFrame() {
   if (P.rig.parts.mount) saddleRider(P.rig.parts);
   if (P.rig.parts.cape) { const segs = P.rig.parts.cape.userData.segs || []; segs.forEach((sg, i) => { sg.rotation.x = 0.06 + Math.sin(now / 700 + i) * 0.03 + 0.02 * br0(now, i); }); }
   if (MODEL_LIVE.length) syncModelRigs();                     // (the warrior's bones follow the pivots before THIS renderer draws — the hook sits on the main one)
+  if (P.camDef) afPreviewLens(P, dt);                         // the lens: the page's framing, or eased in on the part he was tapped on (afPreviewFocus)
   P.renderer.render(P.scene, P.camera);
   requestAnimationFrame(afPreviewFrame);
 }
@@ -24046,7 +24090,7 @@ function afBarberRender() {
   const sw = (k, hexes, names) => hexes.map((h, i) => '<button class="bb-sw' + (L[k] === i ? ' on' : '') + '" data-k="' + k + '" data-i="' + i + '" title="' + names[i] + '" style="background:#' + h.toString(16).padStart(6, '0') + '"><span>' + names[i] + '</span></button>').join('');
   const chips = (k, names) => names.map((n, i) => '<button class="bb-ch' + (L[k] === i ? ' on' : '') + '" data-k="' + k + '" data-i="' + i + '">' + n + '</button>').join('');
   const row = (label, sub, inner) => '<div class="bb-row"><div class="bb-lbl"><b>' + label + '</b><span>' + sub + '</span></div><div class="bb-opts">' + inner + '</div></div>';
-  p.innerHTML = '<div class="mk-head">' + (window.net && net.session ? 'Your face, kept with your career — every fighter in the pit sees it' : 'Kept in this browser — sign in and it follows your career') + '</div>'
+  p.innerHTML = '<div class="mk-head">' + (window.net && net.session ? 'Your face, kept with your career — every fighter in the pit sees it' : 'Kept in this browser — sign in and it follows your career') + ' · tap his head, a hand or the legs to look closer, tap again to step back</div>'
     + row('Skin', 'the tone', sw('s', LOOK_SKIN, LOOK_SKIN_NAMES))
     + row('Face', 'the bones', chips('f', LOOK_FACE_SHAPES))
     + row('Hair', 'the cut', chips('h', LOOK_HAIR_STYLES))
@@ -24230,6 +24274,8 @@ BV.arenaDon = () => (AF.bodies || []).map(b => ({ name: b.name, weapon: b.weapon
 BV.helmHand = o => { Object.assign(MODEL_HELM_HAND, o || {}); return { ...MODEL_HELM_HAND }; };   // test: re-hang the carried helm in the hand (model units, hand-bone frame)
 BV.previewHelm = (hand, k) => { const L = AF.preview && AF.preview.rig && AF.preview.rig.parts.modelRig; if (!L) return null; lookHelmBuild(L); L.helmHand = !!hand; L.helmK = k == null ? null : k; return { built: !!L.mHelm, helmOff: !!L.helmOff, hand: L.helmHand, k: L.helmK }; };   // test: the home figure carries his helm (k: 0..1 lifts it onto his head)
 BV.hipSword = o => { Object.assign(MODEL_HIP, o || {}); for (const L of MODEL_LIVE) if (L.mHip) modelHipPlace(L.mHip); return { ...MODEL_HIP }; };   // test: re-hang the sheathed blade on every live figure
+BV.previewFocus = part => { const P = AF.preview; if (!P) return null; const f = part === undefined ? (P.focus ? P.focus.part : null) : afPreviewFocus(part), r3 = v => v ? v.toArray().map(x => +x.toFixed(2)) : null, parts = {}; if (P.rig && P.camera) for (const sp of AF_PREVIEW_PARTS) { const v = afPreviewPartPos(P, sp); if (v) parts[sp[0] + (parts[sp[0]] ? '2' : '')] = { at: r3(v), ndc: r3(v.clone().project(P.camera)) }; }
+  return { focus: f, cam: r3(P.camera && P.camera.position), look: r3(P.camLook), scale: P.rig ? +P.rig.group.scale.x.toFixed(2) : null, size: [P.W, P.H], parts }; };   // test: focus the preview's lens on a part (null: the full figure), or read it
 BV.previewPick = (kind) => { const P = AF.preview; return P && P.floor ? { ok: kind ? afPreviewPickup(kind) : null, held: { ...P.floor.held }, busy: P.floor.busy, yaw: +P.yaw.toFixed(2), sword: P.floor.sword && P.floor.sword.visible, shield: P.floor.shield && P.floor.shield.visible, helm: !(P.rig && P.rig.parts.modelRig && P.rig.parts.modelRig.helmOff), inHand: !!(P.rig && P.rig.parts.modelRig && P.rig.parts.modelRig.mHelm && P.rig.parts.modelRig.mHelm.visible), lift: P.helmLift ? +P.helmLift.t.toFixed(2) : null } : null; };   // test: the home floor — pick 'sword' | 'shield', or read it
 BV.previewPose = (name) => { const P = AF.preview; if (P && P.anim) { setPose(P.anim, name, 0.01); updateAnimator(P.anim, 1); } return !!P; };   // test: pose the market figure
 BV.arenaHorses = () => AF.horses.map(h => ({ id: h.id, hp: Math.round(h.hp), dead: h.dead, rider: h.rider ? h.rider.name : null, x: +h.x.toFixed(1), z: +h.z.toFixed(1), sp: +h.sp01.toFixed(2), pace: h.pace }));

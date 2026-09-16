@@ -20737,7 +20737,7 @@ function afBashHit(b) {
   const dx = o.x - b.x, dz = o.z - b.z, dd = Math.hypot(dx, dz) || 1, facing = (-dx * Math.sin(o.yaw) - dz * Math.cos(o.yaw)) / dd, up = o.blocking && facing > 0.15 && !o.mounted, pos = o.group.position;
   afDamage(o, rand(BA.dmg[0], BA.dmg[1]) * (b.dmgMul || 1) * afStamMul(b), b, true, false, false, BA.k);
   if (o.dead || o.iframes > 0) return true;
-  if (up) { if (o.stagger > 0) o.stagger = Math.min(o.stagger, BA.open); }            // (afDamage said GUARD BREAK: a bash's is the short one)
+  if (o.stagger > 0) o.stagger = Math.min(o.stagger, BA.open);                       // (afDamage said GUARD BREAK — or BEATEN, a bash into a man mid-swing (the steel rule): a bash's opening is the short one either way)
   else if (!o.mounted && o.stagger <= 0) { o.flinch = Math.max(o.flinch, BA.flinch); afPopup(pos, 'bashed', '#d8c8a8'); }
   afSparks(tmpV.set(o.x, afY(o.x, o.z) + 1.2, o.z), 0xc9b79a, 6); if (o === AF.me) addShake(0.2);
   return true;

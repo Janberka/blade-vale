@@ -104,6 +104,13 @@ travels with the loadout, so guests and profile pages paint the same face; the s
 styles are regions of the baked beard class cut by position in `lookFaceColour` (the chin for a goatee, the upper lip for
 a moustache). The vale's men roll their own.
 
+### Look closer (2026-09-16, "let me click the head and focus and zoom in")
+In the market and the barber's chair a tap on the figure looks closer: the head (framed with the upper body), a hand, the chest, the
+legs — and a tap on the same part, or on nothing, steps back (`afPreviewFocus`, `AF_PREVIEW_PARTS`; the lens eases there in
+`afPreviewLens` and follows the part as he breathes and turns under a drag). The part is picked by its pivot on screen, not a
+raycast — a skinned mesh raycasts its bind pose in r128. A new page, size or figure resets to the full framing. Test hook
+`BV.previewFocus(part | null)`, or with no argument what it looks at and where every part projects.
+
 ### The hair is geometry, the face is bones (2026-09-16, "these hairs look stupid, they always be drawn to the forehead. Add different faces too")
 Hair painted on the head's vertices smeared every cut down the forehead: the head is a few big triangles, so a painted
 vertex at the hairline bled its colour to the brow. Now a cut is a CAP of real geometry (`lookHairGeo`, once per style per

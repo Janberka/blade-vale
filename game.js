@@ -23567,16 +23567,16 @@ function afPreviewClick(e) {
   const P = AF.preview, F = P && P.floor; if (!P || !P.camera || !P.rig) return;
   const r = P.cv.getBoundingClientRect(); if (!r.width || !r.height) return;
   const nd = new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), rc = new THREE.Raycaster(); rc.setFromCamera(nd, P.camera);
-  if (!F || F.busy || AF.marketOpen) { if (typeof SHELL !== 'undefined' && SHELL.page !== 'home') afPreviewFocus(afPreviewPartAt(nd)); return; }   // (the market, the barber's chair: a tap looks closer at a part of him)
+  if (!F || F.busy || AF.marketOpen) { afPreviewFocus(afPreviewPartAt(nd)); return; }   // (the market, the barber's chair, a fighter's page: a tap looks closer at a part of him)
   // a blade is thin and a thumb is not: the sword is picked by the ray's distance to its axis, the shield by its box
   const ray = rc.ray, S = F.S; let best = null, bd = Infinity;
   if (F.sword && F.sword.visible) { const bb = new THREE.Box3().setFromObject(F.sword), c = bb.getCenter(new THREE.Vector3()), a = new THREE.Vector3(c.x, bb.min.y, c.z), b = new THREE.Vector3(c.x, bb.max.y, c.z);   // it stands vertical either way
     const d = Math.sqrt(ray.distanceSqToSegment(a, b)); if (d < 0.28 * S) { best = 'sword'; bd = d; } }
   if (F.shield && F.shield.visible) { const box = new THREE.Box3().setFromObject(F.shield).expandByScalar(0.06); if (ray.intersectsBox(box) && !(best === 'sword' && bd < 0.12 * S)) best = 'shield'; }   // a square hit on the blade wins over the shield's box behind it
-  if (best) afPreviewPickup(best); else if (typeof SHELL !== 'undefined' && SHELL.page !== 'home') afPreviewFocus(afPreviewPartAt(nd));
+  if (best) afPreviewPickup(best); else afPreviewFocus(afPreviewPartAt(nd));   // (nothing on the floor under the tap: a part of him, on the home too)
 }
 // ---- LOOK CLOSER (2026-09-16, "let me click the head and focus and zoom in") ----
-// In the market and the barber's chair a tap on a part of the figure brings the lens to it: the head framed with the upper body,
+// Wherever the figure stands — the home, the market, the barber's chair, a fighter's page — a tap on a part of him brings the lens to it: the head framed with the upper body,
 // a hand close, the chest, the legs. A tap on the same part, or on nothing, steps back. The part is picked by its pivot on screen
 // (a skinned mesh raycasts its bind pose in r128; the pivots are where he stands), the lens eases to it and follows it every frame
 // as he breathes and turns under a drag. [name, the pivot, an offset from it (world units, ×his scale), the lens's distance, the pick radius]

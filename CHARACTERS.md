@@ -105,7 +105,7 @@ styles are regions of the baked beard class cut by position in `lookFaceColour` 
 a moustache). The vale's men roll their own.
 
 ### Look closer (2026-09-16, "let me click the head and focus and zoom in")
-In the market and the barber's chair a tap on the figure looks closer: the head (framed with the upper body), a hand, the chest, the
+Wherever the figure stands — the home (a tap that lands on nothing on the floor), the market, the barber's chair, a fighter's page — a tap on him looks closer: the head (framed with the upper body), a hand, the chest, the
 legs — and a tap on the same part, or on nothing, steps back (`afPreviewFocus`, `AF_PREVIEW_PARTS`; the lens eases there in
 `afPreviewLens` and follows the part as he breathes and turns under a drag). The part is picked by its pivot on screen, not a
 raycast — a skinned mesh raycasts its bind pose in r128. A new page, size or figure resets to the full framing. Test hook

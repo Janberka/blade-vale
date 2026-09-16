@@ -97,7 +97,10 @@ hangs from the chin now — the rig's chin tip (`lookChin`: the front-most midli
 this face's cast (lookFacePoint), the geometry cached per anchor — the first bead rooted just inside the chin's front underside, five
 a rope, not beads ("it still looks weird": beads in a line read as a necklace): a tapered tube whose three-lobed section turns 2.2
 times as it falls — the lobes are the strands — 2 cm wide at the chin (the top ring inside it), a band near the end and a tuft of loose
-ends below, 10 cm long, hanging straight from the chin's front and leaning back to the chest; faceted like the hair cap. v=218
+ends below, 10 cm long, hanging straight from the chin's front and leaning back to the chest. Then "maybe don't build it from some
+balls": it is a flat RIBBON now (wider than deep, as a braid is) with the strands as a herringbone — the left half and the right half
+bulge a half-period out of step, 5½ crossings down its length — smooth-shaded over 40 rings, so the strands read as shading, not as
+stacked lumps. v=219
 
 ## The wardrobe is the marketplace (2026-09-14, "any item we add should be available in the marketplace")
 Six slots now: sword, armor, helm, shield, bow, horse (`ARENA_SLOTS` in arena-items.js; the server validates against the

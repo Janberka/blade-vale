@@ -1893,19 +1893,20 @@ function lookBraidGeo(R, at) {
   const key = at.map(a => a.toFixed(3)).join(','); R.braidGeo = R.braidGeo || {}; if (R.braidGeo[key] !== undefined) return R.braidGeo[key];
   const m = R.meshes.find(x => x.pieces && x.pieces.classes.indexOf('hair') >= 0); if (!m) return (R.braidGeo[key] = null);
   const headNode = R.g.nodes.findIndex(x => x.name === R.spec.map.head), joint = Math.max(0, m.joints.indexOf(headNode));
-  // A PLAIT, not a necklace of beads ("it still looks weird"): a tapered rope with a three-lobed section that turns as it
-  // falls — the lobes are the braid's strands — gathered wide at the chin (the top ring sits inside it), tied off near the
-  // end with a band, the loose ends flaring below. It hangs straight from the chin's front and leans back to the chest.
-  const y0 = at[1] - 0.010, z0 = at[2] - 0.014, L = 0.105, K = 16, M = 9, rings = [];
-  const ring = (t, rad, lobe, twist) => { const y = y0 - L * t, z = z0 - 0.035 * t * t, o = []; for (let k = 0; k < M; k++) { const a = k / M * Math.PI * 2, r = rad * (1 + lobe * Math.cos(3 * a + twist)); o.push([Math.cos(a) * r * 1.15, y, z + Math.sin(a) * r]); } return o; };
-  for (let i = 0; i <= K; i++) { const t = i / K; rings.push(ring(t, 0.020 * (1 - 0.5 * t), 0.32, t * Math.PI * 2 * 2.2)); }   // the rope: 2.2 turns over its length
-  const tie = 0.93; rings.push(ring(tie, 0.0075, 0, 0), ring(tie + 0.045, 0.0075, 0, 0));                                    // the band
-  rings.push(ring(tie + 0.06, 0.006, 0, 0), ring(tie + 0.16, 0.011, 0.3, 1), ring(tie + 0.24, 0.004, 0, 0));                // the loose ends: a tuft that flares and closes
+  // A PLAIT ("maybe don't build it from some balls"): a flat ribbon of a rope — wider than deep, as a braid is — with the
+  // strands as a HERRINGBONE of bulges, the left half and the right half a half-period out of step so they cross each other
+  // down its length; smooth-shaded, tapering, gathered wide at the chin (the top ring sits inside it), tied off near the end
+  // with a band, the loose ends flaring below. It hangs straight from the chin's front and leans back to the chest.
+  const y0 = at[1] - 0.010, z0 = at[2] - 0.014, L = 0.105, K = 40, M = 12, rings = [], waves = 5.5;
+  const ring = (t, rad, amp, wide, deep) => { const y = y0 - L * t, z = z0 - 0.035 * t * t, o = []; for (let k = 0; k < M; k++) { const a = k / M * Math.PI * 2, cx = Math.cos(a), side = cx >= 0 ? 0 : Math.PI, b = 1 + amp * Math.cos(Math.PI * 2 * waves * t + side) * Math.sqrt(Math.abs(cx)); o.push([cx * rad * wide * b, y, z + Math.sin(a) * rad * deep * b]); } return o; };
+  for (let i = 0; i <= K; i++) { const t = i / K; rings.push(ring(t, 0.017 * (1 - 0.45 * t), 0.2, 1.35, 0.72)); }
+  const tie = 0.93; rings.push(ring(tie, 0.0065, 0, 1.1, 1.1), ring(tie + 0.045, 0.0065, 0, 1.1, 1.1));                  // the band
+  rings.push(ring(tie + 0.06, 0.005, 0, 1.2, 0.8), ring(tie + 0.16, 0.010, 0, 1.4, 0.7), ring(tie + 0.24, 0.003, 0, 1.2, 0.8));   // the loose ends: a tuft that flares and closes
   const P = [], I = [], cap = (r0, out) => { const c = [0, 0, 0]; for (const p of r0) { c[0] += p[0] / M; c[1] += p[1] / M; c[2] += p[2] / M; } const ci = P.length / 3; P.push(c[0], c[1], c[2]); const b = ci - M; for (let k = 0; k < M; k++) { const k1 = (k + 1) % M; if (out) I.push(ci, b + k1, b + k); else I.push(ci, b + k, b + k1); } };
   for (const r0 of rings) for (const p of r0) P.push(p[0], p[1], p[2]);
   for (let i = 0; i + 1 < rings.length; i++) for (let k = 0; k < M; k++) { const a = i * M + k, b = i * M + (k + 1) % M, c = a + M, d = b + M; I.push(a, c, b, b, c, d); }
   cap(rings[rings.length - 1], true);
-  let geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); geo.setIndex(I); geo = geo.toNonIndexed(); geo.computeVertexNormals();   // (faceted, like the hair cap)
+  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); geo.setIndex(I); geo.computeVertexNormals();   // (indexed: smooth across the rings, the strands read as shading, not facets)
   const nv = geo.getAttribute('position').count, si = new Uint16Array(nv * 4), sw = new Float32Array(nv * 4); for (let v = 0; v < nv; v++) { si[v * 4] = joint; sw[v * 4] = 1; }
   geo.setAttribute('skinIndex', new THREE.BufferAttribute(si, 4)); geo.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4));
   return (R.braidGeo[key] = geo);

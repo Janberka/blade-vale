@@ -261,15 +261,20 @@ ground clamps included; in a headset your own eyes), so the countdown starts wit
 `maxDur`); anyone still walking then finishes during the countdown (`AF.introTail`, `afIntroBody` keeps marching him)
 and takes his mark at the bell at the latest (`afIntroTailEnd`). A star holding the middle lets go at the walk-in's
 start. When you only watch, the finale is the face-off over your star's shoulder as before, with the cut.
-**Bareheaded, blade at the hip** (2026-09-16): every man walks in with his helm off and his sword sheathed at his left
-hip (`afDonReset` at the start — `parts.sheathed` and `lookHelmOff`; the hip blade is a copy of the figure's own
-sword hung on the hips bone, `mHip` in `wearModelRig`, shown by `syncModelRigs` while sheathed and on an archer while
-his bow is out). A star draws to rally (`afRally`). In the countdown's last breaths (`AF_DON.at`, a per-man jitter)
-`afDonStep` runs the beats: the hand to the crown (`donHelm`), the helm on (index rebuild only — `lookDraw`), the
-hand across to the hip (`drawHip`), the blade out and up (`drawOut`), then guard. A man without a helm skips the
-first, an archer keeps the bow. Whoever is still walking in at the bell does it all at once (`afDonAll` in
-`afIntroTailEnd`). Test: `BV.arenaDon()` (each man's sheathed / bareheaded / beat), `BV.hipSword({x,y,z,rx,ry,rz})`
-re-hangs the blade on every live figure. Every act
+**Bareheaded, helm in hand, blade at the hip** (2026-09-16): every man walks in with his helm carried in his sword
+hand and his sword sheathed at his left hip (`afDonReset` at the start — `parts.sheathed`, `lookHelmOff`, `L.helmHand`).
+The carried helm is the body's own sculpted helmet lifted off as a rigid piece (`lookHelmBuild`: its triangles copied
+into a geometry in the head bone's space, every helmet vertex rides that bone; painted like the body's — `lookHelmPaint`;
+hung on the hand bone at `MODEL_HELM_HAND`). The hip blade is a copy of the figure's own sword on the hips bone (`mHip`
+in `wearModelRig`), shown by `syncModelRigs` while sheathed and on an archer while his bow is out. A star rallies with
+the helm (or his fist) raised, not a blade. In the countdown's last breaths (`AF_DON.at`, a per-man jitter) `afDonStep`
+runs the beats: the hand rises to the crown (`donHelm`) and the helm rides up with it, lerping from the hand onto the
+head (`L.helmK` 0→1, `modelHelmPlace`) where the body's own helmet takes over (index rebuild only — `lookDraw`); the
+hand comes down, crosses to the hip (`drawHip`), the blade comes out and up (`drawOut`), then guard. A man without a
+helm skips the first, an archer keeps the bow. Whoever is still walking in at the bell does it all at once (`afDonAll`
+in `afIntroTailEnd`). Test: `BV.arenaDon()` (each man's sheathed / bareheaded / in-hand / beat), `BV.previewHelm(true, k)`
+puts the home figure's helm in his hand (k lifts it onto his head), `BV.helmHand({x,y,z,rx,ry,rz})` and
+`BV.hipSword({...})` re-hang the pieces on every live figure. Every act
 is built from the same lens kit (`afIntroLens`: pen, gate,
 star, profile, backlit, ride, behind, column, dolly, front, stands, crane, aerial, top, orbit, face-off, walk-in) and the same
 route system (`afIntroRoute`: waypoints with speed, gait, a pause and a facing). The **stars rally** their men

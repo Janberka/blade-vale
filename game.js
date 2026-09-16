@@ -1151,6 +1151,7 @@ function syncModelRigs() {
     const vr = !!L.P.vrGear, sheathed = !vr && !!L.P.sheathed, showGear = vr || (!!L.P.gearSword && !L.P.noModelSword && !sheathed), drawn = !!(L.P.sword && L.P.sword.visible);   // (vrGear: the plastic steel rides the VR controllers, the figure's own is hidden — vrDress; sheathed: the walk into the pit, the blade at his hip — afDonStep)
     if (L.mSword) L.mSword.visible = !vr && drawn && !showGear && !L.P.noModelSword && !sheathed;
     if (L.mHip) L.mHip.visible = !vr && !L.P.noModelSword && (sheathed || !drawn);            // at the hip: while sheathed, and an archer's sidearm while the bow is in his hands
+    if (L.mHelm) { const on = !vr && !!L.helmOff && !!L.helmHand; L.mHelm.visible = on; if (on) modelHelmPlace(L); }   // the helm in his hand on the walk in, and on its way onto his head (afDonStep)
     if (L.P.shield) L.P.shield.visible = vr ? !!L.P.vrShieldOn : false;                          // (afMakeBody re-shows and rescales it; the figure's own shield is the one)
     if (L.P.sword) L.P.sword.traverse(m => { if (m.isMesh && m.visible !== showGear) m.visible = showGear; });   // (afBuildSword rebuilds it on every gear pass)
     const shieldOn = !vr && !L.P.noModelShield && !!(L.P.bow ? !L.P.bow.visible : true);   // (his LOOK says which shield, if any — lookApply)
@@ -1305,12 +1306,54 @@ function lookApply(L, look) {
     const pos = sm.userData.geo0.getAttribute('position');
     for (let v = 0; v < nv; v++) { const cls = pj.classes[pj.vclass[v]], mt = pj.mats[pj.vmat[v]]; c.setHex(skinTint ? lookFaceColour(look, cls, mt, pos.getX(v), pos.getY(v), pos.getZ(v)) : lookColour(look, cls, mt)); if (skinTint && mt === 'skin' && cls !== 'eye') { c.r = Math.min(1, c.r / 1.0); c.g = Math.min(1, c.g / 0.86); c.b = Math.min(1, c.b / 0.70); } col.setXYZ(v, c.r * 255, c.g * 255, c.b * 255); } col.needsUpdate = true;
   }
-  lookDraw(L, look);
+  lookDraw(L, look); if (lookHelmBuild(L)) lookHelmPaint(L);
   const cloak = L.inst.skinned[M.cloak]; if (cloak) { cloak.visible = !!look.cloak; if (cloak.material && cloak.material.color && !cloak.material.map) cloak.material.color.setHex(look.cloakC); }
   if (L.plume) L.plume.visible = !!(look.helmet && look.plume);
   lookHairApply(L, look);                                                // the cut: a cap on the skull when he stands bareheaded
   L.shieldKind = look.shield; if (look.shield === 'round') lookRoundShield(L, look); else if (L.mRound) L.mRound.visible = false;
   if (L.mShield && L.mShield.material && L.mShield.material.color) L.mShield.material.color.setHex(look.cloth).lerp(new THREE.Color(0xffffff), 0.35);
+}
+// THE HELM IN HIS HAND: the sculpted helmet lifted off the body as a piece of its own — its triangles copied into a geometry of its own in the
+// head bone's space (every helmet vertex rides that bone at full weight, so under the head bone at identity it sits exactly where the body's
+// own did), painted with the same vertex colours as the body's, and hung on the sword hand while he walks in (L.helmHand); the don lifts it
+// from the hand onto the head (L.helmK 0→1, a world-space lerp in modelHelmPlace) and the body's own helmet takes over. Built once per figure.
+function lookHelmBuild(L) {
+  if (L.mHelm !== undefined) return L.mHelm; L.mHelm = null;
+  const R = MODEL_RIGS.get(L.g.userData.model); if (!R) return null;
+  for (const [nm, sm] of Object.entries(L.inst.skinned)) { const pj = sm.userData.pieces; if (!pj) continue; const hI = pj.classes.indexOf('helmet'); if (hI < 0) continue;
+    const g0 = sm.userData.geo0, pos0 = g0.getAttribute('position'), nrm0 = g0.getAttribute('normal'), uv0 = g0.getAttribute('uv'), si = g0.getAttribute('skinIndex'), i0 = g0.index.array, tri = pj.tri, mm = R.meshes.find(x => x.name === nm);
+    const map = [], of = new Map(), idx = []; let j = -1;
+    for (let t = 0; t < tri.length; t++) { if (tri[t] !== hI) continue; for (let k = 0; k < 3; k++) { const v = i0[t * 3 + k]; let o = of.get(v); if (o == null) { o = map.length; of.set(v, o); map.push(v); if (j < 0) j = si.getX(v); } idx.push(o); } }
+    if (!map.length || !mm) continue;
+    const M = new THREE.Matrix4().fromArray(mm.ibm, j * 16).multiply(sm.bindMatrix), N = new THREE.Matrix3().getNormalMatrix(M), n = map.length, p = new THREE.Vector3();
+    const pos = new Float32Array(n * 3), nrm = new Float32Array(n * 3), uv = new Float32Array(n * 2), col0 = sm.geometry.getAttribute('color');
+    for (let o = 0; o < n; o++) { const v = map[o]; p.fromBufferAttribute(pos0, v).applyMatrix4(M); pos[o * 3] = p.x; pos[o * 3 + 1] = p.y; pos[o * 3 + 2] = p.z;
+      if (nrm0) { p.fromBufferAttribute(nrm0, v).applyMatrix3(N).normalize(); nrm[o * 3] = p.x; nrm[o * 3 + 1] = p.y; nrm[o * 3 + 2] = p.z; } if (uv0) { uv[o * 2] = uv0.getX(v); uv[o * 2 + 1] = uv0.getY(v); } }
+    const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); if (nrm0) geo.setAttribute('normal', new THREE.BufferAttribute(nrm, 3)); if (uv0) geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    geo.setAttribute('color', new THREE.BufferAttribute(new col0.array.constructor(n * 3), 3, col0.normalized)); geo.setIndex(idx); geo.computeBoundingSphere();
+    if (!R.matHelm) R.matHelm = new THREE.MeshPhongMaterial({ map: R.tex, shininess: 6, specular: 0x111111, vertexColors: true });   // (the painted material without its skinning: this piece is rigid)
+    const m = new THREE.Mesh(geo, R.matHelm); m.name = 'helmInHand'; m.castShadow = true; m.visible = false; m.userData.map = map; m.userData.src = sm;
+    L.mHelm = m; L.helmHead = L.inst.nodes[mm.joints[j]]; L.helmHandBone = R.spec.swordHand ? L.inst.byName[R.spec.swordHand] : null; break; }
+  return L.mHelm;
+}
+function lookHelmPaint(L) {                                  // the same paint as the body's helmet (a champion's gold, a rookie's iron)
+  const m = L.mHelm; if (!m) return; const src = m.userData.src.geometry.getAttribute('color'), dst = m.geometry.getAttribute('color'), map = m.userData.map;
+  for (let o = 0; o < map.length; o++) { const v = map[o] * 3, w = o * 3; dst.array[w] = src.array[v]; dst.array[w + 1] = src.array[v + 1]; dst.array[w + 2] = src.array[v + 2]; } dst.needsUpdate = true;
+}
+// where the helm hangs in the sword hand (model units, in the hand bone's frame) — BV.helmHand(o) to re-hang it live
+const MODEL_HELM_HAND = { x: 0, y: -0.12, z: 0.06, rx: Math.PI, ry: 0, rz: 0 };
+const _hm = { A: new THREE.Matrix4(), B: new THREE.Matrix4(), O: new THREE.Matrix4(), pa: new THREE.Vector3(), pb: new THREE.Vector3(), qa: new THREE.Quaternion(), qb: new THREE.Quaternion(), sa: new THREE.Vector3(), sb: new THREE.Vector3() };
+function modelHelmPlace(L) {                                 // every render while the helm is in play: in the hand (helmK null), or on its way from the hand to the head (helmK 0→1)
+  const m = L.mHelm, hand = L.helmHandBone, head = L.helmHead; if (!m || !hand || !head) return;
+  const H = MODEL_HELM_HAND;
+  if (L.helmK == null) { if (m.parent !== hand) hand.add(m); m.matrixAutoUpdate = true; m.position.set(H.x, H.y, H.z); m.rotation.set(H.rx, H.ry, H.rz); m.scale.setScalar(1); return; }
+  const root = L.inst.root; if (m.parent !== root) root.add(m); m.matrixAutoUpdate = false;
+  hand.updateWorldMatrix(true, false); head.updateWorldMatrix(true, false);
+  _hm.O.compose(new THREE.Vector3(H.x, H.y, H.z), new THREE.Quaternion().setFromEuler(new THREE.Euler(H.rx, H.ry, H.rz)), new THREE.Vector3(1, 1, 1));
+  _hm.A.multiplyMatrices(hand.matrixWorld, _hm.O).decompose(_hm.pa, _hm.qa, _hm.sa); _hm.B.copy(head.matrixWorld).decompose(_hm.pb, _hm.qb, _hm.sb);
+  const k = clamp(L.helmK, 0, 1), kk = k * k * (3 - 2 * k);
+  _hm.pa.lerp(_hm.pb, kk); _hm.qa.slerp(_hm.qb, kk); _hm.sa.lerp(_hm.sb, kk);
+  m.matrix.compose(_hm.pa, _hm.qa, _hm.sa).premultiply(_hm.A.copy(root.matrixWorld).invert()); m.matrixWorldNeedsUpdate = true;
 }
 // the pieces he goes without leave the body's own index (no draw call for them, no seam) — the only part of the look a helm toggle has to redo
 function lookDraw(L, look) {
@@ -19277,7 +19320,7 @@ const AF_RALLIES = {
     [{ pose: 'rally', dur: 0.8, face: 'men' }, { pose: 'rallyPump', dur: 0.3, face: 'men' }, { pose: 'rally', dur: 0.5, face: 'men' }, { pose: 'guard', dur: 0.4, face: 'foe' }],
   ],
 };
-function afRally(b, kind) { const set = AF_RALLIES[kind], S = b.intro; if (!set || !S) return; if (b.weapon !== 'bow') b.parts.sheathed = false; S.rally = { steps: set[(S.rallyPick + (kind === 'pen' ? 0 : 1)) % set.length], i: 0, t: 0 }; if (kind !== 'pen') AF.roar = Math.max(AF.roar, 1.1); }
+function afRally(b, kind) { const set = AF_RALLIES[kind], S = b.intro; if (!set || !S) return; S.rally = { steps: set[(S.rallyPick + (kind === 'pen' ? 0 : 1)) % set.length], i: 0, t: 0 }; if (kind !== 'pen') AF.roar = Math.max(AF.roar, 1.1); }
 function afRallyYaw(b, face) {                             // 'men': back at his own ranks · 'foe' / 'gate': across the pit
   const I = AF.intro || AF.introTail; if (!I) return b.yaw;    // (a star arriving during the countdown rallies from the film's tail)
   if (face === 'men') { const F = I.frames[b.team]; return b.intro.phase === 'wait' ? F.face + Math.PI : Math.atan2(F.ux, F.uz); }
@@ -19659,10 +19702,11 @@ function afIntroEnd() {
 // ---- THE DON: every man walks into the pit bareheaded with his sword at his hip. In the countdown's last breaths he sets the helm on his head
 // (if he owns one) and draws: the hand to the crown, the helm, the hand across to the hip, the blade out and up to guard. A man still walking in at
 // the bell does it all at once (afIntroTailEnd); an archer keeps the bow in his hands and the sidearm at his hip.
-const AF_DON = { at: 2.45, jitter: 0.35, helm: [0.42, 0.22, 0.30], draw: [0.34, 0.08, 0.38] };   // when it starts (countdown seconds left, less a per-man jitter), and the beats: up / hold / down, to the hip / hold / the sweep
-function afDonReset(b) { b.parts.sheathed = true; b.don = null; b.donned = false; const L = b.parts.modelRig; if (L) lookHelmOff(L, true); }
-function afDonHelm(b) { const L = b.parts.modelRig; return !!(L && L.lookBase && L.lookBase.helmet); }   // does he own a helm to set on
-function afDonFinish(b) { b.parts.sheathed = false; b.don = null; b.donned = true; const L = b.parts.modelRig; if (L) lookHelmOff(L, false); }
+const AF_DON = { at: 2.45, jitter: 0.35, helm: [0.55, 0.15, 0.30], draw: [0.34, 0.08, 0.38] };   // when it starts (countdown seconds left, less a per-man jitter), and the beats: the helm up onto the head / pressed on / the hand down, to the hip / hold / the sweep
+function afDonReset(b) { b.parts.sheathed = true; b.don = null; b.donned = false; const L = b.parts.modelRig; if (L) { lookHelmOff(L, true); L.helmHand = afDonHelm(b); L.helmK = null; } }   // bareheaded, the helm in his sword hand, the blade at his hip
+function afDonHelm(b) { const L = b.parts.modelRig; return !!(L && L.lookBase && L.lookBase.helmet && lookHelmBuild(L)); }   // does he own a helm to set on
+function afDonHelmOn(L) { lookHelmOff(L, false); L.helmHand = false; L.helmK = null; }   // (the body's own helmet takes over from the piece in his hand)
+function afDonFinish(b) { b.parts.sheathed = false; b.don = null; b.donned = true; const L = b.parts.modelRig; if (L) afDonHelmOn(L); }
 function afDonAll() { for (const b of AF.bodies || []) if (!b.donned) afDonFinish(b); }
 function afDonStep(b, dt) {                                 // drives the arms through the beats; true while it owns the pose
   if (b.donned) return false;
@@ -19670,9 +19714,9 @@ function afDonStep(b, dt) {                                 // drives the arms t
     if (b === AF.me && VR.on) { afDonFinish(b); return false; }                              // (in the headset your own hands are the controllers)
     b.don = { stage: afDonHelm(b) ? 'helm' : 'draw', t: 0 }; if (b.don.stage === 'draw' && b.weapon === 'bow') { afDonFinish(b); return false; } }   // (no helm and a bow already in hand: nothing to do)
   const D = b.don; D.t += dt;
-  if (D.stage === 'helm') { const [up, hold, down] = AF_DON.helm;
-    if (D.t < up) setPose(b.anim, 'donHelm', up);
-    else if (D.t < up + hold) { const L = b.parts.modelRig; if (L && L.helmOff) lookHelmOff(L, false); }
+  if (D.stage === 'helm') { const [up, hold, down] = AF_DON.helm, L = b.parts.modelRig;
+    if (D.t < up) { setPose(b.anim, 'donHelm', up); if (L) L.helmK = D.t / up; }        // the hand rises to the crown and the helm rides up with it, settling onto the head as it gets there
+    else if (D.t < up + hold) { if (L && L.helmOff) afDonHelmOn(L); }
     else if (D.t < up + hold + down) setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', down);
     else { if (b.weapon === 'bow') { afDonFinish(b); return false; } D.stage = 'draw'; D.t = 0; }
     return true; }
@@ -23533,7 +23577,9 @@ BV.arenaHorseHit = (id, amt) => { const h = AF.horses[id]; if (h) afDamageHorse(
 BV.arenaSeat = (w) => { const s = AF.lobby && afHostSeat(); if (s) { s.weapon = w; AF.lobby.weapon = w; } return s && s.weapon; };   // test: what the host rides in with (sword / bow / horse), bypassing the gear check
 BV.arenaMount = (idx, hid) => { const b = AF.bodies[idx], h = AF.horses[hid]; if (!b || !h || h.dead) return null; if (h.rider) { const r = h.rider; afDismount(r, false, true); r.mountCd = 99; } if (b.mounted) afDismount(b, false, true); b.mountCd = 0; afMount(b, h, true); return { mounted: b.mounted, weapon: b.weapon, canBow: b.canBow }; };   // test: put a man in a saddle (its rider steps down)
 BV.arenaKill = (idx) => { const b = AF.bodies[idx]; if (b && !b.dead) afKill(b, null); return BV.arenaStatus(); };   // test: fell a man
-BV.arenaDon = () => (AF.bodies || []).map(b => ({ name: b.name, weapon: b.weapon, sheathed: !!b.parts.sheathed, helmOff: !!(b.parts.modelRig && b.parts.modelRig.helmOff), ownsHelm: afDonHelm(b), stage: b.don ? b.don.stage : null, donned: !!b.donned, pose: b.anim.name, hip: !!(b.parts.modelRig && b.parts.modelRig.mHip && b.parts.modelRig.mHip.visible) }));   // test: the don — who is bareheaded / sheathed, and where each man is in it
+BV.arenaDon = () => (AF.bodies || []).map(b => ({ name: b.name, weapon: b.weapon, sheathed: !!b.parts.sheathed, helmOff: !!(b.parts.modelRig && b.parts.modelRig.helmOff), inHand: !!(b.parts.modelRig && b.parts.modelRig.mHelm && b.parts.modelRig.mHelm.visible), k: b.parts.modelRig ? b.parts.modelRig.helmK : null, ownsHelm: afDonHelm(b), stage: b.don ? b.don.stage : null, donned: !!b.donned, pose: b.anim.name, hip: !!(b.parts.modelRig && b.parts.modelRig.mHip && b.parts.modelRig.mHip.visible) }));   // test: the don — who is bareheaded / sheathed, and where each man is in it
+BV.helmHand = o => { Object.assign(MODEL_HELM_HAND, o || {}); return { ...MODEL_HELM_HAND }; };   // test: re-hang the carried helm in the hand (model units, hand-bone frame)
+BV.previewHelm = (hand, k) => { const L = AF.preview && AF.preview.rig && AF.preview.rig.parts.modelRig; if (!L) return null; lookHelmBuild(L); L.helmHand = !!hand; L.helmK = k == null ? null : k; return { built: !!L.mHelm, helmOff: !!L.helmOff, hand: L.helmHand, k: L.helmK }; };   // test: the home figure carries his helm (k: 0..1 lifts it onto his head)
 BV.hipSword = o => { Object.assign(MODEL_HIP, o || {}); for (const L of MODEL_LIVE) if (L.mHip) modelHipPlace(L.mHip); return { ...MODEL_HIP }; };   // test: re-hang the sheathed blade on every live figure
 BV.previewPick = (kind) => { const P = AF.preview; return P && P.floor ? { ok: kind ? afPreviewPickup(kind) : null, held: { ...P.floor.held }, busy: P.floor.busy, yaw: +P.yaw.toFixed(2), sword: P.floor.sword && P.floor.sword.visible, shield: P.floor.shield && P.floor.shield.visible, helm: !(P.rig && P.rig.parts.modelRig && P.rig.parts.modelRig.helmOff) } : null; };   // test: the home floor — pick 'sword' | 'shield', or read it
 BV.previewPose = (name) => { const P = AF.preview; if (P && P.anim) { setPose(P.anim, name, 0.01); updateAnimator(P.anim, 1); } return !!P; };   // test: pose the market figure

@@ -1215,11 +1215,20 @@ function modelBodyBuild(R) {
     const mine = list => list.filter(p => Math.sign(p.x) === Math.sign(A.x) || Math.abs(A.x) < 0.01);
     const radii = (list, S, E, nb, shrink, dflt) => { const out = []; for (let b = 0; b < nb; b++) { const rs = []; for (const p of list) { const q = near(p, [S, E]); if (Math.abs(q.t - b / (nb - 1)) < 0.6 / (nb - 1)) rs.push(q.r); } out.push(rs.length >= 4 ? pct(rs, 0.85) * shrink : null); }
       for (let b = 0; b < nb; b++) if (out[b] == null) { const got = out.filter(x => x != null); out[b] = got.length ? got.reduce((a, x) => a + x, 0) / got.length : dflt; } return out; };
-    const up = radii(mine(pts('sleeve')), A, B, 6, 0.96, 0.08), fo = radii(mine(pts('vambrace')), B, C, 6, 0.88, 0.062);
+    // one girth from the sleeve's middle (the cuffs and the vambrace's flare are armour, not arm), the rest a profile off it:
+    // biceps a little fuller, the elbow lean, the wrist the hand's own width — an arm, not a stuffed sleeve
+    const mid = radii(mine(pts('sleeve')), A, B, 5, 1, 0.08), rE = Math.max(0.045, (mid[1] + mid[2] + mid[3]) / 3 * 0.8), rB = rE * 1.08, rW = rE * 0.62;
     const frame = d => { const u = new THREE.Vector3().crossVectors(d, Math.abs(d.z) < 0.9 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(1, 0, 0)).normalize(); return [u, new THREE.Vector3().crossVectors(d, u).normalize()]; };
-    const rings = [], dU = B.clone().sub(A).normalize(), dF = C.clone().sub(B).normalize(), [uU, vU] = frame(dU), [uF, vF] = frame(dF), dM = dU.clone().add(dF).normalize(), [uM, vM] = frame(dM);
-    for (let b = 0; b < 6; b++) { const t = b / 5, c = A.clone().lerp(B, t), k = Math.max(0, (t - 0.7) / 0.3) * 0.5, r = b === 5 ? (up[5] + fo[0]) / 2 : up[b]; rings.push(ring(c, b === 5 ? uM : uU, b === 5 ? vM : vU, r, r, k > 0 ? [[jS, 1 - k], [jE, k]] : [[jS, 1]], cl)); }
-    for (let b = 1; b < 6; b++) { const t = b / 5, c = B.clone().lerp(C, t), k = Math.max(0, (t - 0.6) / 0.4) * 0.5; rings.push(ring(c, uF, vF, fo[b], fo[b], k > 0 ? [[jE, 1 - k], [jH, k]] : [[jE, 1]], cl)); }
+    const dU = B.clone().sub(A).normalize(), dF = C.clone().sub(B).normalize(), dM = dU.clone().add(dF).normalize(), [uU, vU] = frame(dU), [uF, vF] = frame(dF), [uM, vM] = frame(dM), rings = [];
+    const R_ = (c, u, v, r, w) => rings.push(ring(c, u, v, r, r, w, cl));
+    // the upper arm: the shoulder's bone alone, so it turns as one piece
+    for (const [t, r] of [[0, rE * 0.98], [0.3, rB], [0.62, rE * 1.02], [0.84, rE * 0.96]]) R_(A.clone().lerp(B, t), uU, vU, r, [[jS, 1]]);
+    // THE ELBOW: three close rings sharing the two bones 3:1, 1:1, 1:3 — a bend folds the skin across them instead of pinching one ring flat
+    R_(B.clone().addScaledVector(dU, -0.045), uM, vM, rE * 0.94, [[jS, 0.75], [jE, 0.25]]);
+    R_(B.clone(), uM, vM, rE * 0.92, [[jS, 0.5], [jE, 0.5]]);
+    R_(B.clone().addScaledVector(dF, 0.045), uM, vM, rE * 0.92, [[jS, 0.25], [jE, 0.75]]);
+    // the forearm: the elbow's bone, tapering to the wrist; the last ring leans on the hand so the wrist turns with it
+    for (const [t, r, w] of [[0.3, rE * 0.9, [[jE, 1]]], [0.6, rE * 0.78, [[jE, 1]]], [0.85, rW * 1.08, [[jE, 0.7], [jH, 0.3]]], [1.0, rW, [[jE, 0.4], [jH, 0.6]]]]) R_(B.clone().lerp(C, t), uF, vF, r, w);
     for (let i = 1; i < rings.length; i++) stitch(rings[i - 1], rings[i], cl); };
   arm('L', 1); arm('R', 2);
   const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); geo.setAttribute('uv', new THREE.Float32BufferAttribute(UV, 2));

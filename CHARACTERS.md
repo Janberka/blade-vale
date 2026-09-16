@@ -116,3 +116,29 @@ The scalp is still painted under it, but only 3 cm inside the hairline (`lookHai
 `LOOK_FACE_SHAPES` are displacements of the head's vertices in the bind pose (`lookFacePoint`: jaw, chin, cheeks, nose,
 brow; all below the hairline, so one cap fits every face), applied on this body's own copy of the positions and normals
 (`lookFaceApply`; shape 0 'hard' shares the rig's). Rolled from the name on its own stream, so nobody's hair or kit changed.
+
+## The surface pass (2026-09-16, "our chars look too low poly")
+
+The user brought a "game-ready" Knight Templar USDZ to compare. It has ~2,200 triangles a figure (ours has 8,250) and 37
+bones with no clips: its detail is five 1K PBR texture sets. Ours cannot take such maps — the warrior is palette-textured,
+every face's uvs sit in one cell of a 256px swatch — and the flat swatch under Phong with hard split normals was the "low
+poly" look. So the detail is made in the shader instead (`modelMaterial` and the block above `loadModelRig` in game.js):
+
+- the palette stays the COLOUR (every dye, look roll and barber pick keeps working); the material is MeshStandardMaterial
+  lit by the prefiltered sky in `scene.environment` (the pit's hour rebuilds it; the home/market preview has its own on its
+  own renderer, `modelEnvFor`);
+- small tileable normal/roughness maps are drawn once in a canvas (`modelDetailTextures`: mail rings, hammered plate with
+  scratches, a plain weave) and laid on in the figure's own space along three axes (triplanar — no uvs needed);
+- which map a vertex gets is its `kind` attribute — plate steel, mail, cloth, leather, skin, flat — from the bake's
+  material per vertex (`modelKindAttr`) and then per body from the LOOK (`lookKind`, in lookApply): a poor man's
+  "cuirass" painted as a shirt is cloth, a mail hauberk's body pieces are rings, the pelt-wearer's chest is skin;
+- normals are averaged across the split vertices under a 55° crease (`modelSmoothNormals`), so plate reads as curved
+  metal and keeps its rims;
+- the LOW tier keeps the cheap Phong; `modelRefreshMaterials` swaps every figure piece when the tier changes.
+  `BV.modelDetail({ tile, mailTile, str, plateTile, plateStr, plateR0, plateR1, envI })` tunes the uniforms live.
+
+Same day, "the resolution is a bit low, I'm seeing pixels": the low tier drew at 1× pixels with no MSAA (a 3× phone screen
+at a third of its density), and the governor's step-down was saved for ever — one slow afternoon locked a machine at 1×.
+Now low is 1.5× with MSAA (the governor falls to 1× only as a last resort below low), the saved tier holds for the day it
+happened (`bv-quality` = tier@date), and the home page has a resolution pick (`bv-res`: auto / sharp = the screen's full
+density up to 3× / soft = 1×) next to the graphics pick — `afSetRes`, `resRatio`.

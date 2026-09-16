@@ -16,10 +16,16 @@ function gfxDetect() {                                       // the device's tie
   const lowMem = navigator.deviceMemory && navigator.deviceMemory <= 4;
   return (mobile || lowMem) ? 'low' : 'high';
 }
+// RESOLUTION (the home page's pick, bv-res): auto = the tier's pixels · sharp = the screen's full density (up to 3×) · soft = 1× for the weakest devices
+function resPick() { try { const v = localStorage.getItem('bv-res'); return v === 'sharp' || v === 'soft' ? v : 'auto'; } catch (e) { return 'auto'; } }
+function resRatio(tierPr) { const p = resPick(); return p === 'sharp' ? Math.min(window.devicePixelRatio || 1, 3) : p === 'soft' ? 1 : tierPr; }
+function gfxDay() { return new Date().toISOString().slice(0, 10); }
+function gfxSavedToday() { try { const v = localStorage.getItem('bv-quality') || '', t = v.split('@')[0], d = v.split('@')[1]; return d === gfxDay() && (t === 'low' || t === 'medium' || t === 'high') ? t : null; } catch (e) { return null; } }   // the governor's step-down holds for the day it happened, not forever (one bad afternoon used to lock a machine at 1× pixels for good)
+function gfxSave(tier) { try { localStorage.setItem('bv-quality', tier + '@' + gfxDay()); } catch (e) {} }
 function gfxLocked() { try { const g = localStorage.getItem('bv-gfx'); return g === 'low' || g === 'medium' || g === 'high'; } catch (e) { return false; } }   // the home page's fixed pick: the governor keeps its hands off
 let qualityTier = (() => {
   try {
-    const saved = localStorage.getItem('bv-gfx') || localStorage.getItem('bv-quality');   // bv-gfx: the home page's pick (auto = unset) · bv-quality: where the governor last settled
+    const saved = localStorage.getItem('bv-gfx') || gfxSavedToday();   // bv-gfx: the home page's pick (auto = unset) · bv-quality: where the governor settled today
     if (saved === 'low' || saved === 'medium' || saved === 'high') return saved;
   } catch (e) { /* storage unavailable */ }
   return gfxDetect();
@@ -27,7 +33,7 @@ let qualityTier = (() => {
 // physically based fighters (steel/brass/cloth): an experiment, opt-in with ?pbr (or bv-pbr=1)
 const PBR_ON = /[?&]pbr\b/.test(location.search) || (() => { try { return localStorage.getItem('bv-pbr') === '1'; } catch (e) { return false; } })();   // experiment, off by default — see CHARACTER_EXPERIMENTS.md
 const TIERS = {
-  low:    { pixelRatio: 1,   shadows: false, shadowSize: 0,    torchLights: 0,  aa: false },
+  low:    { pixelRatio: Math.min(window.devicePixelRatio || 1, 1.5), shadows: false, shadowSize: 0, torchLights: 0, aa: true },   // (1.5× and MSAA even here: 1× on a 3× phone screen read as "pixels all around"; the governor drops to 1× only as a last resort)
   medium: { pixelRatio: 1.5, shadows: true,  shadowSize: 1024, torchLights: 4,  aa: true },
   high:   { pixelRatio: Math.min(window.devicePixelRatio, 2), shadows: true, shadowSize: 2048, torchLights: 10, aa: true },
 };
@@ -38,7 +44,7 @@ const renderer = new THREE.WebGLRenderer({
   canvas, antialias: TIERS[qualityTier].aa, powerPreference: 'high-performance',
 });
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setPixelRatio(TIERS[qualityTier].pixelRatio);
+renderer.setPixelRatio(resRatio(TIERS[qualityTier].pixelRatio));
 renderer.shadowMap.enabled = TIERS[qualityTier].shadows;
 renderer.shadowMap.type = THREE.PCFShadowMap; // PCFSoft costs ~2x on tile GPUs for little gain here
 
@@ -61,10 +67,10 @@ scene.add(sun);
 scene.add(new THREE.AmbientLight(0x404a5a, 0.4));
 
 // ---------- Environment: a prefiltered sky the steel reflects ----------
-let ENV_GEN = null, ENV_CUR = null;
-function makeEnvMap(zenHex, midHex, horHex, sunPos, sunHex) {
+let ENV_GEN = null, ENV_CUR = null, ENV_DEF = null, MODEL_DETAIL_LIVE = false;   // (MODEL_DETAIL_LIVE: a fighter wears the surface pass — his steel wants the sky)
+function makeEnvMap(zenHex, midHex, horHex, sunPos, sunHex, gen) {
   const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
-  if (!ENV_GEN) ENV_GEN = new THREE.PMREMGenerator(renderer);
+  const G = gen || (ENV_GEN = ENV_GEN || new THREE.PMREMGenerator(renderer));
   const es = new THREE.Scene(), R = 50, geo = new THREE.SphereGeometry(R, 32, 16), p = geo.attributes.position, col = new Float32Array(p.count * 3), c = new THREE.Color();
   const zen = new THREE.Color(zenHex), mid = new THREE.Color(midHex), hor = new THREE.Color(horHex), gnd = new THREE.Color(horHex).multiplyScalar(0.55);
   for (let i = 0; i < p.count; i++) { const t = p.getY(i) / R; if (t < 0) c.copy(gnd).lerp(hor, clamp(1 + t * 6, 0, 1)); else if (t < 0.18) c.copy(hor).lerp(mid, t / 0.18); else c.copy(mid).lerp(zen, clamp((t - 0.18) / 0.6, 0, 1)); col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b; }
@@ -72,11 +78,12 @@ function makeEnvMap(zenHex, midHex, horHex, sunPos, sunHex) {
   es.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide })));
   const hot = new THREE.Mesh(new THREE.SphereGeometry(3.5, 12, 8), new THREE.MeshBasicMaterial({ color: sunHex }));   // the sun: a hot spot for the plates to catch
   hot.position.copy(sunPos).normalize().multiplyScalar(R * 0.9); es.add(hot);
-  const tex = ENV_GEN.fromScene(es, 0.03).texture; geo.dispose(); hot.geometry.dispose();
+  const tex = G.fromScene(es, 0.03).texture; geo.dispose(); hot.geometry.dispose();
   return tex;
 }
-function setEnvMap(tex) { if (ENV_CUR && ENV_CUR !== tex) { try { ENV_CUR.dispose(); } catch (e) {} } ENV_CUR = tex; scene.environment = PBR_ON ? tex : null; }
-const ENV_DEFAULT = PBR_ON ? makeEnvMap(0x3f78bd, 0x8fb6e0, 0xe9dfd0, sun.position, 0xfff0d0) : null;
+function setEnvMap(tex) { if (ENV_CUR && ENV_CUR !== tex && ENV_CUR !== ENV_DEF) { try { ENV_CUR.dispose(); } catch (e) {} } ENV_CUR = tex; scene.environment = tex; }   // (only MeshStandardMaterial listens — the PBR experiment and the fighters' surface pass; the world's Phong ignores it)
+function envDefault() { return ENV_DEF || (ENV_DEF = makeEnvMap(0x3f78bd, 0x8fb6e0, 0xe9dfd0, sun.position, 0xfff0d0)); }
+const ENV_DEFAULT = PBR_ON ? envDefault() : null;
 setEnvMap(ENV_DEFAULT);
 
 // ---------- Helpers ----------
@@ -1018,6 +1025,118 @@ BV.realRig = { load: loadRealRig, wear: wearRealRig, loaded: () => [...REAL_RIGS
 // body; every frame the plastic pivots' rotations are copied onto the mapped bones (rig.json "map"), so the animator,
 // hit heights, weapon swap and gear code never notice — the figure's own weights do the bending.
 const MODEL_RIGS = new Map(), MODEL_LIVE = [];
+// ---------- THE FIGHTER'S SURFACE (2026-09-16) ----------
+// The warrior is a palette-textured mesh: every face's uvs sit in one 16×16 cell of a 256px swatch, so there is nothing to paint
+// detail on — and the flat swatch under Phong with hard split normals is what read as "low poly". Instead the palette stays his
+// COLOUR (so every dye and look roll keeps working) and the surface comes from the shader: MeshStandardMaterial lit by the
+// prefiltered sky (scene.environment), small tileable normal/roughness maps drawn once below and laid on in the figure's own
+// space along three axes (triplanar — no uvs needed), chosen per vertex by what the bake says the vertex is made of (`kind`:
+// plate steel, the mail under it, cloth, leather, skin), and normals averaged across the split vertices under a crease limit so
+// the plate reads as curved metal and keeps its rims. The low tier keeps the cheap Phong (modelMaterial hands either out;
+// modelRefreshMaterials swaps them when the tier changes). BV.modelDetail({ tile, mailTile, str, ... }) tunes the uniforms live.
+const MODEL_DETAIL = { tile: 2.2, mailTile: 11.0, str: 0.8, plateTile: 3.0, plateStr: 0.3, plateR0: 0.28, plateR1: 0.30, envI: 0.9, crease: 55 };
+const MODEL_KIND = { steel: 0, mail: 1, cloth: 2, leather: 3, skin: 4, flat: 5 };
+const MODEL_DETAIL_U = {};                                   // the shared uniforms (one object across every program, so a tune lands everywhere)
+for (const k of ['tile', 'mailTile', 'str', 'plateTile', 'plateStr', 'plateR0', 'plateR1']) MODEL_DETAIL_U['u' + k[0].toUpperCase() + k.slice(1)] = { value: MODEL_DETAIL[k] };
+let MODEL_DTEX = null;
+function modelDetailOn() { return qualityTier !== 'low'; }
+function modelDetailTextures() {                             // drawn once: height fields → tangent-space normal maps (RepeatWrapping), plus a grey ring mask for the mail
+  if (MODEL_DTEX) return MODEL_DTEX;
+  const N = 256, canvasOf = fill => { const c = document.createElement('canvas'); c.width = c.height = N; const g = c.getContext('2d'), im = g.createImageData(N, N); fill(im.data); g.putImageData(im, 0, 0); const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; return t; };
+  const normalOf = (h, amp) => canvasOf(d => { for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) { const L = h[y * N + (x + N - 1) % N], R = h[y * N + (x + 1) % N], U = h[((y + N - 1) % N) * N + x], D = h[((y + 1) % N) * N + x];
+    let nx = (L - R) * amp, ny = (U - D) * amp, nz = 1; const l = Math.hypot(nx, ny, nz); nx /= l; ny /= l; nz /= l; const o = (y * N + x) * 4; d[o] = nx * 127.5 + 127.5; d[o + 1] = ny * 127.5 + 127.5; d[o + 2] = nz * 127.5 + 127.5; d[o + 3] = 255; } });
+  const greyOf = h => canvasOf(d => { for (let i = 0; i < N * N; i++) { const v = Math.max(0, Math.min(1, h[i])) * 255, o = i * 4; d[o] = d[o + 1] = d[o + 2] = v; d[o + 3] = 255; } });
+  let seed = 7; const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+  // MAIL: rows of rings, each row shifted half a ring and overlapping the last (the flat look of 4-in-1 riveted mail)
+  const mail = new Float32Array(N * N), ringR = 7.5, ringW = 2.8, sx = 16, sy = 8;
+  for (let row = 0; row < N / sy; row++) for (let col = 0; col < N / sx; col++) { const cx = col * sx + (row % 2) * sx / 2, cy = row * sy;
+    for (let dy = -11; dy <= 11; dy++) for (let dx = -11; dx <= 11; dx++) { const d = Math.hypot(dx, dy), t = (d - ringR) / ringW; if (t <= -1 || t >= 1) continue; const hh = 1 - t * t, x = ((cx + dx) % N + N) % N, y = ((cy + dy) % N + N) % N; if (hh > mail[y * N + x]) mail[y * N + x] = hh; } }
+  const mailC = new Float32Array(N * N); for (let i = 0; i < N * N; i++) mailC[i] = 0.35 + 0.65 * mail[i];
+  // PLATE: a soft value noise (two octaves) and hairline scratches — the hammered, brushed surface of a breastplate
+  const plate = new Float32Array(N * N), grid = (cells, amp) => { const G = new Float32Array(cells * cells); for (let i = 0; i < G.length; i++) G[i] = rnd(); const sm = t => t * t * (3 - 2 * t);
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) { const fx = x / N * cells, fy = y / N * cells, ix = Math.floor(fx), iy = Math.floor(fy), tx = sm(fx - ix), ty = sm(fy - iy), g = (a, b) => G[((b % cells) * cells) + (a % cells)];
+      const v = (g(ix, iy) * (1 - tx) + g(ix + 1, iy) * tx) * (1 - ty) + (g(ix, iy + 1) * (1 - tx) + g(ix + 1, iy + 1) * tx) * ty; plate[y * N + x] += (v - 0.5) * amp; } };
+  grid(8, 0.5); grid(32, 0.3); for (let i = 0; i < N * N; i++) plate[i] += 0.5;
+  for (let i = 0; i < 50; i++) { let x = rnd() * N, y = rnd() * N; const a = rnd() * Math.PI, len = 20 + rnd() * 70, dx = Math.cos(a), dy = Math.sin(a), dep = 0.05 + rnd() * 0.09; for (let k = 0; k < len; k++) { plate[((Math.round(y) % N + N) % N) * N + ((Math.round(x) % N + N) % N)] -= dep; x += dx; y += dy; } }
+  { const b = new Float32Array(N * N); for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) { let a = 0; for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) a += plate[((y + j + N) % N) * N + (x + i + N) % N]; b[y * N + x] = a / 9; } plate.set(b); }   // (a 3×3 soften: the pixel-stepped scratches read as jagged lightning up close)
+  const plateR = new Float32Array(N * N); for (let i = 0; i < N * N; i++) plateR[i] = 0.5 + (plate[i] - 0.5) * 0.9;
+  // CLOTH: a plain weave
+  const cloth = new Float32Array(N * N); for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) cloth[y * N + x] = 0.5 + 0.25 * (Math.sin(x * Math.PI / 4) + Math.sin(y * Math.PI / 4));
+  MODEL_DTEX = { mailN: normalOf(mail, 3.0), mailC: greyOf(mailC), plateN: normalOf(plate, 1.2), plateR: greyOf(plateR), clothN: normalOf(cloth, 1.5) };
+  return MODEL_DTEX;
+}
+function modelSmoothNormals(geo, creaseDeg) {               // average the normals of every vertex sharing a position — but only with faces within the crease angle, so plate rims stay rims
+  const pos = geo.getAttribute('position'), nrm = geo.getAttribute('normal'); if (!pos || !nrm) return;
+  const n = pos.count, groups = new Map(); for (let i = 0; i < n; i++) { const k = Math.round(pos.getX(i) * 1e4) + ',' + Math.round(pos.getY(i) * 1e4) + ',' + Math.round(pos.getZ(i) * 1e4); let g = groups.get(k); if (!g) groups.set(k, g = []); g.push(i); }
+  const out = new Float32Array(n * 3), cosC = Math.cos(creaseDeg * Math.PI / 180);
+  for (const g of groups.values()) for (const i of g) { let x = 0, y = 0, z = 0; const ix = nrm.getX(i), iy = nrm.getY(i), iz = nrm.getZ(i);
+    for (const j of g) { const jx = nrm.getX(j), jy = nrm.getY(j), jz = nrm.getZ(j); if (ix * jx + iy * jy + iz * jz >= cosC) { x += jx; y += jy; z += jz; } }
+    const l = Math.hypot(x, y, z) || 1; out[i * 3] = x / l; out[i * 3 + 1] = y / l; out[i * 3 + 2] = z / l; }
+  geo.setAttribute('normal', new THREE.BufferAttribute(out, 3));
+}
+function modelKindAttr(m) {                                  // per vertex: what it is made of, from the bake (pieces.json mats) or, failing that, the palette cell its uv points at
+  const pos = m.geo.getAttribute('position'), n = pos.count, k = new Float32Array(n), pj = m.pieces, uv = m.geo.getAttribute('uv'), K = MODEL_KIND;
+  const dark = m.short === 'armor' ? K.mail : m.short === 'sword' ? K.leather : K.flat;   // the palette's dark grey: the mail under the plate, a sword's grip, the black of an eye
+  for (let v = 0; v < n; v++) { let kd = K.flat;
+    if (pj) { const mt = pj.mats[pj.vmat[v]]; kd = mt === 'steel' ? K.steel : mt === 'cloth' ? K.cloth : mt === 'leather' ? K.leather : mt === 'skin' ? K.skin : mt === 'dark' ? dark : K.flat; }
+    else if (uv) { const cx = Math.floor(uv.getX(v) * 16), cy = Math.floor(uv.getY(v) * 16); kd = cy === 0 && cx >= 4 && cx <= 12 ? K.steel : cx === 6 ? K.cloth : cx === 13 && cy <= 7 ? K.leather : cx === 13 ? K.skin : K.flat; }
+    k[v] = kd; }
+  m.geo.setAttribute('kind', new THREE.BufferAttribute(k, 1));
+}
+function modelEnvFor(ctx) {                                  // the sky the steel reflects: the main scene's (the pit's hour rebuilds it) or the preview's own renderer's
+  if (ctx === 'preview') { const P = AF.preview; if (P && P.renderer && !P.scene.environment) { P.envGen = P.envGen || new THREE.PMREMGenerator(P.renderer); P.scene.environment = makeEnvMap(0x3f78bd, 0x8fb6e0, 0xe9dfd0, new THREE.Vector3(3, 6, 4), 0xfff0d0, P.envGen); } return; }
+  MODEL_DETAIL_LIVE = true; if (!ENV_CUR) setEnvMap(envDefault());
+}
+const MODEL_DETAIL_GLSL = {
+  vertHead: `#include <common>\nattribute float kind; varying float vKind; varying vec3 vTri; varying vec3 vTriN; varying mat3 vTriM;`,
+  vertNormal: `#include <defaultnormal_vertex>\n vTriN = normalize(objectNormal); vTriM = normalMatrix;`,   // (object space: post-skinning, in the figure's own frame — the pattern rides him instead of sliding through him)
+  vertPos: `#include <worldpos_vertex>\n vTri = transformed; vKind = kind;`,
+  fragHead: `#include <common>
+varying float vKind; varying vec3 vTri; varying vec3 vTriN; varying mat3 vTriM;
+uniform sampler2D tPlateN, tMailN, tClothN, tPlateR, tMailC; uniform float uTile, uMailTile, uStr, uPlateTile, uPlateStr, uPlateR0, uPlateR1;
+vec3 triW(vec3 n) { vec3 w = pow(abs(n), vec3(4.0)); return w / (w.x + w.y + w.z); }
+vec3 triNormal(sampler2D t, vec3 p, vec3 wn, float s, float str) { vec3 w = triW(wn);
+  vec3 nx = texture2D(t, p.zy * s).xyz * 2.0 - 1.0, ny = texture2D(t, p.xz * s).xyz * 2.0 - 1.0, nz = texture2D(t, p.xy * s).xyz * 2.0 - 1.0;
+  nx.xy *= str; ny.xy *= str; nz.xy *= str;
+  nx = vec3(nx.xy + wn.zy, abs(nx.z) * wn.x); ny = vec3(ny.xy + wn.xz, abs(ny.z) * wn.y); nz = vec3(nz.xy + wn.xy, abs(nz.z) * wn.z);
+  return normalize(nx.zyx * w.x + ny.xzy * w.y + nz.xyz * w.z); }
+float triGray(sampler2D t, vec3 p, vec3 wn, float s) { vec3 w = triW(wn); return texture2D(t, p.zy * s).r * w.x + texture2D(t, p.xz * s).r * w.y + texture2D(t, p.xy * s).r * w.z; }`,
+  fragNormal: `{ vec3 wn = normalize(vTriN); if (!gl_FrontFacing) wn = -wn; vec3 pn = wn; int k = int(vKind + 0.5);
+  if (k == 0) pn = triNormal(tPlateN, vTri, wn, uTile * uPlateTile, uStr * uPlateStr);
+  else if (k == 1) pn = triNormal(tMailN, vTri, wn, uMailTile, uStr);
+  else if (k == 2 || k == 3) pn = triNormal(tClothN, vTri, wn, uTile * 1.6, uStr * 0.35);
+  normal = normalize(vTriM * pn); }`,
+  fragRough: `float roughnessFactor = roughness; { int k = int(vKind + 0.5);
+  if (k == 0) roughnessFactor = uPlateR0 + uPlateR1 * triGray(tPlateR, vTri, vTriN, uTile * uPlateTile * 1.7);
+  else if (k == 1) roughnessFactor = 0.45 + 0.35 * (1.0 - triGray(tMailC, vTri, vTriN, uMailTile));
+  else if (k == 2) roughnessFactor = 0.92; else if (k == 3) roughnessFactor = 0.70; else if (k == 4) roughnessFactor = 0.55; else roughnessFactor = 0.4; }`,
+  fragMetal: `float metalnessFactor = metalness; { int k = int(vKind + 0.5); metalnessFactor = (k == 0) ? 0.88 : (k == 1) ? 0.80 : 0.0; }`,
+  fragIbl: `{ if (int(vKind + 0.5) >= 2) iblIrradiance *= 0.45; }
+#include <lights_fragment_end>`,   // (the sky's ambient washed the dyed cloth pink: cloth, leather and skin take less of it)
+  fragMap: `#include <map_fragment>
+{ int k = int(vKind + 0.5); if (k == 1) { float g = triGray(tMailC, vTri, vTriN, uMailTile); diffuseColor.rgb *= mix(0.55, 1.25, g); } if (k == 0) { float g = triGray(tPlateR, vTri, vTriN, uTile * uPlateTile * 1.7); diffuseColor.rgb *= mix(0.92, 1.04, g); } }`,   // the rings read at a distance: the palette grey shaded by the ring mask
+};
+function modelMaterial(R, o = {}) {                          // the figure's material for a context: Phong on the low tier / thumbnails, the surface pass otherwise; cached per rig unless it carries its own colour
+  const ctx = o.ctx || 'main', det = ctx !== 'thumb' && modelDetailOn(), col = o.color != null ? o.color : 0xffffff, noMap = o.map === false;
+  const key = [det ? 'd' : 'p', o.vc ? 'vc' : '', o.skinning ? 'sk' : '', noMap ? 'nomap' : '', ctx].join('|');
+  R.mats = R.mats || {}; if (o.color == null && R.mats[key]) return R.mats[key];
+  let m;
+  if (!det) m = new THREE.MeshPhongMaterial(noMap ? { color: col, shininess: 4, specular: 0x050505, skinning: !!o.skinning } : { map: R.tex, color: col, shininess: 6, specular: 0x111111, skinning: !!o.skinning, vertexColors: !!o.vc });
+  else { const T = modelDetailTextures(); modelEnvFor(ctx);
+    m = new THREE.MeshStandardMaterial({ map: noMap ? null : R.tex, color: col, metalness: 1, roughness: 1, skinning: !!o.skinning, vertexColors: !!o.vc, envMapIntensity: MODEL_DETAIL.envI });
+    m.onBeforeCompile = sh => { const G = MODEL_DETAIL_GLSL; Object.assign(sh.uniforms, MODEL_DETAIL_U, { tPlateN: { value: T.plateN }, tMailN: { value: T.mailN }, tClothN: { value: T.clothN }, tPlateR: { value: T.plateR }, tMailC: { value: T.mailC } });
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', G.vertHead).replace('#include <defaultnormal_vertex>', G.vertNormal).replace('#include <worldpos_vertex>', G.vertPos);
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', G.fragHead).replace('#include <normal_fragment_maps>', G.fragNormal).replace('#include <roughnessmap_fragment>', G.fragRough).replace('#include <metalnessmap_fragment>', G.fragMetal).replace('#include <map_fragment>', G.fragMap).replace('#include <lights_fragment_end>', G.fragIbl); };
+    m.customProgramCacheKey = () => 'bv-surface'; }
+  m.userData.ctx = ctx; if (o.color == null) R.mats[key] = m;
+  return m;
+}
+function modelRefreshMaterials() {                          // a tier change: every figure piece takes the material its tier wants (the cache hands the same few out)
+  const walk = root => root && root.traverse(x => { const mm = x.userData && x.userData.mm, R = mm && MODEL_RIGS.get(x.userData.mmR); if (R && x.material) x.material = modelMaterial(R, mm); });
+  walk(scene); if (AF.preview) walk(AF.preview.scene);
+}
+BV.modelDetail = o => { for (const k in (o || {})) { if (k === 'envI') { MODEL_DETAIL.envI = o[k]; scene.traverse(x => { if (x.material && x.material.isMeshStandardMaterial && x.userData.mm) x.material.envMapIntensity = o[k]; }); } else if (MODEL_DETAIL_U['u' + k[0].toUpperCase() + k.slice(1)]) { MODEL_DETAIL[k] = o[k]; MODEL_DETAIL_U['u' + k[0].toUpperCase() + k.slice(1)].value = o[k]; } } return Object.assign({ on: modelDetailOn() }, MODEL_DETAIL); };   // test/tune: BV.modelDetail({ tile: 3 })
+
 async function loadModelRig(name) {
   if (MODEL_RIGS.has(name)) return MODEL_RIGS.get(name);
   const base = 'assets/rigs/' + name + '/', spec = await (await fetch(base + 'rig.json')).json(), g = await (await fetch(base + 'scene.gltf')).json();
@@ -1037,24 +1156,25 @@ async function loadModelRig(name) {
   if (pieces) for (const m of meshes) { const key = Object.keys(pieces).find(k => m.name.indexOf('_' + k + '_') >= 0); const pj = key && pieces[key]; if (!pj) continue; m.pieces = pj; m.short = key;
     const ci = pj.mats.indexOf('cloth'), uv = m.geo.getAttribute('uv'); if (ci >= 0 && uv) { for (let v = 0; v < uv.count; v++) if (pj.vmat[v] === ci) uv.setXY(v, LOOK_WHITE_UV[0], LOOK_WHITE_UV[1]); uv.needsUpdate = true; }   // (the blue cloth → a white cell: the vertex colour IS the dye)
     if (key === 'body') lookRuggedHead(m.geo, pj); }
+  for (const m of meshes) { modelKindAttr(m); modelSmoothNormals(m.geo, MODEL_DETAIL.crease); }   // the surface pass: what each vertex is made of, and normals rounded under a crease limit
+  if (modelDetailOn()) MODEL_DETAIL_LIVE = true;           // (so the pit's hour builds the sky the steel reflects before the first man is dressed)
   const entry = { name, spec, g, meshes, tex, pieces }; MODEL_RIGS.set(name, entry); return entry;
 }
 // build a fresh skeleton + skinned meshes for one body
-function instanceModelRig(R) {
+function instanceModelRig(R, ctx = 'main') {
   const g = R.g, nodes = g.nodes.map(n => { const b = new THREE.Bone(); b.name = n.name; if (n.matrix) { const m = new THREE.Matrix4().fromArray(n.matrix); m.decompose(b.position, b.quaternion, b.scale); } return b; });
   const parent = new Array(nodes.length).fill(-1);
   g.nodes.forEach((n, i) => (n.children || []).forEach(c => { parent[c] = i; nodes[i].add(nodes[c]); }));
   const root = new THREE.Group(); g.nodes.forEach((n, i) => { if (parent[i] < 0 && n.mesh == null) root.add(nodes[i]); });
   const byName = {}; nodes.forEach(b => { byName[b.name] = b; });
-  const mat = new THREE.MeshPhongMaterial({ map: R.tex, shininess: 6, specular: 0x111111, skinning: true });
-  const matVC = new THREE.MeshPhongMaterial({ map: R.tex, shininess: 6, specular: 0x111111, skinning: true, vertexColors: true });   // (the painted meshes: palette × vertex colour)
+  const mat = modelMaterial(R, { ctx, skinning: true }), matVC = modelMaterial(R, { ctx, skinning: true, vc: true });   // (the painted meshes: palette × vertex colour) — Phong on the low tier, the surface pass above it
   const skinned = {};
   for (const m of R.meshes) { let geo = m.geo; const own = !!(m.pieces && m.pieces.classes.length > 1);
     if (own) {                                               // this body's own copy of the index (pieces drop out of it) and its own paint; positions, normals, uvs, weights are shared
-      geo = new THREE.BufferGeometry(); for (const k of ['position', 'normal', 'uv', 'skinIndex', 'skinWeight']) geo.setAttribute(k, m.geo.getAttribute(k));
+      geo = new THREE.BufferGeometry(); for (const k of ['position', 'normal', 'uv', 'skinIndex', 'skinWeight', 'kind']) if (m.geo.getAttribute(k)) geo.setAttribute(k, m.geo.getAttribute(k));
       const i0 = m.geo.index.array; geo.setIndex(new THREE.BufferAttribute(new i0.constructor(i0), 1));
       const nv = m.geo.getAttribute('position').count; geo.setAttribute('color', new THREE.BufferAttribute(new Uint8Array(nv * 3).fill(255), 3, true)); }
-    const sm = new THREE.SkinnedMesh(geo, own ? matVC : mat); sm.name = m.name; sm.frustumCulled = false; sm.castShadow = true; root.add(sm); if (own) { sm.userData.pieces = m.pieces; sm.userData.geo0 = m.geo; }
+    const sm = new THREE.SkinnedMesh(geo, own ? matVC : mat); sm.name = m.name; sm.userData.mm = { ctx, skinning: true, vc: own }; sm.userData.mmR = R.name; sm.frustumCulled = false; sm.castShadow = true; root.add(sm); if (own) { sm.userData.pieces = m.pieces; sm.userData.geo0 = m.geo; }
     const bones = m.joints.map(j => nodes[j]), inv = []; for (let i = 0; i < bones.length; i++) inv.push(new THREE.Matrix4().fromArray(m.ibm, i * 16));
     sm.bind(new THREE.Skeleton(bones, inv), new THREE.Matrix4()); skinned[m.name] = sm; }
   const order = []; const dfs = i => { order.push(i); (g.nodes[i].children || []).forEach(dfs); }; g.nodes.forEach((n, i) => { if (parent[i] < 0) dfs(i); });   // parents before children (the file's root sits last)
@@ -1073,7 +1193,7 @@ function instanceModelRig(R) {
       if (n.matrix) { const q = new THREE.Quaternion(); new THREE.Matrix4().fromArray(n.matrix).decompose(new THREE.Vector3(), q, new THREE.Vector3()); restLocal[i].copy(q); }
       else if (n.rotation) restLocal[i].fromArray(n.rotation); }); }
   for (const i of order) restWorld[i] = parent[i] < 0 ? restLocal[i].clone() : restWorld[parent[i]].clone().multiply(restLocal[i]);
-  return { root, nodes, byName, parent, order, restLocal, restWorld, skinned, mat };
+  return { root, nodes, byName, parent, order, restLocal, restWorld, skinned, mat, ctx };
 }
 // a rigid prop of the figure (its sword, its shield — each weighted to one hand bone) as a plain geometry with that
 // hand at the origin and the bind-space orientation kept: the sword's blade runs +Z, the shield's face looks +X
@@ -1087,7 +1207,7 @@ function modelPropGeo(R, key) {
 // dress a built plastic rig in the figure; the plastic body hides, the held gear stays and rides the figure's hands
 function wearModelRig(h, name, o = {}) {
   const R = MODEL_RIGS.get(name); if (!R || !h || !h.parts) return false;
-  const P = h.parts, g = h.group, inst = instanceModelRig(R), S = R.spec.hipY ? 1.52 / R.spec.hipY : 3.3 / (R.spec.height || 1.9);   // scale so the figure's hips sit where the rig's do: same leg length, same stride
+  const P = h.parts, g = h.group, inst = instanceModelRig(R, o.ctx || 'main'), S = R.spec.hipY ? 1.52 / R.spec.hipY : 3.3 / (R.spec.height || 1.9);   // scale so the figure's hips sit where the rig's do: same leg length, same stride
   inst.root.scale.setScalar(S); g.add(inst.root);
   const keep = new Set(); for (const k of ['sword', 'bow', 'shield']) if (P[k]) P[k].traverse(x => keep.add(x));
   g.traverse(x => { if (x.isMesh && !keep.has(x) && !x.isSkinnedMesh && x.name !== 'plume') x.visible = false; });
@@ -1123,10 +1243,10 @@ function wearModelRig(h, name, o = {}) {
   // THE SHEATHED SWORD: a copy of the figure's own blade hung at the left hip on the hips bone (the walk into the pit — P.sheathed — and an archer's sidearm while his bow is out; syncModelRigs)
   let mHip = null; { const hipL = R.spec.map.hipL && inst.byName[R.spec.map.hipL], pi = hipL ? inst.parent[inst.nodes.indexOf(hipL)] : -1, hips = pi >= 0 ? inst.nodes[pi] : null, geo = hips && modelPropGeo(R, 'sword');
     if (geo) { const holder = new THREE.Group(); holder.name = 'hipHolder'; holder.quaternion.copy(inst.restWorld[pi]).invert(); holder.scale.setScalar(1 / S); hips.add(holder);
-      mHip = new THREE.Mesh(geo, new THREE.MeshPhongMaterial({ map: R.tex, shininess: 6, specular: 0x111111 })); mHip.name = 'hipSword'; mHip.castShadow = true; mHip.scale.setScalar(S); mHip.visible = false; modelHipPlace(mHip); holder.add(mHip); } }
+      mHip = new THREE.Mesh(geo, modelMaterial(R, { ctx: inst.ctx })); mHip.userData.mm = { ctx: inst.ctx }; mHip.userData.mmR = R.name; mHip.name = 'hipSword'; mHip.castShadow = true; mHip.scale.setScalar(S); mHip.visible = false; modelHipPlace(mHip); holder.add(mHip); } }
   // team colour: the cloak is dyed outright, the shield's face is tinted — the steel stays steel
-  if (o.team != null) { const cloak = inst.skinned[M.cloak]; if (cloak) cloak.material = new THREE.MeshPhongMaterial({ color: o.team, shininess: 4, specular: 0x050505, skinning: true });
-    if (mShield) mShield.material = new THREE.MeshPhongMaterial({ map: R.tex, color: new THREE.Color(o.team).lerp(new THREE.Color(0xffffff), 0.35), shininess: 6, specular: 0x111111, skinning: true }); }
+  if (o.team != null) { const cloak = inst.skinned[M.cloak]; if (cloak) { cloak.userData.mm = { ctx: inst.ctx, skinning: true, map: false, color: o.team }; cloak.material = modelMaterial(R, cloak.userData.mm); }
+    if (mShield) { mShield.userData.mm = { ctx: inst.ctx, skinning: true, color: new THREE.Color(o.team).lerp(new THREE.Color(0xffffff), 0.35).getHex() }; mShield.material = modelMaterial(R, mShield.userData.mm); } }
   const live = { h, P, g, inst, drive, mSword, mShield, mHip, mRound: null, shieldKind: 'heater', plume, q: new THREE.Quaternion(), w: [], armBase, armAmt: armBase, body: null, bodyLooked: 0 };
   MODEL_LIVE.push(live); P.modelRig = live; g.userData.model = name; return true;
 }
@@ -1290,6 +1410,19 @@ function lookColour(look, cls, mt) {
     : cls === 'socket' ? look.socket : (cls === 'scarL' || cls === 'scarR') ? (look.scar === cls ? look.scarC : look.skin) : cls === 'eye' ? 0xd8d0c8 : look.skin;   // (eye whites dimmed: no doe eyes)
   return look.paint[cls] != null ? look.paint[cls] : 0xffffff;
 }
+// what a painted vertex is MADE OF for the surface pass (modelMaterial's `kind`): the palette says steel, but a poor man's
+// "cuirass" is painted as a linen shirt, a gambeson's as a quilted jack, the pelt-wearer's chest is his skin, and a mail
+// hauberk's body pieces are rings — so the kind follows the paint, not the swatch
+const LOOK_MAIL_PIECES = new Set(['cuirass', 'skirt', 'sleeve', 'greaves']);
+function lookKind(look, cls, mt, kd0) {
+  const O = LOOK_ARMOR[look.kind] || LOOK_ARMOR.none, K = MODEL_KIND;
+  if (mt === 'steel') { const p = O.paint && O.paint[cls] != null ? O.paint[cls] : O.base;
+    if (p === 'shirt' || p === 'breeches' || p === 'jack') return K.cloth; if (p === 'leather' || p === 'fur' || p === 'furDark') return K.leather; if (p === 'skin') return K.skin;
+    return look.kind === 'mail' && LOOK_MAIL_PIECES.has(cls) ? K.mail : K.steel; }
+  if (mt === 'cloth') { const c = O.clothOf && O.clothOf[cls]; return c === 'skin' ? K.skin : c === 'fur' ? K.leather : K.cloth; }
+  if (mt === 'dark') return (typeof O.base === 'number' || O.base === 'plate') ? K.mail : K.leather;   // the dark under-layer at the joints: mail under plate, padding under anything softer
+  return kd0;
+}
 // dress a live figure in a look: paint the vertices, drop the pieces he goes without, cloak, plume, shield
 function lookApply(L, look) {
   if (!L || !L.inst) return; L.lookBase = look; look = lookWorn(L, look);   // (the look as rolled, and the look as worn now — bareheaded while L.helmOff)
@@ -1305,6 +1438,9 @@ function lookApply(L, look) {
     if (skinTint) lookFaceApply(sm, look, pj);                 // (the bones: this body's own head positions)
     const pos = sm.userData.geo0.getAttribute('position');
     for (let v = 0; v < nv; v++) { const cls = pj.classes[pj.vclass[v]], mt = pj.mats[pj.vmat[v]]; c.setHex(skinTint ? lookFaceColour(look, cls, mt, pos.getX(v), pos.getY(v), pos.getZ(v)) : lookColour(look, cls, mt)); if (skinTint && mt === 'skin' && cls !== 'eye') { c.r = Math.min(1, c.r / 1.0); c.g = Math.min(1, c.g / 0.86); c.b = Math.min(1, c.b / 0.70); } col.setXYZ(v, c.r * 255, c.g * 255, c.b * 255); } col.needsUpdate = true;
+    const kd0 = sm.userData.geo0.getAttribute('kind');           // this body's own kinds, following the paint (lookKind)
+    if (kd0 && !skinTint) { if (!sm.userData.ownKind) { sm.geometry.setAttribute('kind', kd0.clone()); sm.userData.ownKind = true; } const kd = sm.geometry.getAttribute('kind');
+      for (let v = 0; v < nv; v++) kd.setX(v, lookKind(look, pj.classes[pj.vclass[v]], pj.mats[pj.vmat[v]], kd0.getX(v))); kd.needsUpdate = true; }
   }
   lookDraw(L, look); if (lookHelmBuild(L)) lookHelmPaint(L);
   const cloak = L.inst.skinned[M.cloak]; if (cloak) { cloak.visible = !!look.cloak; if (cloak.material && cloak.material.color && !cloak.material.map) cloak.material.color.setHex(look.cloakC); }
@@ -1330,9 +1466,10 @@ function lookHelmBuild(L) {
     for (let o = 0; o < n; o++) { const v = map[o]; p.fromBufferAttribute(pos0, v).applyMatrix4(M); pos[o * 3] = p.x; pos[o * 3 + 1] = p.y; pos[o * 3 + 2] = p.z;
       if (nrm0) { p.fromBufferAttribute(nrm0, v).applyMatrix3(N).normalize(); nrm[o * 3] = p.x; nrm[o * 3 + 1] = p.y; nrm[o * 3 + 2] = p.z; } if (uv0) { uv[o * 2] = uv0.getX(v); uv[o * 2 + 1] = uv0.getY(v); } }
     const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); if (nrm0) geo.setAttribute('normal', new THREE.BufferAttribute(nrm, 3)); if (uv0) geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    { const kd0 = sm.geometry.getAttribute('kind'); if (kd0) { const kd = new Float32Array(n); for (let o = 0; o < n; o++) kd[o] = kd0.getX(map[o]); geo.setAttribute('kind', new THREE.BufferAttribute(kd, 1)); } }
     geo.setAttribute('color', new THREE.BufferAttribute(new col0.array.constructor(n * 3), 3, col0.normalized)); geo.setIndex(idx); geo.computeBoundingSphere();
-    if (!R.matHelm) R.matHelm = new THREE.MeshPhongMaterial({ map: R.tex, shininess: 6, specular: 0x111111, vertexColors: true });   // (the painted material without its skinning: this piece is rigid)
-    const m = new THREE.Mesh(geo, R.matHelm); m.name = 'helmInHand'; m.castShadow = true; m.visible = false; m.userData.map = map; m.userData.src = sm;
+    const mmH = { ctx: L.inst.ctx || 'main', vc: true };   // (the painted material without its skinning: this piece is rigid)
+    const m = new THREE.Mesh(geo, modelMaterial(R, mmH)); m.userData.mm = mmH; m.userData.mmR = R.name; m.name = 'helmInHand'; m.castShadow = true; m.visible = false; m.userData.map = map; m.userData.src = sm;
     L.mHelm = m; L.helmHead = L.inst.nodes[mm.joints[j]]; L.helmHandBone = R.spec.swordHand ? L.inst.byName[R.spec.swordHand] : null; break; }
   return L.mHelm;
 }
@@ -11702,7 +11839,7 @@ renderWarbandPicker();
 function applyQuality(tier) {
   qualityTier = tier;
   const t = TIERS[tier];
-  renderer.setPixelRatio(t.pixelRatio);
+  renderer.setPixelRatio(resRatio(t.pixelRatio));
   renderer.shadowMap.enabled = t.shadows;
   sun.castShadow = t.shadows;
   if (t.shadows && sun.shadow.map && sun.shadow.mapSize.x !== t.shadowSize) {
@@ -11717,7 +11854,7 @@ function applyQuality(tier) {
   // into the shader program); prewarm so the hitch happens HERE, not mid-swing
   scene.traverse(o => { if (o.isMesh && o.material) o.material.needsUpdate = true; });
   renderer.compile(scene, camera);
-  try { localStorage.setItem('bv-quality', tier); } catch (e) { /* fine */ }
+  gfxSave(tier); try { modelRefreshMaterials(); } catch (e) { /* fine */ }
 }
 // Tier downgrades that change lights/shadows force a full shader recompile —
 // a multi-hundred-ms hitch on weak GPUs. So: drop pixel ratio IMMEDIATELY
@@ -11732,7 +11869,7 @@ function governFps(dt) {
   if (avg < 42 && !pendingTier) {
     const next = qualityTier === 'high' ? 'medium' : qualityTier === 'medium' ? 'low' : null;
     if (next) {
-      renderer.setPixelRatio(TIERS[next].pixelRatio); // instant relief, no recompile
+      renderer.setPixelRatio(resRatio(TIERS[next].pixelRatio)); // instant relief, no recompile
       pendingTier = next;                              // the rest lands behind a banner
     }
   }
@@ -17383,7 +17520,13 @@ function afSetGfx(v) {                                      // the home page's g
   if (v === 'auto') { try { localStorage.removeItem('bv-quality'); } catch (e) {} }   // (both save the tier as they apply it: auto means nothing saved)
   return tier;
 }
-BV.gfx = afSetGfx; BV.gfxTier = () => ({ tier: qualityTier, q: AF_Q, post: AF_POST.on, pr: renderer.getPixelRatio(), shadow: sun.shadow.mapSize.x, soft: renderer.shadowMap.type === THREE.PCFSoftShadowMap, locked: gfxLocked() });   // test: what the pit draws with
+function afSetRes(v) {                                      // the home page's resolution pick (bv-res), applied at once to the world and the marketplace figure
+  try { if (v === 'auto') localStorage.removeItem('bv-res'); else localStorage.setItem('bv-res', v); } catch (e) {}
+  renderer.setPixelRatio(resRatio(AF.on ? AF_Q.pr : TIERS[qualityTier].pixelRatio)); AF_POST.w = 0;
+  const P = AF.preview; if (P && P.renderer) { P.renderer.setPixelRatio(resRatio(Math.min(window.devicePixelRatio || 1, qualityTier === 'low' ? 1.5 : 2))); P.W = 0; }
+  return renderer.getPixelRatio();
+}
+BV.res = afSetRes; BV.gfx = afSetGfx; BV.gfxTier = () => ({ tier: qualityTier, q: AF_Q, post: AF_POST.on, pr: renderer.getPixelRatio(), shadow: sun.shadow.mapSize.x, soft: renderer.shadowMap.type === THREE.PCFSoftShadowMap, locked: gfxLocked() });   // test: what the pit draws with
 function afNetOn() { try { return localStorage.getItem('bv-net') === '1'; } catch (e) { return false; } }   // the home page's 'net readout' box (no URL flags: settings live on the home page)
 function afNetOverlay() {                                    // a small fixed readout for phone tests, bottom right
   let el = document.getElementById('af-net'); if (!el && !afNetOn()) return;
@@ -18628,7 +18771,7 @@ function afApplyTime() {
   const fk = Math.max(1, AF_F.radius / 50);                // a bigger pit pushes the fog out with it
   scene.fog = new THREE.Fog(fogC.getHex(), (rain ? T.fog[1] * 0.7 : T.fog[1]) * fk, (rain ? T.fog[2] * 0.8 : T.fog[2]) * fk); scene.background = fogC;
   renderer.toneMappingExposure = T.exp;
-  if (PBR_ON) setEnvMap(makeEnvMap(skyC[0].getHex(), skyC[1].getHex(), skyC[2].getHex(), sun.position, T.sunCol));   // the plates reflect the hour
+  if (PBR_ON || MODEL_DETAIL_LIVE) setEnvMap(makeEnvMap(skyC[0].getHex(), skyC[1].getHex(), skyC[2].getHex(), sun.position, T.sunCol));   // the plates reflect the hour
   if (AF_POST.on) AF_POST.bright.uniforms.thr.value = T.thr;
   if (AF.sunSpr) { AF.sunSpr.visible = T.sunSpr > 0 && !rain; AF.sunSpr.position.copy(sun.position).normalize().multiplyScalar(205); AF.sunSpr.scale.set(T.sunSpr, T.sunSpr, 1); AF.sunSpr.material.color.setHex(AF.cfg.time === 'dusk' ? 0xffb070 : 0xffffff); }
   if (AF.ground) { AF.ground.material.shininess = rain ? 42 : 2; AF.ground.material.specular.setHex(rain ? 0x3a3a3a : 0x000000); AF.ground.material.needsUpdate = true; }
@@ -19908,10 +20051,10 @@ function afTagH(mounted, scale) { return (mounted ? 4.3 : 3.4) * (scale || 1) + 
 const AF_TAG_R2 = { near: 24 * 24, big: 12 * 12 };
 function afTagNear(pos) { return camera.position.distanceToSquared(pos) < (AF.bodies.length > AF_LIM.heroCap ? AF_TAG_R2.big : AF_TAG_R2.near); }
 function afFreshInput() { return { mx: 0, mz: 0, yaw: 0, atk: 0, heavy: 0, dodge: 0, block: false, hold: false, swap: 0, jump: 0 }; } // atk = release count (a tap between samples still lands); hold = the button is down (charging)
-function afWearModel(h, pal) {                            // dress a fresh rig (foot, or a cavalry build / seated rider) in the warrior figure
+function afWearModel(h, pal, ctx) {                            // dress a fresh rig (foot, or a cavalry build / seated rider) in the warrior figure
   if (!MODEL_ON || !BV.modelReady || !h || !h.parts) return false;
   const g = h.riderGroup || h.group || h;                    // a horseman: only the man in the saddle wears it, the horse is the horse
-  return wearModelRig({ group: g, parts: h.parts }, MODEL_NAME, { team: pal.cloth });
+  return wearModelRig({ group: g, parts: h.parts }, MODEL_NAME, { team: pal.cloth, ctx: ctx || 'main' });   // (ctx: main scene, the home/market preview's own renderer, or a thumbnail)
 }
 function afMakeBody(entry, idx, r) {
   const td = AF_TEAMS[entry.t];
@@ -22144,20 +22287,20 @@ function afPostOff() { const P = AF_POST; P.on = false; for (const k of ['rt', '
 //   high   — up to 2× · 2048 soft shadows · everything
 // afGovern steps a fight down a tier when the frame rate can't hold (the home page's graphics pick locks it).
 const AF_TIERS = {
-  low:    { pr: 1,   shadow: 1024, soft: false, shellCasts: false, crowdShadow: false, crowd: 0.5, ground: 0.55, post: false, lights: 1 },   // (one point light: the pit's candle-wheel — the nearest to the sand)
+  low:    { pr: Math.min(window.devicePixelRatio || 1, 1.5), shadow: 1024, soft: false, shellCasts: false, crowdShadow: false, crowd: 0.5, ground: 0.55, post: false, lights: 1 },   // (one point light: the pit's candle-wheel — the nearest to the sand)
   medium: { pr: 1.5, shadow: 2048, soft: false, shellCasts: true,  crowdShadow: true,  crowd: 1,   ground: 1,    post: true,  lights: 4 },
   high:   { pr: Math.min(window.devicePixelRatio || 1, 2), shadow: 2048, soft: true, shellCasts: true, crowdShadow: true, crowd: 1, ground: 1, post: true, lights: 99 },
 };
 let AF_Q = AF_TIERS[qualityTier] || AF_TIERS.high;
 function afApplyTier(tier) {                               // the renderer side — safe mid-fight (one shader recompile at most)
   const Q = AF_TIERS[tier] || AF_TIERS.high; AF_Q = Q; qualityTier = tier;
-  renderer.setPixelRatio(Q.pr);
+  renderer.setPixelRatio(resRatio(Q.pr));
   const type = Q.soft ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
   if (sun.shadow.mapSize.x !== Q.shadow) { sun.shadow.mapSize.set(Q.shadow, Q.shadow); if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; } }
   if (renderer.shadowMap.type !== type) { renderer.shadowMap.type = type; scene.traverse(o => { if (o.material) { const ms = Array.isArray(o.material) ? o.material : [o.material]; for (const m of ms) m.needsUpdate = true; } }); }
   if (Q.post && !VR.on) { try { afPostInit(); } catch (e) { AF_POST.on = false; } } else afPostOff();
   afApplyTierScene();
-  try { localStorage.setItem('bv-quality', tier); } catch (e) {}
+  gfxSave(tier); try { modelRefreshMaterials(); } catch (e) {}
   return tier;
 }
 const _afLV = new THREE.Vector3();
@@ -22178,7 +22321,7 @@ function afGovern(dt) {                                    // 4 s windows under 
   const fps = G.n / G.acc, frames = G.n; G.acc = 0; G.n = 0;
   if (frames < 40 || fps >= 42) return;                    // (a tab in the background counts few frames: no verdict)
   const next = qualityTier === 'high' ? 'medium' : qualityTier === 'medium' ? 'low' : null;
-  if (!next) return;
+  if (!next) { if (resPick() === 'auto' && renderer.getPixelRatio() > 1) { console.log('[arena] ' + fps.toFixed(0) + ' fps at low: 1× pixels'); renderer.setPixelRatio(1); G.hold = 3; } return; }   // below low there is only the pixels
   console.log('[arena] ' + fps.toFixed(0) + ' fps: quality ' + qualityTier + ' → ' + next);
   afApplyTier(next); G.hold = 3;
 }
@@ -22387,7 +22530,7 @@ function afRematch() {
 function afLeaveToMenu() {
   if (VR.on && !AF._vrLeaveFailed) { try { vrLeavePit(); return; } catch (e) { console.warn('[vr] leave in place failed — reloading', e); AF._vrLeaveFailed = true; } }   // VR FIRST: presenting, the pit is torn down in place (a reload would end the headset session)
   { const tw = document.getElementById('tb-weapon'); if (tw) tw.style.display = ''; }   // (the world's SWAP button comes back)
-  if (PBR_ON) setEnvMap(ENV_DEFAULT);                     // the overworld sky is back in the steel
+  if (PBR_ON || MODEL_DETAIL_LIVE) setEnvMap(envDefault());   // the overworld sky is back in the steel
   try { if (window.coop && window.coop.connected) window.coop.leave(); } catch (e) {}
   location.href = location.pathname + (location.search.replace(/[?&]arena(=[^&]*)?/, '').replace(/^&/, '?') || '');
 }
@@ -22876,7 +23019,7 @@ function afPreviewEl() {
   wrap.appendChild(cv);
   const side = document.createElement('div'); side.id = 'af-preview-side'; side.style.cssText = 'position:absolute;left:0;right:0;bottom:0;padding:8px 10px;font-size:12px;line-height:1.45;background:linear-gradient(to top,rgba(8,6,14,.96),rgba(8,6,14,.8) 70%,rgba(8,6,14,0));pointer-events:none'; wrap.appendChild(side);
   const P = AF.preview = { wrap, cv, W: 0, H: 0, renderer: null, scene: new THREE.Scene(), camera: new THREE.PerspectiveCamera(30, 1, 0.1, 60), rig: null, yaw: -0.3, mounted: false, drag: null, crouch: 0 };
-  try { P.renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: true }); P.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, qualityTier === 'low' ? 1.5 : 2)); P.renderer.toneMapping = THREE.ACESFilmicToneMapping; P.renderer.localClippingEnabled = true; } catch (e) { P.renderer = null; }   // (clipping: the planted sword's buried tip is cut at the sand)
+  try { P.renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: true }); P.renderer.setPixelRatio(resRatio(Math.min(window.devicePixelRatio || 1, qualityTier === 'low' ? 1.5 : 2))); P.renderer.toneMapping = THREE.ACESFilmicToneMapping; P.renderer.localClippingEnabled = true; } catch (e) { P.renderer = null; }   // (clipping: the planted sword's buried tip is cut at the sand)
   P.scene.add(new THREE.HemisphereLight(0xbfd8ff, 0x6a5a44, 0.9)); const sun = new THREE.DirectionalLight(0xfff0d0, 1.1); sun.position.set(3, 6, 4); P.scene.add(sun);
   const disc = new THREE.Mesh(new THREE.CircleGeometry(2.7, 32), mat(0xc9b79a, { shared: false })); disc.rotation.x = -Math.PI / 2; P.scene.add(disc); P.disc = disc;   // (wide enough that the planted sword's buried tip stays under it from the lens)
   const down = e => { P.drag = { x: e.clientX, y: e.clientY, yaw: P.yaw, moved: false }; P.holdT = performance.now(); try { cv.setPointerCapture(e.pointerId); } catch (err) {} }; const move = e => { if (P.drag) { if (Math.hypot(e.clientX - P.drag.x, e.clientY - P.drag.y) > 6) P.drag.moved = true; if (P.drag.moved) { P.yaw = P.drag.yaw + (e.clientX - P.drag.x) * 0.012; P.yawTo = null; } P.holdT = performance.now(); } }; const up = e => { const d = P.drag; P.drag = null; if (d && !d.moved) afPreviewClick(e); };   // a tap (no drag) picks what it lands on
@@ -22897,7 +23040,7 @@ function afPreviewSet(gear, pal, mounted) {
   const hsz = P.mounted && AF_LOOK.horse[gear.horse] ? AF_LOOK.horse[gear.horse].scale : 1;
   const r = P.mounted ? buildCavalry(pal, hsz, 'sword', opts) : buildHumanoid(pal, 1, 'sword', opts);
   P.rig = { group: r.group || r, parts: P.mounted ? Object.assign({}, r.parts, { mount: r.horse }) : r.parts };
-  afWearModel({ group: P.mounted ? r.riderGroup : P.rig.group, parts: P.rig.parts }, pal);   // the marketplace man is the warrior too
+  afWearModel({ group: P.mounted ? r.riderGroup : P.rig.group, parts: P.rig.parts }, pal, 'preview');   // the marketplace man is the warrior too
   P.rig.parts.lookName = (typeof SHELL !== 'undefined' && SHELL.page === 'profile' && AF.profile && AF.profile.gear) ? AF.profile.name : (window.net && net.session ? net.session.username : '');   // (the figure is YOU — or the man whose page this is)
   afPreviewFloor(pal, gear);                                 // (the home floor: his sword and shield, until he takes them up)
   if (MODEL_ON && !BV.modelReady) {                          // the warrior is still loading: an empty disc until he is, never the plastic stand-in
@@ -23047,7 +23190,7 @@ function afThumbShot(obj, box) {                            // an orthographic l
 }
 function afThumbRig() {                                     // one figure for the armour and bow wares, dressed anew per ware
   if (!TH.rig) { const h = buildHumanoid(AF_TEAMS[0].pal, 1, 'sword', { hero: true, both: true }); TH.rig = h; const anim = makeAnimator(h.parts); setPose(anim, 'relax', 0.01); updateAnimator(anim, 1); restLegs(h.parts, 1, false); }
-  if (!TH.wearing && MODEL_ON && BV.modelReady) { afWearModel(TH.rig, AF_TEAMS[0].pal); TH.wearing = true; TH.rig.parts.lookName = 'the mannequin'; TH.rig.parts.lookFull = true; }
+  if (!TH.wearing && MODEL_ON && BV.modelReady) { afWearModel(TH.rig, AF_TEAMS[0].pal, 'thumb'); TH.wearing = true; TH.rig.parts.lookName = 'the mannequin'; TH.rig.parts.lookFull = true; }
   return TH.rig;
 }
 function afThumb(id) {
@@ -23479,6 +23622,7 @@ function afHomeResume() { AF.tryItem = null; afHomeRender(); }   // back on the 
   g('home-char').onclick = () => { if (SHELL.page === 'career') afShellBack(); else { afHomeRender(); afShellPage('career'); } };   // the name card under the figure opens the sheet
   if (g('home-logout')) g('home-logout').onclick = () => window.net && window.net.logout();
   if (g('home-gfx')) { const sel = g('home-gfx'); let cur = 'auto'; try { cur = localStorage.getItem('bv-gfx') || 'auto'; } catch (e) {} sel.value = cur; sel.onchange = e => afSetGfx(e.target.value); }
+  if (g('home-res')) { const sel = g('home-res'); sel.value = resPick(); sel.onchange = e => afSetRes(e.target.value); }
   if (g('home-net')) { g('home-net').checked = afNetOn(); g('home-net').onchange = e => { try { localStorage.setItem('bv-net', e.target.checked ? '1' : '0'); } catch (x) {} }; }   // the net readout during fights (afNetOverlay)
   g('shell-back').onclick = e => { e.stopPropagation(); afShellBack(); };
   g('shell-help').onclick = e => { e.stopPropagation(); afShellPage('help'); };

@@ -1835,8 +1835,8 @@ function modelHelmPlace(L) {                                 // every render whi
 }
 // the pieces he goes without leave the body's own index (no draw call for them, no seam) — the only part of the look a helm toggle has to redo
 function lookDraw(L, look) {
-  const hide = new Set(look.hide); if (look.helmet) hide.add('hair');   // (under a helm the scalp is not drawn: it lies inside the shell, and the tessellated crown would show through it)
   const R = MODEL_RIGS.get(L.g.userData.model), H = look.helmet && look.helmModel && R && R.helms ? R.helms[look.helmModel] : null;
+  const hide = new Set(look.hide); if (look.helmet && !H) hide.add('hair');   // (under the sallet the scalp is not drawn: it lies inside the shell, and the tessellated crown would show through it; a helm of its own says what it covers — helmCoverMask)
   for (const sm of Object.values(L.inst.skinned)) { const pj = sm.userData.pieces; if (!pj) continue;
     const i0 = sm.userData.geo0.index.array, tri = pj.tri, idx = sm.geometry.index, cover = H && pj.classes.indexOf('hair') >= 0 ? helmCoverMask(R, H) : null; let n = 0;   // (the head under a helm of its own: what it covers is left out — helmCoverMask)
     for (let t = 0; t < tri.length; t++) { if (hide.has(pj.classes[tri[t]]) || (cover && cover[t])) continue; idx.array[n] = i0[t * 3]; idx.array[n + 1] = i0[t * 3 + 1]; idx.array[n + 2] = i0[t * 3 + 2]; n += 3; }
@@ -1981,19 +1981,20 @@ function helmModelMaterials(H, ctx, skinning, crestC) {
   const bronze = new THREE.Color(HELM_BRONZE_LIFT[0], HELM_BRONZE_LIFT[1], HELM_BRONZE_LIFT[2]), helm = make(bronze, Math.min(H.metalness, 0.9), 1), crest = crestC != null ? make(new THREE.Color(crestC).multiplyScalar(1.6), 0.15, 0.85) : helm;   // (dyed horsehair: no longer bronze)
   return (H.mats[k] = [helm, crest]);
 }
-// WHAT THE HELM COVERS: a helm of its own is a thin shell too, and the tessellated forehead showed through its brow. Once per rig and
-// helm, every triangle of the head whose three vertices lie under the shell is marked, and lookDraw leaves the marked ones out while
-// the helm is worn. A vertex is under the shell when a ray from the skull's centre through it leaves the helm's own surface beyond it
-// (or short of it by no more than `tol` — a lifted vertex), OR when the shell stands straight in front of it (a ray forward from the
-// skull's axis: the brow ridge at an eye hole's upper rim looks out through the hole from the centre, yet the brow band is before it).
-// Nothing seen through the eye holes or the face opening is marked: no shell lies on those rays.
-const HELM_COVER_TOL = 0.03, HELM_COVER_Y = 1.60;   // (tol: how far out of the shell a vertex may stand and still count as under it — the forehead pushes a snug helm's brow out by a finger; y: only the head above the jaw, so no hole opens under a cheek guard's edge)
+// WHAT THE HELM COVERS: a helm of its own is a thin shell too, with openings of its own — the Corinthian's ear cutouts look in at the
+// nape — so the sallet's blanket rule (the scalp not drawn under a helm) opened the head to the sky there, and a mask over the whole
+// head hid cheeks and brows that an oblique look through the eye holes still found. So, once per rig and helm: only the SCALP (the
+// 'hair' class) and the forehead well above the eye holes (HELM_COVER_Y) are tested, and a triangle is left out while the helm is
+// worn only when its three vertices lie under the shell — a ray from the skull's centre through the vertex leaves the helm's own
+// surface beyond it (or short of it by no more than `tol`, a lifted vertex), or the shell stands straight in front of it (a ray
+// forward from the skull's axis). What a cutout or the face opening shows stays drawn: no shell lies on those rays.
+const HELM_COVER_TOL = 0.03, HELM_COVER_Y = 1.72;
 function helmCoverMask(R, H) {
   if (H.cover !== undefined) return H.cover; const m = R.meshes.find(x => x.pieces && x.pieces.classes.indexOf('hair') >= 0); if (!m) return (H.cover = null);
   if (!H.shell) { const hp = H.geo.getAttribute('position'), hi = H.geo.index.array, g = H.geo.groups.find(x => x.materialIndex === 0) || { start: 0, count: hi.length }, S = new Float32Array(g.count * 3);   // (the helm's own part, not the crest)
     for (let k = 0; k < g.count; k++) { const v = hi[g.start + k]; S[k * 3] = hp.getX(v); S[k * 3 + 1] = hp.getY(v); S[k * 3 + 2] = hp.getZ(v); } H.shell = S; }
   const pj = m.pieces, pos = m.geo.getAttribute('position'), idx = m.geo.index.array, C = LOOK_SKULL, under = new Uint8Array(pos.count);
-  for (let v = 0; v < pos.count; v++) { if (!LOOK_HEAD_CLASSES.has(pj.classes[pj.vclass[v]]) || pos.getY(v) < HELM_COVER_Y) continue; const dx = pos.getX(v), dy = pos.getY(v) - C.yc, dz = pos.getZ(v) - C.zc, Ln = Math.hypot(dx, dy, dz) || 1;
+  for (let v = 0; v < pos.count; v++) { const cls = pj.classes[pj.vclass[v]]; if (!LOOK_HEAD_CLASSES.has(cls) || (cls !== 'hair' && pos.getY(v) < HELM_COVER_Y)) continue; const dx = pos.getX(v), dy = pos.getY(v) - C.yc, dz = pos.getZ(v) - C.zc, Ln = Math.hypot(dx, dy, dz) || 1;
     const t = lookSkullCast(H.shell, 0, C.yc, C.zc, dx / Ln, dy / Ln, dz / Ln); if (t > 0 && t >= Ln - HELM_COVER_TOL) { under[v] = 1; continue; }
     if (dz > 0) { const tf = lookSkullCast(H.shell, dx, pos.getY(v), C.zc, 0, 0, 1); if (tf > 0 && tf >= dz - 0.006) under[v] = 1; } }
   const cover = new Uint8Array(pj.tri.length); for (let t = 0; t < pj.tri.length; t++) if (under[idx[t * 3]] && under[idx[t * 3 + 1]] && under[idx[t * 3 + 2]]) cover[t] = 1;

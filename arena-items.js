@@ -60,7 +60,7 @@
   var ARENA_SLOTS = ['sword', 'armor', 'helm', 'shield', 'ink', 'bow', 'horse', 'plume', 'trim'];   // (ink: cosmetic, bought like the rest)
   // YOUR LOOK (the barber): skin tone, face shape, hair style, hair colour, beard style — indexes into the client's lists;
   // the server keeps them in the career's meta and every guest paints the same face
-  var ARENA_LOOK = { s: 6, f: 6, h: 5, c: 9, b: 5 };
+  var ARENA_LOOK = { s: 6, f: 6, h: 5, c: 9, b: 6 };   // (b 6: 'braided' joined the beards, 2026-09-16)
   function cleanLook(l) { if (!l || typeof l !== 'object') return null; var o = {}, any = false; for (var k in ARENA_LOOK) { var v = l[k]; if (typeof v === 'number' && v === (v | 0) && v >= 0 && v < ARENA_LOOK[k]) { o[k] = v; any = true; } } return any ? o : null; }
   // THE VALE'S MEN — the NPC name pool. A name is an NPC's identity (his profile, his record), so the lobby, the
   // world's warbands and the server's own simulated bouts all draw from this one list.

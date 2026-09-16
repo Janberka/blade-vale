@@ -166,3 +166,21 @@ Two fixes on the way: a bare chest read as cream because its steel is re-pointed
 palette skin × a tint — the bare-skin paint is now skin × (0.98, 0.76, 0.74) so both land on the same colour; and the
 bake files the cloth showing at the elbows under "skirt" (one connected cloth component), so a sash coloured the elbows —
 `lookClassOf` calls skirt cloth past |x| 0.24 a sleeve (arms hang at waist height in the bind pose; only the flank tells).
+
+## The body under the armour (2026-09-16, "we need a naked body and armours should be attached to it")
+
+The warrior came as armour + a head + hands. A bare-chested look used to paint the CUIRASS skin-colour, so a berserker was a
+man in a flesh-toned breastplate. Now `modelBodyBuild` (game.js, above `instanceModelRig`) lathes a body once per rig from the
+armour's own measurements: the torso from the cuirass's cross-sections (an ellipse per band, a waist, shoulders broadening
+under the mantle where the plate narrows, up to the neck's girth measured on the head class), the arms as tubes down the bones
+sized by the sleeves and vambraces — skinned to the same bones (pelvis → chest blend, shoulder → elbow → hand), bound to the
+armour's skeleton as the `naked` skinned mesh of every instance, painted through its own pieces map (torso / armL / armR, all
+skin, the face's tint) and inked like any other piece. A look with `naked: true` in LOOK_ARMOR (the wolf pelt, the mantle)
+drops `cuirass` and `sleeve` and shows it. Two load-time fixes to the bake for it: the elbow cloth is re-filed from `skirt`
+to `sleeve` (vertices and triangles), and the skirt cloth above the belt (y > 0.99) becomes `skirtTop`, always hidden.
+
+Same day: the axes are carried head-UP when a man is at ease (`updateAnimator` turns the sword group by π about its own z
+for `userData.axe` while the pose is `relax`; drawn, the head leads), the axe head is a 2D profile extruded (socket, a bit
+sweeping out and up, a convex edge, the beard hooking down and back; the Dane axe adds a poll), the barber has a sixth beard
+— `braided`: the full beard's paint plus a plait of beads on the head bone (`lookBraidGeo` / `lookBraidApply`; ARENA_LOOK.b is
+6 now) — and the berserker's bracers are `ironEngraved`: steel kind 8, the ink's knotwork cut in as dark, rougher grooves.

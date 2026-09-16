@@ -1035,7 +1035,7 @@ const MODEL_RIGS = new Map(), MODEL_LIVE = [];
 // the plate reads as curved metal and keeps its rims. The low tier keeps the cheap Phong (modelMaterial hands either out;
 // modelRefreshMaterials swaps them when the tier changes). BV.modelDetail({ tile, mailTile, str, ... }) tunes the uniforms live.
 const MODEL_DETAIL = { tile: 2.2, mailTile: 11.0, str: 0.8, plateTile: 3.0, plateStr: 0.3, plateR0: 0.28, plateR1: 0.30, inkTile: 1.4, envI: 0.9, crease: 55 };
-const MODEL_KIND = { steel: 0, mail: 1, cloth: 2, leather: 3, skin: 4, flat: 5, inkWolf: 6, inkBlood: 7 };   // (6, 7: skin under blue-black knotwork / red war-marks — the ink wares)
+const MODEL_KIND = { steel: 0, mail: 1, cloth: 2, leather: 3, skin: 4, flat: 5, inkWolf: 6, inkBlood: 7, engraved: 8 };   // (8: steel with knotwork cut into it — the berserker's bracers)   // (6, 7: skin under blue-black knotwork / red war-marks — the ink wares)
 const MODEL_DETAIL_U = {};                                   // the shared uniforms (one object across every program, so a tune lands everywhere)
 for (const k of ['tile', 'mailTile', 'str', 'plateTile', 'plateStr', 'plateR0', 'plateR1', 'inkTile']) MODEL_DETAIL_U['u' + k[0].toUpperCase() + k.slice(1)] = { value: MODEL_DETAIL[k] };
 let MODEL_DTEX = null;
@@ -1110,20 +1110,22 @@ vec3 triNormal(sampler2D t, vec3 p, vec3 wn, float s, float str) { vec3 w = triW
   return normalize(nx.zyx * w.x + ny.xzy * w.y + nz.xyz * w.z); }
 float triGray(sampler2D t, vec3 p, vec3 wn, float s) { vec3 w = triW(wn); return texture2D(t, p.zy * s).r * w.x + texture2D(t, p.xz * s).r * w.y + texture2D(t, p.xy * s).r * w.z; }`,
   fragNormal: `{ vec3 wn = normalize(vTriN); if (!gl_FrontFacing) wn = -wn; vec3 pn = wn; int k = int(vKind + 0.5);
-  if (k == 0) pn = triNormal(tPlateN, vTri, wn, uTile * uPlateTile, uStr * uPlateStr);
+  if (k == 0 || k == 8) pn = triNormal(tPlateN, vTri, wn, uTile * uPlateTile, uStr * uPlateStr);
   else if (k == 1) pn = triNormal(tMailN, vTri, wn, uMailTile, uStr);
   else if (k == 2 || k == 3) pn = triNormal(tClothN, vTri, wn, uTile * 1.6, uStr * 0.35);
   normal = normalize(vTriM * pn); }`,
   fragRough: `float roughnessFactor = roughness; { int k = int(vKind + 0.5);
   if (k == 0) roughnessFactor = uPlateR0 + uPlateR1 * triGray(tPlateR, vTri, vTriN, uTile * uPlateTile * 1.7);
+  else if (k == 8) roughnessFactor = uPlateR0 + 0.1 + 0.5 * smoothstep(0.2, 0.6, triGray(tInk, vTri, vTriN, uInkTile * 2.4));
   else if (k == 1) roughnessFactor = 0.45 + 0.35 * (1.0 - triGray(tMailC, vTri, vTriN, uMailTile));
   else if (k == 2) roughnessFactor = 0.92; else if (k == 3) roughnessFactor = 0.70; else if (k == 4 || k >= 6) roughnessFactor = 0.55; else roughnessFactor = 0.4; }`,
-  fragMetal: `float metalnessFactor = metalness; { int k = int(vKind + 0.5); metalnessFactor = (k == 0) ? 0.88 : (k == 1) ? 0.80 : 0.0; }`,
+  fragMetal: `float metalnessFactor = metalness; { int k = int(vKind + 0.5); metalnessFactor = (k == 0 || k == 8) ? 0.88 : (k == 1) ? 0.80 : 0.0; }`,
   fragIbl: `{ if (int(vKind + 0.5) >= 2) iblIrradiance *= 0.45; }
 #include <lights_fragment_end>`,   // (the sky's ambient washed the dyed cloth pink: cloth, leather and skin take less of it)
   fragMap: `#include <map_fragment>
 { int k = int(vKind + 0.5); if (k == 1) { float g = triGray(tMailC, vTri, vTriN, uMailTile); diffuseColor.rgb *= mix(0.55, 1.25, g); } if (k == 0) { float g = triGray(tPlateR, vTri, vTriN, uTile * uPlateTile * 1.7); diffuseColor.rgb *= mix(0.92, 1.04, g); }
-  if (k >= 6) { float m = triGray(tInk, vTri, vTriN, uInkTile); vec3 ic = (k == 6) ? vec3(0.07, 0.10, 0.15) : vec3(0.42, 0.08, 0.07); diffuseColor.rgb = mix(diffuseColor.rgb, ic, smoothstep(0.2, 0.6, m) * 0.9); } }`,   // the ink: a knotwork mask over the skin tone   // the rings read at a distance: the palette grey shaded by the ring mask
+  if (k == 8) { float m = smoothstep(0.2, 0.6, triGray(tInk, vTri, vTriN, uInkTile * 2.4)); diffuseColor.rgb *= 1.0 - 0.6 * m; }   // engraved: the knotwork as dark grooves in the steel
+  if (k == 6 || k == 7) { float m = triGray(tInk, vTri, vTriN, uInkTile); vec3 ic = (k == 6) ? vec3(0.07, 0.10, 0.15) : vec3(0.42, 0.08, 0.07); diffuseColor.rgb = mix(diffuseColor.rgb, ic, smoothstep(0.2, 0.6, m) * 0.9); } }`,   // the ink: a knotwork mask over the skin tone   // the rings read at a distance: the palette grey shaded by the ring mask
 };
 function modelMaterial(R, o = {}) {                          // the figure's material for a context: Phong on the low tier / thumbnails, the surface pass otherwise; cached per rig unless it carries its own colour
   const ctx = o.ctx || 'main', det = modelDetailOn(), col = o.color != null ? o.color : 0xffffff, noMap = o.map === false;
@@ -1164,10 +1166,67 @@ async function loadModelRig(name) {
   let pieces = null; try { const pr = await fetch(base + 'pieces.json'); if (pr.ok) pieces = await pr.json(); } catch (e) { pieces = null; }
   if (pieces) for (const m of meshes) { const key = Object.keys(pieces).find(k => m.name.indexOf('_' + k + '_') >= 0); const pj = key && pieces[key]; if (!pj) continue; m.pieces = pj; m.short = key;
     const ci = pj.mats.indexOf('cloth'), uv = m.geo.getAttribute('uv'); if (ci >= 0 && uv) { for (let v = 0; v < uv.count; v++) if (pj.vmat[v] === ci) uv.setXY(v, LOOK_WHITE_UV[0], LOOK_WHITE_UV[1]); uv.needsUpdate = true; }   // (the blue cloth → a white cell: the vertex colour IS the dye)
-    if (key === 'body') lookRuggedHead(m.geo, pj); }
+    if (key === 'body') lookRuggedHead(m.geo, pj);
+    if (key === 'armor') { const sk = pj.classes.indexOf('skirt'), sl = pj.classes.indexOf('sleeve'), cl = pj.mats.indexOf('cloth'), ps = m.geo.getAttribute('position'), idx = m.geo.index.array;   // the bake files the cloth showing at the ELBOWS under "skirt" (one connected cloth component; the arms hang at waist height in the bind pose) — only the flank tells: out past |x| 0.24 it is the arm's
+      if (sk >= 0 && sl >= 0 && cl >= 0) { for (let v = 0; v < ps.count; v++) if (pj.vclass[v] === sk && pj.vmat[v] === cl && Math.abs(ps.getX(v)) >= 0.24) pj.vclass[v] = sl;
+        for (let t = 0; t < pj.tri.length; t++) if (pj.tri[t] === sk && pj.vclass[idx[t * 3]] === sl && pj.vclass[idx[t * 3 + 1]] === sl && pj.vclass[idx[t * 3 + 2]] === sl) pj.tri[t] = sl;
+        const st = pj.classes.push('skirtTop') - 1;        // and the cloth above the belt (y > 0.99) — under the cuirass before, it would peek over the belt of a bare man
+        for (let v = 0; v < ps.count; v++) if (pj.vclass[v] === sk && pj.vmat[v] === cl && ps.getY(v) > 0.99) pj.vclass[v] = st;
+        for (let t = 0; t < pj.tri.length; t++) if (pj.tri[t] === sk && [0, 1, 2].every(k => pj.vclass[idx[t * 3 + k]] === st)) pj.tri[t] = st; } } }
   for (const m of meshes) { modelKindAttr(m); modelSmoothNormals(m.geo, MODEL_DETAIL.crease); }   // the surface pass: what each vertex is made of, and normals rounded under a crease limit
   if (modelDetailOn()) MODEL_DETAIL_LIVE = true;           // (so the pit's hour builds the sky the steel reflects before the first man is dressed)
   const entry = { name, spec, g, meshes, tex, pieces }; MODEL_RIGS.set(name, entry); return entry;
+}
+// ---------- THE BODY UNDER THE ARMOUR (2026-09-16, "we need a naked body and armours should be attached to it") ----------
+// The warrior came as armour + a head + hands: a bare-chested look used to paint the CUIRASS skin-colour, so a berserker was a
+// man in a flesh-toned breastplate. Now a body is lathed once per rig from the armour's own measurements — the torso from the
+// cuirass's cross-sections (an ellipse per band, a little slimmer than the plate), the arms as tubes along the bones sized by
+// the sleeves and vambraces — skinned to the same bones, painted and inked like any other piece through its own pieces map
+// (classes torso / armL / armR, all skin). A look that goes bare (LOOK_ARMOR `naked`) drops the cuirass and sleeves and shows it.
+function modelBodyBuild(R) {
+  if (R.body !== undefined) return R.body;
+  const am = R.meshes.find(x => x.short === 'armor'), pj = am && am.pieces, hd = R.meshes.find(x => x.short === 'body'); if (!pj) return (R.body = null);
+  const pos = am.geo.getAttribute('position'), names = R.g.nodes.map(n => n.name), joint = nm => am.joints.indexOf(names.indexOf(nm));
+  const worldM = new Map(); am.joints.forEach((j, k) => worldM.set(j, new THREE.Matrix4().fromArray(am.ibm, k * 16).invert()));
+  const bone = nm => new THREE.Vector3().setFromMatrixPosition(worldM.get(names.indexOf(nm))), M = R.spec.map;
+  const cls = c => pj.classes.indexOf(c), pts = c => { const ci = cls(c), out = []; for (let v = 0; v < pos.count; v++) if (pj.vclass[v] === ci) out.push(new THREE.Vector3(pos.getX(v), pos.getY(v), pos.getZ(v))); return out; };
+  const P = [], N = [], UV = [], SI = [], SW = [], IDX = [], VC = [], TRI = [], SEG = 18, uvc = [13.5 / 16, 13.5 / 16];   // (the palette's skin cell — the face's — so the face tint paints it the face's tone)
+  const ring = (c, u, v, rx, rz, w /* [[jointIdx, weight]...] */, cl) => { const base = P.length / 3; for (let i = 0; i < SEG; i++) { const a = i / SEG * Math.PI * 2, x = c.x + u.x * rx * Math.cos(a) + v.x * rz * Math.sin(a), y = c.y + u.y * rx * Math.cos(a) + v.y * rz * Math.sin(a), z = c.z + u.z * rx * Math.cos(a) + v.z * rz * Math.sin(a);
+      P.push(x, y, z); UV.push(uvc[0], uvc[1]); VC.push(cl); const si = [0, 0, 0, 0], sw = [0, 0, 0, 0]; w.slice(0, 4).forEach(([j, k], q) => { si[q] = j; sw[q] = k; }); SI.push(...si); SW.push(...sw); } return base; };
+  const stitch = (a, b, cl) => { for (let i = 0; i < SEG; i++) { const j = (i + 1) % SEG; IDX.push(a + i, b + i, b + j, a + i, b + j, a + j); TRI.push(cl, cl); } };
+  const pct = (arr, q) => { if (!arr.length) return null; const s = arr.slice().sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.floor(q * s.length))]; };
+  // THE TORSO: bands of the cuirass, bottom to collar; a ring below into the skirt, a neck ring above
+  const neck = (() => { const hp = hd && hd.geo.getAttribute('position'), hj = hd && hd.pieces, hi = hj ? hj.classes.indexOf('head') : -1; if (!hp || hi < 0) return { y: 1.45, r: 0.055 };
+    let ymin = 1e9; for (let v = 0; v < hp.count; v++) if (hj.vclass[v] === hi) ymin = Math.min(ymin, hp.getY(v)); const rs = []; for (let v = 0; v < hp.count; v++) if (hj.vclass[v] === hi && hp.getY(v) < ymin + 0.04) rs.push(Math.hypot(hp.getX(v), hp.getZ(v))); return { y: ymin, r: pct(rs, 0.9) || 0.055 }; })();   // (the head mesh is head AND hands: only the head class tells where the neck is)
+  const cu = pts('cuirass').filter(p => p.y <= neck.y + 0.02), ys = cu.map(p => p.y), y0 = Math.min(...ys), y1 = Math.max(...ys), NB = 12, hipY = bone(M.hipL).y, pelvis = joint(names[R.g.nodes.findIndex(n => (n.children || []).includes(names.indexOf(M.hipL)))]), chest = joint(M.upperBody);
+  const bands = []; for (let b = 0; b < NB; b++) { const yb = y0 + (b / (NB - 1)) * (y1 - y0), hw = (y1 - y0) / NB * 0.75, sel = cu.filter(p => Math.abs(p.y - yb) < hw);
+    if (sel.length < 6) { bands.push(null); continue; } const xs = sel.map(p => p.x), zs = sel.map(p => p.z), rx = (Math.max(...xs) - Math.min(...xs)) / 2, rz = (Math.max(...zs) - Math.min(...zs)) / 2; bands.push({ y: yb, cx: (Math.max(...xs) + Math.min(...xs)) / 2, cz: (Math.max(...zs) + Math.min(...zs)) / 2, rx, rz }); }
+  for (let b = 0; b < NB; b++) if (!bands[b]) { let lo = b - 1, hi = b + 1; while (lo >= 0 && !bands[lo]) lo--; while (hi < NB && !bands[hi]) hi++; const A = bands[lo] || bands[hi], B = bands[hi] || bands[lo], t = (b - lo) / Math.max(1, hi - lo); bands[b] = { y: y0 + (b / (NB - 1)) * (y1 - y0), cx: A.cx + (B.cx - A.cx) * t, cz: A.cz + (B.cz - A.cz) * t, rx: A.rx + (B.rx - A.rx) * t, rz: A.rz + (B.rz - A.rz) * t }; }
+  const U = new THREE.Vector3(1, 0, 0), V = new THREE.Vector3(0, 0, 1), tor = cls('torso') < 0 ? 0 : cls('torso'), tw = y => { const k = Math.max(0, Math.min(1, (y - (hipY + 0.05)) / Math.max(0.05, (y1 - 0.08) - (hipY + 0.05)))); return k < 0.001 ? [[pelvis, 1]] : k > 0.999 ? [[chest, 1]] : [[pelvis, 1 - k], [chest, k]]; };
+  let prev = null; const tRings = [];
+  { const b0 = bands[0]; tRings.push(ring(new THREE.Vector3(b0.cx, hipY - 0.03, b0.cz), U, V, b0.rx * 0.94, b0.rz * 0.94, [[pelvis, 1]], 0)); }
+  for (let b = 0; b < NB; b++) { const B = bands[b], h = b / (NB - 1), waist = 1 - 0.05 * Math.max(0, 1 - Math.abs(h - 0.25) / 0.2), pecs = 1 + 0.05 * Math.max(0, 1 - Math.abs(h - 0.68) / 0.22), shoulders = 1 + 0.28 * Math.max(0, (h - 0.55) / 0.45);   // (the cuirass narrows under the pauldrons; a man's shoulders don't)
+    tRings.push(ring(new THREE.Vector3(B.cx, B.y, B.cz), U, V, B.rx * 0.98 * waist * shoulders, B.rz * 0.98 * pecs, tw(B.y), 0)); }
+  { const bt = bands[NB - 1], r = neck.r * 1.15; tRings.push(ring(new THREE.Vector3(0, neck.y + 0.03, bt.cz * 0.5), U, V, Math.max(r, bt.rx * 0.5), Math.max(r, bt.rz * 0.6), [[chest, 1]], 0)); }   // the shoulders close to the neck's girth just under the head
+  for (let i = 1; i < tRings.length; i++) stitch(tRings[i - 1], tRings[i], 0);
+  // THE ARMS: a tube down the bones, shoulder → elbow → hand, sized band by band from the sleeve and the vambrace
+  const arm = (side, cl) => { const A = bone(M['shoulder' + side]), B = bone(M['elbow' + side]), C = bone(M['hand' + side]), jS = joint(M['shoulder' + side]), jE = joint(M['elbow' + side]), jH = joint(M['hand' + side]);
+    const near = (p, seg) => { const [S, E] = seg, d = E.clone().sub(S), L = d.length(); d.normalize(); const t = Math.max(0, Math.min(1, p.clone().sub(S).dot(d) / L)); return { t, r: p.clone().sub(S).sub(d.multiplyScalar(t * L)).length() }; };
+    const mine = list => list.filter(p => Math.sign(p.x) === Math.sign(A.x) || Math.abs(A.x) < 0.01);
+    const radii = (list, S, E, nb, shrink, dflt) => { const out = []; for (let b = 0; b < nb; b++) { const rs = []; for (const p of list) { const q = near(p, [S, E]); if (Math.abs(q.t - b / (nb - 1)) < 0.6 / (nb - 1)) rs.push(q.r); } out.push(rs.length >= 4 ? pct(rs, 0.85) * shrink : null); }
+      for (let b = 0; b < nb; b++) if (out[b] == null) { const got = out.filter(x => x != null); out[b] = got.length ? got.reduce((a, x) => a + x, 0) / got.length : dflt; } return out; };
+    const up = radii(mine(pts('sleeve')), A, B, 6, 0.96, 0.08), fo = radii(mine(pts('vambrace')), B, C, 6, 0.88, 0.062);
+    const frame = d => { const u = new THREE.Vector3().crossVectors(d, Math.abs(d.z) < 0.9 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(1, 0, 0)).normalize(); return [u, new THREE.Vector3().crossVectors(d, u).normalize()]; };
+    const rings = [], dU = B.clone().sub(A).normalize(), dF = C.clone().sub(B).normalize(), [uU, vU] = frame(dU), [uF, vF] = frame(dF), dM = dU.clone().add(dF).normalize(), [uM, vM] = frame(dM);
+    for (let b = 0; b < 6; b++) { const t = b / 5, c = A.clone().lerp(B, t), k = Math.max(0, (t - 0.7) / 0.3) * 0.5, r = b === 5 ? (up[5] + fo[0]) / 2 : up[b]; rings.push(ring(c, b === 5 ? uM : uU, b === 5 ? vM : vU, r, r, k > 0 ? [[jS, 1 - k], [jE, k]] : [[jS, 1]], cl)); }
+    for (let b = 1; b < 6; b++) { const t = b / 5, c = B.clone().lerp(C, t), k = Math.max(0, (t - 0.6) / 0.4) * 0.5; rings.push(ring(c, uF, vF, fo[b], fo[b], k > 0 ? [[jE, 1 - k], [jH, k]] : [[jE, 1]], cl)); }
+    for (let i = 1; i < rings.length; i++) stitch(rings[i - 1], rings[i], cl); };
+  arm('L', 1); arm('R', 2);
+  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); geo.setAttribute('uv', new THREE.Float32BufferAttribute(UV, 2));
+  geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(SI, 4)); geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(SW, 4)); geo.setIndex(IDX); geo.computeVertexNormals();
+  geo.setAttribute('kind', new THREE.BufferAttribute(new Float32Array(P.length / 3).fill(MODEL_KIND.skin), 1));
+  const pieces = { classes: ['torso', 'armL', 'armR'], mats: ['skin'], tri: TRI, vclass: VC, vmat: new Array(P.length / 3).fill(0), naked: true };
+  return (R.body = { geo, pieces });
 }
 // build a fresh skeleton + skinned meshes for one body
 function instanceModelRig(R, ctx = 'main') {
@@ -1186,6 +1245,11 @@ function instanceModelRig(R, ctx = 'main') {
     const sm = new THREE.SkinnedMesh(geo, own ? matVC : mat); sm.name = m.name; sm.userData.mm = { ctx, skinning: true, vc: own }; sm.userData.mmR = R.name; sm.frustumCulled = false; sm.castShadow = true; root.add(sm); if (own) { sm.userData.pieces = m.pieces; sm.userData.geo0 = m.geo; }
     const bones = m.joints.map(j => nodes[j]), inv = []; for (let i = 0; i < bones.length; i++) inv.push(new THREE.Matrix4().fromArray(m.ibm, i * 16));
     sm.bind(new THREE.Skeleton(bones, inv), new THREE.Matrix4()); skinned[m.name] = sm; }
+  const NB = modelBodyBuild(R), am = R.meshes.find(x => x.short === 'armor');   // THE BODY UNDER THE ARMOUR: this man's own copy, bound to the armour's skeleton, shown when his look goes bare (lookApply)
+  if (NB && am && skinned[am.name]) { const geo = new THREE.BufferGeometry(); for (const k of ['position', 'normal', 'uv', 'skinIndex', 'skinWeight', 'kind']) geo.setAttribute(k, NB.geo.getAttribute(k));
+    const i0 = NB.geo.index.array; geo.setIndex(new THREE.BufferAttribute(new i0.constructor(i0), 1)); geo.setAttribute('color', new THREE.BufferAttribute(new Uint8Array(NB.geo.getAttribute('position').count * 3).fill(255), 3, true));
+    const sm = new THREE.SkinnedMesh(geo, matVC); sm.name = 'naked'; sm.frustumCulled = false; sm.castShadow = true; sm.visible = false; root.add(sm); sm.userData.pieces = NB.pieces; sm.userData.geo0 = NB.geo; sm.userData.mm = { ctx, skinning: true, vc: true }; sm.userData.mmR = R.name;
+    sm.bind(skinned[am.name].skeleton, new THREE.Matrix4()); skinned.naked = sm; }
   const order = []; const dfs = i => { order.push(i); (g.nodes[i].children || []).forEach(dfs); }; g.nodes.forEach((n, i) => { if (parent[i] < 0) dfs(i); });   // parents before children (the file's root sits last)
   // the REST pose is the bind pose (inverse of the inverse-bind matrices), not the file's node transforms — those hold the
   // model's idle stance (knees bent, sword up), and the plastic pivots at zero must mean "standing straight"
@@ -1324,7 +1388,7 @@ const LOOK_SKIN = [0xf0d4b8, 0xe4c4a4, 0xd8b090, 0xc89a78, 0xa87858, 0x8a5c40];
 // for his own face; the vale's men roll theirs from the name
 const LOOK_HAIR_PICK = [0x1a1210, 0x3a2416, 0x5c3a1e, 0x8a5a2e, 0xa04a20, 0xb08040, 0xd0b078, 0x8a8a88, 0xd8d4cc];   // black, dark brown, brown, auburn, red, fair, blond, grey, white
 const LOOK_HAIR_STYLES = ['shaved', 'short crop', 'crown', 'long', 'mohawk'];
-const LOOK_BEARD_STYLES = ['clean', 'stubble', 'full beard', 'goatee', 'moustache'];
+const LOOK_BEARD_STYLES = ['clean', 'stubble', 'full beard', 'goatee', 'moustache', 'braided'];   // (braided: the full beard painted, and a plait hanging from the chin — lookBraidApply)
 const LOOK_SKIN_NAMES = ['fair', 'light', 'tan', 'olive', 'brown', 'dark'];
 // THE FACE'S BONES (gear.look.f): six casts of the same head — a displacement of the head's vertices in the bind pose on
 // this body's own copy of the positions (lookFacePoint); the vale's men roll theirs from the name
@@ -1346,8 +1410,8 @@ const LOOK_HAIR_CUT = { 1: { pad: 0.009, top: 0.004 }, 2: { pad: 0.014, top: 0.0
 const LOOK_ARMOR = {
   none:           { helm: 0.08, pauldron: 0,    elbow: 0,    knee: 0,    cloak: 0.12, plume: 0,    straps: 0.3, pouch: 0.5, cloth: 0.5,  base: 'shirt',   paint: { skirt: 'breeches', greaves: 'breeches', boot: 'leather', helmet: 'iron' }, clothOf: { skirt: 'breeches' } },   // a linen shirt and wool breeches
   gambeson:       { helm: 0.15, pauldron: 0,    elbow: 0.3,  knee: 0.15, cloak: 0.25, plume: 0,    straps: 0.6, pouch: 0.5, cloth: 0.35, base: 'leather', paint: { cuirass: 'jack', skirt: 'jack', boot: 'leather', helmet: 'iron' } },
-  wolf_pelt:      { helm: 0.02, pauldron: 1,    elbow: 0,    knee: 0,    cloak: 1,    plume: 0,    straps: 0.7, pouch: 0.6, cloth: 0,    base: 'fur',     bare: true, paint: { cuirass: 'skin', vambrace: 'leather', pauldron: 'furDark', boot: 'leather', helmet: 'iron' }, clothOf: { sleeve: 'skin', skirt: 'fur' }, cloakC: 'furDark' },   // bare-chested under the pelt
-  berserker:      { helm: 0.02, pauldron: 1,    elbow: 0,    knee: 0,    cloak: 0.35, plume: 0,    straps: 1,   pouch: 0.7, cloth: 0.1,  base: 'breeches', bare: true, paint: { cuirass: 'skin', vambrace: 'iron', pauldron: 'furGrey', boot: 'leather', helmet: 'iron', straps: 'leather', pouch: 'leather' }, clothOf: { sleeve: 'skin', skirt: 'sash' }, cloakC: 'furGrey' },   // the northern raider (2026-09-16): a grey wolf mantle on the shoulders, a bare inked chest, steel bracers, a sash in the team dye, wool breeches
+  wolf_pelt:      { helm: 0.02, pauldron: 1,    elbow: 0,    knee: 0,    cloak: 1,    plume: 0,    straps: 0.7, pouch: 0.6, cloth: 0,    base: 'fur',     bare: true, naked: true, paint: { cuirass: 'skin', vambrace: 'leather', pauldron: 'furDark', boot: 'leather', helmet: 'iron' }, clothOf: { sleeve: 'skin', skirt: 'fur' }, cloakC: 'furDark' },   // bare-chested under the pelt (naked: the body under the armour shows, cuirass and sleeves dropped)
+  berserker:      { helm: 0.02, pauldron: 1,    elbow: 0,    knee: 0,    cloak: 0.35, plume: 0,    straps: 1,   pouch: 0.7, cloth: 0.1,  base: 'breeches', bare: true, naked: true, paint: { cuirass: 'skin', vambrace: 'ironEngraved', pauldron: 'furGrey', boot: 'leather', helmet: 'iron', straps: 'leather', pouch: 'leather' }, clothOf: { sleeve: 'skin', skirt: 'sash' }, cloakC: 'furGrey' },   // the northern raider (2026-09-16): a grey wolf mantle on the shoulders, a bare inked chest, steel bracers, a sash in the team dye, wool breeches
   leather:        { helm: 0.25, pauldron: 0.2,  elbow: 0.5,  knee: 0.3,  cloak: 0.35, plume: 0,    straps: 0.6, pouch: 0.5, cloth: 0.35, base: 'leather', paint: { helmet: 'iron' } },
   brigandine:     { helm: 0.5,  pauldron: 0.35, elbow: 0.7,  knee: 0.5,  cloak: 0.4,  plume: 0.1,  straps: 0.6, pouch: 0.5, cloth: 0.15, base: 0x606268,  paint: { cuirass: 0xa03030, skirt: 'leather' } },
   mail:           { helm: 0.6,  pauldron: 0.4,  elbow: 0.8,  knee: 0.6,  cloak: 0.5,  plume: 0.15, straps: 0.6, pouch: 0.5, cloth: 0.1,  base: 0xa8acb4,  paint: { helmet: 0xb4b8c0 } },
@@ -1380,7 +1444,7 @@ function lookRoll(name, arch, gear, pal, o = {}) {
   const bald = r() < 0.28, hairRoll = pick(LOOK_HAIR), hairC = has('c') ? LOOK_HAIR_PICK[LK.c] : hairRoll, skinC = new THREE.Color(look.skin);
   const beardOn = r() < 0.75, fullBeard = r() < 0.65, styleRoll = r(), beardKind = r();
   look.hairStyle = has('h') ? LK.h : bald ? 0 : styleRoll < 0.64 ? 1 : styleRoll < 0.74 ? 2 : styleRoll < 0.94 ? 3 : 4;   // most cropped, some long, a mohawk now and then
-  look.beardStyle = has('b') ? LK.b : !beardOn ? 0 : beardKind < 0.12 ? 3 : beardKind < 0.17 ? 4 : fullBeard ? 2 : 1;      // most wear a beard, most of those a full one
+  look.beardStyle = has('b') ? LK.b : !beardOn ? 0 : beardKind < 0.12 ? 3 : beardKind < 0.17 ? 4 : beardKind < 0.25 ? 5 : fullBeard ? 2 : 1;   // (5: the plait of the north)      // most wear a beard, most of those a full one
   look.hair = look.hairStyle === 0 ? null : hairC; look.beard = look.beardStyle ? c.setHex(hairC).lerp(skinC, 0.08).getHex() : null; look.stubble = c.setHex(hairC).lerp(skinC, 0.45).getHex();
   look.brow = c.setHex(hairC).lerp(skinC, 0.3).getHex(); look.socket = c.copy(skinC).multiplyScalar(0.78).getHex(); look.lip = c.copy(skinC).multiplyScalar(0.88).getHex();   // heavy dark brows, eyes deep in shadow, a hard mouth
   look.faceShape = has('f') ? LK.f : Math.floor(lookRng(lookSeed(name) ^ 0x2545f491)() * LOOK_FACE_SHAPES.length);   // (its own stream: the bones came later, nobody's hair or kit re-rolls for them)
@@ -1388,13 +1452,14 @@ function lookRoll(name, arch, gear, pal, o = {}) {
   // the kit
   look.helmet = !!(gear && (gear.helm || gear.plume));                                              // (a bought plume needs a helm to sit on)
   for (const k of ['pauldron', 'elbow', 'knee', 'straps', 'pouch']) if (r() >= p(k)) look.hide.push(k); if (!look.helmet) look.hide.push('helmet');
+  look.hide.push('skirtTop'); if (O.naked) { look.hide.push('cuirass', 'sleeve'); look.naked = true; }   // bare to the waist: the body under the armour shows (instanceModelRig's 'naked' mesh)
   look.cloak = o.full ? true : r() < p('cloak'); look.plume = o.full || (r() < p('plume')) || !!(gear && gear.plume);
   look.shield = !A.shield && !o.full ? 'none' : (gear && gear.shield === 'heater_shield') ? 'heater' : 'round'; look.round = Math.floor(r() * 4);
   // the paint: cloth = the team dye (dulled on a poor man), steel per piece, the named colours resolved here
   look.cloth = c.copy(team).lerp(new THREE.Color(0x8a8480), O.cloth || 0).getHex(); if (kind === 'dragon_plate') look.cloth = c.copy(team).lerp(new THREE.Color(0x000000), 0.4).getHex();
   const bare = skinC.clone().multiplyScalar(1.28); bare.r = Math.min(1, bare.r); bare.g = Math.min(1, bare.g); bare.b = Math.min(1, bare.b);   // (the palette's steel is a mid grey: lift the tone so a bare chest matches the face)
   const named = { shirt: c.copy(team).lerp(new THREE.Color(0xd8cfb8), 0.5).getHex(), breeches: pick(LOOK_WOOL), jack: c.copy(team).lerp(new THREE.Color(0x6a6460), 0.45).multiplyScalar(0.9).getHex(),
-    leather: look.leather, fur: pick(LOOK_FUR), furDark: 0x33241a, furGrey: 0x6e685e, sash: c.copy(team).multiplyScalar(0.72).getHex(), skin: bare.getHex(), plate: pick(LOOK_PLATE), iron: 0x6a6c72 };   // (the sash: the team dye, deepened)
+    leather: look.leather, fur: pick(LOOK_FUR), furDark: 0x33241a, furGrey: 0x6e685e, ironEngraved: 0x8a8e96, sash: c.copy(team).multiplyScalar(0.72).getHex(), skin: bare.getHex(), plate: pick(LOOK_PLATE), iron: 0x6a6c72 };   // (the sash: the team dye, deepened)
   look.bare = !!O.bare; if (look.bare) { const t = skinC.clone().multiply(new THREE.Color(0.92, 0.71, 0.68)); named.skin = t.setRGB(Math.min(1, t.r), Math.min(1, t.g), Math.min(1, t.b)).getHex(); }   // (a bare chest: its steel is re-pointed at the WHITE cell — lookApply — so this tint × white must equal the face's skin cell × the face tint (lookApply divides by 1 / 0.86 / 0.70); it read as cream before)
   const resolve = v => typeof v === 'string' ? named[v] : v, base = resolve(O.base);
   for (const pc of LOOK_PIECES) look.paint[pc] = O.paint && O.paint[pc] != null ? resolve(O.paint[pc]) : base;
@@ -1409,7 +1474,7 @@ function lookRoll(name, arch, gear, pal, o = {}) {
 function lookFaceColour(look, cls, mt, x, y, z) {
   const hs = look.hairStyle | 0, bs = look.beardStyle | 0;
   if (look.hair != null && cls === 'hair' && lookHairUnder(hs, x, y, z)) return look.hair;
-  if (cls === 'beard' && look.beard != null) { const on = bs === 2 || bs === 1 || (bs === 3 && Math.abs(x) < 0.05) || (bs === 4 && y > 1.585 && z > 0.1); if (on) return bs === 1 ? look.stubble : look.beard; }
+  if (cls === 'beard' && look.beard != null) { const on = bs === 2 || bs === 5 || bs === 1 || (bs === 3 && Math.abs(x) < 0.05) || (bs === 4 && y > 1.585 && z > 0.1); if (on) return bs === 1 ? look.stubble : look.beard; }
   if (cls === 'brow') return look.brow; if (cls === 'socket') return look.socket; if (cls === 'scarL' || cls === 'scarR') return look.scar === cls ? look.scarC : look.skin; if (cls === 'eye') return 0xd8d0c8;
   if (mt === 'leather') return look.lip;                     // (the palette's lip/brow brown: no painted lips)
   return look.skin;
@@ -1425,16 +1490,14 @@ function lookColour(look, cls, mt) {
 // "cuirass" is painted as a linen shirt, a gambeson's as a quilted jack, the pelt-wearer's chest is his skin, and a mail
 // hauberk's body pieces are rings — so the kind follows the paint, not the swatch
 const LOOK_MAIL_PIECES = new Set(['cuirass', 'skirt', 'sleeve', 'greaves']);
-// the bake files the cloth showing at the ELBOWS under "skirt" (one connected cloth component); a fighter's arms hang at
-// waist height in the bind pose, so only the flanks tell them apart: skirt cloth out past |x| 0.24 is the arm's
-function lookClassOf(pj, v, pos) { const cls = pj.classes[pj.vclass[v]]; return cls === 'skirt' && pj.mats[pj.vmat[v]] === 'cloth' && Math.abs(pos.getX(v)) >= 0.24 ? 'sleeve' : cls; }
 function lookInkKind(look, K) { return look.ink === 'wolf' ? K.inkWolf : look.ink === 'blood' ? K.inkBlood : K.skin; }   // bare skin, or bare skin under a tattoo (the ink ware)
 function lookKind(look, cls, mt, kd0) {
   const O = LOOK_ARMOR[look.kind] || LOOK_ARMOR.none, K = MODEL_KIND;
   if (mt === 'steel') { const p = O.paint && O.paint[cls] != null ? O.paint[cls] : O.base;
-    if (p === 'shirt' || p === 'breeches' || p === 'jack') return K.cloth; if (p === 'leather' || p === 'fur' || p === 'furDark' || p === 'furGrey') return K.leather; if (p === 'skin') return lookInkKind(look, K);
+    if (p === 'ironEngraved') return K.engraved; if (p === 'shirt' || p === 'breeches' || p === 'jack') return K.cloth; if (p === 'leather' || p === 'fur' || p === 'furDark' || p === 'furGrey') return K.leather; if (p === 'skin') return lookInkKind(look, K);
     return look.kind === 'mail' && LOOK_MAIL_PIECES.has(cls) ? K.mail : K.steel; }
   if (mt === 'cloth') { const c = O.clothOf && O.clothOf[cls]; return c === 'skin' ? lookInkKind(look, K) : c === 'fur' ? K.leather : K.cloth; }
+  if (mt === 'skin' && (cls === 'torso' || cls === 'armL' || cls === 'armR')) return lookInkKind(look, K);   // the body under the armour: bare skin, inked if he bought ink
   if (mt === 'dark') return (typeof O.base === 'number' || O.base === 'plate') ? K.mail : K.leather;   // the dark under-layer at the joints: mail under plate, padding under anything softer
   return kd0;
 }
@@ -1452,15 +1515,17 @@ function lookApply(L, look) {
     // skin vertices carry a per-vertex colour, so the palette's skin (~#ffdcb4) × tint: the tint is chosen so tint × skin ≈ the tone wanted
     if (skinTint) lookFaceApply(sm, look, pj);                 // (the bones: this body's own head positions)
     const pos = sm.userData.geo0.getAttribute('position');
-    for (let v = 0; v < nv; v++) { const cls = lookClassOf(pj, v, pos), mt = pj.mats[pj.vmat[v]]; c.setHex(skinTint ? lookFaceColour(look, cls, mt, pos.getX(v), pos.getY(v), pos.getZ(v)) : lookColour(look, cls, mt)); if (skinTint && mt === 'skin' && cls !== 'eye') { c.r = Math.min(1, c.r / 1.0); c.g = Math.min(1, c.g / 0.86); c.b = Math.min(1, c.b / 0.70); } col.setXYZ(v, c.r * 255, c.g * 255, c.b * 255); } col.needsUpdate = true;
+    for (let v = 0; v < nv; v++) { const cls = pj.classes[pj.vclass[v]], mt = pj.mats[pj.vmat[v]]; c.setHex(skinTint ? lookFaceColour(look, cls, mt, pos.getX(v), pos.getY(v), pos.getZ(v)) : lookColour(look, cls, mt)); if ((skinTint || pj.naked) && mt === 'skin' && cls !== 'eye') { c.r = Math.min(1, c.r / 1.0); c.g = Math.min(1, c.g / 0.86); c.b = Math.min(1, c.b / 0.70); } col.setXYZ(v, c.r * 255, c.g * 255, c.b * 255); } col.needsUpdate = true;
     const kd0 = sm.userData.geo0.getAttribute('kind');           // this body's own kinds, following the paint (lookKind)
     if (kd0 && !skinTint) { if (!sm.userData.ownKind) { sm.geometry.setAttribute('kind', kd0.clone()); sm.userData.ownKind = true; } const kd = sm.geometry.getAttribute('kind');
-      for (let v = 0; v < nv; v++) kd.setX(v, lookKind(look, lookClassOf(pj, v, pos), pj.mats[pj.vmat[v]], kd0.getX(v))); kd.needsUpdate = true; }
+      for (let v = 0; v < nv; v++) kd.setX(v, lookKind(look, pj.classes[pj.vclass[v]], pj.mats[pj.vmat[v]], kd0.getX(v))); kd.needsUpdate = true; }
   }
   lookDraw(L, look); if (lookHelmBuild(L)) lookHelmPaint(L);
+  if (L.inst.skinned.naked) L.inst.skinned.naked.visible = !!look.naked;
   const cloak = L.inst.skinned[M.cloak]; if (cloak) { cloak.visible = !!look.cloak; if (cloak.material && cloak.material.color && !cloak.material.map) cloak.material.color.setHex(look.cloakC); }
   if (L.plume) L.plume.visible = !!(look.helmet && look.plume);
   lookHairApply(L, look);                                                // the cut: a cap on the skull when he stands bareheaded
+  lookBraidApply(L, look);                                               // the plait, if his beard is braided
   L.shieldKind = look.shield; if (look.shield === 'round') lookRoundShield(L, look); else if (L.mRound) L.mRound.visible = false;
   if (L.mShield && L.mShield.material && L.mShield.material.color) L.mShield.material.color.setHex(look.cloth).lerp(new THREE.Color(0xffffff), 0.35);
 }
@@ -1550,6 +1615,25 @@ function lookSkullCast(T, ox, oy, oz, dx, dy, dz) {
 // the crown, each point the skull's surface at that bearing and height pushed out by the pad, a lip down to the skin at
 // the hairline; long hair drapes from the hairline down the neck; a mohawk is a fin along the midline. Flat-shaded,
 // wound outward, skinned to the head bone.
+// THE PLAIT: a braided beard's tail — a run of beads hanging from the chin, swaying a little forward, a leather tie at the end;
+// bind-space model units on the head bone (the chin sits about y 1.49, z 0.09 — lookRuggedHead's numbers)
+function lookBraidGeo(R) {
+  if (R.braidGeo !== undefined) return R.braidGeo;
+  const m = R.meshes.find(x => x.pieces && x.pieces.classes.indexOf('hair') >= 0); if (!m) return (R.braidGeo = null);
+  const headNode = R.g.nodes.findIndex(x => x.name === R.spec.map.head), joint = Math.max(0, m.joints.indexOf(headNode)), parts = [];
+  for (let i = 0; i < 7; i++) { const t = i / 6, r = 0.019 - t * 0.006, g = new THREE.SphereGeometry(r, 7, 5); g.scale(1.25, 1, 1); g.translate((i % 2 ? 1 : -1) * 0.006, 1.478 - i * 0.03, 0.092 + t * 0.028 - t * t * 0.01); parts.push(g); }
+  { const g = new THREE.CylinderGeometry(0.014, 0.012, 0.02, 6); g.translate(0, 1.478 - 6 * 0.03 - 0.02, 0.092 + 0.018); parts.push(g); }   // the tie
+  let P = [], I = [], off = 0; for (const g of parts) { const p = g.getAttribute('position'), idx = g.index.array; for (let v = 0; v < p.count; v++) P.push(p.getX(v), p.getY(v), p.getZ(v)); for (let k = 0; k < idx.length; k++) I.push(idx[k] + off); off += p.count; }
+  const nv = P.length / 3, si = new Uint16Array(nv * 4), sw = new Float32Array(nv * 4); for (let v = 0; v < nv; v++) { si[v * 4] = joint; sw[v * 4] = 1; }
+  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); geo.setAttribute('skinIndex', new THREE.BufferAttribute(si, 4)); geo.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4)); geo.setIndex(I); geo.computeVertexNormals();
+  return (R.braidGeo = geo);
+}
+function lookBraidApply(L, look) {
+  const on = (look.beardStyle | 0) === 5 && look.beard != null, R = MODEL_RIGS.get(L.g.userData.model), body = on && R && Object.values(L.inst.skinned).find(sm => sm.userData.pieces && sm.userData.pieces.classes.indexOf('hair') >= 0);
+  const g0 = body && lookBraidGeo(R); if (!g0) { if (L.mBraid) L.mBraid.visible = false; return; }
+  if (!L.mBraid) { const sm = new THREE.SkinnedMesh(g0, new THREE.MeshPhongMaterial({ color: look.beard, shininess: 8, specular: 0x181818, skinning: true })); sm.frustumCulled = false; sm.castShadow = true; sm.name = 'braid'; body.parent.add(sm); sm.bind(body.skeleton, body.bindMatrix); L.mBraid = sm; }
+  L.mBraid.material.color.setHex(look.beard); L.mBraid.visible = true;
+}
 function lookHairGeo(R, hs) {
   R.hairGeo = R.hairGeo || {}; if (R.hairGeo[hs] !== undefined) return R.hairGeo[hs]; const T = lookSkullTris(R); if (!T.length) return (R.hairGeo[hs] = null);
   const m = R.meshes.find(m => m.pieces && m.pieces.classes.indexOf('hair') >= 0), headNode = R.g.nodes.findIndex(n => n.name === R.spec.map.head), joint = Math.max(0, m.joints.indexOf(headNode));
@@ -1923,6 +2007,7 @@ function updateAnimator(anim, dt) {
   else p.elbowL.rotation.z = 0;
   p.upperBody.rotation.set(c.leanX, -c.twistY, 0);
   if (!p.sword.userData.fixedGrip) p.sword.rotation.x = SWORD_BASE_X + c.wristX;
+  if (p.sword.userData.axe) { const up = anim.name === 'relax' ? 1 : 0, k = p.sword.userData.axeK == null ? up : p.sword.userData.axeK + (up - p.sword.userData.axeK) * Math.min(1, dt * 8); p.sword.userData.axeK = k; p.sword.rotation.z = Math.PI * k; }   // an axe at ease rides head-up along the arm (a sword hangs point-down); drawn, the head leads
 }
 
 // Procedural legs: walk cycle with knee flex during the swing-through.
@@ -20338,8 +20423,8 @@ const AF_LOOK = {
     black_night:  { style: 'curved',   blade: 0x16141c, len: 1.15, w: 0.22, glow: 0x5a2aa0, guard: 0x5a1a1a, pommel: 0x5a1a1a },
     // THE NORTH (2026-09-16): a broken-back knife and two axes — 'axe' is a haft with a bearded head, the edge forward
     seax:         { style: 'cleaver',  blade: 0xb0b4ba, len: 0.62, w: 0.19, grip: 0x4a3420, guard: 0x4a3420 },
-    bearded_axe:  { style: 'axe',      blade: 0xa8adb4, len: 0.95, w: 0.42, grip: 0x5a3d22, guard: 0x3a2a18 },
-    dane_axe:     { style: 'axe',      blade: 0xb8bcc4, len: 1.45, w: 0.56, grip: 0x4a3420, guard: 0x2a2226, great: true },
+    bearded_axe:  { style: 'axe',      blade: 0xa8adb4, len: 0.95, w: 0.32, grip: 0x5a3d22, guard: 0x3a2a18 },
+    dane_axe:     { style: 'axe',      blade: 0xb8bcc4, len: 1.45, w: 0.42, grip: 0x4a3420, guard: 0x2a2226, great: true },
   },
   bow: { hunting_bow: { scale: 1, wood: 0x6b4a2e }, longbow: { scale: 1.15, wood: 0x4e3620, wrap: true }, warbow: { scale: 1.3, wood: 0x2e2116, wrap: true, tips: 0xd9b24a }, recurve: { scale: 1.1, wood: 0xe8dcc0, wrap: true, tips: 0x2a1a12, horn: true } },
   horse: { nag: { scale: 0.9, coat: 0x8a7a66, droop: 0.28, thin: true }, courser: { scale: 1 }, destrier: { scale: 1.08, coat: 0x3e3630, caparison: true }, warhorse: { scale: 1.14, coat: 0x1e1a18, caparison: true, chamfron: true, crinet: true } },
@@ -20428,14 +20513,14 @@ function afBuildSword(g, sw, tint) {
       const slab = boxMesh(ww, seg * 1.15, t, bladeM); slab.position.set(x + seg / 2 * Math.sin(ang) + (wavy ? 0 : ww * 0.2), y + seg / 2 * Math.cos(ang), 0); slab.rotation.z = -ang; slab.castShadow = i < 3; g.add(slab);   // (−z rotation tips +y toward +x: slab and step agree)
       y += seg * Math.cos(ang); x += wavy ? 0 : seg * Math.sin(ang); }
     const tip = addTip(0, 0); tip.rotation.z = -ang; tip.position.set(x + 0.12 * Math.sin(ang) + (sw.style === 'curved' ? w * 0.2 : 0), y + 0.12 * Math.cos(ang), 0);
-  } else if (sw.style === 'axe') {                                       // a haft with a bearded head: the socket round the wood, the bit forward (+x), the beard hooking down behind the edge
+  } else if (sw.style === 'axe') {                                       // a haft with a bearded head: a 2D profile extruded — the socket round the wood, the bit sweeping out and up, a convex edge, the beard hooking down and back
     const haft = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.05, len, 8), gripM); haft.position.y = y0 + len / 2 - 0.12; g.add(haft);
-    const hy = y0 + len - 0.3, hw = w, dark = mat(sw.guard || 0x3a2a18, { metal: 1, shared: false });
-    const sock = boxMesh(hw * 0.5, 0.36, t * 1.8, dark); sock.position.set(hw * 0.08, hy, 0); g.add(sock);
-    const bit = boxMesh(hw, 0.5, t, bladeM); bit.position.set(hw * 0.5, hy - 0.04, 0); bit.castShadow = true; g.add(bit);
-    const beard = boxMesh(hw * 0.5, 0.38, t, bladeM); beard.position.set(hw * 0.78, hy - 0.42, 0); beard.rotation.z = 0.3; g.add(beard);
-    const edge = boxMesh(0.05, 0.98, t * 0.55, mat(0xe8ecf0, { metal: 1, shared: false })); edge.position.set(hw + 0.01, hy - 0.2, 0); g.add(edge);
-    if (sw.great) { const back = boxMesh(hw * 0.3, 0.2, t * 1.2, dark); back.position.set(-hw * 0.18, hy + 0.02, 0); g.add(back); }
+    const hy = y0 + len - 0.3, hw = w, dark = mat(sw.guard || 0x3a2a18, { metal: 1, shared: false }), sh = new THREE.Shape();
+    sh.moveTo(-0.075, 0.2); sh.lineTo(0.075, 0.2); sh.quadraticCurveTo(hw * 0.5, 0.26, hw * 0.9, 0.36); sh.quadraticCurveTo(hw * 1.14, 0.08, hw * 1.0, -0.2); sh.quadraticCurveTo(hw * 0.92, -0.4, hw * 0.7, -0.5);
+    sh.quadraticCurveTo(hw * 0.6, -0.28, hw * 0.36, -0.14); sh.lineTo(0.075, -0.16); sh.lineTo(-0.075, -0.16); sh.closePath();
+    const head = new THREE.Mesh(new THREE.ExtrudeGeometry(sh, { depth: t * 0.9, bevelEnabled: false }), bladeM); head.position.set(0, hy, -t * 0.45); head.castShadow = true; g.add(head);
+    const sock = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.08, 0.4, 8), dark); sock.position.y = hy + 0.02; g.add(sock);   // the socket: an iron collar round the haft
+    if (sw.great) { const poll = boxMesh(hw * 0.32, 0.22, t * 1.6, dark); poll.position.set(-hw * 0.2, hy + 0.02, 0); g.add(poll); }   // (the Dane axe: a hammer poll behind)
   } else if (sw.style === 'thin') {
     const blade = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.045, len, 6), bladeM); blade.position.y = y0 + len / 2 + 0.02; blade.castShadow = true; g.add(blade);
     const tip = new THREE.Mesh(new THREE.ConeGeometry(0.03, 0.14, 6), bladeM); tip.position.y = y0 + len + 0.09; g.add(tip);
@@ -20444,6 +20529,7 @@ function afBuildSword(g, sw, tint) {
     const nose = boxMesh(w * 1.1, 0.34, t, bladeM); nose.position.set(w * 0.42, y0 + len + 0.12, 0); nose.rotation.z = 0.5; g.add(nose);
     const hole = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, t * 1.3, 8), mat(0x1a1214, { shared: false })); hole.rotation.x = Math.PI / 2; hole.position.set(w * 0.45, y0 + len - 0.1, 0); g.add(hole);
   }
+  g.userData.axe = sw.style === 'axe'; if (!g.userData.axe) { g.rotation.z = 0; g.userData.axeK = 0; }   // (an axe is carried head UP when the man is at ease — updateAnimator turns it)
   g.scale.set(1, 1, 1); g.rotation.y = Math.PI / 2;        // (the grip: edge forward, guard vertical to the wrist — same as makeSword)
   if (real) { for (const c of g.children) c.visible = false; g.add(real); }
 }

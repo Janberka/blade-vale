@@ -134,6 +134,10 @@ under the pecs, the belly shaded into the sash. And it is slimmer than the plate
 with an 8 % waist (the padding under armour, the plate's own stand-off) and shoulders broadening ×1.34 toward the collar, the arms 0.66 of the sleeve's girth — and an arm is an
 ELLIPSE, 0.84 across by 1.04 front-to-back ("from front and back the arms look still a bit wide"): the narrow way round is what
 the front and the back see, the side keeps the biceps' depth.
+THE CHEST ("add some chest muscle detail"): the torso is lathed on 22 rings now (the plate's 12 bands interpolated, `bandAt`), and
+`chestShape` moves each ring's vertices by their place round it — the pecs a plate of muscle either side of the sternum (the two
+vertices next to the midline out 7.5 %, the next 3 %), fullest at two thirds of the torso's height and fading toward the crease
+and the collar bone, the sternum sinking between them, a crease under them (the front set in 4 %) that the paint darkens too.
 
 ## The surface pass (2026-09-16, "our chars look too low poly")
 

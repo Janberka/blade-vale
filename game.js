@@ -1209,7 +1209,17 @@ function modelBodyBuild(R) {
   const U = new THREE.Vector3(1, 0, 0), V = new THREE.Vector3(0, 0, 1), tor = cls('torso') < 0 ? 0 : cls('torso'), tw = y => { const k = Math.max(0, Math.min(1, (y - (hipY + 0.05)) / Math.max(0.05, (y1 - 0.08) - (hipY + 0.05)))); return k < 0.001 ? [[pelvis, 1]] : k > 0.999 ? [[chest, 1]] : [[pelvis, 1 - k], [chest, k]]; };
   let prev = null; const tRings = [];
   const prof = h => { const waist = 1 - 0.08 * Math.max(0, 1 - Math.abs(h - 0.25) / 0.2), pecs = 1 + 0.05 * Math.max(0, 1 - Math.abs(h - 0.68) / 0.22), shoulders = 1 + 0.34 * Math.max(0, (h - 0.55) / 0.45); return [0.90 * waist * shoulders, 0.87 * pecs]; };   // the torso's profile over the plate's cross-section, by height 0..1: a man is slimmer than his plate (the padding under it, the plate's own stand-off), with a waist; the cuirass narrows under the pauldrons, a man's shoulders don't
-  const groove = h => h > 0.06 && h < 0.88 ? (i => (i === SEG / 4 || i === SEG * 3 / 4) ? 0.965 : 1) : null;   // the midline vertex (the front at a quarter turn, the back at three) set in a little: the sternum and the belly's line, the spine
+  // THE CHEST, by vertex (SEG 20: i 5 is the front midline, 15 the back; 1..9 the front half): the midline set in for the sternum, the belly's
+  // line and the spine; the PECS a plate of muscle either side of the sternum from the crease under them up toward the collar bone, fullest at
+  // two thirds of the torso's height, the sternum sinking between them; the crease under the pecs a ring set in across the front
+  const chestShape = h => i => { let q = 1; const F = SEG / 4, mid = i === F || i === SEG - F, pec = Math.abs(i - F) === 1 || Math.abs(i - F) === 2, edge = Math.abs(i - F) === 3, front = Math.abs(i - F) <= 3;
+    if (h > 0.06 && h < 0.88 && mid) q *= 0.965;
+    const pk = Math.max(0, 1 - Math.abs(h - 0.66) / 0.17); if (pec) q *= 1 + 0.075 * pk; else if (edge) q *= 1 + 0.03 * pk; else if (i === F) q *= 1 - 0.025 * pk;
+    const cr = Math.max(0, 1 - Math.abs(h - 0.47) / 0.06); if (front) q *= 1 - 0.04 * cr;
+    return q; };
+  // the rings: NR of them up the torso, the plate's bands interpolated between (bandAt) — denser than the bands so the chest's shape has rings to sit on
+  const NR = 22, bandAt = y => { let b = 0; while (b < NB - 2 && bands[b + 1].y < y) b++; const A = bands[b], B = bands[b + 1], t = clamp((y - A.y) / Math.max(1e-6, B.y - A.y), 0, 1), [kx, kz] = prof(clamp((y - y0) / (y1 - y0), 0, 1));
+    const S = inSash(y, A.cx + (B.cx - A.cx) * t, A.cz + (B.cz - A.cz) * t, (A.rx + (B.rx - A.rx) * t) * kx, (A.rz + (B.rz - A.rz) * t) * kz); return { c: new THREE.Vector3(S.cx, y, S.cz), rx: S.rx, rz: S.rz }; };   // the skin's own ring at that height
   // THE HIPS sit inside the sash: the plate's own skirt overlaps the cloth, so a torso lathed to the plate's width stood OUT through
   // the sash — bare skin below the waist with the cloth's top edge lost inside it (the "naked ass"). Where the skirt's cloth wraps
   // the hips, each ring is held inside it (its centre and a little under its width); above the cloth the plate's measure holds
@@ -1219,7 +1229,7 @@ function modelBodyBuild(R) {
     return { cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, rx: Math.min(rx, (x1 - x0) / 2 * 0.93), rz: Math.min(rz, (z1 - z0) / 2 * 0.93) }; };
   const hipR = (() => { const b0 = bands[0]; return inSash(hipY - 0.03, b0.cx, b0.cz, b0.rx * 0.94, b0.rz * 0.94); })();
   tRings.push(ring(new THREE.Vector3(hipR.cx, hipY - 0.03, hipR.cz), U, V, hipR.rx, hipR.rz, [[pelvis, 1]], 0));
-  for (let b = 0; b < NB; b++) { const B = bands[b], [kx, kz] = prof(b / (NB - 1)), S = inSash(B.y, B.cx, B.cz, B.rx * kx, B.rz * kz); tRings.push(ring(new THREE.Vector3(S.cx, B.y, S.cz), U, V, S.rx, S.rz, tw(B.y), 0, groove(b / (NB - 1)))); }
+  for (let r = 0; r < NR; r++) { const h = r / (NR - 1), y = y0 + h * (y1 - y0), S = bandAt(y); tRings.push(ring(S.c, U, V, S.rx, S.rz, tw(y), 0, chestShape(h))); }
   { const bt = bands[NB - 1], r = neck.r * 1.15; tRings.push(ring(new THREE.Vector3(0, neck.y + 0.03, bt.cz * 0.5), U, V, Math.max(r, bt.rx * 0.5), Math.max(r, bt.rz * 0.6), [[chest, 1]], 0)); }   // the shoulders close to the neck's girth just under the head
   for (let i = 1; i < tRings.length; i++) stitch(tRings[i - 1], tRings[i], 0);
   { const bt = bands[NB - 1]; cap(tRings[0], new THREE.Vector3(hipR.cx, hipY - 0.03, hipR.cz), new THREE.Vector3(0, -1, 0), hipR.rx, [[pelvis, 1]], 0); cap(tRings[tRings.length - 1], new THREE.Vector3(0, neck.y + 0.03, bt.cz * 0.5), new THREE.Vector3(0, 1, 0), neck.r, [[chest, 1]], 0); }   // closed top and bottom
@@ -1228,9 +1238,7 @@ function modelBodyBuild(R) {
   // outside the skin on the sash's top edge — leather, painted by the look (look.leather) — and the sash hangs from it
   { const cl = pj.mats.indexOf('cloth'), skI = cls('skirt'), sky = []; for (let v = 0; v < pos.count; v++) if (pj.vclass[v] === skI && pj.vmat[v] === cl && pos.getZ(v) < -0.05) sky.push(pos.getY(v));   // (the skirt's cloth as drawn, at the BACK where it is lowest and its cut edge — skirtTop above it is hidden — is ragged: the belt sits over that edge, so the sash hangs from the belt with no skin between)
     if (sky.length > 8) { const yLo = Math.max(...sky) - 0.035, yHi = yLo + 0.075;
-      const at = y => { let b = 0; while (b < NB - 2 && bands[b + 1].y < y) b++; const A = bands[b], B = bands[b + 1], t = clamp((y - A.y) / Math.max(1e-6, B.y - A.y), 0, 1), [kx, kz] = prof(clamp((y - y0) / (y1 - y0), 0, 1));
-        const S = inSash(y, A.cx + (B.cx - A.cx) * t, A.cz + (B.cz - A.cz) * t, (A.rx + (B.rx - A.rx) * t) * kx, (A.rz + (B.rz - A.rz) * t) * kz); return { c: new THREE.Vector3(S.cx, y, S.cz), rx: S.rx, rz: S.rz }; };   // the skin's own ring at that height
-      uvNow = LOOK_WHITE_UV; matNow = 1; const out = 1.045, pad = 0.006, lo = at(yLo), hi = at(yHi), w = [[pelvis, 0.5], [chest, 0.5]];
+      uvNow = LOOK_WHITE_UV; matNow = 1; const out = 1.045, pad = 0.006, lo = bandAt(yLo), hi = bandAt(yHi), w = [[pelvis, 0.5], [chest, 0.5]];
       const iL = ring(lo.c, U, V, lo.rx, lo.rz, w, 3), oL = ring(lo.c, U, V, lo.rx * out + pad, lo.rz * out + pad, w, 3), oH = ring(hi.c, U, V, hi.rx * out + pad, hi.rz * out + pad, w, 3), iH = ring(hi.c, U, V, hi.rx, hi.rz, w, 3);
       stitch(iL, oL, 3); stitch(oL, oH, 3); stitch(oH, iH, 3);   // the underside, the face, the top: a closed band a finger thick, faces out (stitch winds a→b outward, so inner→outer faces down and outer→inner faces up)
       uvNow = uvc; matNow = 0; } }
@@ -1523,7 +1531,7 @@ function lookBodyColour(c, look, cls, x, y, z, B) {
   if (cls === 'torso') { const h = (y - B.y0) / Math.max(0.01, B.y1 - B.y0); let k = 1;
     const tan = clamp((y - (B.y1 - 0.05)) / Math.max(0.01, B.neckY - (B.y1 - 0.05)), 0, 1); if (tan > 0) c.lerp(new THREE.Color(look.skin), tan);
     if (Math.abs(x) < 0.02 && h > 0.05 && h < 0.86) k *= z > 0 ? 0.88 : 0.9;
-    if (z > 0 && Math.abs(h - 0.52) < 0.05) k *= 0.93;
+    if (z > 0 && Math.abs(h - 0.47) < 0.05) k *= 0.92;
     if (h < 0.12) k *= 0.95;
     if (k !== 1) c.multiplyScalar(k); }
   return c;

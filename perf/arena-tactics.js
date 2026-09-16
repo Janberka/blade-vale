@@ -87,7 +87,8 @@ function analyse(seed, res) {
   const seq = []; for (const o of orders) if (seq[seq.length - 1] !== o) seq.push(o);
   const doct = first.teams.map(T => T.doctrine);
   const alive = [0, 1].map(t => last.bodies.filter(b => b.team === t && !b.dead).length);
-  return { seed, doct, meet, cav, arch, winner: last.winner, t: last.t, alive, orderSeq: seq };
+  const roles = last.teams.map(T => T.riderRole || '-');
+  return { seed, doct, roles, meet, cav, arch, winner: last.winner, t: last.t, alive, orderSeq: seq };
 }
 
 // the smoke lobbies: nothing measured, just that the odd shapes of a lobby all run clean and resolve
@@ -143,7 +144,7 @@ async function smoke() {
       if (errs.length) console.log('  page errors:', errs.slice(0, 3));
       const A = analyse(seed, res);
       out.push(A);
-      console.log(`seed ${seed}  doct ${A.doct.join(' vs ')}  meet@${A.meet ? A.meet.k.toFixed(2) + ' t=' + A.meet.t : 'none'}  winner ${A.winner} t=${A.t} alive ${A.alive.join('-')}  (${((Date.now() - t0) / 1000).toFixed(0)}s)`);
+      console.log(`seed ${seed}  doct ${A.doct.join(' vs ')} (${A.roles.join('/')})  meet@${A.meet ? A.meet.k.toFixed(2) + ' t=' + A.meet.t : 'none'}  winner ${A.winner} t=${A.t} alive ${A.alive.join('-')}  (${((Date.now() - t0) / 1000).toFixed(0)}s)`);
       for (const c of A.cav) console.log(`   rider t${c.team}: path ${c.pathToHit} to first hit at t=${c.tHit} on ${c.victim}, far ${c.farSecs}s, kills ${c.kills}${c.dead ? ', died to ' + c.killedBy : ''}`);
       for (const a of A.arch) console.log(`   archer t${a.team}: first shot t=${a.tShot}, ${a.shots} shots, ${a.kills} kills${a.dead ? ', died t=' + a.diedAt + ' to ' + a.killedBy : ''}`);
       if (VERBOSE) console.log('   orders:', A.orderSeq.join(' -> '));
@@ -164,4 +165,5 @@ async function smoke() {
   console.log(' riders: path to first hit', avg(cav.filter(c => c.tHit != null).map(c => c.pathToHit)).toFixed(0), ' t first hit', avg(cav.filter(c => c.tHit != null).map(c => c.tHit)).toFixed(1), ' far-from-foe secs', avg(cav.map(c => c.farSecs)).toFixed(1), ' first victims', JSON.stringify(cav.reduce((m, c) => (m[c.victim] = (m[c.victim] || 0) + 1, m), {})), ' kills/rider', avg(cav.map(c => c.kills)).toFixed(2), ' died', cav.filter(c => c.dead).length + '/' + cav.length);
   console.log(' archers: first shot t', avg(arch.filter(a => a.tShot != null).map(a => a.tShot)).toFixed(1), ' shots', avg(arch.map(a => a.shots)).toFixed(1), ' kills', avg(arch.map(a => a.kills)).toFixed(2), ' died', arch.filter(a => a.dead).length + '/' + arch.length, ' killers', JSON.stringify(arch.filter(a => a.dead).reduce((m, a) => (m[a.killedBy] = (m[a.killedBy] || 0) + 1, m), {})));
   console.log(' doctrines:', JSON.stringify(out.reduce((m, a) => (m[a.doct.join('/')] = (m[a.doct.join('/')] || 0) + 1, m), {})), ' winners', JSON.stringify(out.reduce((m, a) => (m[a.winner] = (m[a.winner] || 0) + 1, m), {})));
+  console.log(' rider jobs:', JSON.stringify(out.flatMap(a => a.roles).reduce((m, r) => (m[r] = (m[r] || 0) + 1, m), {})));
 })().catch(e => { console.error(e); process.exit(1); });

@@ -562,9 +562,11 @@ a 30-pace circle at the gallop, and nobody answered for the bows. Now (`afPlanTe
 
 - **A doctrine from the matchup** (`afPickDoctrine`): the captain reads both rosters at the bell
   and draws a plan — a weighted roll, so the same lobby opens differently twice. *line*: advance
-  and meet. *hold*: stand on our ground and let them walk onto the bows (likelier with archers, or
-  weaker foot); the swords charge when the enemy's foot is within `holdOut`, and after `holdSecs` of
-  stand-off the stronger side goes to them. *skirmish* (bow-heavy): the archers stand `screenAhead`
+  and meet. *hold*: the swords stay behind and let the bows kill as much as they can before the
+  lines meet (likelier with archers, or weaker foot) — they only fight what reaches them, for as
+  long as the bows have someone within `bowVolley` to shoot; once the bows have been idle
+  `holdIdle` past `holdSecs` (a stand-off with nobody in range) the stronger side goes to them,
+  and with no bows left the foot at `holdOut` is met. *skirmish* (bow-heavy): the archers stand `screenAhead`
   in FRONT of the swords as a screen and fall back through them (`screenback`) when a foe comes
   within `screenIn`. *oblique*: the block angles for one END of the enemy line and refuses the
   other. *rush*: straight in from the bell (the stronger foot, or no bows against bows). *hammer*:
@@ -576,8 +578,13 @@ a 30-pace circle at the gallop, and nobody answered for the bows. Now (`afPlanTe
   enemy's bows, on the side they lean to, and go into them once the lines meet (or once formed and
   the foot is committed); a hunting rider reads a bowman as thirty paces nearer, and beyond his
   leash he heads for the bows, not the scrum. *flank* — off the end of the enemy line, into its side
-  when it is engaged. *screen* — beside our own bows, meeting the enemy's riders when they come
-  within `screenR` of them (their horse all fallen, it turns to a hunt or a flank). *charge* — the
+  when it is engaged. *trample* — the same mark, but the squadron goes into the enemy's FOOT the
+  moment it comes on across the open (closing faster than `trampleApproach` inside `trampleGap`):
+  a horse at speed throws men down, and a charging line is caught in the open — a holding line's
+  natural partner (they charge under the arrows, the horse rides them down), so `hold` raises it.
+  A trampling rider prefers foot to bows. *screen* — beside our own bows, meeting the enemy's
+  riders when they come within `screenR` of them (their horse all fallen, it turns to a hunt or a
+  flank). *charge* — the
   horse IS the army (foot under 1.5× the riders). Every mark is scaled to the line's width
   (`halfW + huntOff/flankOff`, capped at `flankMax`): a 5-a-side mark sits a dozen paces off, not
   22. The ride to a mark goes ROUND the lines — out through the flank corridor (`T.axis.corridor`)
@@ -612,6 +619,10 @@ a 30-pace circle at the gallop, and nobody answered for the bows. Now (`afPlanTe
   | fights that ran to the 120 s clock | 5 / 30 | 0 / 30 |
   | mean fight length | 69.8 s | 48.4 s |
   | archers felled / of them by horse | 50 of 60 / 41 | 43 of 60 / 29 |
+
+  With the patient hold and the ride-down (same seeds): one side or both hold in 14 of 30 fights,
+  the horse draws *trample* in 12 of 60 squadrons, the archers loose 6.5 arrows each (5.4 before,
+  6.0 in the old always-advance fights), and every fight still resolves inside the clock.
 
   The bows are still what every horse is for — they die to riders, on both sides, by design; the
   leftover-infantry mop-up is met by the bodyguard in the fights where a free swordsman is left

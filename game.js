@@ -21609,7 +21609,8 @@ const AF_TACT = { formSecs: 1.6, walk: 0.62, contact: 10, regroupAfter: 8, rally
   bowGap: 6, bowNear: 11, bowFar: 22, bowShot: 28, bowRoom: 5.5,
   hbNear: 9, hbFar: 16, hbPace: 0.8,   // the HORSE ARCHER's ring (afHorseArcher): the band he rides round his mark, and his throttle (a canter — the gallop would cancel his draw)
   // THE PLAN (2026-09-16, the user: "if I have a 5v5 it will be almost the same pattern … we need to put some intelligence to this"):
-  holdSecs: 14, holdOut: 16,           // a holding line waits this long for the enemy (then the stronger side advances), and charges when their foot is this close
+  holdSecs: 14, holdOut: 16, holdIdle: 4,   // a holding line stands while its bows have someone to shoot (2026-09-16, the user: "infantry can decide to just stay behind, let the archers kill as much as enemy before they meet"); once the bows have been idle this long past holdSecs the stronger side goes to them; with no bows left it charges their foot at holdOut
+  trampleGap: 34, trampleApproach: 1.2,   // the RIDE-DOWN: a squadron goes into the enemy's foot when it is coming on across the open — closing at this pace, this near (the user: "cavalry can decide to just knock all the infantry if they are charging")
   screenIn: 14, screenAhead: 5,        // a skirmish screen of bows stands this far ahead of the swords, and falls back through them when a foe is this close
   guardR: 10, guardReach: 26, detailSecs: 5,   // the BODYGUARD: a foe this close to one of our bowmen, no swordsman beside him → the nearest free swordsman (within guardReach) is sent for him
   flankOff: 7, huntOff: 8, screenOff: 5, flankMax: 24,   // the squadron's marks: off the END of the enemy line / beside the enemy's BOWS / beside our own bows — scaled to the line's width, never a fixed trip across the pit
@@ -21633,7 +21634,7 @@ function afWeightedPick(w) { let tot = 0; for (const k in w) tot += Math.max(0, 
 // hammer: the foot pins, the horse goes for the enemy's bows or the back of his line.
 function afPickDoctrine(me, foe, human) {
   const w = { line: 1 };
-  if (me.bows) w.hold = 0.5 + 2.5 * (me.bows / Math.max(1, me.n)) + (foe.foot > me.foot ? 0.8 : 0) + (foe.riders && !me.riders ? 0.4 : 0);
+  if (me.bows) w.hold = 0.7 + 3 * (me.bows / Math.max(1, me.n)) + (foe.foot > me.foot ? 0.8 : 0) + (foe.riders && !me.riders ? 0.4 : 0);
   if (me.bows >= 2 && me.bows >= me.n * 0.4) w.skirmish = 1.3;
   if (me.foot >= 3 && foe.foot >= 3) w.oblique = 0.8;
   if (me.foot > foe.foot * 1.3 || (!me.bows && foe.bows)) w.rush = 1.1;
@@ -21642,14 +21643,16 @@ function afPickDoctrine(me, foe, human) {
   return afWeightedPick(w);
 }
 // THE SQUADRON'S JOB: hunt — beside the enemy's bows, and into them once the lines meet (they are what a horse is
-// for); flank — off the end of the enemy line, into its side and back when it is engaged; screen — beside our own
-// bows, meeting the enemy's riders when they come for them; charge — the horse IS the army, straight in.
+// for); flank — off the end of the enemy line, into its side and back when it is engaged; trample — off the end of
+// the enemy line too, but into the FOOT the moment it comes on across the open (a horse at speed throws men down);
+// screen — beside our own bows, meeting the enemy's riders when they come for them; charge — the horse IS the army.
 function afPickRiderRole(T, me, foe, nR) {
   if (!nR) return null;
   if (me.foot < nR * 1.5) return 'charge';
   const w = { flank: 0.7 };
   if (foe.bows) w.hunt = 1.2 + (T.doctrine === 'hammer' ? 0.8 : 0);
   if (foe.riders && me.bows) w.screen = 0.9 + (T.doctrine === 'hold' || T.doctrine === 'skirmish' ? 0.8 : 0) + (foe.riders >= nR ? 0.4 : 0);
+  if (foe.foot >= 2) w.trample = 0.7 + (T.doctrine === 'hold' ? 0.8 : 0) + (foe.foot > foe.bows * 2 ? 0.2 : 0);   // ride their foot down as it comes on (a holding line's natural partner: they charge under the arrows, the horse hits them in the open)
   if (T.doctrine === 'hammer') w.flank += 0.4;
   return afWeightedPick(w);
 }
@@ -21714,7 +21717,7 @@ function afRiderMark(T, mc, mine, foes) {
     const mb = afCen(mine.filter(b => b.weapon === 'bow' && !b.mounted)) || mc, off = (T.halfW || 4) + AF_TACT.screenOff;
     const bx = E.ef.x - mb.x, bz = E.ef.z - mb.z, bd = Math.hypot(bx, bz) || 1, lx = -bz / bd, lz = bx / bd;
     x = mb.x + lx * s * off; z = mb.z + lz * s * off; face = E.er || E.ef;
-  } else {                                                   // flank: off the END of the enemy line, a pace ahead of it
+  } else {                                                   // flank / trample: off the END of the enemy line, a pace ahead of it
     const off = Math.min(AF_TACT.flankMax, E.halfW + AF_TACT.flankOff);
     x = E.ef.x + E.lx * s * off - E.fx * 3; z = E.ef.z + E.lz * s * off - E.fz * 3; face = E.ef;
   }
@@ -21768,7 +21771,7 @@ function afFormationSlot(T, b) {
 }
 const AF_ORDER_TEXT = { form: 'forms a line', advance: 'advances', charge: 'charges!', flank: 'sends the riders wide', regroup: 'regroups', fallback: 'falls back to re-form', pursue: 'presses the rout',
   hold: 'holds its ground', skirmish: 'sends the bows forward', screenback: 'draws the bows back through the line', oblique: 'angles for the flank', rush: 'charges from the bell!',
-  hunt: 'sends the riders for the bows', screen: 'keeps the riders by the bows', 'plan:hold': 'means to hold', 'plan:skirmish': 'means to skirmish', 'plan:oblique': 'means to take a flank', 'plan:rush': 'means to rush', 'plan:hammer': 'means to pin and hammer' };
+  hunt: 'sends the riders for the bows', screen: 'keeps the riders by the bows', trample: 'sends the riders to ride down the foot', 'plan:hold': 'means to hold and let the bows work', 'plan:skirmish': 'means to skirmish', 'plan:oblique': 'means to take a flank', 'plan:rush': 'means to rush', 'plan:hammer': 'means to pin and hammer' };
 function afOrderLog(T, key) { const txt = AF_TEAMS[T.t].name + ' ' + (AF_ORDER_TEXT[key] || key); afLogLine(txt, AF_TEAMS[T.t].col); AF.events.push({ k: 'order', t: T.t, o: key }); }
 function afCaptainThink(T, dt) {
   T.thinkT -= dt; if (T.thinkT > 0) return; T.thinkT = 0.4; T.since += 0.4;
@@ -21794,6 +21797,10 @@ function afCaptainThink(T, dt) {
   T.axis = { x: mc.x, z: mc.z, fx: E.fx, fz: E.fz, lx: E.lx, lz: E.lz, corridor: Math.max(T.halfW || 4, E.halfW + 2) + 2 };   // the lines' corridor: a rider leaves it by the flank, never up the middle
   T.regroupSpread = clamp(Math.sqrt(Math.max(1, mine.length)) * 3.4, 12, 34);
   const blood = me.hp + foe.hp; if (blood !== T.lastBlood) { T.lastBlood = blood; T.bloodT = 0; } else T.bloodT = (T.bloodT || 0) + 0.4;
+  const ours = T.footCenter || mc, efd = Math.hypot(E.ef.x - ours.x, E.ef.z - ours.z);   // is their foot COMING ON? (paces a second it closes on our line)
+  T.foeApproach = T.prevEfd != null ? (T.prevEfd - efd) / 0.4 : 0; T.prevEfd = efd; T.foeFootGap = efd; T.enemyFoot = E.ef;
+  const bowsBusy = me.bows > 0 && foes.some(o => mine.some(a => a.weapon === 'bow' && !a.mounted && Math.hypot(o.x - a.x, o.z - a.z) < AF_TACT.bowVolley));   // our bows have someone to shoot
+  T.bowsIdleT = bowsBusy ? 0 : (T.bowsIdleT || 0) + 0.4;
   afGuardTheBows(T, mine, foes);
   // THE SQUADRON at its mark: the mark rides with the enemy line (only re-set when it has really moved), and the
   // horse goes in by its job — the flank when the lines meet, the hunt once formed and the foot committed, the
@@ -21814,6 +21821,8 @@ function afCaptainThink(T, dt) {
           go = go || foes.some(o => o.mounted && Math.hypot(o.x - mb.x, o.z - mb.z) < AF_TACT.screenR) || T.flankWait > AF_TACT.wpTimeout; }   // their horse comes for the bows — or stays away while the lines are locked: then ours goes to work
         else if (T.riderRole === 'hunt') { if (formed || contact) T.flankWait = (T.flankWait || 0) + 0.4; const nearBows = E.eb && rs.some(b => Math.hypot(b.x - E.eb.x, b.z - E.eb.z) < 12);
           go = go || (formed && (contact || nearBows || T.flankWait > 3)) || (contact && T.flankWait > AF_TACT.wpTimeout) || T.flankT > 10; }
+        else if (T.riderRole === 'trample') { if (contact) T.flankWait = (T.flankWait || 0) + 0.4; const coming = T.foeApproach > AF_TACT.trampleApproach && T.foeFootGap < AF_TACT.trampleGap;
+          go = go || (coming && (formed || T.flankT > 3)) || (contact && (formed || T.flankWait > AF_TACT.wpTimeout)); }   // their foot is coming on across the open: into them
         else { if (contact) T.flankWait = (T.flankWait || 0) + 0.4; go = go || (contact && (formed || T.flankWait > AF_TACT.wpTimeout)); }
         if (go) afReleaseRiders(T, mine);
       }
@@ -21837,8 +21846,8 @@ function afCaptainThink(T, dt) {
       let nearFoot = 1e9; for (const o of foes) { if (o.mounted || o.weapon === 'bow') continue; nearFoot = Math.min(nearFoot, Math.hypot(o.x - T.anchor.x, o.z - T.anchor.z)); }
       if (T.screenFwd && (contact || foes.some(o => mine.some(a => a.weapon === 'bow' && !a.mounted && Math.hypot(o.x - a.x, o.z - a.z) < AF_TACT.screenIn)))) {   // the screen falls back through the line
         afLayoutTeam(T, mine.filter(b => b.ctrl === 'ai'), false); afOrderLog(T, 'screenback'); }
-      if (contact || nearFoot < AF_TACT.holdOut) release('charge');
-      else if (T.since > AF_TACT.holdSecs && (ratio >= 0.97 || T.since > AF_TACT.holdSecs * 2) && !T.screenFwd) release('advance');   // a stand-off: the stronger side goes to them (the weaker keeps its ground a while longer)
+      if (contact || (!me.bows && nearFoot < AF_TACT.holdOut)) release('charge');   // the swords stay behind while the bows have work: they fight what reaches them (with no bows left, the foot at holdOut is met)
+      else if (T.since > AF_TACT.holdSecs && !T.screenFwd && ((T.bowsIdleT > AF_TACT.holdIdle && (ratio >= 0.97 || T.since > AF_TACT.holdSecs * 2)) || T.since > AF_TACT.holdSecs * 2.5)) release('advance');   // a stand-off with nobody to shoot: the stronger side goes to them (the weaker keeps its ground a while longer); and no line stands forever — an archery duel that decides nothing is pressed
       else if (T.since > AF_TACT.holdSecs && T.screenFwd && foe.foot && !foes.some(o => !o.mounted && o.weapon !== 'bow' && Math.hypot(o.x - mc.x, o.z - mc.z) < 30)) { afLayoutTeam(T, mine.filter(b => b.ctrl === 'ai'), false); release('advance'); }   // they won't come to the screen: the bows fall in behind and the line goes to them
       break; }
     case 'advance': {
@@ -21873,7 +21882,7 @@ function afAssignTargets() {
     let d = Math.hypot(o.x - f.x, o.z - f.z) - (f.target === o ? 0.8 : 0);
     if (f.detail === o) return d - 40;
     const T = AF.teams && AF.teams[f.team], role = T ? T.riderRole : null, oBow = o.weapon === 'bow' && !o.mounted;
-    if (f.mounted) { if (oBow) d -= role === 'hunt' ? 30 : 10; if (o.mounted && role === 'screen') d -= 25; }   // cavalry's job: ride down the bowmen behind the line
+    if (f.mounted) { if (oBow) d -= role === 'hunt' ? 30 : role === 'trample' ? 0 : 10; if (o.mounted && role === 'screen') d -= 25; if (role === 'trample' && !oBow && !o.mounted) d -= 12; }   // cavalry's job: the bowmen behind the line — or, riding them down, the foot in the open
     else if (f.weapon === 'bow') { if (o.mounted) d -= 6; if (inScrum(o)) d += 5; d -= 4 * (1 - o.hp / Math.max(1, o.maxHp)); }
     else { if (oBow && T && T.phase !== 'form' && live.some(x => x.team !== f.team && !x.mounted && x.weapon !== 'bow')) d += 6; if (o.mounted && (o.sp01 || 0) > 0.35) d += 4; }
     return d;
@@ -22079,7 +22088,7 @@ function afThink(b, dt) {
   if (T && T.enemyCenter && ord === 'charge' && !busy) {   // no foe near me: the fight is at the enemy's mass — go THERE (walking to our own centre made a pile)
     const cap = T.engageR * (b.mounted ? AF_TACT.riderEngageMul : 1);
     if (d > cap) {
-      const G = b.mounted && T.riderRole === 'hunt' && T.enemyBows ? T.enemyBows : T.enemyCenter;   // (a rider on the hunt: the bows)
+      const G = b.mounted && T.riderRole === 'hunt' && T.enemyBows ? T.enemyBows : b.mounted && T.riderRole === 'trample' && T.enemyFoot ? T.enemyFoot : T.enemyCenter;   // (a rider on the hunt: the bows; riding down: the foot)
       const cx = G.x - b.x, cz = G.z - b.z, cd = Math.hypot(cx, cz);
       if (cd > 4) { I.yaw = Math.atan2(cx, cz); I.mx = cx / cd + sx * 0.5; I.mz = cz / cd + sz * 0.5; return; }
     }

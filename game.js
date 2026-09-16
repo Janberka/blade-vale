@@ -1193,6 +1193,9 @@ function modelBodyBuild(R) {
   const P = [], N = [], UV = [], SI = [], SW = [], IDX = [], VC = [], TRI = [], SEG = 18, uvc = [13.5 / 16, 13.5 / 16];   // (the palette's skin cell — the face's — so the face tint paints it the face's tone)
   const ring = (c, u, v, rx, rz, w /* [[jointIdx, weight]...] */, cl) => { const base = P.length / 3; for (let i = 0; i < SEG; i++) { const a = i / SEG * Math.PI * 2, x = c.x + u.x * rx * Math.cos(a) + v.x * rz * Math.sin(a), y = c.y + u.y * rx * Math.cos(a) + v.y * rz * Math.sin(a), z = c.z + u.z * rx * Math.cos(a) + v.z * rz * Math.sin(a);
       P.push(x, y, z); UV.push(uvc[0], uvc[1]); VC.push(cl); const si = [0, 0, 0, 0], sw = [0, 0, 0, 0]; w.slice(0, 4).forEach(([j, k], q) => { si[q] = j; sw[q] = k; }); SI.push(...si); SW.push(...sw); } return base; };
+  const cap = (base, c, dir, r, w, cl) => { const ci = P.length / 3, cc = c.clone().addScaledVector(dir, r * 0.35); P.push(cc.x, cc.y, cc.z); UV.push(uvc[0], uvc[1]); VC.push(cl); const si = [0, 0, 0, 0], sw = [0, 0, 0, 0]; w.slice(0, 4).forEach(([j, k], q) => { si[q] = j; sw[q] = k; }); SI.push(...si); SW.push(...sw);
+    const a = base, b = base + 1, ax = P[a * 3] - cc.x, ay = P[a * 3 + 1] - cc.y, az = P[a * 3 + 2] - cc.z, bx = P[b * 3] - cc.x, by = P[b * 3 + 1] - cc.y, bz = P[b * 3 + 2] - cc.z, nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx, flip = nx * dir.x + ny * dir.y + nz * dir.z < 0;
+    for (let i = 0; i < SEG; i++) { const j = (i + 1) % SEG; if (flip) IDX.push(ci, base + j, base + i); else IDX.push(ci, base + i, base + j); TRI.push(cl); } };
   const stitch = (a, b, cl) => { for (let i = 0; i < SEG; i++) { const j = (i + 1) % SEG; IDX.push(a + i, b + i, b + j, a + i, b + j, a + j); TRI.push(cl, cl); } };
   const pct = (arr, q) => { if (!arr.length) return null; const s = arr.slice().sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.floor(q * s.length))]; };
   // THE TORSO: bands of the cuirass, bottom to collar; a ring below into the skirt, a neck ring above
@@ -1209,6 +1212,7 @@ function modelBodyBuild(R) {
     tRings.push(ring(new THREE.Vector3(B.cx, B.y, B.cz), U, V, B.rx * 0.98 * waist * shoulders, B.rz * 0.98 * pecs, tw(B.y), 0)); }
   { const bt = bands[NB - 1], r = neck.r * 1.15; tRings.push(ring(new THREE.Vector3(0, neck.y + 0.03, bt.cz * 0.5), U, V, Math.max(r, bt.rx * 0.5), Math.max(r, bt.rz * 0.6), [[chest, 1]], 0)); }   // the shoulders close to the neck's girth just under the head
   for (let i = 1; i < tRings.length; i++) stitch(tRings[i - 1], tRings[i], 0);
+  { const b0 = bands[0], bt = bands[NB - 1]; cap(tRings[0], new THREE.Vector3(b0.cx, hipY - 0.03, b0.cz), new THREE.Vector3(0, -1, 0), b0.rx * 0.94, [[pelvis, 1]], 0); cap(tRings[tRings.length - 1], new THREE.Vector3(0, neck.y + 0.03, bt.cz * 0.5), new THREE.Vector3(0, 1, 0), neck.r, [[chest, 1]], 0); }   // closed top and bottom
   // THE ARMS: a tube down the bones, shoulder → elbow → hand, sized band by band from the sleeve and the vambrace
   const arm = (side, cl) => { const A = bone(M['shoulder' + side]), B = bone(M['elbow' + side]), C = bone(M['hand' + side]), jS = joint(M['shoulder' + side]), jE = joint(M['elbow' + side]), jH = joint(M['hand' + side]);
     const near = (p, seg) => { const [S, E] = seg, d = E.clone().sub(S), L = d.length(); d.normalize(); const t = Math.max(0, Math.min(1, p.clone().sub(S).dot(d) / L)); return { t, r: p.clone().sub(S).sub(d.multiplyScalar(t * L)).length() }; };
@@ -1229,7 +1233,8 @@ function modelBodyBuild(R) {
     R_(B.clone().addScaledVector(dF, 0.045), uM, vM, rE * 0.92, [[jS, 0.25], [jE, 0.75]]);
     // the forearm: the elbow's bone, tapering to the wrist; the last ring leans on the hand so the wrist turns with it
     for (const [t, r, w] of [[0.3, rE * 0.9, [[jE, 1]]], [0.6, rE * 0.78, [[jE, 1]]], [0.85, rW * 1.08, [[jE, 0.7], [jH, 0.3]]], [1.0, rW, [[jE, 0.4], [jH, 0.6]]]]) R_(B.clone().lerp(C, t), uF, vF, r, w);
-    for (let i = 1; i < rings.length; i++) stitch(rings[i - 1], rings[i], cl); };
+    for (let i = 1; i < rings.length; i++) stitch(rings[i - 1], rings[i], cl);
+    cap(rings[0], A.clone(), dU.clone().negate(), rE * 0.98, [[jS, 1]], cl); cap(rings[rings.length - 1], C.clone(), dF, rW, [[jE, 0.4], [jH, 0.6]], cl); };   // closed at the shoulder and the wrist: seen end-on, the arm no longer opens into the hollow body
   arm('L', 1); arm('R', 2);
   const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); geo.setAttribute('uv', new THREE.Float32BufferAttribute(UV, 2));
   geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(SI, 4)); geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(SW, 4)); geo.setIndex(IDX); geo.computeVertexNormals();
@@ -12032,6 +12037,7 @@ let last = performance.now();
 let frameNo = 0;
 function loop(now) {
   if (VR.loop) return;                  // a headset is presenting: its own clock drives every frame (vrLoop), and a second render here would fight the XR framebuffer
+  fitCanvas();                          // (a missed or early resize never leaves the picture in half the window)
   if (AF.on) return afFrame(now);       // arena fights: the pit runs its own sim/net/camera (see ARENA FIGHTS)
   if (BATTLE.on) return battleFrame(now); // battle-editor mode: two armies fighting in a valley, own sim + orbit
   if (MARCH.on) return marchFrame(now);  // march-editor mode: two hosts patrol real towns/roads — tune how they WALK
@@ -12333,12 +12339,22 @@ camera.position.set(0, 12, 16);
 camera.lookAt(0, 1.6, 0);
 requestAnimationFrame(loop);
 
-addEventListener('resize', () => {
-  if (renderer.xr && renderer.xr.isPresenting) return;      // (XR owns the framebuffer and the projection)
-  camera.aspect = window.innerWidth / window.innerHeight;
+// THE CANVAS FOLLOWS THE WINDOW — on the resize event, and checked again every frame (loop): a phone's rotation, a fullscreen
+// change or the keyboard going away can fire resize while the browser is still settling on its size, and a canvas sized from
+// that reading keeps it — half a screen of picture, the rest black — until something else resizes. (XR owns its own framebuffer.)
+const _fitSz = new THREE.Vector2();
+function fitCanvas() {
+  if (renderer.xr && renderer.xr.isPresenting) return;
+  const w = window.innerWidth, h = window.innerHeight; if (!w || !h) return;
+  const sz = renderer.getSize(_fitSz); if (sz.x === w && sz.y === h) return;
+  camera.aspect = w / h;
   camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-});
+  renderer.setSize(w, h);
+}
+addEventListener('resize', fitCanvas);
+if (window.visualViewport) window.visualViewport.addEventListener('resize', fitCanvas);
+addEventListener('orientationchange', () => setTimeout(fitCanvas, 350));
+BV.fitCanvas = fitCanvas;
 
 // expose internals for live pose tuning / verification
 BV.player = player; BV.enemies = enemies; BV.POSES = POSES; BV.setPose = setPose;
@@ -22516,26 +22532,47 @@ function afInstallControls() {
   if (AF.installed) return; AF.installed = true;
   const locked = () => document.pointerLockElement === canvas;
   const o = AF.orbit; let px = 0, py = 0;
+  // A MOUSE (or a pen) on a device that also has a touchscreen — a touch laptop, an iPad with a keyboard and trackpad — gets the
+  // desk's controls, not the thumb's: it asks for pointer lock like any desk does. (TOUCH used to skip the lock, and the touch-look
+  // only hears touches, so such a player could walk, strike and guard but never turn.) Where the lock cannot be had at all — iPadOS
+  // Safari has no API, a browser refused it — the held button steers the lens by drag the way a thumb on ATK does: press to load,
+  // drag to aim, let go to swing. A lock that once worked is trusted: Chrome refuses a re-lock for a second after Esc, and that
+  // must not demote a desk to dragging.
+  const mouseLike = e => e.pointerType !== 'touch';
+  let drag = null;                                           // {x, y}: an unlocked mouse / pen held down on the sand
+  const tryLock = () => {
+    if (!canvas.requestPointerLock) { AF.noLock = true; return; }
+    try { const p = canvas.requestPointerLock(); if (p && p.catch) p.catch(() => { if (!AF.lockedOnce) AF.noLock = true; }); } catch (err) { if (!AF.lockedOnce) AF.noLock = true; }
+  };
+  document.addEventListener('pointerlockerror', () => { if (!AF.lockedOnce) AF.noLock = true; });
+  document.addEventListener('pointerlockchange', () => { if (locked()) { AF.lockedOnce = true; AF.noLock = false; drag = null; } });
   canvas.addEventListener('pointerdown', e => {
     if (!AF.on) return;
     if (AF.phase === 'intro' || AF.outro) return;           // (the entrance and the end-game film: the skip button is the only control)
     if (AF.me && !AF.me.dead && AF.phase !== 'over') {
       if (locked()) { if (e.button === 2) AF.mouseRight = true; else if (e.button === 0) AF.mouseDown = true; } // left: hold to load, release to swing · right: block
-      else if (!TOUCH) { try { const p = canvas.requestPointerLock(); if (p && p.catch) p.catch(() => {}); } catch (err) {} }
+      else if (mouseLike(e)) {
+        tryLock();                                         // (asked every press: a lock that comes late promotes the drag back to the desk's aim)
+        if (AF.noLock) { drag = { x: e.clientX, y: e.clientY }; if (e.button === 2) AF.mouseRight = true; else if (e.button === 0) AF.mouseDown = true; }   // no lock to be had: the held button aims
+      }
       return;
     }
     o.drag = true; px = e.clientX; py = e.clientY;
   });
   window.addEventListener('pointermove', e => {
     if (!AF.on) return;
-    if (AF.me && !AF.me.dead) { if (!locked()) return; AF.lookAt = performance.now(); AF.cam.yaw -= (e.movementX || 0) * 0.0026; AF.cam.pitch = clamp(AF.cam.pitch + (e.movementY || 0) * 0.0022, -0.1, 1.1); return; }
+    if (AF.me && !AF.me.dead) {
+      if (locked()) { AF.lookAt = performance.now(); AF.cam.yaw -= (e.movementX || 0) * 0.0026; AF.cam.pitch = clamp(AF.cam.pitch + (e.movementY || 0) * 0.0022, -0.1, 1.1); }
+      else if (drag && mouseLike(e)) { AF.lookAt = performance.now(); AF.cam.yaw -= (e.clientX - drag.x) * 0.005; AF.cam.pitch = clamp(AF.cam.pitch + (e.clientY - drag.y) * 0.003, -0.1, 1.1); drag.x = e.clientX; drag.y = e.clientY; }
+      return;
+    }
     if (!o.drag) return;
     const S = AF.spec; S.touched = true;
     if (S.mode === 'follow') { if (e.pointerType !== 'touch') { AF.lookAt = performance.now(); AF.cam.yaw -= (e.clientX - px) * 0.008; AF.cam.pitch = clamp(AF.cam.pitch + (e.clientY - py) * 0.006, -0.1, 1.1); } }   // (touch: the arena's own look handler turns the cam)
     else { o.theta -= (e.clientX - px) * 0.01; o.phi = clamp(o.phi - (e.clientY - py) * 0.01, 0.15, 1.45); }
     px = e.clientX; py = e.clientY;
   });
-  window.addEventListener('pointerup', e => { o.drag = false; if (e.button === 2) AF.mouseRight = false; else if (e.button === 0) { if (AF.mouseDown) AF.locIn.atk++; AF.mouseDown = false; } });
+  window.addEventListener('pointerup', e => { o.drag = false; drag = null; if (e.button === 2) AF.mouseRight = false; else if (e.button === 0) { if (AF.mouseDown) AF.locIn.atk++; AF.mouseDown = false; } });
   window.addEventListener('blur', () => { AF.mouseDown = false; AF.mouseRight = false; });
   canvas.addEventListener('wheel', e => {
     if (!AF.on) return; e.preventDefault();

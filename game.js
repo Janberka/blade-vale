@@ -1190,9 +1190,9 @@ function modelBodyBuild(R) {
   const worldM = new Map(); am.joints.forEach((j, k) => worldM.set(j, new THREE.Matrix4().fromArray(am.ibm, k * 16).invert()));
   const bone = nm => new THREE.Vector3().setFromMatrixPosition(worldM.get(names.indexOf(nm))), M = R.spec.map;
   const cls = c => pj.classes.indexOf(c), pts = c => { const ci = cls(c), out = []; for (let v = 0; v < pos.count; v++) if (pj.vclass[v] === ci) out.push(new THREE.Vector3(pos.getX(v), pos.getY(v), pos.getZ(v))); return out; };
-  const P = [], N = [], UV = [], SI = [], SW = [], IDX = [], VC = [], VM = [], TRI = [], SEG = 18, uvc = [13.5 / 16, 13.5 / 16];   // (the palette's skin cell — the face's — so the face tint paints it the face's tone)
+  const P = [], N = [], UV = [], SI = [], SW = [], IDX = [], VC = [], VM = [], TRI = [], SEG = 20, uvc = [13.5 / 16, 13.5 / 16];   // (the palette's skin cell — the face's — so the face tint paints it the face's tone)
   let uvNow = uvc, matNow = 0;                              // what the rings are made of: skin (0) on the skin cell — the belt below switches to leather (1) on the white cell, so its vertex colour IS the leather
-  const ring = (c, u, v, rx, rz, w /* [[jointIdx, weight]...] */, cl) => { const base = P.length / 3; for (let i = 0; i < SEG; i++) { const a = i / SEG * Math.PI * 2, x = c.x + u.x * rx * Math.cos(a) + v.x * rz * Math.sin(a), y = c.y + u.y * rx * Math.cos(a) + v.y * rz * Math.sin(a), z = c.z + u.z * rx * Math.cos(a) + v.z * rz * Math.sin(a);
+  const ring = (c, u, v, rx, rz, w /* [[jointIdx, weight]...] */, cl, shape) => { const base = P.length / 3; for (let i = 0; i < SEG; i++) { const a = i / SEG * Math.PI * 2, q = shape ? shape(i) : 1, x = c.x + (u.x * rx * Math.cos(a) + v.x * rz * Math.sin(a)) * q, y = c.y + (u.y * rx * Math.cos(a) + v.y * rz * Math.sin(a)) * q, z = c.z + (u.z * rx * Math.cos(a) + v.z * rz * Math.sin(a)) * q;
       P.push(x, y, z); UV.push(uvNow[0], uvNow[1]); VC.push(cl); VM.push(matNow); const si = [0, 0, 0, 0], sw = [0, 0, 0, 0]; w.slice(0, 4).forEach(([j, k], q) => { si[q] = j; sw[q] = k; }); SI.push(...si); SW.push(...sw); } return base; };
   const cap = (base, c, dir, r, w, cl) => { const ci = P.length / 3, cc = c.clone().addScaledVector(dir, r * 0.35); P.push(cc.x, cc.y, cc.z); UV.push(uvNow[0], uvNow[1]); VC.push(cl); VM.push(matNow); const si = [0, 0, 0, 0], sw = [0, 0, 0, 0]; w.slice(0, 4).forEach(([j, k], q) => { si[q] = j; sw[q] = k; }); SI.push(...si); SW.push(...sw);
     const a = base, b = base + 1, ax = P[a * 3] - cc.x, ay = P[a * 3 + 1] - cc.y, az = P[a * 3 + 2] - cc.z, bx = P[b * 3] - cc.x, by = P[b * 3 + 1] - cc.y, bz = P[b * 3 + 2] - cc.z, nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx, flip = nx * dir.x + ny * dir.y + nz * dir.z < 0;
@@ -1208,7 +1208,8 @@ function modelBodyBuild(R) {
   for (let b = 0; b < NB; b++) if (!bands[b]) { let lo = b - 1, hi = b + 1; while (lo >= 0 && !bands[lo]) lo--; while (hi < NB && !bands[hi]) hi++; const A = bands[lo] || bands[hi], B = bands[hi] || bands[lo], t = (b - lo) / Math.max(1, hi - lo); bands[b] = { y: y0 + (b / (NB - 1)) * (y1 - y0), cx: A.cx + (B.cx - A.cx) * t, cz: A.cz + (B.cz - A.cz) * t, rx: A.rx + (B.rx - A.rx) * t, rz: A.rz + (B.rz - A.rz) * t }; }
   const U = new THREE.Vector3(1, 0, 0), V = new THREE.Vector3(0, 0, 1), tor = cls('torso') < 0 ? 0 : cls('torso'), tw = y => { const k = Math.max(0, Math.min(1, (y - (hipY + 0.05)) / Math.max(0.05, (y1 - 0.08) - (hipY + 0.05)))); return k < 0.001 ? [[pelvis, 1]] : k > 0.999 ? [[chest, 1]] : [[pelvis, 1 - k], [chest, k]]; };
   let prev = null; const tRings = [];
-  const prof = h => { const waist = 1 - 0.05 * Math.max(0, 1 - Math.abs(h - 0.25) / 0.2), pecs = 1 + 0.05 * Math.max(0, 1 - Math.abs(h - 0.68) / 0.22), shoulders = 1 + 0.28 * Math.max(0, (h - 0.55) / 0.45); return [0.98 * waist * shoulders, 0.98 * pecs]; };   // the torso's profile over the plate's cross-section, by height 0..1 (the cuirass narrows under the pauldrons; a man's shoulders don't)
+  const prof = h => { const waist = 1 - 0.08 * Math.max(0, 1 - Math.abs(h - 0.25) / 0.2), pecs = 1 + 0.05 * Math.max(0, 1 - Math.abs(h - 0.68) / 0.22), shoulders = 1 + 0.26 * Math.max(0, (h - 0.55) / 0.45); return [0.90 * waist * shoulders, 0.87 * pecs]; };   // the torso's profile over the plate's cross-section, by height 0..1: a man is slimmer than his plate (the padding under it, the plate's own stand-off), with a waist; the cuirass narrows under the pauldrons, a man's shoulders don't
+  const groove = h => h > 0.06 && h < 0.88 ? (i => (i === SEG / 4 || i === SEG * 3 / 4) ? 0.965 : 1) : null;   // the midline vertex (the front at a quarter turn, the back at three) set in a little: the sternum and the belly's line, the spine
   // THE HIPS sit inside the sash: the plate's own skirt overlaps the cloth, so a torso lathed to the plate's width stood OUT through
   // the sash — bare skin below the waist with the cloth's top edge lost inside it (the "naked ass"). Where the skirt's cloth wraps
   // the hips, each ring is held inside it (its centre and a little under its width); above the cloth the plate's measure holds
@@ -1218,7 +1219,7 @@ function modelBodyBuild(R) {
     return { cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, rx: Math.min(rx, (x1 - x0) / 2 * 0.93), rz: Math.min(rz, (z1 - z0) / 2 * 0.93) }; };
   const hipR = (() => { const b0 = bands[0]; return inSash(hipY - 0.03, b0.cx, b0.cz, b0.rx * 0.94, b0.rz * 0.94); })();
   tRings.push(ring(new THREE.Vector3(hipR.cx, hipY - 0.03, hipR.cz), U, V, hipR.rx, hipR.rz, [[pelvis, 1]], 0));
-  for (let b = 0; b < NB; b++) { const B = bands[b], [kx, kz] = prof(b / (NB - 1)), S = inSash(B.y, B.cx, B.cz, B.rx * kx, B.rz * kz); tRings.push(ring(new THREE.Vector3(S.cx, B.y, S.cz), U, V, S.rx, S.rz, tw(B.y), 0)); }
+  for (let b = 0; b < NB; b++) { const B = bands[b], [kx, kz] = prof(b / (NB - 1)), S = inSash(B.y, B.cx, B.cz, B.rx * kx, B.rz * kz); tRings.push(ring(new THREE.Vector3(S.cx, B.y, S.cz), U, V, S.rx, S.rz, tw(B.y), 0, groove(b / (NB - 1)))); }
   { const bt = bands[NB - 1], r = neck.r * 1.15; tRings.push(ring(new THREE.Vector3(0, neck.y + 0.03, bt.cz * 0.5), U, V, Math.max(r, bt.rx * 0.5), Math.max(r, bt.rz * 0.6), [[chest, 1]], 0)); }   // the shoulders close to the neck's girth just under the head
   for (let i = 1; i < tRings.length; i++) stitch(tRings[i - 1], tRings[i], 0);
   { const bt = bands[NB - 1]; cap(tRings[0], new THREE.Vector3(hipR.cx, hipY - 0.03, hipR.cz), new THREE.Vector3(0, -1, 0), hipR.rx, [[pelvis, 1]], 0); cap(tRings[tRings.length - 1], new THREE.Vector3(0, neck.y + 0.03, bt.cz * 0.5), new THREE.Vector3(0, 1, 0), neck.r, [[chest, 1]], 0); }   // closed top and bottom
@@ -1241,7 +1242,7 @@ function modelBodyBuild(R) {
       for (let b = 0; b < nb; b++) if (out[b] == null) { const got = out.filter(x => x != null); out[b] = got.length ? got.reduce((a, x) => a + x, 0) / got.length : dflt; } return out; };
     // one girth from the sleeve's middle (the cuffs and the vambrace's flare are armour, not arm), the rest a profile off it:
     // biceps a little fuller, the elbow lean, the wrist the hand's own width — an arm, not a stuffed sleeve
-    const mid = radii(mine(pts('sleeve')), A, B, 5, 1, 0.08), rE = Math.max(0.045, (mid[1] + mid[2] + mid[3]) / 3 * 0.8), rB = rE * 1.08, rW = rE * 0.62;
+    const mid = radii(mine(pts('sleeve')), A, B, 5, 1, 0.08), rE = Math.max(0.042, (mid[1] + mid[2] + mid[3]) / 3 * 0.7), rB = rE * 1.12, rW = rE * 0.64;   // (0.7 of the sleeve: the sleeve is cloth over the arm, and hangs)
     const frame = d => { const u = new THREE.Vector3().crossVectors(d, Math.abs(d.z) < 0.9 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(1, 0, 0)).normalize(); return [u, new THREE.Vector3().crossVectors(u, d).normalize()]; };   // (v = u × d, the torso's winding: the rings must run the same way round or the tube faces inward and the near wall is culled — the "transparent arm")
     const dU = B.clone().sub(A).normalize(), dF = C.clone().sub(B).normalize(), dM = dU.clone().add(dF).normalize(), [uU, vU] = frame(dU), [uF, vF] = frame(dF), [uM, vM] = frame(dM), rings = [];
     const R_ = (c, u, v, r, w) => rings.push(ring(c, u, v, r, r, w, cl));
@@ -1259,7 +1260,7 @@ function modelBodyBuild(R) {
   const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); geo.setAttribute('uv', new THREE.Float32BufferAttribute(UV, 2));
   geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(SI, 4)); geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(SW, 4)); geo.setIndex(IDX); geo.computeVertexNormals();
   geo.setAttribute('kind', new THREE.BufferAttribute(Float32Array.from(VM, m => m ? MODEL_KIND.leather : MODEL_KIND.skin), 1));
-  const pieces = { classes: ['torso', 'armL', 'armR', 'belt'], mats: ['skin', 'leather'], tri: TRI, vclass: VC, vmat: VM, naked: true };
+  const pieces = { classes: ['torso', 'armL', 'armR', 'belt'], mats: ['skin', 'leather'], tri: TRI, vclass: VC, vmat: VM, naked: true, body: { y0: hipY - 0.03, y1, neckY: neck.y + 0.03 } };   // (body: the torso's heights, for lookBodyColour's shading)
   return (R.body = { geo, pieces });
 }
 // build a fresh skeleton + skinned meshes for one body
@@ -1475,6 +1476,7 @@ function lookRoll(name, arch, gear, pal, o = {}) {
   const LK = (gear && gear.look) || null, has = k => !!(LK && LK[k] != null);   // (the barber's picks, if he made any)
   const skinPick = pick(LOOK_SKIN), weather = r() * 0.35;
   look.skin = c.setHex(has('s') ? LOOK_SKIN[LK.s] : skinPick).lerp(new THREE.Color(0xc89070), has('s') ? 0.15 : weather).getHex();   // weathered: every tone pulled toward a sun-browned red
+  look.body = c.setHex(has('s') ? LOOK_SKIN[LK.s] : skinPick).lerp(new THREE.Color(0xfff4e8), 0.28).getHex();   // THE BODY under the armour: the same man's skin, unweathered and a shade paler — the chest that never sees the sun; the one tone with the face read as a skin-coloured sweater
   const bald = r() < 0.28, hairRoll = pick(LOOK_HAIR), hairC = has('c') ? LOOK_HAIR_PICK[LK.c] : hairRoll, skinC = new THREE.Color(look.skin);
   const beardOn = r() < 0.75, fullBeard = r() < 0.65, styleRoll = r(), beardKind = r();
   look.hairStyle = has('h') ? LK.h : bald ? 0 : styleRoll < 0.64 ? 1 : styleRoll < 0.74 ? 2 : styleRoll < 0.94 ? 3 : 4;   // most cropped, some long, a mohawk now and then
@@ -1513,6 +1515,19 @@ function lookFaceColour(look, cls, mt, x, y, z) {
   if (mt === 'leather') return look.lip;                     // (the palette's lip/brow brown: no painted lips)
   return look.skin;
 }
+// the body under the armour (modelBodyBuild): its own paler tone, the face's weather returning at the collar (a tan line where the
+// shirt ends), and the muscle read as shade — the midline dark from the sternum to the belly and down the spine, a crease under the
+// pecs, the belly shaded into the sash. Position in the bind pose, model units; the face looks +z
+function lookBodyColour(c, look, cls, x, y, z, B) {
+  c.setHex(look.body != null ? look.body : look.skin); if (!B) return c;
+  if (cls === 'torso') { const h = (y - B.y0) / Math.max(0.01, B.y1 - B.y0); let k = 1;
+    const tan = clamp((y - (B.y1 - 0.05)) / Math.max(0.01, B.neckY - (B.y1 - 0.05)), 0, 1); if (tan > 0) c.lerp(new THREE.Color(look.skin), tan);
+    if (Math.abs(x) < 0.02 && h > 0.05 && h < 0.86) k *= z > 0 ? 0.88 : 0.9;
+    if (z > 0 && Math.abs(h - 0.52) < 0.05) k *= 0.93;
+    if (h < 0.12) k *= 0.95;
+    if (k !== 1) c.multiplyScalar(k); }
+  return c;
+}
 function lookColour(look, cls, mt) {
   if (mt === 'cloth') return look.clothOf[cls] != null ? look.clothOf[cls] : look.cloth; if (mt === 'dark') return 0xffffff;
   if (mt === 'leather') return cls === 'brow' ? look.brow : cls === 'beard' ? (look.beard != null ? look.beard : look.lip) : (cls === 'head' || cls === 'socket' || cls === 'scarL' || cls === 'scarR') ? look.lip : look.leather;   // (the palette's lip/brow brown on the face: no painted lips)
@@ -1549,7 +1564,7 @@ function lookApply(L, look) {
     // skin vertices carry a per-vertex colour, so the palette's skin (~#ffdcb4) × tint: the tint is chosen so tint × skin ≈ the tone wanted
     if (skinTint) lookFaceApply(sm, look, pj);                 // (the bones: this body's own head positions)
     const pos = sm.userData.geo0.getAttribute('position');
-    for (let v = 0; v < nv; v++) { const cls = pj.classes[pj.vclass[v]], mt = pj.mats[pj.vmat[v]]; c.setHex(skinTint ? lookFaceColour(look, cls, mt, pos.getX(v), pos.getY(v), pos.getZ(v)) : lookColour(look, cls, mt)); if ((skinTint || pj.naked) && mt === 'skin' && cls !== 'eye') { c.r = Math.min(1, c.r / 1.0); c.g = Math.min(1, c.g / 0.86); c.b = Math.min(1, c.b / 0.70); } col.setXYZ(v, c.r * 255, c.g * 255, c.b * 255); } col.needsUpdate = true;
+    for (let v = 0; v < nv; v++) { const cls = pj.classes[pj.vclass[v]], mt = pj.mats[pj.vmat[v]]; if (pj.naked && mt === 'skin') lookBodyColour(c, look, cls, pos.getX(v), pos.getY(v), pos.getZ(v), pj.body); else c.setHex(skinTint ? lookFaceColour(look, cls, mt, pos.getX(v), pos.getY(v), pos.getZ(v)) : lookColour(look, cls, mt)); if ((skinTint || pj.naked) && mt === 'skin' && cls !== 'eye') { c.r = Math.min(1, c.r / 1.0); c.g = Math.min(1, c.g / 0.86); c.b = Math.min(1, c.b / 0.70); } col.setXYZ(v, c.r * 255, c.g * 255, c.b * 255); } col.needsUpdate = true;
     const kd0 = sm.userData.geo0.getAttribute('kind');           // this body's own kinds, following the paint (lookKind)
     if (kd0 && !skinTint) { if (!sm.userData.ownKind) { sm.geometry.setAttribute('kind', kd0.clone()); sm.userData.ownKind = true; } const kd = sm.geometry.getAttribute('kind');
       for (let v = 0; v < nv; v++) kd.setX(v, lookKind(look, pj.classes[pj.vclass[v]], pj.mats[pj.vmat[v]], kd0.getX(v))); kd.needsUpdate = true; }

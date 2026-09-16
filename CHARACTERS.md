@@ -126,6 +126,12 @@ and the waist belt is the cuirass' leather, gone with the plate. `modelBodyBuild
 cloth (`inSash`: the cloth's centre and 93 % of its width) and lathes a BELT of its own — a leather band a finger thick, class `belt`,
 mat `leather` on the white palette cell so `look.leather` paints it — over the sash's ragged back edge, so the sash hangs from the belt.
 The sculpted belt is not split out and shown instead: it lies on the plate's surface, where the body cuts through it.
+Same day, "he looks like he is wearing a sweater which is skin color … make the arms and upper body thinner": the body has ITS OWN
+TONE, `look.body` — the man's skin unweathered and a shade paler (the chest that never sees the sun), the face's weather returning at
+the collar (a tan line), painted per vertex by `lookBodyColour` with the muscle read as shade: the midline dark from the sternum to
+the belly and down the spine (20 segments a ring now, so a vertex sits on the midline, set in a little for a real groove), a crease
+under the pecs, the belly shaded into the sash. And it is slimmer than the plate: 0.90 × the cuirass's width and 0.87 × its depth
+with an 8 % waist (the padding under armour, the plate's own stand-off), the arms 0.7 of the sleeve's girth.
 
 ## The surface pass (2026-09-16, "our chars look too low poly")
 

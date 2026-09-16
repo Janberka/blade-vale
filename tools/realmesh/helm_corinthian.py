@@ -10,7 +10,7 @@ import json, struct, os, sys, zipfile, tempfile
 from pxr import Usd, UsdGeom, Gf
 from PIL import Image
 base = 'assets/rigs/warrior/'; src = base + 'src/Helmet_of_Leonidas.usdz'; out = base + 'helm_corinthian'
-FIT = { 's': 0.00155, 'tx': 0.0035, 'ty': 1.4575, 'tz': -0.004, 'pitch': 12.0 }   # scale and offset from the model's world units to the head's bind pose, then a PITCH (degrees, about the skull's centre: positive tips the brow up and the nape down) — checked by eye: the eyes in the eye holes, the nasal a hair off the nose, the crown clear of the skull, the neck guard over the nape
+FIT = { 's': 0.001442, 'tx': 0.00326, 'ty': 1.4768, 'tz': -0.00407, 'pitch': 12.0 }   # scale and offset from the model's world units to the head's bind pose, then a PITCH (degrees, about the skull's centre: positive tips the brow up and the nape down) — checked by eye: the eyes in the eye holes, the nasal a hair off the nose, the crown clear of the skull, the neck guard over the nape
 PIVOT = (0.0, 1.69, -0.005)   # the skull's centre (game.js LOOK_SKULL)
 import math
 def place(p):   # model world → the bind pose: scale, offset, then the pitch about the pivot

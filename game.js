@@ -1208,13 +1208,13 @@ function modelBodyBuild(R) {
   for (let b = 0; b < NB; b++) if (!bands[b]) { let lo = b - 1, hi = b + 1; while (lo >= 0 && !bands[lo]) lo--; while (hi < NB && !bands[hi]) hi++; const A = bands[lo] || bands[hi], B = bands[hi] || bands[lo], t = (b - lo) / Math.max(1, hi - lo); bands[b] = { y: y0 + (b / (NB - 1)) * (y1 - y0), cx: A.cx + (B.cx - A.cx) * t, cz: A.cz + (B.cz - A.cz) * t, rx: A.rx + (B.rx - A.rx) * t, rz: A.rz + (B.rz - A.rz) * t }; }
   const U = new THREE.Vector3(1, 0, 0), V = new THREE.Vector3(0, 0, 1), tor = cls('torso') < 0 ? 0 : cls('torso'), tw = y => { const k = Math.max(0, Math.min(1, (y - (hipY + 0.05)) / Math.max(0.05, (y1 - 0.08) - (hipY + 0.05)))); return k < 0.001 ? [[pelvis, 1]] : k > 0.999 ? [[chest, 1]] : [[pelvis, 1 - k], [chest, k]]; };
   let prev = null; const tRings = [];
-  const prof = h => { const waist = 1 - 0.08 * Math.max(0, 1 - Math.abs(h - 0.25) / 0.2), pecs = 1 + 0.05 * Math.max(0, 1 - Math.abs(h - 0.68) / 0.22), shoulders = 1 + 0.34 * Math.max(0, (h - 0.55) / 0.45); return [0.90 * waist * shoulders, 0.87 * pecs]; };   // the torso's profile over the plate's cross-section, by height 0..1: a man is slimmer than his plate (the padding under it, the plate's own stand-off), with a waist; the cuirass narrows under the pauldrons, a man's shoulders don't
+  const prof = h => { const waist = 1 - 0.08 * Math.max(0, 1 - Math.abs(h - 0.25) / 0.2), pecs = 1 + 0.12 * Math.max(0, 1 - Math.abs(h - 0.74) / 0.24), shoulders = 1 + 0.5 * clamp((h - 0.45) / 0.4, 0, 1); return [0.90 * waist * shoulders, 0.87 * pecs]; };   // the torso's profile over the plate's cross-section, by height 0..1: a man is slimmer than his plate (the padding under it, the plate's own stand-off), with a waist, and a V — half again as wide at the shoulder line as the plate's measure there (the cuirass narrows under the pauldrons, a man's shoulders don't), the chest deepened where the pecs are
   // THE CHEST, by vertex (SEG 20: i 5 is the front midline, 15 the back; 1..9 the front half): the midline set in for the sternum, the belly's
   // line and the spine; the PECS a plate of muscle either side of the sternum from the crease under them up toward the collar bone, fullest at
   // three quarters of the torso's height (just under the collar bone), the sternum sinking between them; the crease under the pecs a ring set in across the front
   const chestShape = h => i => { let q = 1; const F = SEG / 4, mid = i === F || i === SEG - F, pec = Math.abs(i - F) === 1 || Math.abs(i - F) === 2, edge = Math.abs(i - F) === 3, front = Math.abs(i - F) <= 3;
     if (h > 0.06 && h < 0.88 && mid) q *= 0.965;
-    const pk = Math.max(0, 1 - Math.abs(h - 0.76) / 0.16); if (pec) q *= 1 + 0.075 * pk; else if (edge) q *= 1 + 0.03 * pk; else if (i === F) q *= 1 - 0.025 * pk;
+    const pk = Math.max(0, 1 - Math.abs(h - 0.76) / 0.16); if (pec) q *= 1 + 0.10 * pk; else if (edge) q *= 1 + 0.05 * pk; else if (i === F) q *= 1 - 0.025 * pk;
     const cr = Math.max(0, 1 - Math.abs(h - 0.59) / 0.06); if (front) q *= 1 - 0.04 * cr;
     return q; };
   // the rings: NR of them up the torso, the plate's bands interpolated between (bandAt) — denser than the bands so the chest's shape has rings to sit on
@@ -1230,7 +1230,7 @@ function modelBodyBuild(R) {
   const hipR = (() => { const b0 = bands[0]; return inSash(hipY - 0.03, b0.cx, b0.cz, b0.rx * 0.94, b0.rz * 0.94); })();
   tRings.push(ring(new THREE.Vector3(hipR.cx, hipY - 0.03, hipR.cz), U, V, hipR.rx, hipR.rz, [[pelvis, 1]], 0));
   for (let r = 0; r < NR; r++) { const h = r / (NR - 1), y = y0 + h * (y1 - y0), S = bandAt(y); tRings.push(ring(S.c, U, V, S.rx, S.rz, tw(y), 0, chestShape(h))); }
-  { const bt = bands[NB - 1], r = neck.r * 1.15; tRings.push(ring(new THREE.Vector3(0, neck.y + 0.03, bt.cz * 0.5), U, V, Math.max(r, bt.rx * 0.5), Math.max(r, bt.rz * 0.6), [[chest, 1]], 0)); }   // the shoulders close to the neck's girth just under the head
+  { const bt = bands[NB - 1], r = neck.r * 1.15; tRings.push(ring(new THREE.Vector3(0, neck.y + 0.03, bt.cz * 0.5), U, V, Math.max(r, bt.rx * 0.62), Math.max(r, bt.rz * 0.7), [[chest, 1]], 0)); }   // the shoulders close toward the neck just under the head — not all the way: the traps fill the gap under the jaw
   for (let i = 1; i < tRings.length; i++) stitch(tRings[i - 1], tRings[i], 0);
   { const bt = bands[NB - 1]; cap(tRings[0], new THREE.Vector3(hipR.cx, hipY - 0.03, hipR.cz), new THREE.Vector3(0, -1, 0), hipR.rx, [[pelvis, 1]], 0); cap(tRings[tRings.length - 1], new THREE.Vector3(0, neck.y + 0.03, bt.cz * 0.5), new THREE.Vector3(0, 1, 0), neck.r, [[chest, 1]], 0); }   // closed top and bottom
   // THE BELT: a bare man keeps his belt. The sculpted one is the cuirass' leather (the bake files it under "cuirass", and it lies ON the

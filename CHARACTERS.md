@@ -143,6 +143,10 @@ the torso (x 0.176 against a torso edge near 0.19) and the upper arm runs 35° o
 out of the body at an angle and lay against it. The tube starts from the deltoid instead — 5.5 cm out past the torso's edge and
 1.2 cm up, in the bone's own frame so it holds in every pose — and runs to the elbow, where the bracer is: more upright, clear of
 the body. Test hook: `BV.showcasePose('relax')` puts the showcase figure in one of the animator's poses.
+THE V ("now we have a gap between body and arms and head — slightly more v shaped and the chest bigger"): the torso broadens
+to half again the plate's width at the shoulder line (`prof`: ×1.5 from 45 % of the height up to 85 %, held to the top), the
+chest is deepened 12 % where the pecs are and the pec vertices go out 10 % (the next pair 5 %), and the ring that closes toward
+the neck stays at 62 % of the top band's width (was 50 %) so the traps fill the gap under the jaw.
 
 ## The surface pass (2026-09-16, "our chars look too low poly")
 

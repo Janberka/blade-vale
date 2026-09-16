@@ -1880,23 +1880,31 @@ function lookSkullCast(T, ox, oy, oz, dx, dy, dz) {
 // the hairline; long hair drapes from the hairline down the neck; a mohawk is a fin along the midline. Flat-shaded,
 // wound outward, skinned to the head bone.
 // THE PLAIT: a braided beard's tail — a run of beads hanging from the chin, swaying a little forward, a leather tie at the end;
-// bind-space model units on the head bone (the chin sits about y 1.49, z 0.09 — lookRuggedHead's numbers)
-function lookBraidGeo(R) {
-  if (R.braidGeo !== undefined) return R.braidGeo;
-  const m = R.meshes.find(x => x.pieces && x.pieces.classes.indexOf('hair') >= 0); if (!m) return (R.braidGeo = null);
-  const headNode = R.g.nodes.findIndex(x => x.name === R.spec.map.head), joint = Math.max(0, m.joints.indexOf(headNode)), parts = [];
-  for (let i = 0; i < 7; i++) { const t = i / 6, r = 0.019 - t * 0.006, g = new THREE.SphereGeometry(r, 7, 5); g.scale(1.25, 1, 1); g.translate((i % 2 ? 1 : -1) * 0.006, 1.478 - i * 0.03, 0.092 + t * 0.028 - t * t * 0.01); parts.push(g); }
-  { const g = new THREE.CylinderGeometry(0.014, 0.012, 0.02, 6); g.translate(0, 1.478 - 6 * 0.03 - 0.02, 0.092 + 0.018); parts.push(g); }   // the tie
+// bind-space model units on the head bone. The plait HANGS FROM THE CHIN — the chin as this rig has it after lookRuggedHead
+// and as this face's cast moves it (lookFacePoint), not a fixed point: a shorter chin left the old fixed beads floating an inch
+// under it ("it's floating in front of our face"). Five beads, the first tucked up into the chin, straight down from there.
+function lookChin(R) {                                       // the rig's chin: the TIP — the front-most point of the head's midline under the lip (the chin's underside runs level from there back to the throat, so its lowest point is under the jaw, and a plait rooted there hung behind the chin)
+  if (R.chin) return R.chin; const m = R.meshes.find(x => x.pieces && x.pieces.classes.indexOf('hair') >= 0); if (!m) return null;
+  const pj = m.pieces, pos = m.geo.getAttribute('position'); let best = null;
+  for (let v = 0; v < pos.count; v++) { if (!LOOK_HEAD_CLASSES.has(pj.classes[pj.vclass[v]])) continue; const x = pos.getX(v), y = pos.getY(v), z = pos.getZ(v); if (Math.abs(x) > 0.015 || y > 1.57 || y < 1.50) continue; if (!best || z > best[2]) best = [x, y, z]; }
+  return (R.chin = best);
+}
+function lookBraidGeo(R, at) {
+  const key = at.map(a => a.toFixed(3)).join(','); R.braidGeo = R.braidGeo || {}; if (R.braidGeo[key] !== undefined) return R.braidGeo[key];
+  const m = R.meshes.find(x => x.pieces && x.pieces.classes.indexOf('hair') >= 0); if (!m) return (R.braidGeo[key] = null);
+  const headNode = R.g.nodes.findIndex(x => x.name === R.spec.map.head), joint = Math.max(0, m.joints.indexOf(headNode)), parts = [], y0 = at[1] - 0.012, z0 = at[2] - 0.018;   // (the first bead's centre just inside the chin's front underside: rooted, not hung under it)
+  for (let i = 0; i < 5; i++) { const t = i / 4, r = 0.016 - t * 0.004, g = new THREE.SphereGeometry(r, 7, 5); g.scale(1.2, 1, 1); g.translate((i % 2 ? 1 : -1) * 0.004, y0 - i * 0.022, z0 - t * 0.006); parts.push(g); }   // (the beads overlap: one rope, not a necklace; it hangs straight, leaning back to the chest a little)
+  { const g = new THREE.CylinderGeometry(0.011, 0.009, 0.014, 6); g.translate(0, y0 - 4 * 0.022 - 0.016, z0 - 0.006); parts.push(g); }   // the tie
   let P = [], I = [], off = 0; for (const g of parts) { const p = g.getAttribute('position'), idx = g.index.array; for (let v = 0; v < p.count; v++) P.push(p.getX(v), p.getY(v), p.getZ(v)); for (let k = 0; k < idx.length; k++) I.push(idx[k] + off); off += p.count; }
   const nv = P.length / 3, si = new Uint16Array(nv * 4), sw = new Float32Array(nv * 4); for (let v = 0; v < nv; v++) { si[v * 4] = joint; sw[v * 4] = 1; }
   const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); geo.setAttribute('skinIndex', new THREE.BufferAttribute(si, 4)); geo.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4)); geo.setIndex(I); geo.computeVertexNormals();
-  return (R.braidGeo = geo);
+  return (R.braidGeo[key] = geo);
 }
 function lookBraidApply(L, look) {
   const on = (look.beardStyle | 0) === 5 && look.beard != null, R = MODEL_RIGS.get(L.g.userData.model), body = on && R && Object.values(L.inst.skinned).find(sm => sm.userData.pieces && sm.userData.pieces.classes.indexOf('hair') >= 0);
-  const g0 = body && lookBraidGeo(R); if (!g0) { if (L.mBraid) L.mBraid.visible = false; return; }
+  const chin = body && lookChin(R), g0 = chin && lookBraidGeo(R, lookFacePoint(look.faceShape | 0, chin[0], chin[1], chin[2], [0, 0, 0])); if (!g0) { if (L.mBraid) L.mBraid.visible = false; return; }
   if (!L.mBraid) { const sm = new THREE.SkinnedMesh(g0, new THREE.MeshPhongMaterial({ color: look.beard, shininess: 8, specular: 0x181818, skinning: true })); sm.frustumCulled = false; sm.castShadow = true; sm.name = 'braid'; body.parent.add(sm); sm.bind(body.skeleton, body.bindMatrix); L.mBraid = sm; }
-  L.mBraid.material.color.setHex(look.beard); L.mBraid.visible = true;
+  L.mBraid.geometry = g0; L.mBraid.material.color.setHex(look.beard); L.mBraid.visible = true;
 }
 function lookHairGeo(R, hs) {
   R.hairGeo = R.hairGeo || {}; if (R.hairGeo[hs] !== undefined) return R.hairGeo[hs]; const T = lookSkullTris(R); if (!T.length) return (R.hairGeo[hs] = null);

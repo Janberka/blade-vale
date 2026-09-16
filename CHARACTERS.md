@@ -92,6 +92,10 @@ underside so the neck keeps its seat; the long cast draws the face down 22 % (wa
 the cheek, z > 0) took the ear's root and lobe, which sit at z 0 … 0.02. The band is in FRONT of the ear now (z > 0.035, in
 warrior_pieces.py and its port lookBakeHeadClass), and lookFaceColour cuts the baked class the same way, so the shipped pieces.json
 needs no re-bake. v=216
+"The braids look super weird, it's floating in front of our face": the plait hung from a FIXED point an inch under the old chin. It
+hangs from the chin now — the rig's chin tip (`lookChin`: the front-most midline vertex under the lip, after lookRuggedHead) moved by
+this face's cast (lookFacePoint), the geometry cached per anchor — the first bead rooted just inside the chin's front underside, five
+beads that overlap into one rope (was seven with gaps, a necklace), hanging straight and leaning back a little to the chest. v=217
 
 ## The wardrobe is the marketplace (2026-09-14, "any item we add should be available in the marketplace")
 Six slots now: sword, armor, helm, shield, bow, horse (`ARENA_SLOTS` in arena-items.js; the server validates against the

@@ -31,7 +31,7 @@
     brigandine:     { slot: 'armor', name: 'Brigandine',        price: 1000, rank: 2, hp: 45, poise: 10, move: -0.03, desc: 'steel plates riveted under cloth — little weight to speak of' },
     dragon_plate:   { slot: 'armor', name: 'Dragon plate',      price: 7000, rank: 5, skill: ['sword', 5], hp: 110, poise: 30, move: -0.3, desc: 'black steel, red trim, spiked shoulders — a walking fortress' },
     sallet:         { slot: 'helm',  name: 'Sallet',            price: 200,  rank: 0, hp: 8,  poise: 3, desc: 'a visored steel helm — without one you fight bareheaded' },
-    open_sallet:    { slot: 'helm',  name: 'Open sallet',       price: 140,  rank: 0, hp: 5,  poise: 2, open: true, desc: 'the sallet with its face plate cut away — lighter, you see out of it, and the pit sees your face' },   // (open: the look drops the visor piece — lookRoll)
+    corinthian:     { slot: 'helm',  name: 'Corinthian helm',   price: 260,  rank: 0, hp: 8,  poise: 4, model: 'corinthian', desc: 'a bronze helm of the old south, cheek guards and a nasal round an open face, a crest on the crown' },   // (model: its own sculpt in place of the sallet — game.js loadHelmModel)
     round_shield:   { slot: 'shield', name: 'Round shield',     price: 0,    rank: 0, desc: 'a painted wooden round — the pit lends every fighter one' },
     heater_shield:  { slot: 'shield', name: 'Heater shield',    price: 350,  rank: 1, poise: 5, desc: 'steel-faced and team-painted' },
     hunting_bow:    { slot: 'bow',   name: 'Hunting bow',       price: 200,  rank: 0, dmg: 1.0,  desc: 'lets you ride in with a bow at all' },

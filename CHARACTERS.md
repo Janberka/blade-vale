@@ -92,26 +92,31 @@ a man carries one at all is still his class (`AF_ARCH.shield`). NPCs roll all of
 Adding a ware: an entry in ARENA_ITEMS (slot, price, rank, stats), a `LOOK_ARMOR` row if it is armour (paint per piece,
 `bare: true` for skin), the plastic fallback in `AF_LOOK.armor`, and a thumbnail branch in `afThumb` if the slot is new.
 
-## The open sallet (2026-09-16, "add a face open version of the current helmet")
-The sallet is one welded shell on the warrior mesh: skull, comb, brim, cheek walls, a face plate with an eye slit and
-breaths, and a bevor closed under the chin, plus two ear discs. The bake now cuts the face plate and the bevor off as a
-piece of their own, `visor` (`visor_tri` in warrior_pieces.py: helmet triangles whose centre lies under the brim and in
-front of the cheeks, z > 0.06 below y 1.69, or under the chin) — a class of TRIANGLES only, its vertices stay `helmet`,
-so it is painted with the helm. The market sells the **Open sallet** (`open_sallet`, `open: true`, 140 g, lighter: +5
-health, +2 poise): `lookRoll` reads the ware's `open` and drops `visor` from the index, so the man wears the skull, brim,
-cheeks and ear discs and his face — beard, scar and all — shows under the brim. A bare head drops `visor` with `helmet`
-(`lookWorn`), the helm carried in on the walk (`lookHelmBuild`) is cut the same way and is rebuilt when the preview
-figure changes to or from an open helm, and NPCs roll a third of their helms open (`afNpcGear`, the same draw as before,
-so the same men wear a helm). Test: `BV.showcase({name, gear: {helm: 'open_sallet'}})`, `BV.look.live()[i].look.open`.
-**The face irons** (same day, "cover the cheeks and nose with extensions"): in place of the plate the open sallet wears a
-NASAL — a steel bar from under the brim down the ridge of the nose to above the lip — and two CHEEK PIECES, plates hung from
-the helm's cheek walls at the temple, over the cheeks from under the eyes to the jaw, leaving the eyes, the mouth and the chin
-free. They are cast onto the face the way the hair cap is cast onto the skull (`lookHelmExtGeo`: rays from the skull's axis
-through the head in the look's face shape, `lookFaceTris`, pushed out by a pad — so a hawk's beak and a round man's cheeks wear
-them alike), built once per rig and face shape (`LOOK_NASAL`, `LOOK_CHEEK`: bearings and heights, model units), skinned to the
-head bone and painted the helm's steel on the figure's own copy — the palette's steel cell × the helm's paint, the kind following
-it, so a champion's are gold (`lookHelmExtApply`, from `lookApply` and `lookHelmOff`: on with an open helm, gone with the helm).
-The helm carried in on the walk wears the same irons, appended in the head bone's space (`lookHelmBuild`).
+## The Corinthian helm (2026-09-16, "add a face open version of the current helmet" → "just use this")
+A second helm ware, with a sculpt of its own: the **Corinthian helm** (`corinthian` in arena-items, `model: 'corinthian'`, 260 g,
++8 health, +4 poise) — the "Helmet of Leonidas" (`assets/rigs/warrior/src/Helmet_of_Leonidas.usdz`: the helm and its crest, one
+PBR texture set, bronze), a face open between cheek guards and a nasal. `tools/realmesh/helm_corinthian.py` (usd-core, Pillow)
+bakes it FITTED over the warrior's head in the bind pose (`FIT`: one scale and offset, checked by eye — the eyes in the eye holes,
+the nasal a hair off the nose, the crown clear of the skull) into `helm_corinthian.json` + `.bin` (positions, normals, uvs,
+indices, a draw group per part) and its maps halved to 512. game.js loads it with the warrior (`loadHelmModel`, awaited by
+`loadModelRig`; `HELM_MODELS` names the wares' files) and shares it between figures: worn, it rides the head bone as a SkinnedMesh
+bound to the body's skeleton (`lookHelmModelApply`, from `lookApply` and `lookHelmOff` — on with the helm, gone with it); carried
+in on the walk, the same geometry rigid in the head bone's space (`lookHelmBuild`, rebuilt when the figure changes helm). Under
+it the sculpted sallet comes off the body (`lookRoll` hides `helmet` when the ware has a model — `look.helmModel`) and the plume
+feather stays away: the crest is the plume, and takes a bought plume's dye (`look.plumeC`; `helmModelMaterials`: the crest's
+material dyed, metalness down — horsehair). Its own colour, normal, roughness and occlusion maps, metalness 1, the surface pass's
+sky in it (a Phong with the maps on the low tier); it is not repainted per armour like the sallet. NPCs roll a third of their
+helms Corinthian (`afNpcGear`, the same draw as before, so the same men wear a helm). Test: `BV.showcase({name, gear: {helm:
+'corinthian'}})`, `BV.look.live()[i].look.helmModel`.
+
+## The head under the helm (2026-09-16, "the head pops out of the helmet here and there")
+The sallet is a thin shell a few millimetres off the skull, and the face's tessellation lifts scalp vertices through it, while
+the rugged jaw and a square face's push the jaw's corner out under the ear. Two remedies (`LOOK_TUCK`): under any helm the SCALP
+is not drawn (`lookDraw` hides the head's `hair` class — crown, temples, nape — which lies wholly inside the shell), and the jaw,
+temple and cheekbone band under the helm's walls and the whole skull above the brow are TUCKED inside the shell (`lookHelmTuck`:
+a head vertex standing out of the shell by less than 2 cm is pulled 2 mm inside it along the ray from the skull's centre — on the
+rig's shared head at load, and on a figure's own copy after his face shape). The chin and the neck below the rim stand out by
+more and are left alone. `lookHelmShell` is the shell: the helmet piece's triangles in the bind pose.
 
 ## The barber (2026-09-14, "we should be able to edit the hair style, hair color, beard style, skin color")
 The "✂ Look" chip in the home's gear row opens THE BARBER, a page of the shell like the market (`page-barber`,

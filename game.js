@@ -1264,9 +1264,11 @@ async function loadModelRig(name) {
         const st = pj.classes.push('skirtTop') - 1;        // and the cloth above the belt (y > 0.99) — under the cuirass before, it would peek over the belt of a bare man
         for (let v = 0; v < ps.count; v++) if (pj.vclass[v] === sk && pj.vmat[v] === cl && ps.getY(v) > 0.99) pj.vclass[v] = st;
         for (let t = 0; t < pj.tri.length; t++) if (pj.tri[t] === sk && [0, 1, 2].every(k => pj.vclass[idx[t * 3 + k]] === st)) pj.tri[t] = st; } } }
+  if (pieces) { const body = meshes.find(m => m.pieces && m.pieces.classes.indexOf('hair') >= 0); if (body && lookHelmTuck(body.geo.getAttribute('position'), body.pieces, { meshes })) body.geo.computeVertexNormals(); }   // the jaw and the temples inside the helm's shell (lookHelmTuck)
   for (const m of meshes) { modelKindAttr(m); modelSmoothNormals(m.geo, MODEL_DETAIL.crease); if (m.pieces && m.pieces.classes.indexOf('hair') >= 0) lookFaceNormals(m.geo, m.pieces); }   // the surface pass: what each vertex is made of, and normals rounded under a crease limit (a face under none of it)
   if (modelDetailOn()) MODEL_DETAIL_LIVE = true;           // (so the pit's hour builds the sky the steel reflects before the first man is dressed)
-  const entry = { name, spec, g, meshes, tex, pieces }; MODEL_RIGS.set(name, entry); return entry;
+  const entry = { name, spec, g, meshes, tex, pieces }; await Promise.all(Object.keys(HELM_MODELS).map(k => loadHelmModel(entry, k)));   // the helms of their own (the Corinthian) load with him
+  MODEL_RIGS.set(name, entry); return entry;
 }
 // ---------- THE BODY UNDER THE ARMOUR (2026-09-16, "we need a naked body and armours should be attached to it") ----------
 // The warrior came as armour + a head + hands: a bare-chested look used to paint the CUIRASS skin-colour, so a berserker was a
@@ -1502,7 +1504,7 @@ BV.modelRig = { load: loadModelRig, wear: wearModelRig, live: () => MODEL_LIVE.l
 
 // ---------- LOOKS: no two fighters alike ----------
 // The warrior's armour is one sculpted mesh; pieces.json (tools/realmesh/warrior_pieces.py) says which PIECE every
-// triangle belongs to (helmet, visor, pauldron, sleeve, elbow, vambrace, cuirass, skirt, straps, knee, greaves, pouch), what
+// triangle belongs to (helmet, pauldron, sleeve, elbow, vambrace, cuirass, skirt, straps, knee, greaves, pouch), what
 // the palette makes each vertex of (steel, cloth, leather, dark, skin) and where the bald head's hair and beard would
 // be. A LOOK is rolled per fighter from his NAME (host and guests roll the same man), the armour he wears and his
 // class: which pieces he has on, what each is painted, his skin, hair and beard, whether he wears a cloak, and which
@@ -1660,7 +1662,7 @@ function lookRoll(name, arch, gear, pal, o = {}) {
   const r = lookRng(lookSeed(name) ^ 0x5bd1e995), A = AF_ARCH[arch] || AF_ARCH.swordsman, kind = gear && gear.armor && LOOK_ARMOR[gear.armor] ? gear.armor : 'none', O = LOOK_ARMOR[kind], K = LOOK_CLASS[arch] || {};
   const p = k => o.full ? 1 : clamp((O[k] || 0) + (K[k] || 0), 0, 1), pick = a => a[Math.floor(r() * a.length)];
   const c = new THREE.Color(), team = new THREE.Color(pal ? pal.cloth : 0x8a8a8a);
-  const look = { kind, hide: [], paint: {}, clothOf: {}, cloth: 0, cloakC: 0, leather: pick(LOOK_LEATHER), skin: 0, hair: null, beard: null, cloak: false, shield: 'none', helmet: false, open: false, plume: false, round: 0 };
+  const look = { kind, hide: [], paint: {}, clothOf: {}, cloth: 0, cloakC: 0, leather: pick(LOOK_LEATHER), skin: 0, hair: null, beard: null, cloak: false, shield: 'none', helmet: false, helmModel: null, plume: false, round: 0 };
   // the man: skin, hair, beard (rolled first, so a change of kit never changes his face)
   const LK = (gear && gear.look) || null, has = k => !!(LK && LK[k] != null);   // (the barber's picks, if he made any)
   const skinPick = pick(LOOK_SKIN), weather = r() * 0.35;
@@ -1676,8 +1678,9 @@ function lookRoll(name, arch, gear, pal, o = {}) {
   const scar = r(); look.scar = scar < 0.18 ? 'scarL' : scar < 0.36 ? 'scarR' : null; look.scarC = c.copy(skinC).lerp(new THREE.Color(0xe8a0a0), 0.45).multiplyScalar(1.05).getHex();
   // the kit
   look.helmet = !!(gear && (gear.helm || gear.plume));                                              // (a bought plume needs a helm to sit on)
-  const hm = look.helmet && gear.helm && window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS[gear.helm] : null; look.open = !!(hm && hm.open);   // an OPEN-FACED helm (the ware's `open`): the sallet's skull, brim and cheeks without its face plate — the 'visor' piece comes off and the face shows
-  for (const k of ['pauldron', 'elbow', 'knee', 'straps', 'pouch']) if (r() >= p(k)) look.hide.push(k); if (!look.helmet) look.hide.push('helmet'); if (!look.helmet || look.open) look.hide.push('visor');
+  const I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}, hm = look.helmet && gear.helm ? I[gear.helm] : null; look.helmModel = hm && hm.model && HELM_MODELS[hm.model] ? hm.model : null;   // a helm with a sculpt of its own (the ware's `model` — the Corinthian): the sallet comes off the body, the model rides the head bone (lookHelmModelApply)
+  const pl = gear && gear.plume ? I[gear.plume] : null; look.plumeC = pl && pl.plume != null ? pl.plume : null;                       // (the plume ware's dye: such a helm's crest takes it)
+  for (const k of ['pauldron', 'elbow', 'knee', 'straps', 'pouch']) if (r() >= p(k)) look.hide.push(k); if (!look.helmet || look.helmModel) look.hide.push('helmet');
   look.hide.push('skirtTop'); if (O.naked) { look.hide.push('cuirass', 'sleeve', 'pouch'); look.naked = true; }   // bare to the waist: the body under the armour shows (instanceModelRig's 'naked' mesh); the belt stays on, the belt pouches come off (two leather blocks that only read tucked under a back plate — a box on a bare back otherwise)
   look.cloak = o.full ? true : r() < p('cloak'); look.plume = o.full || (r() < p('plume')) || !!(gear && gear.plume);
   look.shield = !A.shield && !o.full ? 'none' : (gear && gear.shield === 'heater_shield') ? 'heater' : 'round'; look.round = Math.floor(r() * 4);
@@ -1768,47 +1771,51 @@ function lookApply(L, look) {
   lookDraw(L, look); if (lookHelmBuild(L)) lookHelmPaint(L);
   if (L.inst.skinned.naked) L.inst.skinned.naked.visible = !!look.naked;
   const cloak = L.inst.skinned[M.cloak]; if (cloak) { cloak.visible = !!look.cloak; if (cloak.material && cloak.material.color && !cloak.material.map) cloak.material.color.setHex(look.cloakC); }
-  if (L.plume) L.plume.visible = !!(look.helmet && look.plume);
+  if (L.plume) L.plume.visible = !!(look.helmet && look.plume && !look.helmModel);   // (a helm with a crest of its own carries no feather: the crest takes the plume's dye)
   lookHairApply(L, look);                                                // the cut: a cap on the skull when he stands bareheaded
-  lookHelmExtApply(L, look);                                             // the open sallet's nasal and cheek pieces
+  lookHelmModelApply(L, look);                                           // a helm with a sculpt of its own (the Corinthian) on the head bone
   lookBraidApply(L, look);                                               // the plait, if his beard is braided
   L.shieldKind = look.shield; if (look.shield === 'round') lookRoundShield(L, look); else if (L.mRound) L.mRound.visible = false;
   if (L.mShield && L.mShield.material && L.mShield.material.color) L.mShield.material.color.setHex(look.cloth).lerp(new THREE.Color(0xffffff), 0.35);
 }
-// THE HELM IN HIS HAND: the sculpted helmet lifted off the body as a piece of its own — its triangles (the visor's too, unless his helm is
-// open-faced) copied into a geometry of its own in the head bone's space (every helmet vertex rides that bone at full weight, so under the head
-// bone at identity it sits exactly where the body's own did), painted with the same vertex colours as the body's, and hung on the sword hand
-// while he walks in (L.helmHand); the don lifts it from the hand onto the head (L.helmK 0→1, a world-space lerp in modelHelmPlace) and the
-// body's own helmet takes over. Built once per figure — and again if he changes to or from an open-faced helm (the shop's preview).
+// THE HELM IN HIS HAND: the sculpted helmet lifted off the body as a piece of its own — its triangles copied into a geometry of its own in the
+// head bone's space (every helmet vertex rides that bone at full weight, so under the head bone at identity it sits exactly where the body's
+// own did), painted with the same vertex colours as the body's, and hung on the sword hand while he walks in (L.helmHand); the don lifts it
+// from the hand onto the head (L.helmK 0→1, a world-space lerp in modelHelmPlace) and the body's own helmet takes over. A helm with a sculpt
+// of its own (the Corinthian) is carried the same way: its geometry, rigid, in the head bone's space. Built once per figure — and again if he
+// changes helm (the shop's preview).
 function lookHelmBuild(L) {
-  const open = !!(L.lookBase && L.lookBase.open); if (L.mHelm !== undefined && L.mHelmOpen === open) return L.mHelm;
-  if (L.mHelm) { if (L.mHelm.parent) L.mHelm.parent.remove(L.mHelm); L.mHelm.geometry.dispose(); } L.mHelm = null; L.mHelmOpen = open;
+  const key = (L.lookBase && L.lookBase.helmModel) || 'sallet'; if (L.mHelm !== undefined && L.mHelmKey === key) return L.mHelm;
+  if (L.mHelm) { if (L.mHelm.parent) L.mHelm.parent.remove(L.mHelm); L.mHelm.geometry.dispose(); } L.mHelm = null; L.mHelmKey = key;
   const R = MODEL_RIGS.get(L.g.userData.model); if (!R) return null;
-  for (const [nm, sm] of Object.entries(L.inst.skinned)) { const pj = sm.userData.pieces; if (!pj) continue; const hI = pj.classes.indexOf('helmet'), vI = open ? -1 : pj.classes.indexOf('visor'); if (hI < 0) continue;
+  for (const [nm, sm] of Object.entries(L.inst.skinned)) { const pj = sm.userData.pieces; if (!pj) continue; const hI = pj.classes.indexOf('helmet'); if (hI < 0) continue;
     const g0 = sm.userData.geo0, pos0 = g0.getAttribute('position'), nrm0 = g0.getAttribute('normal'), uv0 = g0.getAttribute('uv'), si = g0.getAttribute('skinIndex'), i0 = g0.index.array, tri = pj.tri, mm = R.meshes.find(x => x.name === nm);
     const map = [], of = new Map(), idx = []; let j = -1;
-    for (let t = 0; t < tri.length; t++) { if (tri[t] !== hI && tri[t] !== vI) continue; for (let k = 0; k < 3; k++) { const v = i0[t * 3 + k]; let o = of.get(v); if (o == null) { o = map.length; of.set(v, o); map.push(v); if (j < 0) j = si.getX(v); } idx.push(o); } }
+    for (let t = 0; t < tri.length; t++) { if (tri[t] !== hI) continue; for (let k = 0; k < 3; k++) { const v = i0[t * 3 + k]; let o = of.get(v); if (o == null) { o = map.length; of.set(v, o); map.push(v); if (j < 0) j = si.getX(v); } idx.push(o); } }
     if (!map.length || !mm) continue;
     const M = new THREE.Matrix4().fromArray(mm.ibm, j * 16).multiply(sm.bindMatrix), N = new THREE.Matrix3().getNormalMatrix(M), n = map.length, p = new THREE.Vector3();
-    const ext = open ? lookHelmExtGeo(R, L.lookBase.faceShape | 0) : null, ne = ext ? ext.getAttribute('position').count : 0, nt = n + ne;   // an open helm carries its nasal and cheek pieces too
-    const pos = new Float32Array(nt * 3), nrm = new Float32Array(nt * 3), uv = new Float32Array(nt * 2), col0 = sm.geometry.getAttribute('color');
-    for (let o = 0; o < n; o++) { const v = map[o]; p.fromBufferAttribute(pos0, v).applyMatrix4(M); pos[o * 3] = p.x; pos[o * 3 + 1] = p.y; pos[o * 3 + 2] = p.z;
-      if (nrm0) { p.fromBufferAttribute(nrm0, v).applyMatrix3(N).normalize(); nrm[o * 3] = p.x; nrm[o * 3 + 1] = p.y; nrm[o * 3 + 2] = p.z; } if (uv0) { uv[o * 2] = uv0.getX(v); uv[o * 2 + 1] = uv0.getY(v); } }
-    if (ne) { const ep = ext.getAttribute('position'), en = ext.getAttribute('normal'), eu = ext.getAttribute('uv');   // (the irons are in the same bind space as the armour: the same matrix takes them to the head bone)
-      for (let e = 0; e < ne; e++) { const o = n + e; p.fromBufferAttribute(ep, e).applyMatrix4(M); pos[o * 3] = p.x; pos[o * 3 + 1] = p.y; pos[o * 3 + 2] = p.z;
-        p.fromBufferAttribute(en, e).applyMatrix3(N).normalize(); nrm[o * 3] = p.x; nrm[o * 3 + 1] = p.y; nrm[o * 3 + 2] = p.z; uv[o * 2] = eu.getX(e); uv[o * 2 + 1] = eu.getY(e); idx.push(o); } }
-    const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); if (nrm0 || ne) geo.setAttribute('normal', new THREE.BufferAttribute(nrm, 3)); if (uv0 || ne) geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-    { const kd0 = sm.geometry.getAttribute('kind'); if (kd0) { const kd = new Float32Array(nt); for (let o = 0; o < n; o++) kd[o] = kd0.getX(map[o]); for (let o = n; o < nt; o++) kd[o] = kd[0]; geo.setAttribute('kind', new THREE.BufferAttribute(kd, 1)); } }   // (the irons: the helm's own kind)
-    geo.setAttribute('color', new THREE.BufferAttribute(new col0.array.constructor(nt * 3), 3, col0.normalized)); geo.setIndex(idx); geo.computeBoundingSphere();
-    const mmH = { ctx: L.inst.ctx || 'main', vc: true };   // (the painted material without its skinning: this piece is rigid)
-    const m = new THREE.Mesh(geo, modelMaterial(R, mmH)); m.userData.mm = mmH; m.userData.mmR = R.name; m.name = 'helmInHand'; m.castShadow = true; m.visible = false; m.userData.map = map; m.userData.src = sm;
+    const H = key !== 'sallet' && R.helms && R.helms[key]; let m;
+    if (H) {                                                 // a helm of its own: its geometry, rigid, taken into the head bone's space by the same matrix (it is fitted in the armour's bind space)
+      const hp = H.geo.getAttribute('position'), hn = H.geo.getAttribute('normal'), hu = H.geo.getAttribute('uv'), nh = hp.count, pos = new Float32Array(nh * 3), nrm = new Float32Array(nh * 3);
+      for (let o = 0; o < nh; o++) { p.fromBufferAttribute(hp, o).applyMatrix4(M); pos[o * 3] = p.x; pos[o * 3 + 1] = p.y; pos[o * 3 + 2] = p.z; p.fromBufferAttribute(hn, o).applyMatrix3(N).normalize(); nrm[o * 3] = p.x; nrm[o * 3 + 1] = p.y; nrm[o * 3 + 2] = p.z; }
+      const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); geo.setAttribute('normal', new THREE.BufferAttribute(nrm, 3)); geo.setAttribute('uv', hu); geo.setAttribute('uv2', hu); geo.setIndex(H.geo.index); for (const g of H.geo.groups) geo.addGroup(g.start, g.count, g.materialIndex); geo.computeBoundingSphere();
+      m = new THREE.Mesh(geo, helmModelMaterials(H, L.inst.ctx || 'main', false, L.lookBase.plume ? L.lookBase.plumeC : null)); }
+    else {
+      const pos = new Float32Array(n * 3), nrm = new Float32Array(n * 3), uv = new Float32Array(n * 2), col0 = sm.geometry.getAttribute('color');
+      for (let o = 0; o < n; o++) { const v = map[o]; p.fromBufferAttribute(pos0, v).applyMatrix4(M); pos[o * 3] = p.x; pos[o * 3 + 1] = p.y; pos[o * 3 + 2] = p.z;
+        if (nrm0) { p.fromBufferAttribute(nrm0, v).applyMatrix3(N).normalize(); nrm[o * 3] = p.x; nrm[o * 3 + 1] = p.y; nrm[o * 3 + 2] = p.z; } if (uv0) { uv[o * 2] = uv0.getX(v); uv[o * 2 + 1] = uv0.getY(v); } }
+      const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); if (nrm0) geo.setAttribute('normal', new THREE.BufferAttribute(nrm, 3)); if (uv0) geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+      { const kd0 = sm.geometry.getAttribute('kind'); if (kd0) { const kd = new Float32Array(n); for (let o = 0; o < n; o++) kd[o] = kd0.getX(map[o]); geo.setAttribute('kind', new THREE.BufferAttribute(kd, 1)); } }
+      geo.setAttribute('color', new THREE.BufferAttribute(new col0.array.constructor(n * 3), 3, col0.normalized)); geo.setIndex(idx); geo.computeBoundingSphere();
+      const mmH = { ctx: L.inst.ctx || 'main', vc: true };   // (the painted material without its skinning: this piece is rigid)
+      m = new THREE.Mesh(geo, modelMaterial(R, mmH)); m.userData.mm = mmH; m.userData.mmR = R.name; m.userData.map = map; m.userData.src = sm; }
+    m.name = 'helmInHand'; m.castShadow = true; m.visible = false;
     L.mHelm = m; L.helmHead = L.inst.nodes[mm.joints[j]]; L.helmHandBone = R.spec.swordHand ? L.inst.byName[R.spec.swordHand] : null; break; }
   return L.mHelm;
 }
 function lookHelmPaint(L) {                                  // the same paint as the body's helmet (a champion's gold, a rookie's iron)
-  const m = L.mHelm; if (!m) return; const src = m.userData.src.geometry.getAttribute('color'), dst = m.geometry.getAttribute('color'), map = m.userData.map;
-  for (let o = 0; o < map.length; o++) { const v = map[o] * 3, w = o * 3; dst.array[w] = src.array[v]; dst.array[w + 1] = src.array[v + 1]; dst.array[w + 2] = src.array[v + 2]; }
-  for (let o = map.length; o < dst.count; o++) { const v = map[0] * 3, w = o * 3; dst.array[w] = src.array[v]; dst.array[w + 1] = src.array[v + 1]; dst.array[w + 2] = src.array[v + 2]; } dst.needsUpdate = true;   // (the irons: the helm's colour)
+  const m = L.mHelm; if (!m || !m.userData.map) return; const src = m.userData.src.geometry.getAttribute('color'), dst = m.geometry.getAttribute('color'), map = m.userData.map;   // (a helm of its own wears its own maps)
+  for (let o = 0; o < map.length; o++) { const v = map[o] * 3, w = o * 3; dst.array[w] = src.array[v]; dst.array[w + 1] = src.array[v + 1]; dst.array[w + 2] = src.array[v + 2]; } dst.needsUpdate = true;
 }
 // where the helm hangs in the sword hand (model units, in the hand bone's frame) — BV.helmHand(o) to re-hang it live
 const MODEL_HELM_HAND = { x: 0.03, y: 0.12, z: -0.08, rx: 0, ry: 0, rz: 0 };   // (hand frame: +x up the forearm, +y down past the fingers, +z toward the body — the rim at the fingers, the helm hanging crown-down below the fist)
@@ -1827,16 +1834,16 @@ function modelHelmPlace(L) {                                 // every render whi
 }
 // the pieces he goes without leave the body's own index (no draw call for them, no seam) — the only part of the look a helm toggle has to redo
 function lookDraw(L, look) {
-  const hide = new Set(look.hide);
+  const hide = new Set(look.hide); if (look.helmet) hide.add('hair');   // (under a helm the scalp is not drawn: it lies inside the shell, and the tessellated crown would show through it)
   for (const sm of Object.values(L.inst.skinned)) { const pj = sm.userData.pieces; if (!pj) continue;
     const i0 = sm.userData.geo0.index.array, tri = pj.tri, idx = sm.geometry.index; let n = 0;
     for (let t = 0; t < tri.length; t++) { if (hide.has(pj.classes[tri[t]])) continue; idx.array[n] = i0[t * 3]; idx.array[n + 1] = i0[t * 3 + 1]; idx.array[n + 2] = i0[t * 3 + 2]; n += 3; }
     idx.needsUpdate = true; sm.geometry.setDrawRange(0, n); }
 }
-function lookWorn(L, look) { return L.helmOff && (look.helmet || !look.hide.includes('helmet')) ? Object.assign({}, look, { helmet: false, hide: look.hide.concat('helmet', 'visor') }) : look; }   // bareheaded: the sculpted helm dropped, its visor and the plume with it
+function lookWorn(L, look) { return L.helmOff && (look.helmet || !look.hide.includes('helmet')) ? Object.assign({}, look, { helmet: false, hide: look.hide.concat('helmet') }) : look; }   // bareheaded: the sculpted helm dropped, the plume with it
 // the helm off and on again — the home and the barber's chair (his face and hair are the point there, as the sword and shield lie on the floor),
 // and the walk into the pit: every man comes in bareheaded and sets it on in the countdown's last breaths (afDonStep). Only the index, the plume and the hair cap change.
-function lookHelmOff(L, off) { if (!L || !!L.helmOff === !!off) return; L.helmOff = !!off; if (!L.lookBase || !L.inst) return; const look = L.look = lookWorn(L, L.lookBase); lookDraw(L, look); if (L.plume) L.plume.visible = !!(look.helmet && look.plume); lookHairApply(L, look); lookHelmExtApply(L, look); }
+function lookHelmOff(L, off) { if (!L || !!L.helmOff === !!off) return; L.helmOff = !!off; if (!L.lookBase || !L.inst) return; const look = L.look = lookWorn(L, L.lookBase); lookDraw(L, look); if (L.plume) L.plume.visible = !!(look.helmet && look.plume && !look.helmModel); lookHairApply(L, look); lookHelmModelApply(L, look); }
 // ---- THE HAIR: a cap of geometry on the skull ----
 // the hairline's height at a bearing (deg) round the skull's axis, a smooth curve through the style's keys (mirrored left/right)
 function lookHairline(hs, a) {
@@ -1951,68 +1958,76 @@ function lookHairGeo(R, hs) {
 }
 // the figure's hair: the cap for his cut in his colour, riding the head bone; gone under a helm, or shaved
 function lookHairApply(L, look) {
-  const hs = look.hairStyle | 0, on = look.hair != null && hs > 0 && look.hide.includes('helmet');
+  const hs = look.hairStyle | 0, on = look.hair != null && hs > 0 && !look.helmet;
   const R = MODEL_RIGS.get(L.g.userData.model), body = on && R && Object.values(L.inst.skinned).find(sm => sm.userData.pieces && sm.userData.pieces.classes.indexOf('hair') >= 0);
   const g0 = body && lookHairGeo(R, hs); if (!g0) { if (L.mHair) L.mHair.visible = false; return; }
   if (!L.mHair) { const sm = new THREE.SkinnedMesh(g0, new THREE.MeshPhongMaterial({ color: look.hair, shininess: 10, specular: 0x202020, skinning: true, flatShading: true, side: THREE.DoubleSide }));
     sm.frustumCulled = false; sm.castShadow = true; sm.name = 'hair'; body.parent.add(sm); sm.bind(body.skeleton, body.bindMatrix); L.mHair = sm; }
   L.mHair.geometry = g0; L.mHair.material.color.setHex(look.hair); L.mHair.visible = true;
 }
-// ---- THE OPEN SALLET'S FACE IRONS (2026-09-16, "cover the cheeks and nose with extensions") ----
-// The open sallet drops the face plate (the 'visor' piece) and wears in its place a NASAL — a steel bar from under the brim down the ridge of
-// the nose to above the lip — and two CHEEK PIECES, plates hung from the helm's cheek walls over the cheeks, from under the eyes to the jaw,
-// leaving the eyes, the mouth and the chin free. Both are CAST onto the face (a ray from the skull's axis, as the hair cap is — lookSkullCast —
-// through the head in the look's face shape, lookFacePoint, pushed out by a pad), so a hawk's beak and a round man's cheeks wear them alike.
-// Geometry in the bind pose riding the head bone (one per rig and face shape), painted the helm's steel on this figure's own copy: the
-// palette's steel cell × the helm's paint, the kind following it (lookHelmExtApply). The helm carried in the hand wears the same irons
-// (lookHelmBuild appends them in the head bone's space).
-const LOOK_NASAL = { top: 1.728, bottom: 1.598, w: 0.010, pad: 0.009, edge: 0.004 };   // y from under the brim to above the lip; the bar's half-width; how far its ridge and its edges stand off the nose
-const LOOK_CHEEK = { a0: 22, a1: 70, aEye: 40, y0: 1.525, y1: 1.648, y1Out: 1.698, pad: 0.009, padOut: 0.003, M: 7, N: 4 };   // bearings (deg, 0 the front) from beside the mouth to under the helm's cheek wall; y from the jaw to under the eye, the top edge rising past the eye's corner (aEye) to the temple (y1Out) where it hangs from the helm; the pad thins to padOut at the outer edge, under the helm's wall
-function lookFaceTris(R, f) {                                // the skull's triangles in a face shape (bind pose, model units)
-  R.faceTris = R.faceTris || {}; if (R.faceTris[f]) return R.faceTris[f]; const T0 = lookSkullTris(R); if (!f) return (R.faceTris[f] = T0);
-  const T = new Float32Array(T0.length), o = [0, 0, 0]; for (let i = 0; i < T0.length; i += 3) { lookFacePoint(f, T0[i], T0[i + 1], T0[i + 2], o); T[i] = o[0]; T[i + 1] = o[1]; T[i + 2] = o[2]; } return (R.faceTris[f] = T);
+// ---- HELMS OF THEIR OWN (2026-09-16, "use this": the Corinthian helm) ----
+// A helm ware may bring a sculpt of its own in place of the sculpted sallet (arena-items `model`). tools/realmesh/helm_corinthian.py
+// bakes the Corinthian helm (assets/rigs/warrior/src/Helmet_of_Leonidas.usdz: the helm and its crest, one PBR texture set) FITTED over
+// the head in the bind pose — helm_corinthian.json + .bin: positions, normals, uvs, indices, a draw group per part, and its own maps.
+// Loaded with the warrior (loadModelRig awaits it) and shared by every figure: worn, it rides the head bone as a SkinnedMesh bound to
+// the body's skeleton (lookHelmModelApply); carried in on the walk, the same geometry rigid in the head bone's space (lookHelmBuild).
+// The sculpted sallet comes off the body under it (lookRoll hides 'helmet'), the scalp too, and the plume feather stays away: the crest is
+// the plume, and takes a bought plume's dye. Bronze: its own colour, normal, roughness and occlusion maps, metalness 1, the sky of the
+// surface pass reflected in it (a plain Phong with the maps on the low tier).
+const HELM_MODELS = { corinthian: 'helm_corinthian' };
+const HELM_BRONZE_LIFT = [2.1, 1.75, 1.25];   // the helm's colour over its map (r, g, b — above 1: brighter than the map, warmer) — BV.helmBronze([r, g, b]) to try another
+async function loadHelmModel(R, key) {
+  const file = HELM_MODELS[key]; if (!file) return null; R.helms = R.helms || {}; if (R.helms[key] !== undefined) return R.helms[key];
+  try { const base = 'assets/rigs/' + R.name + '/', [hr, br] = await Promise.all([fetch(base + file + '.json'), fetch(base + file + '.bin')]); if (!hr.ok || !br.ok) throw new Error('missing ' + file);
+    const h = await hr.json(), buf = await br.arrayBuffer(), nv = h.verts, nt = h.tris; let o = 0;
+    const pos = new Float32Array(buf, o, nv * 3); o += nv * 12; const nrm = new Float32Array(buf, o, nv * 3); o += nv * 12; const uv = new Float32Array(buf, o, nv * 2); o += nv * 8; const idx = new Uint16Array(buf, o, nt * 3);
+    const m = R.meshes.find(x => x.pieces && x.pieces.classes.indexOf('hair') >= 0), headNode = R.g.nodes.findIndex(n => n.name === R.spec.map.head), joint = m ? Math.max(0, m.joints.indexOf(headNode)) : 0;   // (rides the body's head bone at full weight)
+    const si = new Uint16Array(nv * 4), sw = new Float32Array(nv * 4); for (let v = 0; v < nv; v++) { si[v * 4] = joint; sw[v * 4] = 1; }
+    const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); geo.setAttribute('normal', new THREE.BufferAttribute(nrm, 3)); const uva = new THREE.BufferAttribute(uv, 2); geo.setAttribute('uv', uva); geo.setAttribute('uv2', uva);
+    geo.setAttribute('skinIndex', new THREE.BufferAttribute(si, 4)); geo.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4)); geo.setIndex(new THREE.BufferAttribute(idx, 1)); for (const p of h.parts) geo.addGroup(p.start * 3, p.count * 3, p.name === 'crest' ? 1 : 0); geo.computeBoundingSphere();
+    const tl = new THREE.TextureLoader(), T = {}; for (const k in h.textures) { T[k] = tl.load(base + h.textures[k]); T[k].anisotropy = 4; } if (T.color) T.color.encoding = THREE.sRGBEncoding;   // (the bake's uv origin is bottom-left: three's default flip)
+    return (R.helms[key] = { key, geo, tex: T, metalness: h.metalness != null ? h.metalness : 1, bounds: h.bounds, mats: {} }); }
+  catch (e) { console.warn('[model] helm', key, e); return (R.helms[key] = null); }
 }
-function lookHelmExtGeo(R, f) {
-  R.helmExtGeo = R.helmExtGeo || {}; f = f | 0; if (R.helmExtGeo[f] !== undefined) return R.helmExtGeo[f]; const T = lookFaceTris(R, f); if (!T.length) return (R.helmExtGeo[f] = null);
-  const m = R.meshes.find(m => m.pieces && m.pieces.classes.indexOf('hair') >= 0), headNode = R.g.nodes.findIndex(n => n.name === R.spec.map.head), joint = Math.max(0, m.joints.indexOf(headNode));
-  const C = LOOK_SKULL, NA = LOOK_NASAL, CH = LOOK_CHEEK, P = [], deg = Math.PI / 180;
-  const tri = (a, b, c, h) => { const nx = (b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1]), ny = (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]), nz = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
-    if (nx * nx + ny * ny + nz * nz < 1e-16) return; const hx = h ? h[0] : (a[0] + b[0] + c[0]) / 3, hy = h ? h[1] : 0, hz = h ? h[2] : (a[2] + b[2] + c[2]) / 3 - C.zc;   // (wound to face outward: from the skull's axis, or the hint given)
-    if (nx * hx + ny * hy + nz * hz < 0) P.push(a, c, b); else P.push(a, b, c); };
-  const quad = (a, b, c, d, h) => { tri(a, b, c, h); tri(a, c, d, h); };
-  const fwd = (ox, y, pad) => { const t = lookSkullCast(T, ox, y, C.zc, 0, 0, 1); return [ox, y, C.zc + (t < 0 ? 0.12 : t + pad)]; };                                           // straight forward from the axis, off the face by pad
-  const at = (a, y, pad) => { const dx = Math.sin(a * deg), dz = Math.cos(a * deg), t = lookSkullCast(T, 0, y, C.zc, dx, 0, dz), r = t < 0 ? 0.1 : t + pad; return [dx * r, y, C.zc + dz * r]; };   // at a bearing
-  // THE NASAL: the ridge of the nose stands off at pad, the bar's edges at ±w a little less (a peaked bar), with walls down into the skin
-  { const K = 7, rd = [], L = [], Rr = [], Lf = [], Rf = [];
-    for (let k = 0; k <= K; k++) { const y = NA.top + (NA.bottom - NA.top) * k / K, w = NA.w;
-      rd.push(fwd(0, y, NA.pad)); L.push(fwd(-w, y, NA.edge)); Rr.push(fwd(w, y, NA.edge)); Lf.push(fwd(-w, y, -0.002)); Rf.push(fwd(w, y, -0.002)); }
-    for (let k = 0; k < K; k++) { quad(L[k], rd[k], rd[k + 1], L[k + 1]); quad(rd[k], Rr[k], Rr[k + 1], rd[k + 1]); quad(Lf[k], L[k], L[k + 1], Lf[k + 1], [-1, 0, 0]); quad(Rr[k], Rf[k], Rf[k + 1], Rr[k + 1], [1, 0, 0]); }
-    tri(Lf[K], L[K], rd[K], [0, -1, 0]); tri(Lf[K], rd[K], Rr[K], [0, -1, 0]); tri(Lf[K], Rr[K], Rf[K], [0, -1, 0]); }   // the foot's underside
-  // THE CHEEK PIECES: a plate over each cheek, cast at pad, with a lip down to the skin round its edge
-  for (const s of [-1, 1]) { const G = [], F = [];
-    for (let j = 0; j <= CH.N; j++) { const row = [], foot = []; for (let i = 0; i <= CH.M; i++) { const u = i / CH.M, a0 = CH.a0 + (CH.a1 - CH.a0) * u, a = s * a0, r = Math.max(0, Math.min(1, (a0 - CH.aEye) / (CH.a1 - CH.aEye))), rise = r * r * (3 - 2 * r);
-        const y = CH.y0 + (CH.y1 + (CH.y1Out - CH.y1) * rise - CH.y0) * j / CH.N, pad = CH.pad + (CH.padOut - CH.pad) * u; row.push(at(a, y, pad)); foot.push(at(a, y, -0.001)); } G.push(row); F.push(foot); }
-    for (let j = 0; j < CH.N; j++) for (let i = 0; i < CH.M; i++) quad(G[j][i], G[j][i + 1], G[j + 1][i + 1], G[j + 1][i]);
-    for (let i = 0; i < CH.M; i++) { quad(F[CH.N][i], G[CH.N][i], G[CH.N][i + 1], F[CH.N][i + 1], [0, 1, 0]); quad(F[0][i], G[0][i], G[0][i + 1], F[0][i + 1], [0, -1, 0]); }   // the top and the bottom lips
-    for (let j = 0; j < CH.N; j++) { quad(F[j][0], G[j][0], G[j + 1][0], F[j + 1][0], [-s, 0, 0]); quad(F[j][CH.M], G[j][CH.M], G[j + 1][CH.M], F[j + 1][CH.M], [s, 0, 0]); } }   // the inner and the outer edges
-  // the palette's steel cell: the helm's own (the first steel vertex of the helmet piece on the armour mesh)
-  let su = 0.34, sv = 0.03; { const A = R.meshes.find(x => x.pieces && x.pieces.classes.indexOf('helmet') >= 0); if (A) { const pj = A.pieces, hI = pj.classes.indexOf('helmet'), sI = pj.mats.indexOf('steel'), uvA = A.geo.getAttribute('uv');
-      if (uvA) for (let v = 0; v < pj.vclass.length; v++) if (pj.vclass[v] === hI && pj.vmat[v] === sI) { su = uvA.getX(v); sv = uvA.getY(v); break; } } }
-  const n = P.length, pos = new Float32Array(n * 3), uv = new Float32Array(n * 2), si = new Uint16Array(n * 4), sw = new Float32Array(n * 4);
-  P.forEach((v, i) => { pos.set(v, i * 3); uv[i * 2] = su; uv[i * 2 + 1] = sv; si[i * 4] = joint; sw[i * 4] = 1; });
-  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2)); geo.setAttribute('skinIndex', new THREE.BufferAttribute(si, 4)); geo.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4));
-  geo.computeVertexNormals(); return (R.helmExtGeo[f] = geo);
+// the helm's materials for a context: [the helm, the crest] — the crest dyed when a plume is worn; cached per helm
+function helmModelMaterials(H, ctx, skinning, crestC) {
+  const det = modelDetailOn(), k = [det ? 'd' : 'p', skinning ? 'sk' : '', crestC != null ? crestC.toString(16) : '', ctx].join('|'); if (H.mats[k]) return H.mats[k]; const T = H.tex;
+  // (the model's colour map is a dark brown meant for a studio's lights: lifted to a bright bronze here — the lift is a colour above white)
+  const make = (col, metal, rough) => { if (!det) return new THREE.MeshPhongMaterial({ map: T.color, normalMap: T.normal, color: col, shininess: metal > 0.5 ? 36 : 8, specular: metal > 0.5 ? 0x9a7a48 : 0x202020, skinning: !!skinning });
+    modelEnvFor(ctx); return new THREE.MeshStandardMaterial({ map: T.color, normalMap: T.normal, roughnessMap: T.rough, aoMap: T.occl, color: col, metalness: metal, roughness: rough, envMapIntensity: MODEL_DETAIL.envI * 1.4, skinning: !!skinning }); };
+  const bronze = new THREE.Color(HELM_BRONZE_LIFT[0], HELM_BRONZE_LIFT[1], HELM_BRONZE_LIFT[2]), helm = make(bronze, Math.min(H.metalness, 0.9), 1), crest = crestC != null ? make(new THREE.Color(crestC).multiplyScalar(1.6), 0.15, 0.85) : helm;   // (dyed horsehair: no longer bronze)
+  return (H.mats[k] = [helm, crest]);
 }
-// the figure's face irons: on with an open helm, gone with the helm (bareheaded, or the helm in his hand); painted with the helm
-function lookHelmExtApply(L, look) {
-  const on = !!(look.helmet && look.open), R = MODEL_RIGS.get(L.g.userData.model), body = on && R && Object.values(L.inst.skinned).find(sm => sm.userData.pieces && sm.userData.pieces.classes.indexOf('hair') >= 0);
-  const g0 = body && lookHelmExtGeo(R, look.faceShape | 0); if (!g0) { if (L.mHelmExt) L.mHelmExt.visible = false; return; }
-  if (!L.mHelmExt) { const mm = { ctx: L.inst.ctx || 'main', skinning: true, vc: true }, sm = new THREE.SkinnedMesh(g0.clone(), modelMaterial(R, mm)); sm.userData.mm = mm; sm.userData.mmR = R.name; sm.frustumCulled = false; sm.castShadow = true; sm.name = 'helmIrons';
-    body.parent.add(sm); sm.bind(body.skeleton, body.bindMatrix); L.mHelmExt = sm; }
-  const sm = L.mHelmExt; if (sm.userData.src !== g0) { sm.geometry.dispose(); sm.geometry = g0.clone(); sm.userData.src = g0; }   // (this figure's own copy: its colour and kind are his)
-  const n = g0.getAttribute('position').count, c = new THREE.Color(lookColour(look, 'helmet', 'steel')), kind = lookKind(look, 'helmet', 'steel', MODEL_KIND.steel);
-  const col = new Uint8Array(n * 3), kd = new Float32Array(n); for (let v = 0; v < n; v++) { col[v * 3] = c.r * 255; col[v * 3 + 1] = c.g * 255; col[v * 3 + 2] = c.b * 255; kd[v] = kind; }
-  sm.geometry.setAttribute('color', new THREE.BufferAttribute(col, 3, true)); sm.geometry.setAttribute('kind', new THREE.BufferAttribute(kd, 1)); sm.visible = true;
+// the figure's helm of its own: on the head bone with the helm worn, gone with it (bareheaded, or the helm in his hand)
+function lookHelmModelApply(L, look) {
+  const R = MODEL_RIGS.get(L.g.userData.model), H = look.helmet && look.helmModel && R && R.helms ? R.helms[look.helmModel] : null, body = H && Object.values(L.inst.skinned).find(sm => sm.userData.pieces && sm.userData.pieces.classes.indexOf('hair') >= 0);
+  if (!body) { if (L.mHelmModel) L.mHelmModel.visible = false; return; }
+  const mats = helmModelMaterials(H, L.inst.ctx || 'main', true, look.plume ? look.plumeC : null);
+  if (!L.mHelmModel) { const sm = new THREE.SkinnedMesh(H.geo, mats); sm.frustumCulled = false; sm.castShadow = true; sm.name = 'helmModel'; body.parent.add(sm); sm.bind(body.skeleton, body.bindMatrix); L.mHelmModel = sm; }
+  const sm = L.mHelmModel; if (sm.geometry !== H.geo) sm.geometry = H.geo; sm.material = mats; sm.visible = true;
+}
+// ---- THE HEAD UNDER THE HELM (2026-09-16, "the head pops out of the helmet here and there") ----
+// The sallet is a thin shell a few millimetres off the skull. The face's tessellation (lookHeadRefine) lifts the scalp's new vertices
+// outward, the rugged jaw (lookRuggedHead) and a square face's (lookFacePoint) widen it, and wherever one crosses the shell a patch of
+// skin showed on the crown, at the temple or at the jaw's corner under the ear. Two remedies: under a helm the SCALP is not drawn at
+// all (lookDraw: the head's 'hair' class — the crown, the temples, the nape — lies wholly inside the shell), and the jaw and temple
+// band under the helm's walls is TUCKED inside the shell (lookHelmTuck: a head vertex there that stands out of the shell by less than
+// LOOK_TUCK.max is pulled back to LOOK_TUCK.in inside it, along the ray from the skull's centre) — on the rig's shared head at load,
+// and on a figure's own copy after his face shape. The chin and the neck below the shell's rim stand out by more, and are meant to.
+const LOOK_TUCK = { y0: 1.49, y1: 1.74, zMax: 0.06, xMin: 0.05, zBone: 0.09, xBone: 0.075, yTop: 1.70, max: 0.02, in: 0.002 };   // the band: the jaw and temples (z < zMax, |x| > xMin), the cheekbones (z < zBone, |x| > xBone), and the whole skull above yTop
+function lookHelmShell(R) {                                  // the sallet's skull, brim, cheek walls and ear discs (the 'helmet' piece, not the visor) as triangles in the bind pose
+  const A = R.meshes.find(x => x.pieces && x.pieces.classes.indexOf('helmet') >= 0); if (!A) return new Float32Array(0); if (A.helmShell) return A.helmShell;
+  const pj = A.pieces, hI = pj.classes.indexOf('helmet'), pos = A.geo.getAttribute('position'), idx = A.geo.index.array, out = [];
+  for (let t = 0; t < pj.tri.length; t++) { if (pj.tri[t] !== hI) continue; for (let k = 0; k < 3; k++) { const v = idx[t * 3 + k]; out.push(pos.getX(v), pos.getY(v), pos.getZ(v)); } }
+  return (A.helmShell = new Float32Array(out));
+}
+function lookHelmTuck(pos, pj, R) {
+  const S = R && lookHelmShell(R); if (!S || !S.length) return false; const C = LOOK_SKULL, K = LOOK_TUCK; let moved = 0;
+  for (let v = 0; v < pos.count; v++) { if (!LOOK_HEAD_CLASSES.has(pj.classes[pj.vclass[v]])) continue; const x = pos.getX(v), y = pos.getY(v), z = pos.getZ(v);
+    const ax = Math.abs(x); if (y < K.y0 || !(y >= K.yTop || (y <= K.y1 && ((z <= K.zMax && ax >= K.xMin) || (z <= K.zBone && ax >= K.xBone))))) continue;
+    const dx = x, dy = y - C.yc, dz = z - C.zc, L = Math.hypot(dx, dy, dz) || 1, t = lookSkullCast(S, 0, C.yc, C.zc, dx / L, dy / L, dz / L);
+    if (t <= 0 || t >= L || L - t > K.max) continue; const r = (t - K.in) / L; pos.setXYZ(v, dx * r, C.yc + dy * r, C.zc + dz * r); moved++; }
+  if (moved) pos.needsUpdate = true; return moved > 0;
 }
 // ---- THE FACE'S BONES: one head, six casts ----
 // a head vertex of the bind pose moved for a face shape (model units, the face looks +z; the base head is lookRuggedHead's)
@@ -2036,6 +2051,7 @@ function lookFaceApply(sm, look, pj) {
   if (!sm.userData.ownPos) { geo.setAttribute('position', g0.getAttribute('position').clone()); geo.setAttribute('normal', g0.getAttribute('normal').clone()); sm.userData.ownPos = true; }
   const p0 = g0.getAttribute('position'), p = geo.getAttribute('position'), o = [0, 0, 0];
   for (let v = 0; v < p.count; v++) { const x = p0.getX(v), y = p0.getY(v), z = p0.getZ(v); if (LOOK_HEAD_CLASSES.has(pj.classes[pj.vclass[v]])) { lookFacePoint(f, x, y, z, o); p.setXYZ(v, o[0], o[1], o[2]); } else p.setXYZ(v, x, y, z); }
+  lookHelmTuck(p, pj, MODEL_RIGS.get(sm.userData.mmR));                                              // (a wide jaw back inside the helm's walls)
   p.needsUpdate = true; geo.computeVertexNormals(); modelSmoothNormals(geo, MODEL_DETAIL.crease); lookFaceNormals(geo, pj); sm.userData.face = f;   // (the normals as at load: the crease pass, then the face's)
 }
 // A ROUND SHIELD in the figure's shield hand: a faceted disc with a rim and a boss, skinned to the same bone as the
@@ -2071,7 +2087,7 @@ function lookRoundPaint(col, pt, look) {
   const faceOf = i => look.round === 0 ? team : look.round === 1 ? (i < N / 2 ? team : dev) : look.round === 2 ? (Math.floor(i / (N / 4)) % 2 ? dev : team) : (i % 2 ? dev : team);
   for (let v = 0; v < col.count; v++) { const p = pt[v]; c.copy(p < N ? faceOf(p) : p === N ? rim : p === N + 1 ? boss : backC); col.setXYZ(v, c.r * 255, c.g * 255, c.b * 255); } col.needsUpdate = true;
 }
-BV.look = { roll: lookRoll, apply: lookApply, live: () => MODEL_LIVE.map(L => ({ name: L.P.lookName, arch: L.P.lookArch, full: !!L.P.lookFull, shield: L.shieldKind, look: L.look && { kind: L.look.kind, hide: L.look.hide, helmet: L.look.helmet, open: L.look.open, cloak: L.look.cloak, plume: L.look.plume, hair: L.look.hair, beard: L.look.beard, skin: L.look.skin, hairStyle: L.look.hairStyle, beardStyle: L.look.beardStyle, faceShape: L.look.faceShape, hairMesh: !!(L.mHair && L.mHair.visible) } })) };   // (test: every live figure's look)
+BV.look = { roll: lookRoll, apply: lookApply, live: () => MODEL_LIVE.map(L => ({ name: L.P.lookName, arch: L.P.lookArch, full: !!L.P.lookFull, shield: L.shieldKind, look: L.look && { kind: L.look.kind, hide: L.look.hide, helmet: L.look.helmet, helmModel: L.look.helmModel, cloak: L.look.cloak, plume: L.look.plume, hair: L.look.hair, beard: L.look.beard, skin: L.look.skin, hairStyle: L.look.hairStyle, beardStyle: L.look.beardStyle, faceShape: L.look.faceShape, hairMesh: !!(L.mHair && L.mHair.visible) } })) };   // (test: every live figure's look)
 const MODEL_ON = !/[?&]plastic\b/.test(location.search);   // the warrior is the base soldier; ?plastic brings the plastic figures back
 const MODEL_NAME = 'warrior';
 BV.modelLoad = MODEL_ON ? loadModelRig(MODEL_NAME).then(() => { BV.modelReady = true; console.log('[model] warrior ready'); }, e => console.error('[model] load failed', e)) : Promise.resolve();   // (the home / market figure waits on this — the plastic placeholder is never shown)
@@ -20731,7 +20747,7 @@ function afNpcGear(entry, xp, r) {
   if (xp < 20) g.armor = r() < 0.3 ? 'gambeson' : undefined;                                     // (nothing = a shirt and breeches)
   else if (xp < 40) g.armor = pelt ? north : r() < 0.55 ? 'leather' : r() < 0.5 ? 'gambeson' : undefined;
   else g.armor = xp < 60 ? (pelt ? north : 'mail') : xp < 82 ? (r() < 0.4 ? 'brigandine' : 'plate') : xp < 95 ? 'champion_plate' : (r() < 0.35 ? 'dragon_plate' : 'champion_plate');
-  { const ho = lookOdds(g.armor || 'none', entry.arch, 'helm'), hr = r(); if (hr < ho) g.helm = hr < ho * 0.35 ? 'open_sallet' : 'sallet'; }   // a helm by his armour and his class (lookOdds); a third of them open-faced (one draw, so the same men wear one as before)
+  { const ho = lookOdds(g.armor || 'none', entry.arch, 'helm'), hr = r(); if (hr < ho) g.helm = hr < ho * 0.35 ? 'corinthian' : 'sallet'; }   // a helm by his armour and his class (lookOdds); a third of them the Corinthian (one draw, so the same men wear one as before)
   g.shield = xp < 45 ? 'round_shield' : r() < 0.65 ? 'heater_shield' : 'round_shield';
   if (A.weapon === 'bow') g.bow = xp < 40 ? 'hunting_bow' : xp < 70 ? 'longbow' : xp < 90 ? 'warbow' : 'recurve';
   if (A.weapon === 'horse') g.horse = xp < 35 ? 'nag' : xp < 65 ? 'courser' : xp < 85 ? 'destrier' : 'warhorse';
@@ -23834,6 +23850,7 @@ function afThumb(id) {
   if (url) AF.thumbs.set(id, url); return url;
 }
 BV.thumb = id => afThumb(id);   // test: a ware's picture (data URL)
+BV.helmBronze = (rgb) => { if (rgb) { HELM_BRONZE_LIFT[0] = rgb[0]; HELM_BRONZE_LIFT[1] = rgb[1]; HELM_BRONZE_LIFT[2] = rgb[2]; for (const R of MODEL_RIGS.values()) for (const H of Object.values(R.helms || {})) if (H) H.mats = {}; for (const L of MODEL_LIVE) if (L.look) lookHelmModelApply(L, L.look); } return HELM_BRONZE_LIFT.slice(); };   // test: the Corinthian's bronze lift, re-applied live
 function afMarketOpen() { AF.marketOpen = true; AF.tryItem = null; afShellPage('market'); afMarketRender(); afCareerLoad(); afPreviewRun(); }   // (always re-read the purse: a fight may just have paid out)
 function afMarketClose() { if (SHELL.page === 'market') afShellBack(); else { AF.marketOpen = false; AF.tryItem = null; } }
 

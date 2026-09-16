@@ -1222,7 +1222,7 @@ function modelBodyBuild(R) {
     // one girth from the sleeve's middle (the cuffs and the vambrace's flare are armour, not arm), the rest a profile off it:
     // biceps a little fuller, the elbow lean, the wrist the hand's own width — an arm, not a stuffed sleeve
     const mid = radii(mine(pts('sleeve')), A, B, 5, 1, 0.08), rE = Math.max(0.045, (mid[1] + mid[2] + mid[3]) / 3 * 0.8), rB = rE * 1.08, rW = rE * 0.62;
-    const frame = d => { const u = new THREE.Vector3().crossVectors(d, Math.abs(d.z) < 0.9 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(1, 0, 0)).normalize(); return [u, new THREE.Vector3().crossVectors(d, u).normalize()]; };
+    const frame = d => { const u = new THREE.Vector3().crossVectors(d, Math.abs(d.z) < 0.9 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(1, 0, 0)).normalize(); return [u, new THREE.Vector3().crossVectors(u, d).normalize()]; };   // (v = u × d, the torso's winding: the rings must run the same way round or the tube faces inward and the near wall is culled — the "transparent arm")
     const dU = B.clone().sub(A).normalize(), dF = C.clone().sub(B).normalize(), dM = dU.clone().add(dF).normalize(), [uU, vU] = frame(dU), [uF, vF] = frame(dF), [uM, vM] = frame(dM), rings = [];
     const R_ = (c, u, v, r, w) => rings.push(ring(c, u, v, r, r, w, cl));
     // the upper arm: the shoulder's bone alone, so it turns as one piece

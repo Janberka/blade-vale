@@ -242,7 +242,7 @@
   net.arenaCareer = function (seed) { return jfetch('/arena/career' + (seed != null ? '?seed=' + encodeURIComponent(seed) : ''), { method: 'GET' }).then(function (r) { return r && r.career; }).catch(function () { return null; }); };
   net.arenaBuy = function (item) { return jpost('/arena/buy', { item: item }); };
   net.arenaEquip = function (slot, item) { return jpost('/arena/equip', { slot: slot, item: item }); };
-  net.arenaLook = function (look) { return jpost('/arena/look', look); };   // the barber: { s, h, c, b }
+  net.arenaLook = function (look) { return jpost('/arena/look', look); };   // the barber: { s, f, h, c, b }
   net.arenaResult = function (result) { return jpost('/arena/result', result); };
   // profiles + the ladder (public reads; the network scope is everyone who shared a pit with you)
   net.arenaProfile = function (name, kind) { return jfetch('/arena/profile?name=' + encodeURIComponent(name) + (kind ? '&kind=' + encodeURIComponent(kind) : ''), { method: 'GET' }).catch(function () { return { ok: false, error: 'the war-net did not answer' }; }); };

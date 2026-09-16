@@ -95,10 +95,24 @@ Adding a ware: an entry in ARENA_ITEMS (slot, price, rank, stats), a `LOOK_ARMOR
 ## The barber (2026-09-14, "we should be able to edit the hair style, hair color, beard style, skin color")
 The "✂ Look" chip in the home's gear row opens THE BARBER, a page of the shell like the market (`page-barber`,
 `afBarberOpen` / `afBarberRender`; the user: "the barber cannot be a modal on the home page, it should be a separate
-page"): the figure on the left, rows on the right — skin tone (6), hair style (shaved, short crop, crown, long, mohawk),
-hair colour (9), beard style (clean, stubble, full beard, goatee, moustache), and "Let the barber choose" (`afLookClear`,
-the server clears the look on `{clear: true}`). Every tap repaints the figure and saves: `gear.look = { s, h, c, b }` (indexes; ranges in `ARENA_LOOK`, validated by `cleanLook` in arena-items.js)
+page"): the figure on the left, rows on the right — skin tone (6), face (hard, square, long, round, hawk, broken), hair style
+(shaved, short crop, crown, long, mohawk), hair colour (9), beard style (clean, stubble, full beard, goatee, moustache), and
+"Let the barber choose" (`afLookClear`, the server clears the look on `{clear: true}`). Every tap repaints the figure and
+saves: `gear.look = { s, f, h, c, b }` (indexes; ranges in `ARENA_LOOK`, validated by `cleanLook` in arena-items.js)
 travels with the loadout, so guests and profile pages paint the same face; the server keeps it in the career's meta
-(`POST /api/v1/arena/look`, both server/arena.js and worker/index.js) and this browser keeps a copy (`bv-look`). Styles
-are regions of the baked head classes cut by position in `lookFaceColour` (a crown alone, a strip for the mohawk, the
-neck's back for long hair, the chin for a goatee, the upper lip for a moustache). The vale's men roll their own.
+(`POST /api/v1/arena/look`, both server/arena.js and worker/index.js) and this browser keeps a copy (`bv-look`). Beard
+styles are regions of the baked beard class cut by position in `lookFaceColour` (the chin for a goatee, the upper lip for
+a moustache). The vale's men roll their own.
+
+### The hair is geometry, the face is bones (2026-09-16, "these hairs look stupid, they always be drawn to the forehead. Add different faces too")
+Hair painted on the head's vertices smeared every cut down the forehead: the head is a few big triangles, so a painted
+vertex at the hairline bled its colour to the brow. Now a cut is a CAP of real geometry (`lookHairGeo`, once per style per
+rig, shared by every figure): rays from the skull's centre find the surface at each bearing and height, the hairline is a
+curve by bearing (`LOOK_HAIRLINE` — high at the brow, down past the temple, over the ear, to the nape), the cap is pushed
+out by a pad with a lip down to the skin; long hair adds a drape down the neck to a hem over the collar, the mohawk is a
+fin along the midline (tallest over the front of the crown). The cap is a `SkinnedMesh` bound to the body's skeleton on
+the head bone (`lookHairApply`, like the round shield on its arm), in the hair colour, flat-shaded, hidden under a helm.
+The scalp is still painted under it, but only 3 cm inside the hairline (`lookHairUnder`) — never at the edge. FACES:
+`LOOK_FACE_SHAPES` are displacements of the head's vertices in the bind pose (`lookFacePoint`: jaw, chin, cheeks, nose,
+brow; all below the hairline, so one cap fits every face), applied on this body's own copy of the positions and normals
+(`lookFaceApply`; shape 0 'hard' shares the rig's). Rolled from the name on its own stream, so nobody's hair or kit changed.

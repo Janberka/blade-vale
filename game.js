@@ -1182,12 +1182,27 @@ function lookRuggedHead(geo, pj) {
 }
 const LOOK_HAIR = [0x1a1210, 0x1a1210, 0x2a1a12, 0x3a2416, 0x3a2416, 0x5c3a1e, 0x8a5a2e, 0x6a6a68, 0x4a3a3a];   // black, black, near-black, dark brown ×2, brown, auburn, grey, ash — cropped and dark, mostly
 const LOOK_SKIN = [0xf0d4b8, 0xe4c4a4, 0xd8b090, 0xc89a78, 0xa87858, 0x8a5c40];
-// THE BARBER (gear.look = { s, h, c, b }, indexes below; ARENA_LOOK in arena-items.js holds the ranges): what a player picks
+// THE BARBER (gear.look = { s, f, h, c, b }, indexes below; ARENA_LOOK in arena-items.js holds the ranges): what a player picks
 // for his own face; the vale's men roll theirs from the name
 const LOOK_HAIR_PICK = [0x1a1210, 0x3a2416, 0x5c3a1e, 0x8a5a2e, 0xa04a20, 0xb08040, 0xd0b078, 0x8a8a88, 0xd8d4cc];   // black, dark brown, brown, auburn, red, fair, blond, grey, white
 const LOOK_HAIR_STYLES = ['shaved', 'short crop', 'crown', 'long', 'mohawk'];
 const LOOK_BEARD_STYLES = ['clean', 'stubble', 'full beard', 'goatee', 'moustache'];
 const LOOK_SKIN_NAMES = ['fair', 'light', 'tan', 'olive', 'brown', 'dark'];
+// THE FACE'S BONES (gear.look.f): six casts of the same head — a displacement of the head's vertices in the bind pose on
+// this body's own copy of the positions (lookFacePoint); the vale's men roll theirs from the name
+const LOOK_FACE_SHAPES = ['hard', 'square', 'long', 'round', 'hawk', 'broken'];
+const LOOK_HEAD_CLASSES = new Set(['head', 'hair', 'beard', 'brow', 'socket', 'scarL', 'scarR']);
+// THE HAIR is real geometry: a cap cast onto the skull (lookHairGeo) — paint alone smeared every cut down the forehead,
+// the head being a few big triangles (a painted vertex at the hairline bleeds to the brow). The hairline is a curve by
+// bearing round the skull's axis: 0 the brow, 90 over the ear, 180 the nape (mirrored); model units, bind pose.
+const LOOK_SKULL = { yc: 1.69, zc: -0.005, top: 1.828 };
+const LOOK_HAIRLINE = {
+  1: [[0, 1.772], [30, 1.768], [50, 1.745], [65, 1.728], [90, 1.722], [120, 1.712], [150, 1.678], [180, 1.652]],   // short crop: high at the brow, down past the temple, over the ear, to the nape
+  2: [[0, 1.782], [40, 1.778], [90, 1.765], [180, 1.745]],                                                          // crown: a thick mop on top, the sides shaven
+  3: [[0, 1.768], [30, 1.764], [50, 1.742], [65, 1.726], [90, 1.720], [120, 1.710], [150, 1.676], [180, 1.650]],   // long: the crop's line, and a drape down the neck
+  4: [[0, 1.775], [90, 1.740], [180, 1.668]],                                                                       // mohawk: where the fin's ends sit
+};
+const LOOK_HAIR_CUT = { 1: { pad: 0.009, top: 0.004 }, 2: { pad: 0.014, top: 0.020 }, 3: { pad: 0.013, top: 0.006, drape: [[60, null], [90, 1.60], [120, 1.545], [180, 1.50]] }, 4: { pad: 0.004 } };   // pad: the cap's thickness at the hairline, top: more of it at the crown; drape: [bearing, the hem's y] (null = the hairline)
 // per armour: the odds of each loose piece and of a helm (NPCs — a player's helm is a ware), the paint of each piece's
 // STEEL (a multiplier on the palette grey — white leaves it steel; the names are the look's own colours) and of its CLOTH
 const LOOK_ARMOR = {
@@ -1229,6 +1244,7 @@ function lookRoll(name, arch, gear, pal, o = {}) {
   look.beardStyle = has('b') ? LK.b : !beardOn ? 0 : beardKind < 0.12 ? 3 : beardKind < 0.17 ? 4 : fullBeard ? 2 : 1;      // most wear a beard, most of those a full one
   look.hair = look.hairStyle === 0 ? null : hairC; look.beard = look.beardStyle ? c.setHex(hairC).lerp(skinC, 0.08).getHex() : null; look.stubble = c.setHex(hairC).lerp(skinC, 0.45).getHex();
   look.brow = c.setHex(hairC).lerp(skinC, 0.3).getHex(); look.socket = c.copy(skinC).multiplyScalar(0.78).getHex(); look.lip = c.copy(skinC).multiplyScalar(0.88).getHex();   // heavy dark brows, eyes deep in shadow, a hard mouth
+  look.faceShape = has('f') ? LK.f : Math.floor(lookRng(lookSeed(name) ^ 0x2545f491)() * LOOK_FACE_SHAPES.length);   // (its own stream: the bones came later, nobody's hair or kit re-rolls for them)
   const scar = r(); look.scar = scar < 0.18 ? 'scarL' : scar < 0.36 ? 'scarR' : null; look.scarC = c.copy(skinC).lerp(new THREE.Color(0xe8a0a0), 0.45).multiplyScalar(1.05).getHex();
   // the kit
   look.helmet = !!(gear && (gear.helm || gear.plume));                                              // (a bought plume needs a helm to sit on)
@@ -1247,12 +1263,12 @@ function lookRoll(name, arch, gear, pal, o = {}) {
   look.cloakC = O.cloakC ? resolve(O.cloakC) : look.cloth;
   return look;
 }
-// the face: hair and beard styles are regions of the bald head — the baked hair/beard classes cut by position (bind pose,
-// model units, the face looks +z): a crown alone, a strip for a mohawk, the neck's back for long hair, the chin for a goatee
+// the face: beard styles are regions of the bald head — the baked beard class cut by position (bind pose, model units,
+// the face looks +z): the chin for a goatee, the lip for a moustache. The hair is the cap (lookHairApply); the scalp under
+// it is painted too, but only well inside the hairline — a painted vertex at the edge would bleed down the forehead
 function lookFaceColour(look, cls, mt, x, y, z) {
   const hs = look.hairStyle | 0, bs = look.beardStyle | 0;
-  if (look.hair != null) { const on = cls === 'hair' ? (hs === 1 || hs === 3 || (hs === 2 && y > 1.775) || (hs === 4 && Math.abs(x) < 0.04 && y > 1.72)) : (hs === 3 && cls === 'head' && z < -0.005 && y < 1.71 && y > 1.45);
-    if (on) return look.hair; }
+  if (look.hair != null && cls === 'hair' && lookHairUnder(hs, x, y, z)) return look.hair;
   if (cls === 'beard' && look.beard != null) { const on = bs === 2 || bs === 1 || (bs === 3 && Math.abs(x) < 0.05) || (bs === 4 && y > 1.585 && z > 0.1); if (on) return bs === 1 ? look.stubble : look.beard; }
   if (cls === 'brow') return look.brow; if (cls === 'socket') return look.socket; if (cls === 'scarL' || cls === 'scarR') return look.scar === cls ? look.scarC : look.skin; if (cls === 'eye') return 0xd8d0c8;
   if (mt === 'leather') return look.lip;                     // (the palette's lip/brow brown: no painted lips)
@@ -1278,6 +1294,7 @@ function lookApply(L, look) {
       for (let v = 0; v < nv; v++) { if (pj.vclass[v] === cuI && pj.vmat[v] === stI) uv.setXY(v, LOOK_WHITE_UV[0], LOOK_WHITE_UV[1]); else uv.setXY(v, uv0.getX(v), uv0.getY(v)); } uv.needsUpdate = true; }
     else if (sm.userData.ownUv) { sm.geometry.setAttribute('uv', uv0); sm.userData.ownUv = false; }
     // skin vertices carry a per-vertex colour, so the palette's skin (~#ffdcb4) × tint: the tint is chosen so tint × skin ≈ the tone wanted
+    if (skinTint) lookFaceApply(sm, look, pj);                 // (the bones: this body's own head positions)
     const pos = sm.userData.geo0.getAttribute('position');
     for (let v = 0; v < nv; v++) { const cls = pj.classes[pj.vclass[v]], mt = pj.mats[pj.vmat[v]]; c.setHex(skinTint ? lookFaceColour(look, cls, mt, pos.getX(v), pos.getY(v), pos.getZ(v)) : lookColour(look, cls, mt)); if (skinTint && mt === 'skin' && cls !== 'eye') { c.r = Math.min(1, c.r / 1.0); c.g = Math.min(1, c.g / 0.86); c.b = Math.min(1, c.b / 0.70); } col.setXYZ(v, c.r * 255, c.g * 255, c.b * 255); } col.needsUpdate = true;
     const i0 = sm.userData.geo0.index.array, tri = pj.tri, idx = sm.geometry.index; let n = 0;
@@ -1285,11 +1302,120 @@ function lookApply(L, look) {
     idx.needsUpdate = true; sm.geometry.setDrawRange(0, n); }
   const cloak = L.inst.skinned[M.cloak]; if (cloak) { cloak.visible = !!look.cloak; if (cloak.material && cloak.material.color && !cloak.material.map) cloak.material.color.setHex(look.cloakC); }
   if (L.plume) L.plume.visible = !!(look.helmet && look.plume);
+  lookHairApply(L, look);                                                // the cut: a cap on the skull when he stands bareheaded
   L.shieldKind = look.shield; if (look.shield === 'round') lookRoundShield(L, look); else if (L.mRound) L.mRound.visible = false;
   if (L.mShield && L.mShield.material && L.mShield.material.color) L.mShield.material.color.setHex(look.cloth).lerp(new THREE.Color(0xffffff), 0.35);
 }
 // the helm off and on again (the home, the barber's chair: his face and hair are the point there, as the sword and shield lie on the floor)
 function lookHelmOff(L, off) { if (!L || !!L.helmOff === !!off) return; L.helmOff = !!off; if (L.lookBase) lookApply(L, L.lookBase); }
+// ---- THE HAIR: a cap of geometry on the skull ----
+// the hairline's height at a bearing (deg) round the skull's axis, a smooth curve through the style's keys (mirrored left/right)
+function lookHairline(hs, a) {
+  const K = LOOK_HAIRLINE[hs] || LOOK_HAIRLINE[1]; a = Math.min(180, Math.abs(a)); let i = 0; while (i < K.length - 2 && a > K[i + 1][0]) i++;
+  const t0 = Math.max(0, Math.min(1, (a - K[i][0]) / (K[i + 1][0] - K[i][0]))), t = t0 * t0 * (3 - 2 * t0); return K[i][1] + (K[i + 1][1] - K[i][1]) * t;
+}
+function lookBearing(x, z) { return Math.atan2(x, z - LOOK_SKULL.zc) * 180 / Math.PI; }
+// is a scalp vertex well under the cap (painted) — 3 cm inside the hairline, and under the fin alone for a mohawk
+function lookHairUnder(hs, x, y, z) { if (hs <= 0) return false; if (hs === 4 && Math.abs(x) > 0.045) return false; return y > lookHairline(hs, lookBearing(x, z)) + 0.03; }
+// the skull's triangles (the head's classes, not the eyes) in the bind pose, flat: 9 floats a triangle
+function lookSkullTris(R) {
+  if (R.skullTris) return R.skullTris; const m = R.meshes.find(m => m.pieces && m.pieces.classes.indexOf('hair') >= 0); if (!m) return (R.skullTris = new Float32Array(0));
+  const pj = m.pieces, pos = m.geo.getAttribute('position'), idx = m.geo.index.array, out = [];
+  for (let t = 0; t < pj.tri.length; t++) { if (!LOOK_HEAD_CLASSES.has(pj.classes[pj.tri[t]])) continue; for (let k = 0; k < 3; k++) { const v = idx[t * 3 + k]; out.push(pos.getX(v), pos.getY(v), pos.getZ(v)); } }
+  return (R.skullTris = new Float32Array(out));
+}
+// a ray from inside the skull: the distance to where it LEAVES (the farthest crossing — the outer surface), or -1
+function lookSkullCast(T, ox, oy, oz, dx, dy, dz) {
+  let best = -1;
+  for (let i = 0; i < T.length; i += 9) {
+    const ax = T[i], ay = T[i + 1], az = T[i + 2], e1x = T[i + 3] - ax, e1y = T[i + 4] - ay, e1z = T[i + 5] - az, e2x = T[i + 6] - ax, e2y = T[i + 7] - ay, e2z = T[i + 8] - az;
+    const px = dy * e2z - dz * e2y, py = dz * e2x - dx * e2z, pz = dx * e2y - dy * e2x, det = e1x * px + e1y * py + e1z * pz; if (Math.abs(det) < 1e-12) continue;
+    const inv = 1 / det, tx = ox - ax, ty = oy - ay, tz = oz - az, u = (tx * px + ty * py + tz * pz) * inv; if (u < -1e-6 || u > 1 + 1e-6) continue;
+    const qx = ty * e1z - tz * e1y, qy = tz * e1x - tx * e1z, qz = tx * e1y - ty * e1x, v = (dx * qx + dy * qy + dz * qz) * inv; if (v < -1e-6 || u + v > 1 + 1e-6) continue;
+    const t = (e2x * qx + e2y * qy + e2z * qz) * inv; if (t > best) best = t; }
+  return best;
+}
+// the cap for a style, once per rig (shared by every figure; the colour is the material's): rings from the hairline up to
+// the crown, each point the skull's surface at that bearing and height pushed out by the pad, a lip down to the skin at
+// the hairline; long hair drapes from the hairline down the neck; a mohawk is a fin along the midline. Flat-shaded,
+// wound outward, skinned to the head bone.
+function lookHairGeo(R, hs) {
+  R.hairGeo = R.hairGeo || {}; if (R.hairGeo[hs] !== undefined) return R.hairGeo[hs]; const T = lookSkullTris(R); if (!T.length) return (R.hairGeo[hs] = null);
+  const m = R.meshes.find(m => m.pieces && m.pieces.classes.indexOf('hair') >= 0), headNode = R.g.nodes.findIndex(n => n.name === R.spec.map.head), joint = Math.max(0, m.joints.indexOf(headNode));
+  const C = LOOK_SKULL, cut = LOOK_HAIR_CUT[hs] || LOOK_HAIR_CUT[1], P = [], M = 28, N = 5, deg = Math.PI / 180;
+  const tri = (a, b, c) => { const nx = (b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1]), ny = (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]), nz = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+    if (nx * nx + ny * ny + nz * nz < 1e-16) return; const cx = (a[0] + b[0] + c[0]) / 3, cy = (a[1] + b[1] + c[1]) / 3 - C.yc, cz = (a[2] + b[2] + c[2]) / 3 - C.zc;
+    if (nx * cx + ny * cy + nz * cz < 0) P.push(a, c, b); else P.push(a, b, c); };
+  const quad = (a, b, c, d) => { tri(a, b, c); tri(a, c, d); };
+  // a ray from the skull's centre at a bearing and a pitch: where it leaves the skull, pushed out by pad (along the ray)
+  const cast = (a, ph, pad, ox = 0) => { const sx = Math.sin(a * deg), sz = Math.cos(a * deg), dx = sx * Math.cos(ph), dy = Math.sin(ph), dz = sz * Math.cos(ph), t = lookSkullCast(T, ox, C.yc, C.zc, dx, dy, dz);
+    if (t < 0) return null; return [ox + dx * (t + pad), C.yc + dy * (t + pad), C.zc + dz * (t + pad)]; };
+  const pitchFor = (a, y) => { let lo = -1.0, hi = 1.55; for (let k = 0; k < 22; k++) { const ph = (lo + hi) / 2, h = cast(a, ph, 0); if (!h || h[1] < y) lo = ph; else hi = ph; } return (lo + hi) / 2; };
+  const at = (a, y, pad) => cast(a, pitchFor(a, y), pad) || [Math.sin(a * deg) * 0.1, y, C.zc + Math.cos(a * deg) * 0.1];
+  if (hs === 4) {                                            // THE FIN: along the midline from the brow over the crown to the nape, its base sunk into the skull, a flat top
+    const w = 0.026, tw = 0.007, S = 14, thF = pitchFor(0, lookHairline(4, 0)), thB = Math.PI - pitchFor(180, lookHairline(4, 180)), L = [], Rr = [], TL = [], TR = [];
+    const HP = Math.PI / 2, crest = 0.42;                    // where along the arc (0 the brow, 0.5 the top, 1 the nape) the fin stands tallest
+    for (let s = 0; s <= S; s++) { const th = thF + (thB - thF) * s / S, dy = Math.sin(th), dz = Math.cos(th), g = th < HP ? 0.5 * (th - thF) / (HP - thF) : 0.5 + 0.5 * (th - HP) / (thB - HP);
+      const h = 0.028 + 0.062 * (g < crest ? Math.sin(HP * g / crest) : Math.cos(HP * (g - crest) / (1 - crest)));
+      const tL = lookSkullCast(T, -w, C.yc, C.zc, 0, dy, dz), tR = lookSkullCast(T, w, C.yc, C.zc, 0, dy, dz), t0 = lookSkullCast(T, 0, C.yc, C.zc, 0, dy, dz);
+      L.push([-w, C.yc + dy * (tL - 0.004), C.zc + dz * (tL - 0.004)]); Rr.push([w, C.yc + dy * (tR - 0.004), C.zc + dz * (tR - 0.004)]);
+      TL.push([-tw, C.yc + dy * (t0 + h), C.zc + dz * (t0 + h)]); TR.push([tw, C.yc + dy * (t0 + h), C.zc + dz * (t0 + h)]); }
+    for (let s = 0; s < S; s++) { quad(L[s], L[s + 1], TL[s + 1], TL[s]); quad(Rr[s], Rr[s + 1], TR[s + 1], TR[s]); quad(TL[s], TL[s + 1], TR[s + 1], TR[s]); }
+    quad(L[0], Rr[0], TR[0], TL[0]); quad(L[S], Rr[S], TR[S], TL[S]);
+  } else {                                                   // THE CAP
+    const ring = [], inner = [], A = [];
+    for (let i = 0; i < M; i++) { const a = i / M * 360 - 180, y0 = lookHairline(hs, a); A.push(a); const ph0 = pitchFor(a, y0); inner.push(cast(a, ph0, 0.001) || at(a, y0, 0.001));
+      for (let j = 0; j < N; j++) { const y = y0 + (C.top - y0) * (j / N), pad = cut.pad + (cut.top || 0) * (j / N); (ring[j] = ring[j] || []).push(j === 0 ? cast(a, ph0, pad) || at(a, y0, pad) : at(a, y, pad)); } }
+    const apex = [0, C.top + cut.pad + (cut.top || 0), C.zc];
+    for (let i = 0; i < M; i++) { const k = (i + 1) % M;
+      quad(inner[i], inner[k], ring[0][k], ring[0][i]);                                            // the lip: the cap's edge down to the skin
+      for (let j = 0; j < N - 1; j++) quad(ring[j][i], ring[j][k], ring[j + 1][k], ring[j + 1][i]);
+      tri(ring[N - 1][i], ring[N - 1][k], apex); }
+    if (cut.drape) {                                         // LONG: from the hairline down the neck, straight, flaring a little, to a hem that hangs lowest at the nape
+      const K = 3, hem = a => { const D = cut.drape, b = Math.abs(a); if (b <= D[0][0]) return null; let i = 0; while (i < D.length - 2 && b > D[i + 1][0]) i++;
+        const t = Math.max(0, Math.min(1, (b - D[i][0]) / (D[i + 1][0] - D[i][0]))), y0 = D[i][1] == null ? lookHairline(hs, D[i][0]) : D[i][1]; return y0 + (D[i + 1][1] - y0) * t; };
+      const rows = [ring[0]]; for (let k = 1; k <= K; k++) { const row = []; for (let i = 0; i < M; i++) { const top = ring[0][i], yb = hem(A[i]); if (yb == null) { row.push(top); continue; }
+          const f = k / K, y = top[1] + (yb - top[1]) * f, sc = 1 + 0.05 * f; row.push([top[0] * sc, y, C.zc + (top[2] - C.zc) * sc]); } rows.push(row); }
+      for (let k = 0; k < K; k++) for (let i = 0; i < M; i++) { const j = (i + 1) % M; quad(rows[k][i], rows[k][j], rows[k + 1][j], rows[k + 1][i]); } }
+  }
+  const pos = new Float32Array(P.length * 3), si = new Uint16Array(P.length * 4), sw = new Float32Array(P.length * 4);
+  P.forEach((v, i) => { pos.set(v, i * 3); si[i * 4] = joint; sw[i * 4] = 1; });
+  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); geo.setAttribute('skinIndex', new THREE.BufferAttribute(si, 4)); geo.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4));
+  geo.computeVertexNormals(); return (R.hairGeo[hs] = geo);
+}
+// the figure's hair: the cap for his cut in his colour, riding the head bone; gone under a helm, or shaved
+function lookHairApply(L, look) {
+  const hs = look.hairStyle | 0, on = look.hair != null && hs > 0 && look.hide.includes('helmet');
+  const R = MODEL_RIGS.get(L.g.userData.model), body = on && R && Object.values(L.inst.skinned).find(sm => sm.userData.pieces && sm.userData.pieces.classes.indexOf('hair') >= 0);
+  const g0 = body && lookHairGeo(R, hs); if (!g0) { if (L.mHair) L.mHair.visible = false; return; }
+  if (!L.mHair) { const sm = new THREE.SkinnedMesh(g0, new THREE.MeshPhongMaterial({ color: look.hair, shininess: 10, specular: 0x202020, skinning: true, flatShading: true, side: THREE.DoubleSide }));
+    sm.frustumCulled = false; sm.castShadow = true; sm.name = 'hair'; body.parent.add(sm); sm.bind(body.skeleton, body.bindMatrix); L.mHair = sm; }
+  L.mHair.geometry = g0; L.mHair.material.color.setHex(look.hair); L.mHair.visible = true;
+}
+// ---- THE FACE'S BONES: one head, six casts ----
+// a head vertex of the bind pose moved for a face shape (model units, the face looks +z; the base head is lookRuggedHead's)
+function lookFacePoint(f, x, y, z, out) {
+  const ax = Math.abs(x), jaw = y > 1.50 && y < 1.62 && z > -0.03, chin = y < 1.575 && z > 0.06 && ax < 0.06, cheek = y > 1.60 && y < 1.665 && ax > 0.055 && z > 0.02,
+    nose = y > 1.605 && y < 1.70 && z > 0.124 && ax < 0.05, tip = nose && y < 1.66, brow = y > 1.70 && y < 1.75 && z > 0.08 && ax < 0.075, bone = y > 1.655 && y < 1.69 && ax > 0.085 && z > 0;
+  switch (f) {
+    case 1: if (jaw) x *= 1.14; if (chin) { y -= 0.008; z += 0.008; } if (brow) z += 0.005; break;                                        // square: a wide jaw, a blunt chin, a flat brow
+    case 2: if (y < 1.655 && z > -0.01) y -= (1.655 - y) * 0.28 * Math.min(1, (z + 0.01) / 0.07) * Math.max(0, Math.min(1, (y - 1.49) / 0.05));   // long: the face drawn down below the eyes
+      if (jaw) x *= 0.92; if (nose) z += 0.008; if (tip) y -= 0.005; if (cheek) x *= 0.96; break;
+    case 3: if (cheek) { x *= 1.12; z += 0.008; } if (jaw) x *= 1.08; if (jaw && y < 1.55) y += 0.010; if (nose) z -= 0.008; if (brow) y += 0.003; break;   // round: full cheeks, a short chin, a small nose
+    case 4: if (nose) z += 0.022; if (tip) y -= 0.010; if (cheek && ax < 0.10 && z > 0.03) { x *= 0.91; z -= 0.008; } if (bone) x *= 1.08; if (jaw) x *= 0.94; if (chin) { z += 0.008; y -= 0.005; } break;   // hawk: a beak, hollow cheeks, a pointed chin
+    case 5: if (nose && y < 1.68) x += 0.018; if (tip) z -= 0.010; if (brow) { z += 0.008; y -= 0.005; } if (jaw) x *= 1.09; if (cheek && x < 0) z += 0.008; break;   // broken: a nose bent and flattened, a heavy brow, a swollen cheek
+  }
+  out[0] = x; out[1] = y; out[2] = z; return out;
+}
+// the body's head takes the look's face: shape 0 shares the rig's positions, any other gets this body its own copy (and normals)
+function lookFaceApply(sm, look, pj) {
+  const f = look.faceShape | 0, geo = sm.geometry, g0 = sm.userData.geo0; if ((sm.userData.face | 0) === f && (f > 0) === !!sm.userData.ownPos) return;
+  if (f === 0) { geo.setAttribute('position', g0.getAttribute('position')); geo.setAttribute('normal', g0.getAttribute('normal')); sm.userData.ownPos = false; sm.userData.face = 0; return; }
+  if (!sm.userData.ownPos) { geo.setAttribute('position', g0.getAttribute('position').clone()); geo.setAttribute('normal', g0.getAttribute('normal').clone()); sm.userData.ownPos = true; }
+  const p0 = g0.getAttribute('position'), p = geo.getAttribute('position'), o = [0, 0, 0];
+  for (let v = 0; v < p.count; v++) { const x = p0.getX(v), y = p0.getY(v), z = p0.getZ(v); if (LOOK_HEAD_CLASSES.has(pj.classes[pj.vclass[v]])) { lookFacePoint(f, x, y, z, o); p.setXYZ(v, o[0], o[1], o[2]); } else p.setXYZ(v, x, y, z); }
+  p.needsUpdate = true; geo.computeVertexNormals(); sm.userData.face = f;
+}
 // A ROUND SHIELD in the figure's shield hand: a faceted disc with a rim and a boss, skinned to the same bone as the
 // figure's own heater so it rides the arm exactly as that does. Painted per look: plain, halves, quarters, or rays.
 const LOOK_ROUND = { r: 0.31, x: 0.47, seg: 12 };
@@ -1323,7 +1449,7 @@ function lookRoundPaint(col, pt, look) {
   const faceOf = i => look.round === 0 ? team : look.round === 1 ? (i < N / 2 ? team : dev) : look.round === 2 ? (Math.floor(i / (N / 4)) % 2 ? dev : team) : (i % 2 ? dev : team);
   for (let v = 0; v < col.count; v++) { const p = pt[v]; c.copy(p < N ? faceOf(p) : p === N ? rim : p === N + 1 ? boss : backC); col.setXYZ(v, c.r * 255, c.g * 255, c.b * 255); } col.needsUpdate = true;
 }
-BV.look = { roll: lookRoll, apply: lookApply, live: () => MODEL_LIVE.map(L => ({ name: L.P.lookName, arch: L.P.lookArch, full: !!L.P.lookFull, shield: L.shieldKind, look: L.look && { kind: L.look.kind, hide: L.look.hide, helmet: L.look.helmet, cloak: L.look.cloak, plume: L.look.plume, hair: L.look.hair, beard: L.look.beard, skin: L.look.skin, hairStyle: L.look.hairStyle, beardStyle: L.look.beardStyle } })) };   // (test: every live figure's look)
+BV.look = { roll: lookRoll, apply: lookApply, live: () => MODEL_LIVE.map(L => ({ name: L.P.lookName, arch: L.P.lookArch, full: !!L.P.lookFull, shield: L.shieldKind, look: L.look && { kind: L.look.kind, hide: L.look.hide, helmet: L.look.helmet, cloak: L.look.cloak, plume: L.look.plume, hair: L.look.hair, beard: L.look.beard, skin: L.look.skin, hairStyle: L.look.hairStyle, beardStyle: L.look.beardStyle, faceShape: L.look.faceShape, hairMesh: !!(L.mHair && L.mHair.visible) } })) };   // (test: every live figure's look)
 const MODEL_ON = !/[?&]plastic\b/.test(location.search);   // the warrior is the base soldier; ?plastic brings the plastic figures back
 const MODEL_NAME = 'warrior';
 BV.modelLoad = MODEL_ON ? loadModelRig(MODEL_NAME).then(() => { BV.modelReady = true; console.log('[model] warrior ready'); }, e => console.error('[model] load failed', e)) : Promise.resolve();   // (the home / market figure waits on this — the plastic placeholder is never shown)
@@ -14200,6 +14326,7 @@ BV.edit = (s) => { if (!EDIT.on) editorBoot(_toSpec(s) || { kind: 'house' }); el
 BV.editSpin = (on) => { EDIT.spin = on === undefined ? !EDIT.spin : !!on; return EDIT.spin; };
 BV.editSeed = (n) => editApply({ ...EDIT.spec, seed: n >>> 0 });
 BV.editFrameCam = () => { editFrameCam(); return 'framed'; };
+BV.editOrbit = (o = {}) => { for (const k of ['r', 'theta', 'phi']) if (o[k] != null) EDIT.orbit[k] = o[k]; if (o.target) EDIT.orbit.target.fromArray(o.target); return { r: EDIT.orbit.r, theta: EDIT.orbit.theta, phi: EDIT.orbit.phi, target: EDIT.orbit.target.toArray() }; };   // the camera by hand (a head close-up)
 BV.editSnap = (w) => { editSnap(w); return 'snapped'; };   // 0=before, 1=after, 'both' (mirrors keys 1/2/3)
 BV.editPose = (n) => { if (EDIT.anims.length && POSES[n]) { EDIT.pose = n; for (const a of EDIT.anims) setPose(a, n, 0.25); editPosePanel(); } return EDIT.pose; };
 BV.editStatus = editStatus;
@@ -23164,7 +23291,7 @@ function afHomeHud() {
   { const gear = afGear(), el = g('hm-gear'); el.innerHTML = '<span class="look" data-look="1" title="Your face: skin, hair, beard">✂ Look</span>' + ['sword', 'armor', 'helm', 'shield', 'bow', 'horse'].map(sl => gear[sl] && I[gear[sl]] ? '<span data-slot="' + sl + '">' + escHtml(I[gear[sl]].name) + '</span>' : '<span class="none" data-slot="' + sl + '" title="no ' + (sl === 'armor' ? 'armour' : sl) + ' yet — the market has one">—</span>').join('');
     const lb = el.querySelector('[data-look]'); if (lb) lb.onclick = e => { e.stopPropagation(); afBarberOpen(); }; }
 }
-// THE BARBER: your own face — skin tone, hair style and colour, beard. A page of the shell (the figure on the left, the
+// THE BARBER: your own face — skin tone, the face's bones, hair style and colour, beard. A page of the shell (the figure on the left, the
 // choices on the right, Back where it always is). Saved with the career (the server keeps it in the career's meta, every
 // guest paints the same man) and in this browser; the figure changes as you tap.
 function afLookGet() { const c = AF.career; return Object.assign({}, (c && c.meta && c.meta.look) || AF.myLook || {}); }
@@ -23182,6 +23309,7 @@ function afBarberRender() {
   const row = (label, sub, inner) => '<div class="bb-row"><div class="bb-lbl"><b>' + label + '</b><span>' + sub + '</span></div><div class="bb-opts">' + inner + '</div></div>';
   p.innerHTML = '<div class="mk-head">' + (window.net && net.session ? 'Your face, kept with your career — every fighter in the pit sees it' : 'Kept in this browser — sign in and it follows your career') + '</div>'
     + row('Skin', 'the tone', sw('s', LOOK_SKIN, LOOK_SKIN_NAMES))
+    + row('Face', 'the bones', chips('f', LOOK_FACE_SHAPES))
     + row('Hair', 'the cut', chips('h', LOOK_HAIR_STYLES))
     + row('Colour', 'hair and beard', sw('c', LOOK_HAIR_PICK, ['black', 'dark brown', 'brown', 'auburn', 'red', 'fair', 'blond', 'grey', 'white']))
     + row('Beard', 'the chin', chips('b', LOOK_BEARD_STYLES))

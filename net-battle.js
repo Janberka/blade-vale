@@ -9,7 +9,7 @@
     try { var o = localStorage.getItem('bv-coop-url'); if (o) return o; } catch (e) {}
     if (typeof window !== 'undefined' && window.BV_COOP) return window.BV_COOP;   // the relay's own host (the tunnel), set by the page
     var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
-    if (location.port === '' || location.port === '8787') return proto + location.host + '/coop';   // the game server (or a tunnel in front of it) served the page
+    if (location.port === '' || location.port === '8787' || location.port === '8790') return proto + location.host + '/coop';   // the game server (or a tunnel in front of it) served the page
     return proto + (location.hostname || 'localhost') + ':8787/coop';
   }
 

@@ -50,7 +50,11 @@ shows the hidden **Enter the Vale** button and the open-world title copy again (
 | Swap sword-and-shield ↔ bow (archers only — a swordsman or rider has no bow, and the SWAP button is hidden) | F | SWAP |
 
 On touch, the thumb that holds ATK or BLOCK also aims: press, drag to turn, release to swing where you
-face (the other thumb is on the stick, so there is no third finger).
+face (the other thumb is on the stick, so there is no third finger). A mouse or pen on a device that also
+has a touchscreen (a touch laptop, an iPad with a keyboard and trackpad) gets the desk's aim: a click asks
+for pointer lock; where no lock can be had (iPadOS Safari has none) the held button aims by drag, like
+the thumb. The canvas is re-fitted to the window every frame, not only on the resize event, so a rotation
+or fullscreen change that fired resize early can never leave the picture in half the screen.
 | Roll — forward, back, either side or anything between (invulnerable for most of it; you come up still facing your man) | C rolls the way you're moving (a side if you stand still); Q / E are always the sides | double-tap the stick, then push the way you want to go |
 
 When you fall you spectate: drag to orbit the pit, wheel to zoom. The fight ends when one

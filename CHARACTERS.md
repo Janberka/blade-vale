@@ -138,6 +138,11 @@ THE CHEST ("add some chest muscle detail"): the torso is lathed on 22 rings now 
 `chestShape` moves each ring's vertices by their place round it — the pecs a plate of muscle either side of the sternum (the two
 vertices next to the midline out 7.5 %, the next 3 %), fullest at three quarters of the torso's height (just under the collar bone; "too low" at two thirds) and fading toward the crease
 and the collar bone, the sternum sinking between them, a crease under them (the front set in 4 %) that the paint darkens too.
+THE SHOULDER ("arms are too close to body, the top of the arm joins the body with a weird angle"): the shoulder bone sits INSIDE
+the torso (x 0.176 against a torso edge near 0.19) and the upper arm runs 35° outward to the elbow, so a tube from the bone came
+out of the body at an angle and lay against it. The tube starts from the deltoid instead — 5.5 cm out past the torso's edge and
+1.2 cm up, in the bone's own frame so it holds in every pose — and runs to the elbow, where the bracer is: more upright, clear of
+the body. Test hook: `BV.showcasePose('relax')` puts the showcase figure in one of the animator's poses.
 
 ## The surface pass (2026-09-16, "our chars look too low poly")
 

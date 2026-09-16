@@ -1243,15 +1243,19 @@ function modelBodyBuild(R) {
       stitch(iL, oL, 3); stitch(oL, oH, 3); stitch(oH, iH, 3);   // the underside, the face, the top: a closed band a finger thick, faces out (stitch winds a→b outward, so inner→outer faces down and outer→inner faces up)
       uvNow = uvc; matNow = 0; } }
   // THE ARMS: a tube down the bones, shoulder → elbow → hand, sized band by band from the sleeve and the vambrace
-  const arm = (side, cl) => { const A = bone(M['shoulder' + side]), B = bone(M['elbow' + side]), C = bone(M['hand' + side]), jS = joint(M['shoulder' + side]), jE = joint(M['elbow' + side]), jH = joint(M['hand' + side]);
+  const arm = (side, cl) => { const A0 = bone(M['shoulder' + side]), B = bone(M['elbow' + side]), C = bone(M['hand' + side]), jS = joint(M['shoulder' + side]), jE = joint(M['elbow' + side]), jH = joint(M['hand' + side]);
     const near = (p, seg) => { const [S, E] = seg, d = E.clone().sub(S), L = d.length(); d.normalize(); const t = Math.max(0, Math.min(1, p.clone().sub(S).dot(d) / L)); return { t, r: p.clone().sub(S).sub(d.multiplyScalar(t * L)).length() }; };
-    const mine = list => list.filter(p => Math.sign(p.x) === Math.sign(A.x) || Math.abs(A.x) < 0.01);
+    const mine = list => list.filter(p => Math.sign(p.x) === Math.sign(A0.x) || Math.abs(A0.x) < 0.01);
     const radii = (list, S, E, nb, shrink, dflt) => { const out = []; for (let b = 0; b < nb; b++) { const rs = []; for (const p of list) { const q = near(p, [S, E]); if (Math.abs(q.t - b / (nb - 1)) < 0.6 / (nb - 1)) rs.push(q.r); } out.push(rs.length >= 4 ? pct(rs, 0.85) * shrink : null); }
       for (let b = 0; b < nb; b++) if (out[b] == null) { const got = out.filter(x => x != null); out[b] = got.length ? got.reduce((a, x) => a + x, 0) / got.length : dflt; } return out; };
     // one girth from the sleeve's middle (the cuffs and the vambrace's flare are armour, not arm), the rest a profile off it:
     // biceps a little fuller, the elbow lean, the wrist the hand's own width — an arm, not a stuffed sleeve
-    const mid = radii(mine(pts('sleeve')), A, B, 5, 1, 0.08), rE = Math.max(0.04, (mid[1] + mid[2] + mid[3]) / 3 * 0.66), rB = rE * 1.12, rW = rE * 0.66;   // (0.66 of the sleeve: the sleeve is cloth over the arm, and hangs)
+    const mid = radii(mine(pts('sleeve')), A0, B, 5, 1, 0.08), rE = Math.max(0.04, (mid[1] + mid[2] + mid[3]) / 3 * 0.66), rB = rE * 1.12, rW = rE * 0.66;   // (0.66 of the sleeve: the sleeve is cloth over the arm, and hangs)
     const frame = d => { const u = new THREE.Vector3().crossVectors(d, Math.abs(d.z) < 0.9 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(1, 0, 0)).normalize(); return [u, new THREE.Vector3().crossVectors(u, d).normalize()]; };   // (v = u × d, the torso's winding: the rings must run the same way round or the tube faces inward and the near wall is culled — the "transparent arm")
+    // THE SHOULDER: the bone sits inside the torso (x 0.176 against a torso edge near 0.19) and the upper arm runs 35° outward to the elbow, so a tube
+    // from the bone came out of the body at an angle and lay against it. The tube starts from the DELTOID instead — a point out past the torso's
+    // edge and a little up (in the bone's own frame, so it holds in every pose) — and runs to the elbow, where the bracer is: more upright, clear of the body
+    const A = A0.clone().add(new THREE.Vector3((Math.sign(A0.x) || 1) * 0.055, 0.012, 0));
     const dU = B.clone().sub(A).normalize(), dF = C.clone().sub(B).normalize(), dM = dU.clone().add(dF).normalize(), [uU, vU] = frame(dU), [uF, vF] = frame(dF), [uM, vM] = frame(dM), rings = [];
     const R_ = (c, u, v, r, w) => rings.push(ring(c, u, v, r * 0.84, r * 1.04, w, cl));   // an arm is deeper than it is wide (u runs across, v front-to-back): seen from the front or the back it is the narrow way round
     // the upper arm: the shoulder's bone alone, so it turns as one piece
@@ -24030,6 +24034,7 @@ BV.showcase = (o) => {
   h.group.position.copy(p); h.group.rotation.y = o.yaw != null ? o.yaw : Math.atan2(camera.position.x - p.x, camera.position.z - p.z);
   scene.add(h.group); BV._show = h; return h;
 };
+BV.showcasePose = (name = 'relax') => { const h = BV._show; if (!h) return null; h.anim = h.anim || makeAnimator(h.parts); setPose(h.anim, name, 0.01); updateAnimator(h.anim, 1); return name; };   // test: the showcase figure in one of the animator's poses (at ease on the home: 'relax')
 BV.shot = (w = 1280, h = 800, pose) => {              // a still of the scene from a given camera {pos, look, fov}: no sim step, no post — for character renders
   const sz = renderer.getSize(new THREE.Vector2()), pr = renderer.getPixelRatio();
   renderer.setPixelRatio(1); renderer.setSize(w, h, false);

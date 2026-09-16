@@ -96,8 +96,9 @@ Adding a ware: an entry in ARENA_ITEMS (slot, price, rank, stats), a `LOOK_ARMOR
 A second helm ware, with a sculpt of its own: the **Corinthian helm** (`corinthian` in arena-items, `model: 'corinthian'`, 260 g,
 +8 health, +4 poise) — the "Helmet of Leonidas" (`assets/rigs/warrior/src/Helmet_of_Leonidas.usdz`: the helm and its crest, one
 PBR texture set, bronze), a face open between cheek guards and a nasal. `tools/realmesh/helm_corinthian.py` (usd-core, Pillow)
-bakes it FITTED over the warrior's head in the bind pose (`FIT`: one scale and offset, checked by eye — the eyes in the eye holes,
-the nasal a hair off the nose, the crown clear of the skull) into `helm_corinthian.json` + `.bin` (positions, normals, uvs,
+bakes it FITTED over the warrior's head in the bind pose (`FIT`: one scale and offset, then a pitch about the skull's centre that
+tips the brow up and the neck guard down — checked by eye: the eyes in the eye holes, the nasal a hair off the nose, the crown
+clear of the skull, the nape covered) into `helm_corinthian.json` + `.bin` (positions, normals, uvs,
 indices, a draw group per part) and its maps halved to 512. game.js loads it with the warrior (`loadHelmModel`, awaited by
 `loadModelRig`; `HELM_MODELS` names the wares' files) and shares it between figures: worn, it rides the head bone as a SkinnedMesh
 bound to the body's skeleton (`lookHelmModelApply`, from `lookApply` and `lookHelmOff` — on with the helm, gone with it); carried

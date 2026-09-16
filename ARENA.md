@@ -45,6 +45,7 @@ shows the hidden **Enter the Vale** button and the open-world title copy again (
 | Aim | mouse (click the pit to lock the cursor) | drag the right half of the screen |
 | Attack: **hold to load, release to swing** — a tap is a quick light (three chain into a combo), a full hold is a heavy that cracks a raised guard; the bow draws the same way | hold / release left click | hold / release ATK |
 | Block (hold; 85% less damage from the front) | Shift or right click | BLOCK |
+| **Shield bash** — TAP block (press and let go inside a fifth of a second) and the shield is punched out in front: little damage, a hard shove, and a man behind a raised guard is **guard-broken** for half a second — a light tapped behind the bash lands in the opening (an execution); a man loading a blow loses the load. Costs breath; not from the saddle, not with a bow in hand. A tap that only cancelled your own load is a cancel, not a bash | tap Shift / right click | tap BLOCK |
 | **Shield charge** — hold block at full stride and the shield comes down in front, you keep the stride and go through: square on, a man on foot is **RUN DOWN** (two of them, if the first doesn't stop you), a man behind his own raised shield is guard-broken instead, a horse at a walk loses its rider; a horse under way is a wall. Costs breath; ends when you drop the guard, ease off, or run out of men | Shift at full stride | BLOCK at full stride |
 | Swap sword-and-shield ↔ bow (archers only — a swordsman or rider has no bow, and the SWAP button is hidden) | F | SWAP |
 
@@ -83,6 +84,18 @@ gaits with backpedal. Damage (`afDamage`) runs the **poise** model: light hits c
 flinch, a raised guard eats 85% from the front, a heavy on a guard is a *guard break*, and when
 poise runs out the fighter is **staggered** for 1.2 s — any hit on a staggered fighter is an
 **execution** (2.2× damage). Arrows only chip poise lightly.
+
+**The shield bash** (2026-09-16, the user: "tapping on guard (without holding) should do a shield attack"):
+`afDrive` times every BLOCK press of a human fighter (`b.blkT`); let go inside `AF_F.bash.tapBy` (0.22 s) with nothing
+else going on (no swing, no load, no charge, not landing, not winded, a shield in hand) and `b.bash` starts: `wind` 0.10 s
+with the arm cocked (`bashWind`), the punch (`bashHit`, a lunge of `lunge` × move through wind + strike), `rec` 0.26 s
+back to guard. At the strike frame `afBashHit` (host) takes the nearest foe square in front within `reach` 1.7 and puts
+him through `afDamage` as a **heavy of weight `k` 0.6**: little damage (`dmg` 3–6), the heavy's knock, a raised guard is
+GUARD-BROKEN but the stagger is capped at `open` 0.6 s (a heavy's is 0.75) — a light tapped during the bash is kept and
+comes out behind it (0.26 + 0.24 ≈ 0.52 s to the hit: inside the opening, so it executes; `cd` after the bash is 0 — any pause there eats the buffered tap); a man loading a heavy loses
+the load (k ≥ 0.5 rides through the armour rule); a man with no guard up is flinched `flinch` 0.4 and shoved. A tap that
+cancelled your own load (`b.blkCancel`) stays a cancel. NPCs never tap (their guard is a timer). State code 18 on the wire,
+the move slot 1 once the shield has gone out.
 
 **The chain has an end** (2026-09-12, after the pits were "super easy even against veterans": tapping
 the button stun-locked anyone to death — a tapped light lands 0.06 s after the press, every hit cancelled

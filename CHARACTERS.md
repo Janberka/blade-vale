@@ -252,3 +252,36 @@ for `userData.axe` while the pose is `relax`; drawn, the head leads), the axe he
 sweeping out and up, a convex edge, the beard hooking down and back; the Dane axe adds a poll), the barber has a sixth beard
 — `braided`: the full beard's paint plus a plait of beads on the head bone (`lookBraidGeo` / `lookBraidApply`; ARENA_LOOK.b is
 6 now) — and the berserker's bracers are `ironEngraved`: steel kind 8, the ink's knotwork cut in as dark, rougher grooves.
+
+## The face's surface (2026-09-16, "character faces are too low poly now, let's add them some detail and smoothing like the body and armors")
+
+The surface pass gave the plate and the cloth their smoothing and their grain; the head stayed a paper mask — ~750 triangles for
+the skull and its features (the eyes ~290 more), split at every palette seam, a nose of four planes — and `lookFaceApply` threw
+even the crease pass away (`computeVertexNormals` on split vertices is flat shading, so any face but 'hard' was faceted). Four
+things, all in game.js by `lookRuggedHead`:
+
+- **Refinement** (`lookHeadRefine`, once per rig at load, before the head is roughened): the head's and the eyes' triangles are
+  subdivided one level by Phong tessellation — interpolating, so every vertex the artist placed stays put and every position band
+  in the file (the rugged head, the bake's regions, `lookFacePoint`, the hairline) still means what it did; each edge gains a
+  midpoint lifted onto the surface the vertex normals imply (the midpoint dropped onto the tangent plane at either end, averaged,
+  `LOOK_REFINE_LIFT` of the way). Local, no fans or valences: a butterfly stencil was tried first and furrowed the forehead's tall
+  thin triangles. The lift uses the welded normals (every triangle at a position, across the seams) and the new vertices are
+  emitted per split edge, so seams and palette cells survive. A new vertex keeps its edge's piece; at a seam between two pieces
+  the bake's own position rules say which side (`lookBakeHeadClass`, a port of `warrior_pieces.py` — keep the two in step); its
+  cell and skin weights come from the edge's ends. `pieces.json`'s per-vertex and per-triangle arrays grow with it in memory (the
+  file is untouched). ~3 100 triangles more a bare head, 20 ms at load.
+- **Normals** (`lookFaceNormals`): after the 55° crease pass, the face's and the eyes' normals are averaged across seams and
+  facets under a 120° crease (`LOOK_FACE_CREASE`), then softened — two rounds of each welded vertex's normal averaged with its
+  ring's (`LOOK_FACE_SOFTEN`; the welded neighbourhood is `lookFaceAdj`, built once per rig). `lookFaceApply` runs the same passes
+  on a body's own copy after it casts a face. `modelSmoothNormals` takes a vertex filter for it.
+- **Pores** (`modelDetailTextures().skinN` / `skinR`): a skin height field — two octaves of swell under a grain of round
+  dimples — laid on every skin kind (bare or inked) as a triplanar normal map, with an oily sheen over the swells and matte pores
+  in the roughness. `BV.modelDetail({ skinTile, skinStr })` tunes it (defaults 14 × tile, 0.35 × str).
+- **The paint's edges** (`lookScalpMask`, `lookBrowMask`): the finer head showed what the coarse one hid — the forehead is tall
+  slivers fanning from the crown to the brow row, and a dark vertex at either end (the hair colour painted on the scalp under the
+  cap; the bake's brow box, which takes the skin round the eyebrow's root as well as the ridge) ran its colour the length of every
+  sliver it touched: a comb of dark bands. Found by swapping materials in the render (the normals were clean, the vertex colours
+  alone carried it). Now a scalp vertex is painted only when every neighbour is under the cap too (one mask per style per rig),
+  and a brow vertex only when every neighbour is brow — the ridge stays dark, the skin round it stays skin.
+
+Hands are not refined (the user asked for faces); `LOOK_REFINE_CLASSES` is the list if they should be.

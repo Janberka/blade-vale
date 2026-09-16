@@ -184,28 +184,3 @@ for `userData.axe` while the pose is `relax`; drawn, the head leads), the axe he
 sweeping out and up, a convex edge, the beard hooking down and back; the Dane axe adds a poll), the barber has a sixth beard
 — `braided`: the full beard's paint plus a plait of beads on the head bone (`lookBraidGeo` / `lookBraidApply`; ARENA_LOOK.b is
 6 now) — and the berserker's bracers are `ironEngraved`: steel kind 8, the ink's knotwork cut in as dark, rougher grooves.
-
-## Animal fur helms (2026-09-16, "we should have some helmets from animal fur like wolf or lion or bear")
-
-Three helm wares beside the sallet (arena-items.js, `pelt: 'wolf' | 'bear' | 'lion'`): the **Wolf's head** (rank 0), the
-**Bear's head** (rank 1) and the **Lion's mane** (rank 2) — a beast's head worn as a hood over a fur-lined cap, its hide down
-the nape. Nothing new on the server: the slot is `helm` and both backends validate against the shared list. On the figure:
-
-- **The cap** is the sculpted helmet itself, painted the beast's fur (`lookRoll`: `look.pelt` from the ware, `look.paint.helmet`
-  = `LOOK_PELT[pelt].fur`) and handed the leather kind by `lookKind`, so the surface pass shades it as hide, not steel. The
-  carried helm (`lookHelmBuild`) copies the same paint. A pelt has no crown for a plume: `look.plume` is off under one.
-- **The head** is `lookPeltGeo(R, kind, M)`: a low-poly animal head built in the bind pose over the helmet (the crown at about
-  y 1.88, the visor's front at z 0.2) — a skull sunk into the crown, a muzzle out over the brow with the jaws open and four
-  fangs, a nose, eyes, ears (cones for the wolf, flat rounds for the bear and the lion), the hide as an open half-cylinder
-  down the nape (fur at the top, its hem dark), and for the lion three rings of tufts round the skull's axis, none in the
-  face (fur at the root, dark at the tip). Vertex-coloured, flat-shaded, one shared Phong material (`LOOK_PELT_MAT`). The
-  parts are merged and carried into the head bone's space with the same matrix the carried helm uses (`L.helmM`, kept by
-  `lookHelmBuild`), so one rigid mesh (`L.mPelt`) serves both: `lookPeltSync` (every `syncModelRigs`, and on `lookHelmOff`)
-  parents it to the head bone while the helm is worn, to the carried helm (`helmInHand`) while that shows — so it hangs in
-  his hand on the walk in and rides the lift onto his head — and hides it bareheaded. Built once per rig and beast.
-- **The vale's men** (`afNpcGear`): a northerner in the pelt or the mantle wears a wolf's or a bear's head (the helm odds for
-  those armours rose from 0.02 to 0.35 / 0.3 in `LOOK_ARMOR`), a champion (82 XP and up) now and then a lion's mane; the one
-  helm roll decides all of it, so the rest of the roster's rolls are untouched.
-- The market's Helms tab shows each on the bust (the `helm` thumbnail branch, unchanged). Tests: `BV.look.live()` reports
-  `pelt` and `peltMesh`; `BV.showcase({gear: {helm: 'wolf_helm', armor: 'wolf_pelt'}, ground: true})` puts one on the
-  overworld's terrain, and `BV.showcaseHelm({off, hand, k})` takes his helm off, into his hand, or lifts it (k 0..1).

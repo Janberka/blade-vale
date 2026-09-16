@@ -17544,7 +17544,18 @@ const AF_F = { hp: 100, move: 5.6, reach: 2.5, cone: 0.3, radius: 34, timeLimit:
   light: { wind: 0.24, strike: 0.10, rec: 0.28, dmg: [10, 15] },
   heavy: { wind: 0.60, strike: 0.12, rec: 0.50, dmg: [24, 32] },
   bow:   { wind: 0.50, strike: 0.06, rec: 0.40, dmg: [11, 16], speed: 42, range: 44 },
-  blockMul: 0.15, guardBreak: 0.75, flinch: 0.32, deathDur: 1.1,   // (flinch > the light's recovery: whoever lands the blow keeps the initiative — at 0.18 the man hit always got to punish the man who hit him)
+  blockMul: 0, guardBreak: 0.75, flinch: 0.32, deathDur: 1.1,   // (flinch > the light's recovery: whoever lands the blow keeps the initiative — at 0.18 the man hit always got to punish the man who hit him)   // (blockMul 0, 2026-09-16, the user: "if a sword hits our shield we shouldn't get damage" — a raised shield STOPS a light; the heavy's guard break and the bash are the answers to a wall, not a 15 % trickle)
+  // STEEL ON STEEL, THE SHIELD'S SIDE, THE BARE HEAD (2026-09-16, the user: "if a sword comes to another sword it should stop,
+  // that's like another guard. Even if we don't guard, if a sword hits our shield we shouldn't get damage. If I get a sword to
+  // my naked head that's big damage, it should make me fall"). afDamage: a man whose own blade is OUT IN FRONT (his swing's
+  // wind, strike and `steel.after` seconds of the follow-through) meets a blow from the front as a guard would — a light is a
+  // blade lock (both swings spent), a heavy beats a light aside (the guard break), heavy on heavy locks. A man NOT guarding
+  // still carries his shield on his left arm: a blow from that flank (its side component past `shield.side` of the way round
+  // from the front, not from behind him) rings on the shield — no wound; a light glances off, a heavy drives the shield into
+  // him (the knock and a flinch). An OVERHEAD cut (the chain's chop, any heavy) on a BAREHEADED man — no helm in his look, or
+  // his helm still in his hand — is a blow to the skull: `head.mul` × the damage and he is FLOORED (the trample's downT) for
+  // `head.down` seconds, light / heavy. The don matters: walk in slow and the first chop finds your naked head.
+  steel: { after: 0.10 }, shield: { side: 0.5, behind: -0.25, heavyFlinch: 0.3 }, head: { mul: 1.7, down: [1.1, 1.5] },   // (mul 2.0 took 88 of a player's 100 from one veteran heavy — 1.7 and the fall is the wound)
   knock: 3, heavyKnock: 14, lightPoise: 14, heavyPoise: 40, maxPoise: 45, poiseRegen: 8, staggerDur: 1.2, executeMul: 2.2, // three lights CHIP a guard (42 of 45), a heavy on the chipped guard breaks it — a chain alone never staggers
   comboMax: 3, comboRest: 2.0, comboCd: 0.35, chainAt: 0.75,   // the light chain is THREE blows, the next chained at 3/4 of the follow-through — ~0.37 s hit to hit, a hair LONGER than the flinch, so a man who reads the chain gets his guard up for the second (at 0.45 it was 0.29 s: nobody could): the third has twice the follow-through and nothing queues behind it; then a breath before the next tap counts
   accel: 7.13, friction: 0.0008, lunge: 2, heavyLunge: 3,      // velocity model borrowed from the field fighters (terminal speed ≈ move)
@@ -21161,20 +21172,34 @@ function afDamage(t, amt, from, heavy, exec, arrow, k) {   // heavy: cracks guar
   if (t.iframes > 0) { afPopup(pos, 'dodge', '#9fd6ff'); return; }
   const ax = from.x - t.x, az = from.z - t.z, ad = Math.hypot(ax, az) || 1;
   const facing = (ax * Math.sin(t.yaw) + az * Math.cos(t.yaw)) / ad;
-  let blocked = 0;
+  const side = (ax * Math.cos(t.yaw) - az * Math.sin(t.yaw)) / ad;   // +: the blow comes from his LEFT — the arm the shield hangs on (makeArm(1) is the left arm, at +x)
+  let blocked = 0, head = false;
   tmpV.set(t.x, afY(t.x, t.z) + 1.3, t.z);
-  if (t.blocking && facing > 0.15) {
-    if (heavy) { blocked = 2; t.stagger = AF_F.guardBreak; t.poise = t.maxPoise; t.blocking = false; t.atk = null; t.bash = null; amt *= 0.5; t.vx -= ax / ad * AF_F.knock; t.vz -= az / ad * AF_F.knock; afPopup(pos, 'GUARD BREAK', '#ffb347'); try { SFX.clang(pos, true); } catch (e) {} }
+  // STEEL ON STEEL: his own blade is out in front of him (the swing's wind and strike, a breath of the follow-through) — a
+  // blow from the front meets it as it would a raised guard. Not an arrow (it flies past a blade), not on a staggered man.
+  const steel = !arrow && !exec && facing > 0.15 && !t.blocking && !t.mounted && !!t.atk && !t.atk.bow && t.weapon !== 'bow' && !t.parts.sheathed && t.atk.t <= t.atk.wind + t.atk.strike + AF_F.steel.after;
+  const guard = t.blocking && facing > 0.15;
+  // THE SHIELD'S SIDE: no guard up, but the shield is on his arm — a blow from his left flank rings on it
+  const shielded = !guard && !steel && !exec && !t.noShield && t.weapon !== 'bow' && t.stagger <= 0 && t.downT <= 0 && side > AF_F.shield.side && facing > AF_F.shield.behind;
+  if (guard || steel) {
+    const beaten = heavy && !(steel && t.atk.heavy);        // a heavy breaks a guard, and beats a light swing aside; heavy on heavy is a lock
+    const rides = steel && !heavy && t.atk.heavy;           // a light on a heavy's raised blade: the light is parried and the HEAVY COMES ON (the heavier steel wins, as the guard break says)
+    if (steel && !rides) { t.atk = null; t.charge = null; t.queued = false; t.aiHoldT = 0; }   // otherwise his swing stops on the other blade too
+    if (beaten) { blocked = 2; t.stagger = AF_F.guardBreak; t.poise = t.maxPoise; t.blocking = false; t.atk = null; t.bash = null; amt *= 0.5; t.vx -= ax / ad * AF_F.knock; t.vz -= az / ad * AF_F.knock; afPopup(pos, steel ? 'BEATEN' : 'GUARD BREAK', '#ffb347'); try { SFX.clang(pos, true); } catch (e) {} }
     else {
-      blocked = 1; amt *= AF_F.blockMul; afPopup(pos, 'block', '#ffe089'); try { SFX.clang(pos); } catch (e) {} t.riposteAt = performance.now();   // (a blow that lands inside the next beat and a half is a RIPOSTE — afCallout)
+      blocked = steel ? 4 : 1; amt *= steel ? 0 : AF_F.blockMul; afPopup(pos, steel ? 'PARRY' : 'block', '#ffe089'); try { SFX.clang(pos); } catch (e) {} t.riposteAt = performance.now();   // (a blow that lands inside the next beat and a half is a RIPOSTE — afCallout)
       if (!arrow) {                                          // BLADE LOCK: steel bites steel, both freeze for a beat, then the shove — and the attacker's swing is spent
         from.clashT = 0.3; from.clashAtk = true; from.clashDx = ax / ad; from.clashDz = az / ad; from.atk = null; from.charge = null; from.queued = false; from.aiHoldT = 0; from.vx = from.vz = 0;
-        t.clashT = 0.22; t.clashAtk = false; t.clashDx = -ax / ad; t.clashDz = -az / ad; t.vx = t.vz = 0; t.holdBlock = 0;   // (the guard did its work: an NPC lets it drop and ripostes into the shove instead of standing behind it)
+        if (!rides) { t.clashT = 0.22; t.clashAtk = false; t.clashDx = -ax / ad; t.clashDz = -az / ad; t.vx = t.vz = 0; t.holdBlock = 0; }   // (the guard did its work: an NPC lets it drop and ripostes into the shove instead of standing behind it)
         tmpV.set((t.x + from.x) / 2, afY(t.x, t.z) + 1.4, (t.z + from.z) / 2); afSparks(tmpV, 0xffffff, 12); afSparks(tmpV, 0xffdf6b, 8);
         if (from === AF.me || t === AF.me) { addShake(0.14); AF.hitstop = Math.max(AF.hitstop, 0.05); }
       }
     }
     afSparks(tmpV, 0xffdf6b, 6);
+  } else if (shielded) {                                     // on the shield, unasked: no wound. A light glances off; a heavy drives the shield into him
+    blocked = 3; amt = 0; afPopup(pos, 'shield', '#ffe089'); try { SFX.clang(pos, heavy); } catch (e) {} afSparks(tmpV, 0xffdf6b, heavy ? 10 : 5);
+    if (heavy) { const kk = lerp(AF_F.knock, AF_F.heavyKnock, weight) * 0.5; t.vx -= ax / ad * kk; t.vz -= az / ad * kk; if (t.stagger <= 0) t.flinch = Math.max(t.flinch, AF_F.shield.heavyFlinch); t.atk = null; t.charge = null; t.bash = null; t.queued = false; t.aiHoldT = 0; }
+    if (t === AF.me || from === AF.me) addShake(heavy ? 0.12 : 0.06);
   } else {
     // HEAVY ARMOUR: a blow loaded past the heavy windup (or already swinging heavy) rides through a light hit — he takes
     // the wound but his swing still comes. Without it a held attack could never trade with a jab: every hit reset the load.
@@ -21188,7 +21213,11 @@ function afDamage(t, amt, from, heavy, exec, arrow, k) {   // heavy: cracks guar
       else if (!armoured) t.flinch = Math.max(t.flinch, AF_F.flinch);
       else afPopup(pos, 'armour', '#d8c8a8');
     }
-    afSparks(tmpV, exec ? 0xff3b2b : 0xff5a3c, exec ? 14 : arrow ? 3 : 8); try { SFX.hit(pos, heavy); } catch (e) {}
+    // THE BARE HEAD: an overhead cut (the chain's chop, any heavy) on a man with no helm on lands on the skull — double the
+    // wound and he goes down. (from.atk: a sword blow, not a bash, a tackle or a charge; the horse took a rider's blow above)
+    head = !arrow && !t.mounted && !!from.atk && !from.atk.bow && (from.atk.heavy || from.atk.move === 2) && afBareHead(t);
+    if (head) { amt *= AF_F.head.mul; const hs = Math.sign(ax * Math.cos(t.yaw) - az * Math.sin(t.yaw)) || 1; t.downT = Math.max(t.downT || 0, lerp(AF_F.head.down[0], AF_F.head.down[1], weight)); t.downSide = -hs; t.stagger = 0; t.flinch = 0; t.atk = null; t.charge = null; t.bash = null; t.queued = false; t.run01 = 0; t.rushT = 0; t.blocking = false; afPopup(tmpV.clone().setY(tmpV.y + 0.5), 'HEAD', '#ff3b2b'); if (t === AF.me) addShake(0.3); }
+    afSparks(tmpV, exec || head ? 0xff3b2b : 0xff5a3c, exec || head ? 14 : arrow ? 3 : 8); try { SFX.hit(pos, heavy || head); } catch (e) {}
     t.hitT = 0.25; t.hitSide = Math.sign(ax * Math.cos(t.yaw) - az * Math.sin(t.yaw)) || 1;   // thrown back and away from the blow
     t.flashT = 0.07;                                         // an impact frame: the body flares white for a beat
     if (t === AF.me) AF.hurt = Math.min(1, AF.hurt + (heavy ? 0.9 : 0.55));
@@ -21198,9 +21227,11 @@ function afDamage(t, amt, from, heavy, exec, arrow, k) {   // heavy: cracks guar
   if (!blocked) { if (amt > (from.bigBlow || 0)) from.bigBlow = amt; if (from === AF.me && from.riposteAt && performance.now() - from.riposteAt < 1400) { from.riposteAt = 0; afCallout('RIPOSTE', 'the guard held — and answered', '#9fd6ff'); AF.roar = Math.max(AF.roar, 1.0); } }   // (the career's bests; the riposte callout)
   t.hp -= amt; from.dmgDealt = (from.dmgDealt || 0) + amt; t.dmgTaken = (t.dmgTaken || 0) + amt; if (arrow) from.bowHits = (from.bowHits || 0) + 1; else from.swordHits = (from.swordHits || 0) + 1;   // (the career's ledger)
   if ((from === AF.me || t === AF.me) && AF.role !== 'guest') afJuice(from, t, amt, heavy, blocked); // your blows and your wounds rattle the camera
-  AF.events.push({ k: 'hit', i: t.idx, d: Math.round(amt), b: blocked, h: heavy ? 1 : 0, by: from.idx });
+  AF.events.push({ k: 'hit', i: t.idx, d: Math.round(amt), b: blocked, h: heavy ? 1 : 0, by: from.idx, hd: head ? 1 : 0 });
   if (t.hp <= 0) afKill(t, from);
 }
+// no helm on his head: none in his look (a bareheaded roll, no helm bought), or the one he owns still in his hand (the don)
+function afBareHead(t) { const L = t.parts && t.parts.modelRig; return !!(L && (L.helmOff || !(L.look && L.look.helmet))); }   // (a plastic body wears its helm always)
 // the screen juice: shake + hit-stop + a directional kick + FOV punch, scaled by the weight of the blow
 function afJuice(from, t, amt, heavy, blocked) {
   if (VR.on) { if (from === AF.me) vrHaptic('right', blocked ? 0.35 : heavy ? 1 : 0.6, blocked ? 60 : 90); if (t === AF.me) { vrHaptic('left', 1, 140); vrHaptic('right', 0.6, 120); } return; }   // never shake a VR camera: the blow is felt in the hands instead
@@ -22140,9 +22171,9 @@ function afApplyEvent(ev) {
   if (ev.k === 'hit' && b) {
     const by = AF.bodies[ev.by], felt = by === AF.me && afPredicted(ev.i);   // (felt: my own blow, already played when I swung — only the number is news)
     tmpV.set(b.x, afY(b.x, b.z) + 1.3, b.z);
-    if (ev.b) { if (!felt) { afSparks(tmpV, 0xffdf6b, 6); try { SFX.clang(b.group.position, ev.b === 2); } catch (e) {} } afPopup(b.group.position, ev.b === 2 ? 'GUARD BREAK' : 'block', ev.b === 2 ? '#ffb347' : '#ffe089'); if (ev.b === 1 && b === AF.me) b.riposteAt = performance.now(); }
+    if (ev.b) { if (!felt) { afSparks(tmpV, 0xffdf6b, 6); try { SFX.clang(b.group.position, ev.b === 2); } catch (e) {} } afPopup(b.group.position, ev.b === 2 ? 'GUARD BREAK' : ev.b === 3 ? 'shield' : ev.b === 4 ? 'PARRY' : 'block', ev.b === 2 ? '#ffb347' : '#ffe089'); if ((ev.b === 1 || ev.b === 4) && b === AF.me) b.riposteAt = performance.now(); }   // (3: the unasked shield, 4: steel on steel — afDamage)
     else if (by === AF.me) { if (ev.d > (by.bigBlow || 0)) by.bigBlow = ev.d; if (by.riposteAt && performance.now() - by.riposteAt < 1400) { by.riposteAt = 0; afCallout('RIPOSTE', 'the guard held — and answered', '#9fd6ff'); } }
-    else { if (!felt) { afSparks(tmpV, 0xff5a3c, 8); try { SFX.hit(b.group.position, !!ev.h); } catch (e) {} } afPopup(b.group.position, String(ev.d), ev.h ? '#ffd27a' : '#ff7d6f');
+    else { if (!felt) { afSparks(tmpV, 0xff5a3c, 8); try { SFX.hit(b.group.position, !!ev.h); } catch (e) {} } afPopup(b.group.position, String(ev.d), ev.h ? '#ffd27a' : '#ff7d6f'); if (ev.hd) { afPopup(tmpV.clone().setY(tmpV.y + 0.5), 'HEAD', '#ff3b2b'); if (b === AF.me) addShake(0.3); }   // (hd: a bare head — he goes down, the pose row says so)
       if (by) { b.hitT = 0.25; b.hitSide = Math.sign((by.x - b.x) * Math.cos(b.yaw) - (by.z - b.z) * Math.sin(b.yaw)) || 1; } b.flashT = 0.07; if (b === AF.me) AF.hurt = Math.min(1, AF.hurt + (ev.h ? 0.9 : 0.55)); if (!felt) afSplat(b.x, b.z, ev.h ? 1.1 : 0.7); }
     if (by && (by === AF.me || b === AF.me) && !felt) afJuice(by, b, ev.d, !!ev.h, ev.b);   // my blow / my wound: the guest feels it too
   } else if (ev.k === 'kill' && b) {
@@ -23970,6 +24001,8 @@ BV.arenaOutro = (cmd) => { const O = AF.outro; if (cmd === 'skip') afOutroSkip()
   const V = AF.victory, P = AF.outro, ndc = V && V.mvp ? tmpV.set(V.mvp.x, afY(V.mvp.x, V.mvp.z) + 2, V.mvp.z).project(camera) : null; return { film: !!P, mvpScreen: ndc ? [+ndc.x.toFixed(2), +ndc.y.toFixed(2)] : null, view: camera.view ? [camera.view.enabled, camera.view.offsetX, camera.view.fullWidth] : null, shot: P ? P.i : -1, of: P ? P.shots.length : 0, t: P ? +P.t.toFixed(1) : 0, shotT: P ? +P.shotT.toFixed(2) : 0, mvp: V && V.mvp ? V.mvp.name + (V.mvp.dead ? ' (fallen)' : '') : null, winners: V ? V.winners.map(b => b.name + ':' + (b.anim ? b.anim.name : '-')).join(' ') : '', roar: +AF.roar.toFixed(2), cam: [camera.position.x, camera.position.y, camera.position.z].map(v => +v.toFixed(1)), fov: +AF.fov.toFixed(0) }; };   // test: the end-game film (skip / jump to a shot / advance seconds / read it)
 BV.arenaStep = (steps = 60, dt = 1 / 60) => { if (AF.phase === 'intro') afIntroEnd(); if (AF.phase === 'countdown') { AF.phase = 'fight'; AF.countdown = 0; afIntroTailEnd(); } for (let i = 0; i < steps; i++) afTick(dt); return BV.arenaStatus(); };
 BV.arenaInput = (patch) => { Object.assign(AF.locIn, patch || {}); return { ...AF.locIn }; };
+BV.arenaBare = (i, off) => { const b = AF.bodies[i], L = b && b.parts.modelRig; if (L && off != null) lookHelmOff(L, !!off); return b ? { name: b.name, bare: afBareHead(b), model: !!L } : null; };   // test: take the fighter's helm off / put it on, and ask whether his head is bare (afDamage's head blow)
+BV.arenaSwing = (i, heavy) => { const b = AF.bodies[i]; if (!b || b.dead) return null; afStartAttack(b, !!heavy); return { atk: !!b.atk, heavy: !!(b.atk && b.atk.heavy), move: b.atk ? b.atk.move : null }; };   // test: an instant swing at a fixed weight (the head blow: heavy, or the chop — set b.combo = 2 first)
 BV.arenaStam = (v) => { const b = AF.me; if (!b) return null; if (v != null) { afStamina(b, 0); b.stam = clamp(v, 0, b.maxStam); } return { stam: b.stam, winded: b.winded, max: b.maxStam, regen: b.stamRegen }; };   // test: read / set your stamina
 
 

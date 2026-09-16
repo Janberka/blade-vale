@@ -1518,7 +1518,8 @@ function lookRuggedHead(geo, pj) {
   const pos = geo.getAttribute('position'), head = new Set(['head', 'hair', 'beard', 'brow', 'socket', 'scarL', 'scarR']);
   for (let v = 0; v < pos.count; v++) { if (!head.has(pj.classes[pj.vclass[v]])) continue; let x = pos.getX(v), y = pos.getY(v), z = pos.getZ(v);
     if (y > 1.49 && y < 1.61 && z > -0.04) x *= 1.07 - 0.03 * clamp((z - 0.02) / 0.06, 0, 1);   // the jaw: 7 % at the angle, 4 % toward the chin (a jawline, not a slab)
-    if (y > 1.49 && y < 1.565 && z > 0.06) z += 0.012;                                   // the chin: firm, forward
+    if (y > 1.49 && y < 1.565 && z > 0.03) y += (1.565 - y) * 0.32 * clamp((z - 0.03) / 0.04, 0, 1);   // the chin: SHORTER — the model's runs long below the mouth ("the chin is toooo long"): everything under the lip line drawn up by a third at the front, fading round to the jaw's underside so the neck keeps its seat
+    if (y > 1.49 && y < 1.565 && z > 0.06) z += 0.010;                                   // and firm, forward
     if (y > 1.70 && y < 1.745 && z > 0.08) { z += 0.006; y -= 0.002; }                   // the brow: defined, level
     if (y > 1.625 && y < 1.685 && Math.abs(x) > 0.08) x *= 1.07;                         // cheekbones: high and out
     pos.setXYZ(v, x, y, z); }
@@ -1957,7 +1958,7 @@ function lookFacePoint(f, x, y, z, out) {
     nose = y > 1.605 && y < 1.70 && z > 0.124 && ax < 0.05, tip = nose && y < 1.66, brow = y > 1.70 && y < 1.75 && z > 0.08 && ax < 0.075, bone = y > 1.655 && y < 1.69 && ax > 0.085 && z > 0;
   switch (f) {
     case 1: if (jaw) x *= 1.07; if (chin) { y -= 0.008; z += 0.008; } if (brow) z += 0.004; break;                                        // square: a wide jaw, a blunt chin, a flat brow
-    case 2: if (y < 1.655 && z > -0.01) y -= (1.655 - y) * 0.28 * Math.min(1, (z + 0.01) / 0.07) * Math.max(0, Math.min(1, (y - 1.49) / 0.05));   // long: the face drawn down below the eyes
+    case 2: if (y < 1.655 && z > -0.01) y -= (1.655 - y) * 0.22 * Math.min(1, (z + 0.01) / 0.07) * Math.max(0, Math.min(1, (y - 1.49) / 0.05));   // long: the face drawn down below the eyes
       if (jaw) x *= 0.92; if (nose) z += 0.008; if (tip) y -= 0.005; if (cheek) x *= 0.96; break;
     case 3: if (cheek) { x *= 1.10; z += 0.008; } if (jaw) x *= 1.04; if (jaw && y < 1.55) y += 0.010; if (nose) z -= 0.008; if (brow) y += 0.003; break;   // round: full cheeks, a short chin, a small nose
     case 4: if (nose) z += 0.022; if (tip) y -= 0.010; if (cheek && ax < 0.10 && z > 0.03) { x *= 0.91; z -= 0.008; } if (bone) x *= 1.08; if (jaw) x *= 0.94; if (chin) { z += 0.008; y -= 0.005; } break;   // hawk: a beak, hollow cheeks, a pointed chin

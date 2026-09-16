@@ -86,6 +86,8 @@ square cast stacked another 14 % on it — 7 % now, the round and broken casts 4
 brought a little forward but LEVEL (was pushed out 14 mm and dropped 7 mm: a shelf over slitted eyes), the cheekbones high as
 before, the eyes open (84 % of the boy's height, was 62 %) and set only a touch under the brow, the sockets a light shadow
 (×0.91, was ×0.78: sunk into a skull) and the whites clear (`0xece8e2`, were `0xd8d0c8`). Dark brows and a hard mouth stay.
+Then "the chin is toooo long": everything under the lip line (y < 1.565, the front) is drawn up by a third, fading round to the jaw's
+underside so the neck keeps its seat; the long cast draws the face down 22 % (was 28 %). v=215
 
 ## The wardrobe is the marketplace (2026-09-14, "any item we add should be available in the marketplace")
 Six slots now: sword, armor, helm, shield, bow, horse (`ARENA_SLOTS` in arena-items.js; the server validates against the

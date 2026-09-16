@@ -83,7 +83,7 @@ for node in g['nodes']:
             if (y > 1.725 and not face) or (z < -0.03 and y > 1.60) or (abs(x) > 0.085 and y > 1.69 and not face): vclass[v] = 'hair'
             elif 1.705 < y < 1.74 and z > 0.085 and abs(x) < 0.095: vclass[v] = 'brow'                                    # the brow ridge over the eyes
             elif 1.47 < y < 1.615 and z > -0.03 and abs(x) < 0.115: vclass[v] = 'beard'                                   # jaw, chin, lips: a full beard
-            elif 1.615 <= y < 1.665 and abs(x) > 0.075 and z > 0.0: vclass[v] = 'beard'                                   # sideburns up the cheek
+            elif 1.615 <= y < 1.665 and abs(x) > 0.075 and z > 0.035: vclass[v] = 'beard'                                 # sideburns up the cheek, in front of the ear (its root sits at z 0 … 0.02)
             elif 1.655 < y < 1.705 and z > 0.07 and 0.025 < abs(x) < 0.1: vclass[v] = 'socket'                            # round the eyes
             elif z > 0.06 and 0.03 < abs(x) < 0.095 and abs((y - 1.665) + 0.9 * (abs(x) - 0.06)) < 0.014: vclass[v] = 'scarL' if x < 0 else 'scarR'   # a cut across one cheek
     classes = sorted(set(vclass)); mats = sorted(set(vmat))

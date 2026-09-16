@@ -1512,21 +1512,23 @@ BV.modelRig = { load: loadModelRig, wear: wearModelRig, live: () => MODEL_LIVE.l
 // of the body's own index; the paint is a vertex colour over the palette (the blue cloth is re-pointed at a white
 // cell at load, so the team dye takes on the sleeves and the skirt).
 const LOOK_WHITE_UV = [1.5 / 16, 0.5 / 16];               // palette cell (1,0) = #eeeeee
-// THE FACE: the model's head is a smooth, boyish one. Once, at load, every man's head is roughened in the bind pose
-// (model units, the face looks +z): a wider jaw, the chin and the brow pushed forward and the brow lowered so the eyes
-// sit deep, cheekbones out. The eyes are their own meshes and stay put.
+// THE FACE: the model's head is a smooth, boyish one. Once, at load, every man's head is firmed up in the bind pose
+// (model units, the face looks +z): a defined jaw — widest at its angle under the ear, tapering to the chin — a firm chin
+// forward, a level brow brought a little forward (never lowered: a brow pushed out and down over slitted eyes was the
+// caveman of "I didn't mean to make it a Neanderthal"), high cheekbones. The eyes are their own meshes and stay open.
 function lookRuggedHead(geo, pj) {
   const pos = geo.getAttribute('position'), head = new Set(['head', 'hair', 'beard', 'brow', 'socket', 'scarL', 'scarR']);
   for (let v = 0; v < pos.count; v++) { if (!head.has(pj.classes[pj.vclass[v]])) continue; let x = pos.getX(v), y = pos.getY(v), z = pos.getZ(v);
-    if (y > 1.49 && y < 1.61 && z > -0.04) x *= 1.13;                                    // the jaw
-    if (y > 1.49 && y < 1.565 && z > 0.06) z += 0.014;                                   // the chin
-    if (y > 1.70 && y < 1.745 && z > 0.08) { z += 0.014; y -= 0.007; }                   // the brow: heavier, lower
-    if (y > 1.625 && y < 1.685 && Math.abs(x) > 0.08) x *= 1.07;                         // cheekbones
+    if (y > 1.49 && y < 1.61 && z > -0.04) x *= 1.07 - 0.03 * clamp((z - 0.02) / 0.06, 0, 1);   // the jaw: 7 % at the angle, 4 % toward the chin (a jawline, not a slab)
+    if (y > 1.49 && y < 1.565 && z > 0.03) y += (1.565 - y) * 0.32 * clamp((z - 0.03) / 0.04, 0, 1);   // the chin: SHORTER — the model's runs long below the mouth ("the chin is toooo long"): everything under the lip line drawn up by a third at the front, fading round to the jaw's underside so the neck keeps its seat
+    if (y > 1.49 && y < 1.565 && z > 0.06) z += 0.010;                                   // and firm, forward
+    if (y > 1.70 && y < 1.745 && z > 0.08) { z += 0.006; y -= 0.002; }                   // the brow: defined, level
+    if (y > 1.625 && y < 1.685 && Math.abs(x) > 0.08) x *= 1.07;                         // cheekbones: high and out
     pos.setXYZ(v, x, y, z); }
-  // the eyes: narrowed to a hard squint and tucked under the brow (each eye about its own centre)
+  // the eyes: a touch narrower than the boy's (steady, not a squint) and set just under the brow (each eye about its own centre)
   const ei = pj.classes.indexOf('eye'); if (ei >= 0) { const eyes = { L: [], R: [] }; for (let v = 0; v < pos.count; v++) if (pj.vclass[v] === ei) eyes[pos.getX(v) < 0 ? 'L' : 'R'].push(v);
     for (const vs of [eyes.L, eyes.R]) { if (!vs.length) continue; let cy = 0; for (const v of vs) cy += pos.getY(v); cy /= vs.length;
-      for (const v of vs) pos.setXYZ(v, pos.getX(v), cy + (pos.getY(v) - cy) * 0.62, pos.getZ(v) - 0.004); } }
+      for (const v of vs) pos.setXYZ(v, pos.getX(v), cy + (pos.getY(v) - cy) * 0.84, pos.getZ(v) - 0.002); } }
   pos.needsUpdate = true; geo.computeVertexNormals();
 }
 // ---- THE FACE'S SURFACE (2026-09-16, "character faces are too low poly") ----
@@ -1551,7 +1553,7 @@ function lookBakeHeadClass(x, y, z) {                        // the bake's regio
   if ((y > 1.725 && !face) || (z < -0.03 && y > 1.60) || (ax > 0.085 && y > 1.69 && !face)) return 'hair';
   if (y > 1.705 && y < 1.74 && z > 0.085 && ax < 0.095) return 'brow';                                          // the brow ridge over the eyes
   if (y > 1.47 && y < 1.615 && z > -0.03 && ax < 0.115) return 'beard';                                         // jaw, chin, lips: a full beard
-  if (y >= 1.615 && y < 1.665 && ax > 0.075 && z > 0.0) return 'beard';                                         // sideburns up the cheek
+  if (y >= 1.615 && y < 1.665 && ax > 0.075 && z > 0.035) return 'beard';                                       // sideburns up the cheek — in FRONT of the ear (its root and lobe sit at z 0 … 0.02, and z > 0 grew hair out of them)
   if (y > 1.655 && y < 1.705 && z > 0.07 && ax > 0.025 && ax < 0.1) return 'socket';                            // round the eyes
   if (z > 0.06 && ax > 0.03 && ax < 0.095 && Math.abs((y - 1.665) + 0.9 * (ax - 0.06)) < 0.014) return x < 0 ? 'scarL' : 'scarR';   // a cut across one cheek
   return 'head';
@@ -1614,7 +1616,7 @@ const LOOK_HAIR_PICK = [0x1a1210, 0x3a2416, 0x5c3a1e, 0x8a5a2e, 0xa04a20, 0xb080
 const LOOK_HAIR_STYLES = ['shaved', 'short crop', 'crown', 'long', 'mohawk'];
 const LOOK_INK = [null, 'wolf', 'serpent', 'tide', 'sun', 'thorn'], LOOK_INK_NAMES = ['none', 'wolf', 'serpent', 'tide', 'sun', 'thorn'];   // the ink's DESIGN (gear.look.i): free, the barber's — it shows on whatever skin the kit leaves bare; bands of the ink atlas, in this order
 const LOOK_INK_COLOURS = [0x12192a, 0x101010, 0x6b1410, 0xe8dcc8, 0x2f5a2a, 0xb8752a, 0x4a2a6a, 0x1f6b6b], LOOK_INK_COLOUR_NAMES = ['blue-black', 'black', 'blood', 'bone', 'moss', 'ochre', 'violet', 'teal'];   // the ink's COLOUR (gear.look.k)
-const LOOK_BEARD_STYLES = ['clean', 'stubble', 'full beard', 'goatee', 'moustache', 'braided'];   // (braided: the full beard painted, and a plait hanging from the chin — lookBraidApply)
+const LOOK_BEARD_STYLES = ['clean', 'stubble', 'full beard', 'goatee', 'moustache'];   // (a sixth, 'braided' — a plait hung from the chin — came and went the same day: "let's just remove this braids"; a saved b 5 fails cleanLook's range and falls back to the roll)
 const LOOK_SKIN_NAMES = ['fair', 'light', 'tan', 'olive', 'brown', 'dark'];
 // THE FACE'S BONES (gear.look.f): six casts of the same head — a displacement of the head's vertices in the bind pose on
 // this body's own copy of the positions (lookFacePoint); the vale's men roll theirs from the name
@@ -1671,9 +1673,9 @@ function lookRoll(name, arch, gear, pal, o = {}) {
   const bald = r() < 0.28, hairRoll = pick(LOOK_HAIR), hairC = has('c') ? LOOK_HAIR_PICK[LK.c] : hairRoll, skinC = new THREE.Color(look.skin);
   const beardOn = r() < 0.75, fullBeard = r() < 0.65, styleRoll = r(), beardKind = r();
   look.hairStyle = has('h') ? LK.h : bald ? 0 : styleRoll < 0.64 ? 1 : styleRoll < 0.74 ? 2 : styleRoll < 0.94 ? 3 : 4;   // most cropped, some long, a mohawk now and then
-  look.beardStyle = has('b') ? LK.b : !beardOn ? 0 : beardKind < 0.12 ? 3 : beardKind < 0.17 ? 4 : beardKind < 0.25 ? 5 : fullBeard ? 2 : 1;   // (5: the plait of the north)      // most wear a beard, most of those a full one
+  look.beardStyle = has('b') ? LK.b : !beardOn ? 0 : beardKind < 0.12 ? 3 : beardKind < 0.17 ? 4 : fullBeard ? 2 : 1;      // most wear a beard, most of those a full one
   look.hair = look.hairStyle === 0 ? null : hairC; look.beard = look.beardStyle ? c.setHex(hairC).lerp(skinC, 0.08).getHex() : null; look.stubble = c.setHex(hairC).lerp(skinC, 0.45).getHex();
-  look.brow = c.setHex(hairC).lerp(skinC, 0.3).getHex(); look.socket = c.copy(skinC).multiplyScalar(0.78).getHex(); look.lip = c.copy(skinC).multiplyScalar(0.88).getHex();   // heavy dark brows, eyes deep in shadow, a hard mouth
+  look.brow = c.setHex(hairC).lerp(skinC, 0.3).getHex(); look.socket = c.copy(skinC).multiplyScalar(0.91).getHex(); look.lip = c.copy(skinC).multiplyScalar(0.88).getHex();   // dark brows, a light shadow round the eyes (0.78 sank them into a skull), a hard mouth
   look.faceShape = has('f') ? LK.f : Math.floor(lookRng(lookSeed(name) ^ 0x2545f491)() * LOOK_FACE_SHAPES.length);   // (its own stream: the bones came later, nobody's hair or kit re-rolls for them)
   const scar = r(); look.scar = scar < 0.18 ? 'scarL' : scar < 0.36 ? 'scarR' : null; look.scarC = c.copy(skinC).lerp(new THREE.Color(0xe8a0a0), 0.45).multiplyScalar(1.05).getHex();
   // the kit
@@ -1704,8 +1706,8 @@ function lookRoll(name, arch, gear, pal, o = {}) {
 function lookFaceColour(look, cls, mt, x, y, z, scalp, brow) {
   const bs = look.beardStyle | 0;
   if (look.hair != null && cls === 'hair' && scalp) return look.hair;   // (scalp: this vertex is well under the cap — lookScalpMask; brow: well inside the brow — lookBrowMask)
-  if (cls === 'beard' && look.beard != null) { const on = bs === 2 || bs === 5 || bs === 1 || (bs === 3 && Math.abs(x) < 0.05) || (bs === 4 && y > 1.585 && z > 0.1); if (on) return bs === 1 ? look.stubble : look.beard; }
-  if (cls === 'brow') return brow ? look.brow : look.skin; if (cls === 'socket') return look.socket; if (cls === 'scarL' || cls === 'scarR') return look.scar === cls ? look.scarC : look.skin; if (cls === 'eye') return 0xd8d0c8;
+  if (cls === 'beard' && look.beard != null && !(y >= 1.615 && z < 0.035)) { const on = bs === 2 || bs === 1 || (bs === 3 && Math.abs(x) < 0.05) || (bs === 4 && y > 1.585 && z > 0.1); if (on) return bs === 1 ? look.stubble : look.beard; }   // (the baked sideburn band took the ear's root and lobe — pieces.json still carries that; the cut here keeps the beard on the cheek, in front of the ear: "it looks like it's coming out of ears")
+  if (cls === 'brow') return brow ? look.brow : look.skin; if (cls === 'socket') return look.socket; if (cls === 'scarL' || cls === 'scarR') return look.scar === cls ? look.scarC : look.skin; if (cls === 'eye') return 0xece8e2;
   if (mt === 'leather') return look.lip;                     // (the palette's lip/brow brown: no painted lips)
   return look.skin;
 }
@@ -1726,7 +1728,7 @@ function lookColour(look, cls, mt) {
   if (mt === 'cloth') return look.clothOf[cls] != null ? look.clothOf[cls] : look.cloth; if (mt === 'dark') return 0xffffff;
   if (mt === 'leather') return cls === 'brow' ? look.brow : cls === 'beard' ? (look.beard != null ? look.beard : look.lip) : (cls === 'head' || cls === 'socket' || cls === 'scarL' || cls === 'scarR') ? look.lip : look.leather;   // (the palette's lip/brow brown on the face: no painted lips)
   if (mt === 'skin') return cls === 'hair' ? (look.hair != null ? look.hair : look.skin) : cls === 'beard' ? (look.beard != null ? look.beard : look.skin) : cls === 'brow' ? look.brow
-    : cls === 'socket' ? look.socket : (cls === 'scarL' || cls === 'scarR') ? (look.scar === cls ? look.scarC : look.skin) : cls === 'eye' ? 0xd8d0c8 : look.skin;   // (eye whites dimmed: no doe eyes)
+    : cls === 'socket' ? look.socket : (cls === 'scarL' || cls === 'scarR') ? (look.scar === cls ? look.scarC : look.skin) : cls === 'eye' ? 0xece8e2 : look.skin;   // (eye whites a shade off white: clear, not doe-eyed)
   return look.paint[cls] != null ? look.paint[cls] : 0xffffff;
 }
 // what a painted vertex is MADE OF for the surface pass (modelMaterial's `kind`): the palette says steel, but a poor man's
@@ -1774,7 +1776,6 @@ function lookApply(L, look) {
   if (L.plume) L.plume.visible = !!(look.helmet && look.plume && !look.helmModel);   // (a helm with a crest of its own carries no feather: the crest takes the plume's dye)
   lookHairApply(L, look);                                                // the cut: a cap on the skull when he stands bareheaded
   lookHelmModelApply(L, look);                                           // a helm with a sculpt of its own (the Corinthian) on the head bone
-  lookBraidApply(L, look);                                               // the plait, if his beard is braided
   L.shieldKind = look.shield; if (look.shield === 'round') lookRoundShield(L, look); else if (L.mRound) L.mRound.visible = false;
   if (L.mShield && L.mShield.material && L.mShield.material.color) L.mShield.material.color.setHex(look.cloth).lerp(new THREE.Color(0xffffff), 0.35);
 }
@@ -1894,25 +1895,6 @@ function lookSkullCast(T, ox, oy, oz, dx, dy, dz) {
 // the crown, each point the skull's surface at that bearing and height pushed out by the pad, a lip down to the skin at
 // the hairline; long hair drapes from the hairline down the neck; a mohawk is a fin along the midline. Flat-shaded,
 // wound outward, skinned to the head bone.
-// THE PLAIT: a braided beard's tail — a run of beads hanging from the chin, swaying a little forward, a leather tie at the end;
-// bind-space model units on the head bone (the chin sits about y 1.49, z 0.09 — lookRuggedHead's numbers)
-function lookBraidGeo(R) {
-  if (R.braidGeo !== undefined) return R.braidGeo;
-  const m = R.meshes.find(x => x.pieces && x.pieces.classes.indexOf('hair') >= 0); if (!m) return (R.braidGeo = null);
-  const headNode = R.g.nodes.findIndex(x => x.name === R.spec.map.head), joint = Math.max(0, m.joints.indexOf(headNode)), parts = [];
-  for (let i = 0; i < 7; i++) { const t = i / 6, r = 0.019 - t * 0.006, g = new THREE.SphereGeometry(r, 7, 5); g.scale(1.25, 1, 1); g.translate((i % 2 ? 1 : -1) * 0.006, 1.478 - i * 0.03, 0.092 + t * 0.028 - t * t * 0.01); parts.push(g); }
-  { const g = new THREE.CylinderGeometry(0.014, 0.012, 0.02, 6); g.translate(0, 1.478 - 6 * 0.03 - 0.02, 0.092 + 0.018); parts.push(g); }   // the tie
-  let P = [], I = [], off = 0; for (const g of parts) { const p = g.getAttribute('position'), idx = g.index.array; for (let v = 0; v < p.count; v++) P.push(p.getX(v), p.getY(v), p.getZ(v)); for (let k = 0; k < idx.length; k++) I.push(idx[k] + off); off += p.count; }
-  const nv = P.length / 3, si = new Uint16Array(nv * 4), sw = new Float32Array(nv * 4); for (let v = 0; v < nv; v++) { si[v * 4] = joint; sw[v * 4] = 1; }
-  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); geo.setAttribute('skinIndex', new THREE.BufferAttribute(si, 4)); geo.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4)); geo.setIndex(I); geo.computeVertexNormals();
-  return (R.braidGeo = geo);
-}
-function lookBraidApply(L, look) {
-  const on = (look.beardStyle | 0) === 5 && look.beard != null, R = MODEL_RIGS.get(L.g.userData.model), body = on && R && Object.values(L.inst.skinned).find(sm => sm.userData.pieces && sm.userData.pieces.classes.indexOf('hair') >= 0);
-  const g0 = body && lookBraidGeo(R); if (!g0) { if (L.mBraid) L.mBraid.visible = false; return; }
-  if (!L.mBraid) { const sm = new THREE.SkinnedMesh(g0, new THREE.MeshPhongMaterial({ color: look.beard, shininess: 8, specular: 0x181818, skinning: true })); sm.frustumCulled = false; sm.castShadow = true; sm.name = 'braid'; body.parent.add(sm); sm.bind(body.skeleton, body.bindMatrix); L.mBraid = sm; }
-  L.mBraid.material.color.setHex(look.beard); L.mBraid.visible = true;
-}
 function lookHairGeo(R, hs) {
   R.hairGeo = R.hairGeo || {}; if (R.hairGeo[hs] !== undefined) return R.hairGeo[hs]; const T = lookSkullTris(R); if (!T.length) return (R.hairGeo[hs] = null);
   const m = R.meshes.find(m => m.pieces && m.pieces.classes.indexOf('hair') >= 0), headNode = R.g.nodes.findIndex(n => n.name === R.spec.map.head), joint = Math.max(0, m.joints.indexOf(headNode));
@@ -2054,12 +2036,12 @@ function lookFacePoint(f, x, y, z, out) {
   const ax = Math.abs(x), jaw = y > 1.50 && y < 1.62 && z > -0.03, chin = y < 1.575 && z > 0.06 && ax < 0.06, cheek = y > 1.60 && y < 1.665 && ax > 0.055 && z > 0.02,
     nose = y > 1.605 && y < 1.70 && z > 0.124 && ax < 0.05, tip = nose && y < 1.66, brow = y > 1.70 && y < 1.75 && z > 0.08 && ax < 0.075, bone = y > 1.655 && y < 1.69 && ax > 0.085 && z > 0;
   switch (f) {
-    case 1: if (jaw) x *= 1.14; if (chin) { y -= 0.008; z += 0.008; } if (brow) z += 0.005; break;                                        // square: a wide jaw, a blunt chin, a flat brow
-    case 2: if (y < 1.655 && z > -0.01) y -= (1.655 - y) * 0.28 * Math.min(1, (z + 0.01) / 0.07) * Math.max(0, Math.min(1, (y - 1.49) / 0.05));   // long: the face drawn down below the eyes
+    case 1: if (jaw) x *= 1.07; if (chin) { y -= 0.008; z += 0.008; } if (brow) z += 0.004; break;                                        // square: a wide jaw, a blunt chin, a flat brow
+    case 2: if (y < 1.655 && z > -0.01) y -= (1.655 - y) * 0.22 * Math.min(1, (z + 0.01) / 0.07) * Math.max(0, Math.min(1, (y - 1.49) / 0.05));   // long: the face drawn down below the eyes
       if (jaw) x *= 0.92; if (nose) z += 0.008; if (tip) y -= 0.005; if (cheek) x *= 0.96; break;
-    case 3: if (cheek) { x *= 1.12; z += 0.008; } if (jaw) x *= 1.08; if (jaw && y < 1.55) y += 0.010; if (nose) z -= 0.008; if (brow) y += 0.003; break;   // round: full cheeks, a short chin, a small nose
+    case 3: if (cheek) { x *= 1.10; z += 0.008; } if (jaw) x *= 1.04; if (jaw && y < 1.55) y += 0.010; if (nose) z -= 0.008; if (brow) y += 0.003; break;   // round: full cheeks, a short chin, a small nose
     case 4: if (nose) z += 0.022; if (tip) y -= 0.010; if (cheek && ax < 0.10 && z > 0.03) { x *= 0.91; z -= 0.008; } if (bone) x *= 1.08; if (jaw) x *= 0.94; if (chin) { z += 0.008; y -= 0.005; } break;   // hawk: a beak, hollow cheeks, a pointed chin
-    case 5: if (nose && y < 1.68) x += 0.018; if (tip) z -= 0.010; if (brow) { z += 0.008; y -= 0.005; } if (jaw) x *= 1.09; if (cheek && x < 0) z += 0.008; break;   // broken: a nose bent and flattened, a heavy brow, a swollen cheek
+    case 5: if (nose && y < 1.68) x += 0.018; if (tip) z -= 0.010; if (brow) { z += 0.006; y -= 0.003; } if (jaw) x *= 1.04; if (cheek && x < 0) z += 0.008; break;   // broken: a nose bent and flattened, a heavy brow, a swollen cheek
   }
   out[0] = x; out[1] = y; out[2] = z; return out;
 }
@@ -21595,6 +21577,7 @@ function afKill(t, by, quiet) {                          // quiet: a guest mirro
   t.dead = true; t.hp = 0; t.deadT = 0; t.atk = null; t.blocking = false; t.dodgeT = 0; t.tiltX = 0; t.rollAng = 0; t.downT = 0;
   t.flashT = 0; t.flashWhite = false; t.tinted = false; setTint(t.parts, null);   // clear any hit-flash so the corpse darkens instead of glowing white
   if (by && by !== t) by.kills++;
+  t.killerIdx = by ? by.idx : -1; t.diedAt = AF.t;
   if (!quiet) afKillHooks(t, by);                            // streaks, first blood, comeback, last man standing, who felled whom (a guest runs it from the event)
   if (!quiet) { try { SFX.kill(t.group.position); } catch (e) {} afSparks(tmpV.set(t.x, afY(t.x, t.z) + 1.6, t.z), 0xff6b6b, 14); }
   afSplat(t.x, t.z, 1.6); afSplat(t.x + Math.sin(t.yaw) * 0.8, t.z + Math.cos(t.yaw) * 0.8, 1.0);
@@ -21662,6 +21645,7 @@ function afShoot(b, k) {                                    // a longer draw fli
     if (K && best) { tx = best.x; tz = best.z; K = afShotBlocker(b.x, b.z, tx, tz, w); }
     if (K) { afNoLine(b, tx, tz, K); return false; }
   }
+  b.shots = (b.shots | 0) + 1;
   afSpawnArrow(b.team, b.idx, b.x, afY(b.x, b.z) + (b.mounted ? 2.6 : 1.6), b.z, tx, afY(tx, tz) + 1.1, tz, true, w); return true;
 }
 function afSpawnArrow(team, owner, sx, sy, sz, tx, ty, tz, announce, k) {
@@ -21705,105 +21689,260 @@ function afStepArrows(dt, sim) {
    and fall back to a wall when losing badly. Humans are never commanded, but see their captain's order. ---- */
 const AF_TACT = { formSecs: 1.6, walk: 0.62, contact: 10, regroupAfter: 8, rallyRatio: 0.45, rallySecs: 3.5, pursueRatio: 1.7, engageMin: 16, engageMax: 60, riderEngageMul: 1.7, wpTimeout: 6,
   bowGap: 6, bowNear: 11, bowFar: 22, bowShot: 28, bowRoom: 5.5,
-  hbNear: 9, hbFar: 16, hbPace: 0.8 };   // the HORSE ARCHER's ring (afHorseArcher): the band he rides round his mark, and his throttle (a canter — the gallop would cancel his draw)
+  hbNear: 9, hbFar: 16, hbPace: 0.8,   // the HORSE ARCHER's ring (afHorseArcher): the band he rides round his mark, and his throttle (a canter — the gallop would cancel his draw)
+  // THE PLAN (2026-09-16, the user: "if I have a 5v5 it will be almost the same pattern … we need to put some intelligence to this"):
+  holdSecs: 14, holdOut: 16, holdIdle: 4,   // a holding line stands while its bows have someone to shoot (2026-09-16, the user: "infantry can decide to just stay behind, let the archers kill as much as enemy before they meet"); once the bows have been idle this long past holdSecs the stronger side goes to them; with no bows left it charges their foot at holdOut
+  trampleGap: 34, trampleApproach: 1.2,   // the RIDE-DOWN: a squadron goes into the enemy's foot when it is coming on across the open — closing at this pace, this near (the user: "cavalry can decide to just knock all the infantry if they are charging")
+  screenIn: 14, screenAhead: 5,        // a skirmish screen of bows stands this far ahead of the swords, and falls back through them when a foe is this close
+  guardR: 10, guardReach: 26, detailSecs: 5,   // the BODYGUARD: a foe this close to one of our bowmen, no swordsman beside him → the nearest free swordsman (within guardReach) is sent for him
+  flankOff: 7, huntOff: 8, screenOff: 5, flankMax: 24,   // the squadron's marks: off the END of the enemy line / beside the enemy's BOWS / beside our own bows — scaled to the line's width, never a fixed trip across the pit
+  screenR: 18,                         // a screening squadron goes when an enemy rider comes this close to the bows
+  stallSecs: 26,                       // a fight with no blood for this long is pressed, not re-formed
+  bowVolley: 34 };                     // the approach volley: a bowman walking in with the line looses from farther out (a longer draw)
   // archers: the gap behind the swords at muster; give ground inside bowNear, close beyond bowFar, loose out to bowShot, and keep bowRoom of clear sand from their own swordsmen
 function afClampPit(x, z, margin) { const d = Math.hypot(x, z); const max = AF_F.radius - margin; if (d > max && d > 1e-4) { const k = max / d; x *= k; z *= k; } return AF.terr && AF.terr.rocks.length ? afFreePoint(x, z, 1.2) : { x, z }; }
+function afCen(arr) { if (!arr.length) return null; let x = 0, z = 0; for (const b of arr) { x += b.x; z += b.z; } return { x: x / arr.length, z: z / arr.length }; }
+function afTeamMix(arr) {                                    // what a host is made of (the living): foot, bows, horse — and its blood
+  const m = { n: 0, foot: 0, bows: 0, riders: 0, hp: 0 };
+  for (const b of arr) { if (b.dead) continue; m.n++; m.hp += b.hp; if (b.mounted) m.riders++; else if (b.weapon === 'bow') m.bows++; else m.foot++; }
+  return m;
+}
+function afWeightedPick(w) { let tot = 0; for (const k in w) tot += Math.max(0, w[k]); let x = Math.random() * tot; for (const k in w) { x -= Math.max(0, w[k]); if (x <= 0) return k; } return Object.keys(w)[0]; }
+// THE DOCTRINE: read both rosters at the bell and pick a plan that fits the matchup — weighted, not fixed, so two
+// fights of the same lobby open differently. line: advance and meet. hold: stand on our ground and let them walk
+// onto the bows (a side with archers, or weaker foot). skirmish: the bows lead as a screen and fall back through
+// the swords. oblique: the block angles for one END of the enemy line and refuses the other. rush: straight in from
+// the bell (the stronger foot, or a host with no bows against one that has them — every pace under arrows costs).
+// hammer: the foot pins, the horse goes for the enemy's bows or the back of his line.
+function afPickDoctrine(me, foe, human) {
+  const w = { line: 1 };
+  if (me.bows) w.hold = 0.7 + 3 * (me.bows / Math.max(1, me.n)) + (foe.foot > me.foot ? 0.8 : 0) + (foe.riders && !me.riders ? 0.4 : 0);
+  if (me.bows >= 2 && me.bows >= me.n * 0.4) w.skirmish = 1.3;
+  if (me.foot >= 3 && foe.foot >= 3) w.oblique = 0.8;
+  if (me.foot > foe.foot * 1.3 || (!me.bows && foe.bows)) w.rush = 1.1;
+  if (me.riders && me.foot >= 2) w.hammer = 0.9 + (foe.bows ? 0.7 : 0);
+  if (human) { if (w.hold) w.hold *= 0.35; if (w.skirmish) w.skirmish *= 0.35; }   // a player in the ranks is not going to stand and wait: his men go with him
+  return afWeightedPick(w);
+}
+// THE SQUADRON'S JOB: hunt — beside the enemy's bows, and into them once the lines meet (they are what a horse is
+// for); flank — off the end of the enemy line, into its side and back when it is engaged; trample — off the end of
+// the enemy line too, but into the FOOT the moment it comes on across the open (a horse at speed throws men down);
+// screen — beside our own bows, meeting the enemy's riders when they come for them; charge — the horse IS the army.
+function afPickRiderRole(T, me, foe, nR) {
+  if (!nR) return null;
+  if (me.foot < nR * 1.5) return 'charge';
+  const w = { flank: 0.7 };
+  if (foe.bows) w.hunt = 1.2 + (T.doctrine === 'hammer' ? 0.8 : 0);
+  if (foe.riders && me.bows) w.screen = 0.9 + (T.doctrine === 'hold' || T.doctrine === 'skirmish' ? 0.8 : 0) + (foe.riders >= nR ? 0.4 : 0);
+  if (foe.foot >= 2) w.trample = 0.7 + (T.doctrine === 'hold' ? 0.8 : 0) + (foe.foot > foe.bows * 2 ? 0.2 : 0);   // ride their foot down as it comes on (a holding line's natural partner: they charge under the arrows, the horse hits them in the open)
+  if (T.doctrine === 'hammer') w.flank += 0.4;
+  return afWeightedPick(w);
+}
+// the formation: guardsmen centre-front, swordsmen and brutes filling the front rank, duelists on its ends; the
+// archers a clear gap BEHIND the last rank (or, a skirmish screen, AHEAD of the first); riders on the wing
+function afLayoutTeam(T, npcs, screenFwd) {
+  const front = [], rear = [], riders = [];
+  for (const b of npcs) { if (b.mounted) riders.push(b); else if (b.weapon === 'bow') rear.push(b); else front.push(b); }
+  const priority = b => b.arch === 'guardsman' ? 0 : b.arch === 'brute' ? 1 : b.arch === 'swordsman' ? 2 : 3;   // who anchors the FRONT rank
+  front.sort((a, b) => priority(a) - priority(b));
+  const ordered = [];                                        // alternate sides from the centre outward so the sort doesn't pile one flank
+  front.forEach((b, i) => { if (i % 2) ordered.push(b); else ordered.unshift(b); });
+  // a REAL block, not one enormous thread: files ∝ √N, a few ranks deep, the last (short) rank centred — this
+  // shape holds together as it closes instead of shearing into pockets the instant contact goes uneven
+  const files = clamp(Math.round(Math.sqrt(ordered.length * 2.3)), 4, 26);
+  ordered.forEach((b, i) => {
+    const rk = Math.floor(i / files), nFiles = Math.min(files, ordered.length - rk * files);
+    b.slot = { right: (i % files - (nFiles - 1) / 2) * 2.3, back: rk * 2.6 };
+  });
+  // the ARCHERS: their own block a clear gap behind the last rank of swords (AF_TACT.bowGap), so the bowmen are
+  // a visibly separate line that looses over the melee, not a fourth rank swallowed by it the moment it closes
+  const rw = Math.max(1, Math.ceil(rear.length / Math.max(1, Math.ceil(rear.length / 8)))), meleeDepth = ordered.length ? Math.ceil(ordered.length / files) * 2.6 : 0;
+  rear.forEach((b, i) => { b.slot = { right: ((i % rw) - (Math.min(rw, rear.length) - 1) / 2) * 2.4, back: screenFwd ? -(AF_TACT.screenAhead + Math.floor(i / rw) * 2.4) : meleeDepth + AF_TACT.bowGap + Math.floor(i / rw) * 2.4 }; });
+  const halfW = (Math.min(files, ordered.length) - 1) / 2 * 2.3 + 3.5;
+  riders.forEach((b, i) => { b.slot = { right: (i % 2 ? -1 : 1) * (halfW + Math.floor(i / 2) * 2.6), back: 1.5 }; });
+  T.halfW = halfW; T.screenFwd = !!screenFwd;
+  return { front, rear, riders };
+}
 function afPlanTeams() {
   AF.teams = [];
   for (let t = 0; t < AF.cfg.teams; t++) {
-    const sp = afSpawn(t, AF.cfg.teams), T = { t, phase: 'form', order: 'hold', riderOrder: 'hold', anchor: { x: sp.cx, z: sp.cz }, home: { x: sp.cx, z: sp.cz }, face: sp.yaw, thinkT: 0, since: 0, rallied: false, wp: null, riderSide: 1, doctrine: 'line',
-                center: { x: sp.cx, z: sp.cz }, engageR: AF_TACT.engageMin, regroupSpread: 12 };
+    const sp = afSpawn(t, AF.cfg.teams), T = { t, phase: 'form', order: 'hold', riderOrder: 'hold', riderRole: null, anchor: { x: sp.cx, z: sp.cz }, home: { x: sp.cx, z: sp.cz }, face: sp.yaw, thinkT: 0, since: 0, rallied: false, wp: null, riderSide: 1, doctrine: 'line',
+                center: { x: sp.cx, z: sp.cz }, engageR: AF_TACT.engageMin, regroupSpread: 12, released: false, side: Math.random() < 0.5 ? 1 : -1 };
     const npcs = AF.bodies.filter(b => b.team === t && b.ctrl === 'ai');
-    const front = [], rear = [], riders = [];
-    for (const b of npcs) { if (b.mounted) riders.push(b); else if (b.weapon === 'bow') rear.push(b); else front.push(b); }
-    const priority = b => b.arch === 'guardsman' ? 0 : b.arch === 'brute' ? 1 : b.arch === 'swordsman' ? 2 : 3;   // who anchors the FRONT rank
-    front.sort((a, b) => priority(a) - priority(b));
-    const ordered = [];                                        // alternate sides from the centre outward so the sort doesn't pile one flank
-    front.forEach((b, i) => { if (i % 2) ordered.push(b); else ordered.unshift(b); });
-    // a REAL block, not one enormous thread: files ∝ √N, a few ranks deep, the last (short) rank centred — this
-    // shape holds together as it closes instead of shearing into pockets the instant contact goes uneven
-    const files = clamp(Math.round(Math.sqrt(ordered.length * 2.3)), 4, 26);
-    ordered.forEach((b, i) => {
-      const rk = Math.floor(i / files), nFiles = Math.min(files, ordered.length - rk * files);
-      b.slot = { right: (i % files - (nFiles - 1) / 2) * 2.3, back: rk * 2.6 };
-    });
-    // the ARCHERS: their own block a clear gap behind the last rank of swords (AF_TACT.bowGap), so the bowmen are
-    // a visibly separate line that looses over the melee, not a fourth rank swallowed by it the moment it closes
-    const rw = Math.max(1, Math.ceil(rear.length / Math.max(1, Math.ceil(rear.length / 8)))), meleeDepth = ordered.length ? Math.ceil(ordered.length / files) * 2.6 : 0;
-    rear.forEach((b, i) => { b.slot = { right: ((i % rw) - (Math.min(rw, rear.length) - 1) / 2) * 2.4, back: meleeDepth + AF_TACT.bowGap + Math.floor(i / rw) * 2.4 }; });
-    const halfW = (Math.min(files, ordered.length) - 1) / 2 * 2.3 + 3.5;
-    riders.forEach((b, i) => { b.slot = { right: (i % 2 ? -1 : 1) * (halfW + Math.floor(i / 2) * 2.6), back: 1.5 }; });
-    const archers = rear.length, total = npcs.length;
-    T.doctrine = archers > total * 0.4 ? 'skirmish' : riders.length >= 2 ? 'hammer' : 'line';
+    const me = afTeamMix(AF.bodies.filter(b => b.team === t)), foe = afTeamMix(AF.bodies.filter(b => b.team !== t));
+    T.doctrine = npcs.length >= 2 ? afPickDoctrine(me, foe, AF.bodies.some(b => b.team === t && b.ctrl !== 'ai')) : 'rush';   // (a lone man, or a human with one aide, doesn't drill)
+    afLayoutTeam(T, npcs, T.doctrine === 'skirmish');
     AF.teams.push(T);
     if (npcs.length >= 3) afOrderLog(T, 'form');
+    if (npcs.length >= 3 && T.doctrine !== 'line') afOrderLog(T, 'plan:' + T.doctrine);
   }
 }
-// the SQUADRON: each rider his own place in a line abreast (two ranks past eight) at the flanking mark, facing the
-// enemy's centre — so twenty horses form up side by side instead of all fighting for one spot and spinning on it
-function afFlankPoint(T, mc, fc) {                          // 22 paces off the enemy's end of the meeting point, on the chosen side
-  const fb = Math.atan2(fc.x - mc.x, fc.z - mc.z), px = -Math.cos(fb), pz = Math.sin(fb), cx = lerp(mc.x, fc.x, 0.62), cz = lerp(mc.z, fc.z, 0.62);
-  return afClampPit(cx + px * 22 * T.riderSide, cz + pz * 22 * T.riderSide, 6);
+// the enemy's LINE as the captain reads it: his foot's centre (the bows and horse aside — they stand elsewhere),
+// its half-width across our bearing, and where his bows and riders are
+function afEnemyLine(T, mc, foes) {
+  const foot = foes.filter(b => !b.mounted && b.weapon !== 'bow'), bows = foes.filter(b => b.weapon === 'bow' && !b.mounted), riders = foes.filter(b => b.mounted);
+  const ef = afCen(foot) || afCen(foes), eb = afCen(bows), er = afCen(riders);
+  const fb = Math.atan2(ef.x - mc.x, ef.z - mc.z), fx = Math.sin(fb), fz = Math.cos(fb), lx = -Math.cos(fb), lz = Math.sin(fb);
+  let halfW = 2; for (const b of foot) halfW = Math.max(halfW, Math.abs((b.x - ef.x) * lx + (b.z - ef.z) * lz));
+  const lat = p => p ? (p.x - ef.x) * lx + (p.z - ef.z) * lz : 0;
+  return { ef, eb, er, fx, fz, lx, lz, halfW, bowsLat: lat(eb), ridersLat: lat(er) };
 }
-function afSquadronMarks(T, mine, fc) {
+// where the squadron rides to, by its job (see afPickRiderRole); a point out of the foot's reach, scaled to the
+// lines (a 5-a-side line is a few paces wide: the mark sits a dozen paces off, not a fixed 22 across the sand)
+function afRiderMark(T, mc, mine, foes) {
+  const E = afEnemyLine(T, mc, foes), s = T.riderSide, role = T.riderRole;
+  let x, z, face;
+  if (role === 'hunt' && E.eb) {                             // level with the enemy's bows, out on the flank: the charge goes into them from the side, not through the line
+    const off = Math.min(AF_TACT.flankMax, E.halfW + AF_TACT.huntOff);
+    x = E.eb.x + E.lx * s * off; z = E.eb.z + E.lz * s * off; face = E.eb;
+  } else if (role === 'screen') {                            // beside our own bows (or our block), facing the enemy — the horse that meets theirs
+    const mb = afCen(mine.filter(b => b.weapon === 'bow' && !b.mounted)) || mc, off = (T.halfW || 4) + AF_TACT.screenOff;
+    const bx = E.ef.x - mb.x, bz = E.ef.z - mb.z, bd = Math.hypot(bx, bz) || 1, lx = -bz / bd, lz = bx / bd;
+    x = mb.x + lx * s * off; z = mb.z + lz * s * off; face = E.er || E.ef;
+  } else {                                                   // flank / trample: off the END of the enemy line, a pace ahead of it
+    const off = Math.min(AF_TACT.flankMax, E.halfW + AF_TACT.flankOff);
+    x = E.ef.x + E.lx * s * off - E.fx * 3; z = E.ef.z + E.lz * s * off - E.fz * 3; face = E.ef;
+  }
+  const p = afClampPit(x, z, 6); p.face = face; return p;
+}
+// the SQUADRON: each rider his own place in a line abreast (two ranks past eight) at the mark, facing what it is
+// there for — so twenty horses form up side by side instead of all fighting for one spot and spinning on it
+function afSquadronMarks(T, mine, face) {
   const rs = mine.filter(b => b.mounted && b.ctrl === 'ai'); if (!rs.length || !T.wp) return;
-  const fyaw = Math.atan2(fc.x - T.wp.x, fc.z - T.wp.z), fx = Math.sin(fyaw), fz = Math.cos(fyaw), rx = -fz, rz = fx;
+  const fyaw = Math.atan2(face.x - T.wp.x, face.z - T.wp.z), fx = Math.sin(fyaw), fz = Math.cos(fyaw), rx = -fz, rz = fx;
   const perRank = rs.length > 8 ? Math.ceil(rs.length / 2) : rs.length;
   rs.sort((a, b) => a.idx - b.idx).forEach((b, i) => {
     const rk = Math.floor(i / perRank), n = Math.min(perRank, rs.length - rk * perRank), off = (i % perRank - (n - 1) / 2) * 3.4;
     b.flankMark = afClampPit(T.wp.x + rx * off - fx * rk * 4.2, T.wp.z + rz * off - fz * rk * 4.2, 5); b.flankFace = fyaw;
   });
 }
+function afSendRiders(T, mc, mine, foes, me, foe) {          // the captain gives the horse its job and its mark
+  const rs = mine.filter(b => b.mounted && b.ctrl === 'ai');
+  T.riderRole = afPickRiderRole(T, me, foe, rs.length);
+  if (!T.riderRole) return;
+  if (T.riderRole === 'charge') { T.riderOrder = 'charge'; for (const b of rs) { b.cav = 'charge'; b.formed = false; } return; }   // no infantry worth the name to pin the enemy: the horse IS the army — straight in, no flanking to wait on
+  const E = afEnemyLine(T, mc, foes);
+  T.riderSide = T.riderRole === 'hunt' && Math.abs(E.bowsLat) > 2 ? Math.sign(E.bowsLat)   // the side the enemy's bows lean to
+             : T.riderRole === 'screen' && Math.abs(E.ridersLat) > 2 ? Math.sign(E.ridersLat)   // the side their horse is coming round
+             : (Math.random() < 0.5 ? 1 : -1);
+  T.wp = afRiderMark(T, mc, mine, foes); T.riderOrder = 'flank'; T.flankWait = 0; T.flankT = 0; afSquadronMarks(T, mine, T.wp.face);
+  afOrderLog(T, T.riderRole);
+}
+function afReleaseRiders(T, mine) { T.riderOrder = 'charge'; for (const b of mine) if (b.mounted && b.ctrl === 'ai') { b.cav = 'charge'; b.formed = false; } }
+// THE BODYGUARD: a foe closing on one of our bowmen with no swordsman beside him gets the nearest free
+// swordsman sent for him (b.detail) — the answer to "the infantry left over from the middle starts on the archers"
+function afGuardTheBows(T, mine, foes) {
+  const foot = mine.filter(b => b.ctrl === 'ai' && !b.mounted && b.weapon !== 'bow');
+  for (const b of foot) if (b.detail && (b.detail.dead || (b.detailT -= 0.4) <= 0 || (b.ward && b.ward.dead))) { b.detail = null; b.ward = null; }
+  const bows = mine.filter(b => b.weapon === 'bow' && !b.mounted); if (!bows.length || !foot.length) return;
+  const R = AF_TACT.guardR;
+  for (const a of bows) {
+    let threat = null, td = R; for (const o of foes) { const d = Math.hypot(o.x - a.x, o.z - a.z); if (d < td) { td = d; threat = o; } }
+    if (!threat) continue;
+    if (foot.some(f => f.detail === threat || Math.hypot(f.x - a.x, f.z - a.z) < 5)) continue;   // someone has him, or stands beside the bowman already
+    let pick = null, pd = AF_TACT.guardReach;
+    for (const f of foot) { if (f.detail) continue; let busy = false; for (const o of foes) if (Math.hypot(o.x - f.x, o.z - f.z) < (AF_F.reach + (f.reachBonus || 0)) * 1.4) { busy = true; break; } if (busy) continue;   // a man blade to blade stays in his duel
+      const d = Math.hypot(f.x - a.x, f.z - a.z); if (d < pd) { pd = d; pick = f; } }
+    if (pick) { pick.detail = threat; pick.ward = a; pick.detailT = AF_TACT.detailSecs; }
+  }
+}
 function afFormationSlot(T, b) {
   const fwx = Math.sin(T.face), fwz = Math.cos(T.face), rgx = -Math.cos(T.face), rgz = Math.sin(T.face), sl = b.slot || { right: 0, back: 0 };
   const x = T.anchor.x + rgx * sl.right - fwx * sl.back, z = T.anchor.z + rgz * sl.right - fwz * sl.back;
   return AF.terr.rocks.length ? afFreePoint(x, z, 0.9) : { x, z };   // a place in the line that falls on a stone is taken beside it
 }
-const AF_ORDER_TEXT = { form: 'forms a line', advance: 'advances', charge: 'charges!', flank: 'sends the riders wide', regroup: 'regroups', fallback: 'falls back to re-form', pursue: 'presses the rout' };
+const AF_ORDER_TEXT = { form: 'forms a line', advance: 'advances', charge: 'charges!', flank: 'sends the riders wide', regroup: 'regroups', fallback: 'falls back to re-form', pursue: 'presses the rout',
+  hold: 'holds its ground', skirmish: 'sends the bows forward', screenback: 'draws the bows back through the line', oblique: 'angles for the flank', rush: 'charges from the bell!',
+  hunt: 'sends the riders for the bows', screen: 'keeps the riders by the bows', trample: 'sends the riders to ride down the foot', 'plan:hold': 'means to hold and let the bows work', 'plan:skirmish': 'means to skirmish', 'plan:oblique': 'means to take a flank', 'plan:rush': 'means to rush', 'plan:hammer': 'means to pin and hammer' };
 function afOrderLog(T, key) { const txt = AF_TEAMS[T.t].name + ' ' + (AF_ORDER_TEXT[key] || key); afLogLine(txt, AF_TEAMS[T.t].col); AF.events.push({ k: 'order', t: T.t, o: key }); }
 function afCaptainThink(T, dt) {
   T.thinkT -= dt; if (T.thinkT > 0) return; T.thinkT = 0.4; T.since += 0.4;
-  const mine = AF.bodies.filter(b => !b.dead && b.team === T.t), foes = AF.bodies.filter(b => !b.dead && b.team !== T.t);
+  const mine = AF.bodies.filter(b => !b.dead && b.team === T.t); let foes = AF.bodies.filter(b => !b.dead && b.team !== T.t);
   if (!mine.length || !foes.length) return;
-  const cen = arr => { let x = 0, z = 0; for (const b of arr) { x += b.x; z += b.z; } return { x: x / arr.length, z: z / arr.length }; };
-  const mc = cen(mine), fc = cen(foes), gap = Math.hypot(fc.x - mc.x, fc.z - mc.z);
-  const hp = arr => arr.reduce((a, b) => a + b.hp, 0), ratio = hp(mine) / Math.max(1, hp(foes));
+  const mc = afCen(mine);
+  if (AF.cfg.teams > 2) {                                    // a free-for-all: the line he faces is the NEAREST enemy team's, not a blend of every host on the sand
+    let bt = -1, bd = Infinity; for (let t = 0; t < AF.cfg.teams; t++) { if (t === T.t) continue; const c = afCen(foes.filter(b => b.team === t)); if (!c) continue; const d = Math.hypot(c.x - mc.x, c.z - mc.z); if (d < bd) { bd = d; bt = t; } }
+    if (bt >= 0) foes = foes.filter(b => b.team === bt);
+  }
+  const me = afTeamMix(mine), foe = afTeamMix(foes);
+  const fc = afCen(foes), gap = Math.hypot(fc.x - mc.x, fc.z - mc.z);
+  const ratio = me.hp / Math.max(1, foe.hp);
   const spread = mine.reduce((a, b) => a + Math.hypot(b.x - mc.x, b.z - mc.z), 0) / mine.length;
-  const bearing = Math.atan2(fc.x - T.anchor.x, fc.z - T.anchor.z);
+  const E = afEnemyLine(T, mc, foes);
+  // the block's GOAL: the enemy's foot (his line), and under an oblique plan the END of it on our chosen side
+  const goal = T.doctrine === 'oblique' && foe.foot >= 2 ? { x: E.ef.x + E.lx * T.side * (E.halfW + 3), z: E.ef.z + E.lz * T.side * (E.halfW + 3) } : E.ef;
+  const bearing = Math.atan2(goal.x - T.anchor.x, goal.z - T.anchor.z);
   let contact = false; for (const b of mine) { if (b.mounted) continue; for (const o of foes) { if (o.mounted) continue; if (Math.hypot(o.x - b.x, o.z - b.z) < 5) { contact = true; break; } } if (contact) break; } // the LINES meeting — foot on foot; a rider's blow (ours or theirs) doesn't release the whole army
   T.noContact = contact ? 0 : (T.noContact || 0) + 0.4;
-  T.center = mc; T.enemyCenter = fc;                        // the living centroids: an isolated man heads for the ENEMY's, never his own (that made a pile)
+  T.center = mc; T.enemyCenter = fc; T.enemyBows = E.eb; T.footCenter = afCen(mine.filter(b => !b.mounted && b.weapon !== 'bow'));   // the living centroids: an isolated man heads for the ENEMY's, never his own (that made a pile)
   T.engageR = clamp(spread * 1.8 + 14, AF_TACT.engageMin, AF_TACT.engageMax);
+  T.axis = { x: mc.x, z: mc.z, fx: E.fx, fz: E.fz, lx: E.lx, lz: E.lz, corridor: Math.max(T.halfW || 4, E.halfW + 2) + 2 };   // the lines' corridor: a rider leaves it by the flank, never up the middle
   T.regroupSpread = clamp(Math.sqrt(Math.max(1, mine.length)) * 3.4, 12, 34);
-  if (T.riderOrder === 'flank' && (T.flankT = (T.flankT || 0) + 0.4) > 16) { T.riderOrder = 'charge'; for (const b of mine) if (b.mounted) { b.cav = 'charge'; b.formed = false; } }   // nobody waits on a flank forever
-  if (T.riderOrder === 'flank') {                             // the flanking mark: out to the side of where the LINES WILL MEET (that point hardly moves;
-    const wp = afFlankPoint(T, mc, fc);                       // the enemy's centre marches, and a mark riding along with it had the squadron turning all the while)
-    if (!T.wp || Math.hypot(wp.x - T.wp.x, wp.z - T.wp.z) > 5) { T.wp = wp; afSquadronMarks(T, mine, fc); }
+  const blood = me.hp + foe.hp; if (blood !== T.lastBlood) { T.lastBlood = blood; T.bloodT = 0; } else T.bloodT = (T.bloodT || 0) + 0.4;
+  const ours = T.footCenter || mc, efd = Math.hypot(E.ef.x - ours.x, E.ef.z - ours.z);   // is their foot COMING ON? (paces a second it closes on our line)
+  T.foeApproach = T.prevEfd != null ? (T.prevEfd - efd) / 0.4 : 0; T.prevEfd = efd; T.foeFootGap = efd; T.enemyFoot = E.ef;
+  const bowsBusy = me.bows > 0 && foes.some(o => mine.some(a => a.weapon === 'bow' && !a.mounted && Math.hypot(o.x - a.x, o.z - a.z) < AF_TACT.bowVolley));   // our bows have someone to shoot
+  T.bowsIdleT = bowsBusy ? 0 : (T.bowsIdleT || 0) + 0.4;
+  afGuardTheBows(T, mine, foes);
+  // THE SQUADRON at its mark: the mark rides with the enemy line (only re-set when it has really moved), and the
+  // horse goes in by its job — the flank when the lines meet, the hunt once formed and the foot committed, the
+  // screen when the enemy's riders come for the bows (or, their horse all fallen, it turns to a hunt or a flank)
+  if (T.riderOrder === 'flank') {
+    T.flankT = (T.flankT || 0) + 0.4;
+    const rs = mine.filter(b => b.mounted && b.ctrl === 'ai');
+    if (!rs.length) T.riderOrder = 'charge';
+    else {
+      if (T.riderRole === 'screen' && !foe.riders) { T.riderRole = null; afSendRiders(T, mc, mine, foes, me, foe); }   // nothing left to screen against
+      else if (T.riderRole === 'hunt' && !foe.bows) { T.riderRole = null; afSendRiders(T, mc, mine, foes, me, foe); }   // the bows are down: a new job
+      if (T.riderOrder === 'flank') {
+        const wp = afRiderMark(T, mc, mine, foes);
+        if (!T.wp || Math.hypot(wp.x - T.wp.x, wp.z - T.wp.z) > 5) { T.wp = wp; afSquadronMarks(T, mine, wp.face); }
+        const there = rs.filter(b => b.flankMark && Math.hypot(b.x - b.flankMark.x, b.z - b.flankMark.z) < 5).length, formed = there >= rs.length * 0.6;
+        let go = T.flankT > 16;                              // nobody waits on a flank forever
+        if (T.riderRole === 'screen') { const mb = afCen(mine.filter(b => b.weapon === 'bow' && !b.mounted)) || mc; if (contact) T.flankWait = (T.flankWait || 0) + 0.4;
+          go = go || foes.some(o => o.mounted && Math.hypot(o.x - mb.x, o.z - mb.z) < AF_TACT.screenR) || T.flankWait > AF_TACT.wpTimeout; }   // their horse comes for the bows — or stays away while the lines are locked: then ours goes to work
+        else if (T.riderRole === 'hunt') { if (formed || contact) T.flankWait = (T.flankWait || 0) + 0.4; const nearBows = E.eb && rs.some(b => Math.hypot(b.x - E.eb.x, b.z - E.eb.z) < 12);
+          go = go || (formed && (contact || nearBows || T.flankWait > 3)) || (contact && T.flankWait > AF_TACT.wpTimeout) || T.flankT > 10; }
+        else if (T.riderRole === 'trample') { if (contact) T.flankWait = (T.flankWait || 0) + 0.4; const coming = T.foeApproach > AF_TACT.trampleApproach && T.foeFootGap < AF_TACT.trampleGap;
+          go = go || (coming && (formed || T.flankT > 3)) || (contact && (formed || T.flankWait > AF_TACT.wpTimeout)); }   // their foot is coming on across the open: into them
+        else { if (contact) T.flankWait = (T.flankWait || 0) + 0.4; go = go || (contact && (formed || T.flankWait > AF_TACT.wpTimeout)); }
+        if (go) afReleaseRiders(T, mine);
+      }
+    }
   }
+  const release = (phase, key) => { T.phase = phase; T.order = phase === 'hold' ? 'hold' : phase; T.since = 0; T.released = T.released || phase === 'charge'; afOrderLog(T, key || phase); };
   switch (T.phase) {
     case 'form':
       T.face = angleLerp(T.face, bearing, 0.5);
-      if (T.since >= AF_TACT.formSecs || contact) { T.phase = 'advance'; T.order = 'advance'; T.since = 0; afOrderLog(T, 'advance');
-        const nR = mine.filter(b => b.mounted && b.ctrl === 'ai').length, nFoot = mine.length - mine.filter(b => b.mounted).length;
-        if (nR && nFoot < nR * 1.5) { T.riderOrder = 'charge'; }   // no infantry worth the name to pin the enemy: the horse IS the army — straight in, no flanking to wait on
-        else if (nR) { T.riderSide = Math.random() < 0.5 ? 1 : -1; T.wp = afFlankPoint(T, mc, fc); T.riderOrder = 'flank'; T.flankWait = 0; T.flankT = 0; afSquadronMarks(T, mine, fc); afOrderLog(T, 'flank'); } }
+      if (T.since >= AF_TACT.formSecs || contact) {
+        if (T.doctrine === 'rush') { T.phase = 'charge'; T.order = 'charge'; T.since = 0; T.released = true; afOrderLog(T, 'rush'); }
+        else if (!T.released && T.doctrine === 'hold') release('hold');
+        else if (!T.released && T.doctrine === 'skirmish' && T.screenFwd) release('hold', 'skirmish');
+        else release('advance', T.doctrine === 'oblique' && !T.released ? 'oblique' : 'advance');
+        if (!T.riderRole) afSendRiders(T, mc, mine, foes, me, foe);
+        else if (T.riderOrder === 'hold') T.riderOrder = 'charge';
+      }
       break;
+    case 'hold': {                                           // the line stands; the bows work; the swords go when the enemy's foot is on them, or when the wait has been long and we are the stronger
+      T.face = angleLerp(T.face, bearing, 0.5);
+      let nearFoot = 1e9; for (const o of foes) { if (o.mounted || o.weapon === 'bow') continue; nearFoot = Math.min(nearFoot, Math.hypot(o.x - T.anchor.x, o.z - T.anchor.z)); }
+      if (T.screenFwd && (contact || foes.some(o => mine.some(a => a.weapon === 'bow' && !a.mounted && Math.hypot(o.x - a.x, o.z - a.z) < AF_TACT.screenIn)))) {   // the screen falls back through the line
+        afLayoutTeam(T, mine.filter(b => b.ctrl === 'ai'), false); afOrderLog(T, 'screenback'); }
+      if (contact || (!me.bows && nearFoot < AF_TACT.holdOut)) release('charge');   // the swords stay behind while the bows have work: they fight what reaches them (with no bows left, the foot at holdOut is met)
+      else if (T.since > AF_TACT.holdSecs && !T.screenFwd && ((T.bowsIdleT > AF_TACT.holdIdle && (ratio >= 0.97 || T.since > AF_TACT.holdSecs * 2)) || T.since > AF_TACT.holdSecs * 2.5)) release('advance');   // a stand-off with nobody to shoot: the stronger side goes to them (the weaker keeps its ground a while longer); and no line stands forever — an archery duel that decides nothing is pressed
+      else if (T.since > AF_TACT.holdSecs && T.screenFwd && foe.foot && !foes.some(o => !o.mounted && o.weapon !== 'bow' && Math.hypot(o.x - mc.x, o.z - mc.z) < 30)) { afLayoutTeam(T, mine.filter(b => b.ctrl === 'ai'), false); release('advance'); }   // they won't come to the screen: the bows fall in behind and the line goes to them
+      break; }
     case 'advance': {
       T.face = angleLerp(T.face, bearing, 0.6);
-      const step = AF_F.move * AF_TACT.walk * 0.4, d = Math.hypot(fc.x - T.anchor.x, fc.z - T.anchor.z);
-      if (d > AF_TACT.contact) { T.anchor.x += (fc.x - T.anchor.x) / d * step; T.anchor.z += (fc.z - T.anchor.z) / d * step; }
-      if (gap < AF_TACT.contact || contact) { T.phase = 'charge'; T.order = 'charge'; T.since = 0; afOrderLog(T, 'charge'); }
+      const step = AF_F.move * AF_TACT.walk * 0.4, d = Math.hypot(goal.x - T.anchor.x, goal.z - T.anchor.z);
+      if (d > AF_TACT.contact) { T.anchor.x += (goal.x - T.anchor.x) / d * step; T.anchor.z += (goal.z - T.anchor.z) / d * step; }
+      if (d <= AF_TACT.contact || contact || (T.doctrine !== 'oblique' && gap < AF_TACT.contact)) release('charge');
       break; }
     case 'charge':
-      if (T.riderOrder === 'flank' && T.wp) {                // the lines have met: the squadron goes in once most of it is formed up (or the waiting's gone on long enough)
-        const rs = mine.filter(b => b.mounted && b.ctrl === 'ai'), there = rs.filter(b => b.flankMark && Math.hypot(b.x - b.flankMark.x, b.z - b.flankMark.z) < 5).length;
-        T.flankWait = (T.flankWait || 0) + 0.4;
-        if (!rs.length || there >= rs.length * 0.6 || T.flankWait > AF_TACT.wpTimeout) { T.riderOrder = 'charge'; for (const b of rs) { b.cav = 'charge'; b.formed = false; } }
-      }
       if (ratio < AF_TACT.rallyRatio && mine.length >= 3 && !T.rallied) { T.rallied = true; T.phase = 'fallback'; T.order = 'fallback'; T.riderOrder = 'fallback'; T.since = 0; const ux = (fc.x - mc.x) / (gap || 1), uz = (fc.z - mc.z) / (gap || 1); T.anchor = afClampPit(mc.x - ux * 12, mc.z - uz * 12, 8); T.face = Math.atan2(ux, uz); afOrderLog(T, 'fallback'); } // a FIGHTING withdrawal — a dozen paces back to re-form, not an 80-pace walk to the wall with backs turned (that was a massacre at legion scale)
       else if (T.since > AF_TACT.regroupAfter && spread > T.regroupSpread && ratio < AF_TACT.pursueRatio && mine.length >= 3 && !contact) { T.phase = 'form'; T.order = 'hold'; T.since = 0; T.anchor = { x: mc.x, z: mc.z }; T.face = bearing; afOrderLog(T, 'regroup'); }
       else if (ratio > AF_TACT.pursueRatio && !T.pursuing) { T.pursuing = true; afOrderLog(T, 'pursue'); }
-      else if (T.noContact > 2.5 && gap > AF_TACT.contact * 1.5 && mine.length >= 3) { T.phase = 'advance'; T.order = 'advance'; T.since = 0; T.anchor = { x: mc.x, z: mc.z }; T.face = bearing; afOrderLog(T, 'advance'); } // the lines came apart: dress ranks where we stand and march again
+      else if (T.noContact > 2.5 && gap > AF_TACT.contact * 1.5 && mine.length >= 3 && T.bloodT < AF_TACT.stallSecs) { T.phase = 'advance'; T.order = 'advance'; T.since = 0; T.anchor = { x: mc.x, z: mc.z }; T.face = bearing; afOrderLog(T, 'advance'); } // the lines came apart: dress ranks where we stand and march again (unless the fight has gone stale — then it is pressed, not re-formed)
       break;
     case 'fallback': {
       let near = 0; for (const o of foes) if (Math.hypot(o.x - T.anchor.x, o.z - T.anchor.z) < 8) near++;
@@ -21814,9 +21953,22 @@ function afCaptainThink(T, dt) {
 // PACK DIRECTOR (borrowed from the field fights): every 0.3s each NPC claims a foe, closest first; a victim accepts
 // at most two committed attackers, the overflow spreads to another foe with a free slot, and only when every duel is
 // full does a man WAIT — circling to a slot in his mark's rear arc and committing only from behind, where guards can't reach.
+// The claim is weighed by the man's JOB: a rider on the hunt reads a bowman as thirty paces nearer; a screening rider
+// the enemy's horse; a swordsman leaves the bows to the horse while an enemy line stands (and a galloping horse to
+// itself); a bowman shoots the man coming at him, the rider bearing down on the bows, and a man in the open over
+// one already in the scrum with a friend; a bodyguard's detail (afGuardTheBows) is his mark before anything.
 function afAssignTargets() {
   const live = AF.bodies.filter(b => !b.dead), ai = live.filter(b => b.ctrl === 'ai'), counts = new Map();
-  const adj = (f, o) => Math.hypot(o.x - f.x, o.z - f.z) - (f.target === o ? 0.8 : 0) - (f.mounted && o.weapon === 'bow' && !o.mounted ? 10 : 0); // cavalry's job: ride down the bowmen behind the line
+  const inScrum = o => !!(o.target && !o.target.dead && o.target.team !== o.team && Math.hypot(o.target.x - o.x, o.target.z - o.z) < 4);
+  const adj = (f, o) => {
+    let d = Math.hypot(o.x - f.x, o.z - f.z) - (f.target === o ? 0.8 : 0);
+    if (f.detail === o) return d - 40;
+    const T = AF.teams && AF.teams[f.team], role = T ? T.riderRole : null, oBow = o.weapon === 'bow' && !o.mounted;
+    if (f.mounted) { if (oBow) d -= role === 'hunt' ? 30 : role === 'trample' ? 0 : 10; if (o.mounted && role === 'screen') d -= 25; if (role === 'trample' && !oBow && !o.mounted) d -= 12; }   // cavalry's job: the bowmen behind the line — or, riding them down, the foot in the open
+    else if (f.weapon === 'bow') { if (o.mounted) d -= 6; if (inScrum(o)) d += 5; d -= 4 * (1 - o.hp / Math.max(1, o.maxHp)); }
+    else { if (oBow && T && T.phase !== 'form' && live.some(x => x.team !== f.team && !x.mounted && x.weapon !== 'bow')) d += 6; if (o.mounted && (o.sp01 || 0) > 0.35) d += 4; }
+    return d;
+  };
   for (const f of ai) { let bd = Infinity; for (const o of live) if (o.team !== f.team) bd = Math.min(bd, adj(f, o)); f._claim = bd; }
   ai.sort((a, b) => a._claim - b._claim);
   for (const f of ai) {
@@ -21825,7 +21977,8 @@ function afAssignTargets() {
       if (d < bdAny) { bdAny = d; bestAny = o; }
       const cap = o.ctrl === 'input' && f.skill < 0.6 ? 1 : 2;   // a PLAYER faces one blade at a time — only veterans press him in pairs; the rest circle and wait for an opening
       if ((counts.get(o) || 0) < cap && d < bdFree) { bdFree = d; bestFree = o; } }
-    if (f.weapon === 'bow') { f.target = bestAny; f.waiting = false; continue; }   // archers never crowd a duel
+    if (f.weapon === 'bow' || f.mounted) { f.target = bestAny; f.waiting = false; continue; }   // archers never crowd a duel; a horse strikes in passing, it never waits its turn
+    if (f.detail && !f.detail.dead) { f.target = f.detail; f.waiting = false; counts.set(f.detail, (counts.get(f.detail) || 0) + 1); continue; }   // the bodyguard goes for his man whoever else is on him
     if (bestFree) { f.target = bestFree; f.waiting = false; counts.set(bestFree, (counts.get(bestFree) || 0) + 1); }
     else { f.target = bestAny; f.waiting = true; }
   }
@@ -21907,7 +22060,10 @@ function afArcherSidestep(b, ux, uz, dt, w) {              // while the line is 
 function afArcherRetreat(b, T) {                            // give ground: away from every foe within bowNear+3, and away from the ENEMY's mass (toward our own
   let rx = 0, rz = 0; const R2 = (AF_TACT.bowNear + 3) ** 2;   // centre was wrong once the lines had met — it walked the bowmen straight into their own melee)
   for (const o of AF.bodies) { if (o.dead || o.team === b.team) continue; const ox = b.x - o.x, oz = b.z - o.z, d2 = ox * ox + oz * oz; if (d2 > R2 || d2 < 1e-4) continue; const d = Math.sqrt(d2), w = 1 / Math.max(1, d); rx += ox / d * w; rz += oz / d * w; }
-  if (T && T.enemyCenter) { const cx = b.x - T.enemyCenter.x, cz = b.z - T.enemyCenter.z, cd = Math.hypot(cx, cz); if (cd > 1) { rx += cx / cd * 0.5; rz += cz / cd * 0.5; } }
+  if (T && T.footCenter && T.enemyCenter) {                 // behind our own swords: the line is the wall a bowman runs to while it stands (open sand was where the leftover infantry caught him)
+    const ex = T.enemyCenter.x - T.footCenter.x, ez = T.enemyCenter.z - T.footCenter.z, ed = Math.hypot(ex, ez) || 1, hx = T.footCenter.x - ex / ed * AF_TACT.bowGap, hz = T.footCenter.z - ez / ed * AF_TACT.bowGap;
+    const cx = hx - b.x, cz = hz - b.z, cd = Math.hypot(cx, cz); if (cd > 2) { rx += cx / cd * 0.9; rz += cz / cd * 0.9; }
+  } else if (T && T.enemyCenter) { const cx = b.x - T.enemyCenter.x, cz = b.z - T.enemyCenter.z, cd = Math.hypot(cx, cz); if (cd > 1) { rx += cx / cd * 0.5; rz += cz / cd * 0.5; } }
   else if (T && T.center) { const cx = T.center.x - b.x, cz = T.center.z - b.z, cd = Math.hypot(cx, cz); if (cd > 3) { rx += cx / cd * 0.35; rz += cz / cd * 0.35; } }
   const m = Math.hypot(rx, rz) || 1; return [rx / m * 0.8, rz / m * 0.8];
 }
@@ -21978,23 +22134,35 @@ function afThink(b, dt) {
   const T = AF.teams && AF.teams[b.team];
   const ord = T ? (b.mounted ? T.riderOrder : T.order) : 'charge';
   const bow = b.weapon === 'bow' && !b.mounted, horseBow = b.mounted && b.weapon === 'bow';
-  if (ord !== 'charge' && !busy && !(bow && d < AF_TACT.bowNear) && !horseBow) {   // (an archer with a foe inside bowNear leaves his place and gives ground — below; a HORSE ARCHER is a skirmisher: no order holds him at a mark, he rings the enemy from the first — afHorseArcher)
+  const detail = b.detail && !b.detail.dead && !b.mounted && !bow ? b.detail : null;   // THE BODYGUARD (afGuardTheBows): his man is his mark whatever the line is doing
+  if (detail && !busy && detail.mounted && b.ward && !b.ward.dead && Math.hypot(detail.x - b.x, detail.z - b.z) > 6) {   // a horse he can't catch he meets at the bowman's side, between them
+    const W = b.ward, wx = detail.x - W.x, wz = detail.z - W.z, wd = Math.hypot(wx, wz) || 1, px = W.x + wx / wd * 2.5, pz = W.z + wz / wd * 2.5, gx = px - b.x, gz = pz - b.z, gd = Math.hypot(gx, gz);
+    I.yaw = Math.atan2(wx, wz); if (gd > 0.8) { I.mx = gx / gd + sx * 0.5; I.mz = gz / gd + sz * 0.5; } I.block = wd < 7; return;
+  }
+  if (ord !== 'charge' && !busy && !(bow && d < AF_TACT.bowNear) && !horseBow && !detail) {   // (an archer with a foe inside bowNear leaves his place and gives ground — below; a HORSE ARCHER is a skirmisher: no order holds him at a mark, he rings the enemy from the first — afHorseArcher)
     if (ord === 'flank' && T.wp) {
-      const mk = b.flankMark || T.wp, wx = mk.x - b.x, wz = mk.z - b.z, wd = Math.hypot(wx, wz) || 1e-4;
+      const mk = b.flankMark || T.wp, wx0 = mk.x - b.x, wz0 = mk.z - b.z, wd0 = Math.hypot(wx0, wz0) || 1e-4;
       if (d > 8) {                                           // (a foe riding at the squadron is met, not watched)
-        if (wd < 2.5) b.formed = true; else if (wd > 7) b.formed = false;   // formed up, he stays put until his place has really moved (no fidgeting)
-        if (!b.formed) { I.yaw = Math.atan2(wx, wz); const thr = clamp(wd / 8, 0.25, 1); I.mx = wx / wd * thr; I.mz = wz / wd * thr; return; }
+        if (wd0 < 2.5) b.formed = true; else if (wd0 > 7) b.formed = false;   // formed up, he stays put until his place has really moved (no fidgeting)
+        if (!b.formed) {
+          // ROUND the lines, not through them: a mark ahead on the far side of our own block (or the enemy's) is reached by
+          // riding OUT to the flank corridor first, then up it — a horse that walked up the middle behind its own foot got
+          // there at a walk, after the lines had met (the 11 seconds the user saw the cavalry "run to some random place")
+          let gx = wx0, gz = wz0, gd = wd0;
+          if (T.axis) { const A = T.axis, bl = (b.x - A.x) * A.lx + (b.z - A.z) * A.lz, bf = (b.x - A.x) * A.fx + (b.z - A.z) * A.fz, ml = (mk.x - A.x) * A.lx + (mk.z - A.z) * A.lz, mf = (mk.x - A.x) * A.fx + (mk.z - A.z) * A.fz;
+            if (Math.abs(bl) < A.corridor && Math.abs(ml) >= A.corridor - 1 && mf > bf + 6) { const sx0 = A.x + A.lx * ml + A.fx * bf, sz0 = A.z + A.lz * ml + A.fz * bf; gx = sx0 - b.x; gz = sz0 - b.z; gd = Math.hypot(gx, gz) || 1e-4; } }
+          I.yaw = Math.atan2(gx, gz); const thr = clamp(gd / 8, 0.25, 1) * (Math.abs(angleDelta(b.yaw, I.yaw)) > 0.9 ? 0.45 : 1); I.mx = gx / gd * thr; I.mz = gz / gd * thr; return; }
         I.yaw = b.flankFace != null ? b.flankFace : Math.atan2(dx, dz); b.cav = 'charge'; return;   // stand, face the enemy, wait for the word
       }
     } else {
       const slot = afFormationSlot(T, b), slx = slot.x - b.x, slz = slot.z - b.z, sd = Math.hypot(slx, slz);
       const reach = F.reach + (b.reachBonus || 0) + (b.mounted ? F.horseReach : 0);
-      const inFace = d <= reach * 1.25, pressing = d < 4 && ord === 'advance';
+      const inFace = d <= reach * 1.25, pressing = d < 4 && (ord === 'advance' || ord === 'hold');
       if (ord === 'fallback') { if (sd > 1) { I.mx = slx / sd + sx; I.mz = slz / sd + sz; } I.yaw = d < 9 ? Math.atan2(dx, dz) : T.face; I.block = d < 4.5 && b.weapon !== 'bow'; if (b.weapon === 'bow' && d > 6 && d < AF_TACT.bowShot && b.shotCd <= 0) afArcherLoose(b, t, 0.6, 1.9 + Math.random()); b.shotCd -= dt; return; }
       if (!inFace && !pressing) {
         if (sd > 0.5) { const pace = ord === 'advance' ? AF_TACT.walk + 0.15 : 1; I.mx = slx / sd * pace + sx * 0.5; I.mz = slz / sd * pace + sz * 0.5; }
         I.yaw = d < 12 ? Math.atan2(dx, dz) : T.face;
-        if (b.weapon === 'bow') { b.shotCd -= dt; if (d > 6 && d < AF_TACT.bowShot && b.shotCd <= 0 && !busy) afArcherLoose(b, t, 0.7 + b.skill * 0.3, 1.7 + Math.random() * 1.2); }   // (a man holding his place in the line doesn't wander for a line: no shot until the stone or the foe moves)
+        if (b.weapon === 'bow') { b.shotCd -= dt; if (d > 6 && d < AF_TACT.bowVolley && b.shotCd <= 0 && !busy) afArcherLoose(b, t, d > AF_TACT.bowShot ? 0.95 : 0.7 + b.skill * 0.3, 1.7 + Math.random() * 1.2); }   // (a man holding his place in the line doesn't wander for a line: no shot until the stone or the foe moves)
         return;
       }
     }
@@ -22002,7 +22170,8 @@ function afThink(b, dt) {
   if (T && T.enemyCenter && ord === 'charge' && !busy) {   // no foe near me: the fight is at the enemy's mass — go THERE (walking to our own centre made a pile)
     const cap = T.engageR * (b.mounted ? AF_TACT.riderEngageMul : 1);
     if (d > cap) {
-      const cx = T.enemyCenter.x - b.x, cz = T.enemyCenter.z - b.z, cd = Math.hypot(cx, cz);
+      const G = b.mounted && T.riderRole === 'hunt' && T.enemyBows ? T.enemyBows : b.mounted && T.riderRole === 'trample' && T.enemyFoot ? T.enemyFoot : T.enemyCenter;   // (a rider on the hunt: the bows; riding down: the foot)
+      const cx = G.x - b.x, cz = G.z - b.z, cd = Math.hypot(cx, cz);
       if (cd > 4) { I.yaw = Math.atan2(cx, cz); I.mx = cx / cd + sx * 0.5; I.mz = cz / cd + sz * 0.5; return; }
     }
   }
@@ -22030,13 +22199,14 @@ function afThink(b, dt) {
       const want = Math.atan2(dx, dz), err = angleDelta(b.yaw, want);
       if (b.wheelDir == null) b.wheelDir = nearWall ? (angleDelta(b.yaw, Math.atan2(-b.x, -b.z)) < 0 ? -1 : 1) : (err < 0 ? -1 : 1);   // (off a wall: turn toward the middle)
       if (Math.abs(err) < 0.3 || (d > 14 && Math.abs(err) < 0.7)) { b.cav = 'charge'; }
-      else { const thr = Math.abs(err) > 0.8 ? 0.6 : 1;   // ease to a canter for the turn (a galloping horse carves a 27-pace circle — into the wall), open up once round
+      else { const thr = Math.abs(err) > 0.8 ? 0.3 : Math.abs(err) > 0.4 ? 0.6 : 1;   // brake INTO the turn (a galloping horse carves a 27-pace circle — a lap of a small pit; at a canter it wheels in a few paces), open up once round
         I.yaw = b.yaw - b.wheelDir * Math.min(Math.abs(err), 1.1); I.mx = Math.sin(b.yaw) * thr + sx * 0.3; I.mz = Math.cos(b.yaw) * thr + sz * 0.3; strikeInPassing(); return; }
     }
     // CHARGE: full tilt at the mark, a little lead on a moving one
     const lead = clamp(d / 12, 0, 0.6), ax = t.x + (t.vx || 0) * lead - b.x, az = t.z + (t.vz || 0) * lead - b.z;
-    I.yaw = Math.atan2(ax, az); I.mx = Math.sin(b.yaw) + sx * 0.3; I.mz = Math.cos(b.yaw) + sz * 0.3;
-    const off = Math.abs(angleDelta(b.yaw, Math.atan2(dx, dz)));
+    I.yaw = Math.atan2(ax, az);
+    const off = Math.abs(angleDelta(b.yaw, Math.atan2(dx, dz))), thrC = off > 1.0 ? 0.5 : 1;   // (heels in once he is lined up — a gallop off the line only widens the circle)
+    I.mx = Math.sin(b.yaw) * thrC + sx * 0.3; I.mz = Math.cos(b.yaw) * thrC + sz * 0.3;
     if (d <= reach * 1.1 && !busy && b.cd <= 0) { afAiSwing(b, b.sp01 < 0.4 && Math.random() < b.heavyBias); b.cd = 0.5 + Math.random() * 0.4; }
     if ((d < 2.6 || (off > 1.2 && d < 9)) && b.cav !== 'out') {   // on him (or he's slipped to my flank, inside the turn): ride THROUGH, don't pivot
       b.cav = 'out'; b.outYaw = b.yaw + (Math.random() - 0.5) * 0.3; b.outT = 0.6 + Math.random() * 0.5;
@@ -22537,7 +22707,7 @@ function afApplyEvent(ev) {
   } else if (ev.k === 'arrow') {
     afAddArrow(ev.t, ev.o, ev.p[0], ev.p[1], ev.p[2], new THREE.Vector3(ev.v[0], ev.v[1], ev.v[2]), 9, ev.l);
   } else if (ev.k === 'order') {
-    afLogLine(AF_TEAMS[ev.t].name + ' ' + (AF_ORDER_TEXT[ev.o] || ev.o), AF_TEAMS[ev.t].col); if (AF.me && AF.me.team === ev.t) AF.myOrder = ev.o;
+    afLogLine(AF_TEAMS[ev.t].name + ' ' + (AF_ORDER_TEXT[ev.o] || ev.o), AF_TEAMS[ev.t].col); if (AF.me && AF.me.team === ev.t && ev.o.slice(0, 5) !== 'plan:') AF.myOrder = ev.o;
   } else if (ev.k === 'hhit') {
     const h = AF.horses[ev.h]; if (h) { const px = h.rider ? h.rider.x : h.x, pz = h.rider ? h.rider.z : h.z; tmpV.set(px, afY(px, pz) + 1.7, pz); afSparks(tmpV, 0xff5a3c, 5); afPopup(h.group.position, 'horse ' + ev.d, '#d8b07a'); try { SFX.hit(h.group.position, false); } catch (e) {} if (h.rider === AF.me) { addShake(0.08); AF.hurt = Math.min(1, AF.hurt + 0.25); } }
   } else if (ev.k === 'horse') {
@@ -24393,6 +24563,10 @@ BV.arenaStatus = () => ({ on: AF.on, stam: AF.me && AF.me.maxStam ? +AF.me.stam.
 BV.arenaIntro = (cmd) => { if (cmd === 'skip') afIntroSkip(); else if (typeof cmd === 'number' && AF.intro) { const I = AF.intro, n = clamp(cmd, 0, I.shots.length - 1); for (let k = I.i + 1; k < n; k++) if (I.shots[k].onStart) I.shots[k].onStart(); I.i = n; afIntroApplyShot(); } /* (a jump still fires the beats it skips over) */ else if (cmd && cmd.advance && AF.intro) { for (let t = 0; t < cmd.advance && AF.intro; t += 1 / 60) { afIntroStep(1 / 60); if (AF.intro) afIntroCamera(1 / 60); } } const I = AF.intro; return I ? { film: I.film, shot: I.i, of: I.shots.length, t: +I.t.toFixed(1), shotT: +I.shotT.toFixed(2), ts: AF.timeScale, released: I.released, cap: I.cap, stars: I.stars.map(a => a.map(b => b.name + ':' + b.xp)), gates: AF.gates.map(g => +g.open.toFixed(2)), march: AF.bodies.map(b => b.intro ? b.intro.phase[0] : '-').join('') } : { shot: -1, phase: AF.phase }; };   // test: the entrance (skip / jump to a shot / read it)
 BV.arenaOutro = (cmd) => { const O = AF.outro; if (cmd === 'skip') afOutroSkip(); else if (typeof cmd === 'number' && O) { const n = clamp(cmd, 0, O.shots.length - 1); for (let k = O.i + 1; k < n; k++) if (O.shots[k].onStart) O.shots[k].onStart(); O.i = n; afOutroApplyShot(); } else if (cmd && cmd.advance && O) { for (let t = 0; t < cmd.advance && AF.outro; t += 1 / 60) { afTick(1 / 60); afOutroStep(1 / 60); if (AF.outro) afOutroCamera(1 / 60); } }
   const V = AF.victory, P = AF.outro, ndc = V && V.mvp ? tmpV.set(V.mvp.x, afY(V.mvp.x, V.mvp.z) + 2, V.mvp.z).project(camera) : null; return { film: !!P, mvpScreen: ndc ? [+ndc.x.toFixed(2), +ndc.y.toFixed(2)] : null, view: camera.view ? [camera.view.enabled, camera.view.offsetX, camera.view.fullWidth] : null, shot: P ? P.i : -1, of: P ? P.shots.length : 0, t: P ? +P.t.toFixed(1) : 0, shotT: P ? +P.shotT.toFixed(2) : 0, mvp: V && V.mvp ? V.mvp.name + (V.mvp.dead ? ' (fallen)' : '') : null, winners: V ? V.winners.map(b => b.name + ':' + (b.anim ? b.anim.name : '-')).join(' ') : '', roar: +AF.roar.toFixed(2), cam: [camera.position.x, camera.position.y, camera.position.z].map(v => +v.toFixed(1)), fov: +AF.fov.toFixed(0) }; };   // test: the end-game film (skip / jump to a shot / advance seconds / read it)
+BV.arenaTactics = () => ({ t: +AF.t.toFixed(2), over: AF.over, winner: AF.winner,
+  teams: (AF.teams || []).map(T => ({ t: T.t, doctrine: T.doctrine, phase: T.phase, order: T.order, riderOrder: T.riderOrder, riderRole: T.riderRole || null, anchor: [+T.anchor.x.toFixed(1), +T.anchor.z.toFixed(1)], wp: T.wp ? [+T.wp.x.toFixed(1), +T.wp.z.toFixed(1)] : null })),
+  bodies: AF.bodies.map(b => ({ i: b.idx, team: b.team, arch: b.arch, mounted: !!b.mounted, weapon: b.weapon, ctrl: b.ctrl, x: +b.x.toFixed(1), z: +b.z.toFixed(1), hp: Math.round(b.hp), dead: b.dead, kills: b.kills, shots: b.shots | 0, dmg: Math.round(b.dmgDealt || 0), target: b.target ? b.target.idx : -1, cav: b.cav || null, role: b.role || null, waiting: !!b.waiting, detail: b.detail && !b.detail.dead ? b.detail.idx : -1, killedBy: b.dead ? (b.killerIdx == null ? -1 : b.killerIdx) : null, diedAt: b.dead ? +(b.diedAt || 0).toFixed(1) : null })) });   // test: the captains' orders and every man's mark — what the tactics are doing right now
+BV.arenaMix = (rows) => { const L = AF.lobby; if (!L || !rows) return null; L.npcArch = rows.map((row, t) => row.map((k, s) => (L.slots[t] && L.slots[t][s]) ? null : (AF_ARCH[k] ? k : 'swordsman'))); afLobbyRender(); return L.npcArch; };   // test: deal the NPC seats' archetypes by hand (a row per team)
 BV.arenaStep = (steps = 60, dt = 1 / 60) => { if (AF.phase === 'intro') afIntroEnd(); if (AF.phase === 'countdown') { AF.phase = 'fight'; AF.countdown = 0; afIntroTailEnd(); } for (let i = 0; i < steps; i++) afTick(dt); return BV.arenaStatus(); };
 BV.arenaInput = (patch) => { Object.assign(AF.locIn, patch || {}); return { ...AF.locIn }; };
 BV.arenaBare = (i, off) => { const b = AF.bodies[i], L = b && b.parts.modelRig; if (L && off != null) lookHelmOff(L, !!off); return b ? { name: b.name, bare: afBareHead(b), model: !!L } : null; };   // test: take the fighter's helm off / put it on, and ask whether his head is bare (afDamage's head blow)

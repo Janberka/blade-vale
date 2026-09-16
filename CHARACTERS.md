@@ -80,6 +80,30 @@ Faces (same day, "put some alpha male look on the faces"): `lookRuggedHead` roug
 wider jaw, chin and brow forward and the brow lowered, cheekbones out, the eye meshes narrowed to a squint — and the
 roll gives dark cropped hair or a shaved head, a full beard on most, heavy dark brows (`brow`), shadowed eye sockets
 (`socket`), weathered skin, dimmed eye whites, no painted lips, and a scar across one cheek on a third (`scarL`/`scarR`).
+Two days on, "I didn't mean to make it a Neanderthal — they need to be charismatic not ugly": the roughening is now a firming.
+The jaw is a jawline, not a slab (7 % wider at its angle under the ear, 4 % toward the chin; was 13 % throughout, and the
+square cast stacked another 14 % on it — 7 % now, the round and broken casts 4 %), the chin still firm and forward, the brow
+brought a little forward but LEVEL (was pushed out 14 mm and dropped 7 mm: a shelf over slitted eyes), the cheekbones high as
+before, the eyes open (84 % of the boy's height, was 62 %) and set only a touch under the brow, the sockets a light shadow
+(×0.91, was ×0.78: sunk into a skull) and the whites clear (`0xece8e2`, were `0xd8d0c8`). Dark brows and a hard mouth stay.
+Then "the chin is toooo long": everything under the lip line (y < 1.565, the front) is drawn up by a third, fading round to the jaw's
+underside so the neck keeps its seat; the long cast draws the face down 22 % (was 28 %). v=215
+"What's wrong with this dude's facial hair, it looks like it's coming out of ears": the bake's sideburn band (y 1.615–1.665, wide of
+the cheek, z > 0) took the ear's root and lobe, which sit at z 0 … 0.02. The band is in FRONT of the ear now (z > 0.035, in
+warrior_pieces.py and its port lookBakeHeadClass), and lookFaceColour cuts the baked class the same way, so the shipped pieces.json
+needs no re-bake. v=216
+"The braids look super weird, it's floating in front of our face": the plait hung from a FIXED point an inch under the old chin. It
+hangs from the chin now — the rig's chin tip (`lookChin`: the front-most midline vertex under the lip, after lookRuggedHead) moved by
+this face's cast (lookFacePoint), the geometry cached per anchor — the first bead rooted just inside the chin's front underside, five
+a rope, not beads ("it still looks weird": beads in a line read as a necklace): a tapered tube whose three-lobed section turns 2.2
+times as it falls — the lobes are the strands — 2 cm wide at the chin (the top ring inside it), a band near the end and a tuft of loose
+ends below, 10 cm long, hanging straight from the chin's front and leaning back to the chest. Then "maybe don't build it from some
+balls": it is a flat RIBBON now (wider than deep, as a braid is) with the strands as a herringbone — the left half and the right half
+bulge a half-period out of step, 5½ crossings down its length — smooth-shaded over 40 rings, so the strands read as shading, not as
+stacked lumps. v=219
+Then "let's just remove this braids": the braided beard is gone — the style, its roll, its paint branch, the plait's geometry and mesh
+(`lookChin` / `lookBraidGeo` / `lookBraidApply`). ARENA_LOOK.b is 5 again, so a saved b 5 fails `cleanLook`'s range and the barber's
+roll takes over. v=220, arena-items v=11
 
 ## The wardrobe is the marketplace (2026-09-14, "any item we add should be available in the marketplace")
 Six slots now: sword, armor, helm, shield, bow, horse (`ARENA_SLOTS` in arena-items.js; the server validates against the
@@ -286,9 +310,8 @@ to `sleeve` (vertices and triangles), and the skirt cloth above the belt (y > 0.
 
 Same day: the axes are carried head-UP when a man is at ease (`updateAnimator` turns the sword group by π about its own z
 for `userData.axe` while the pose is `relax`; drawn, the head leads), the axe head is a 2D profile extruded (socket, a bit
-sweeping out and up, a convex edge, the beard hooking down and back; the Dane axe adds a poll), the barber has a sixth beard
-— `braided`: the full beard's paint plus a plait of beads on the head bone (`lookBraidGeo` / `lookBraidApply`; ARENA_LOOK.b is
-6 now) — and the berserker's bracers are `ironEngraved`: steel kind 8, the ink's knotwork cut in as dark, rougher grooves.
+sweeping out and up, a convex edge, the beard hooking down and back; the Dane axe adds a poll), the barber had a sixth beard
+— `braided`, the full beard's paint plus a plait on the head bone (removed the same day, below; ARENA_LOOK.b is 5 again) — and the berserker's bracers are `ironEngraved`: steel kind 8, the ink's knotwork cut in as dark, rougher grooves.
 
 ## The face's surface (2026-09-16, "character faces are too low poly now, let's add them some detail and smoothing like the body and armors")
 

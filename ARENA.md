@@ -551,6 +551,85 @@ skirmishes into one continuous front:
 - **Regroup scales with roster size** (`T.regroupSpread`): a fixed 9-unit trigger either never fired
   for a 50-man block or fired constantly; it's now proportional to √(team size).
 
+**The plan (2026-09-16)** — the user: *"if I have a 5v5 it will be almost the same pattern: infantry runs
+straight to the middle, cavalry runs to some random place and then attacks the infantry mess, archers
+running late, the infantry left over from the middle starts on the archers"*. It was: the captain
+computed a doctrine and never used it, every fight was `advance → charge` for both sides (the lines
+always met at the dead centre), the riders always rode to a fixed mark 22 paces off the meeting
+point (a trip across a small pit, up the middle behind their own foot at a walk) and then wheeled in
+a 30-pace circle at the gallop, and nobody answered for the bows. Now (`afPlanTeams`,
+`afCaptainThink`, `afAssignTargets`; every number in `AF_TACT`):
+
+- **A doctrine from the matchup** (`afPickDoctrine`): the captain reads both rosters at the bell
+  and draws a plan — a weighted roll, so the same lobby opens differently twice. *line*: advance
+  and meet. *hold*: the swords stay behind and let the bows kill as much as they can before the
+  lines meet (likelier with archers, or weaker foot) — they only fight what reaches them, for as
+  long as the bows have someone within `bowVolley` to shoot; once the bows have been idle
+  `holdIdle` past `holdSecs` (a stand-off with nobody in range) the stronger side goes to them,
+  and with no bows left the foot at `holdOut` is met. *skirmish* (bow-heavy): the archers stand `screenAhead`
+  in FRONT of the swords as a screen and fall back through them (`screenback`) when a foe comes
+  within `screenIn`. *oblique*: the block angles for one END of the enemy line and refuses the
+  other. *rush*: straight in from the bell (the stronger foot, or no bows against bows). *hammer*:
+  the foot pins, the horse is sent for the bows or the back of the line. A team with a human in it
+  rarely draws a standing plan (his men go with him), and the moment he is blade to blade the line
+  charges. Plans and orders are logged ("AZURE means to hold", "CRIMSON sends the riders for the
+  bows"), and a human sees his captain's order on the HUD as before.
+- **The squadron has a job** (`afPickRiderRole`, `afRiderMark`): *hunt* — form up beside the
+  enemy's bows, on the side they lean to, and go into them once the lines meet (or once formed and
+  the foot is committed); a hunting rider reads a bowman as thirty paces nearer, and beyond his
+  leash he heads for the bows, not the scrum. *flank* — off the end of the enemy line, into its side
+  when it is engaged. *trample* — the same mark, but the squadron goes into the enemy's FOOT the
+  moment it comes on across the open (closing faster than `trampleApproach` inside `trampleGap`):
+  a horse at speed throws men down, and a charging line is caught in the open — a holding line's
+  natural partner (they charge under the arrows, the horse rides them down), so `hold` raises it.
+  A trampling rider prefers foot to bows. *screen* — beside our own bows, meeting the enemy's
+  riders when they come within `screenR` of them (their horse all fallen, it turns to a hunt or a
+  flank). *charge* — the
+  horse IS the army (foot under 1.5× the riders). Every mark is scaled to the line's width
+  (`halfW + huntOff/flankOff`, capped at `flankMax`): a 5-a-side mark sits a dozen paces off, not
+  22. The ride to a mark goes ROUND the lines — out through the flank corridor (`T.axis.corridor`)
+  and up it at the gallop — never up the middle behind the foot. The wheel brakes INTO the turn
+  (throttle 0.3 past 0.8 rad of error): a canter wheels in a few paces where the gallop carved a lap
+  of the pit; and the charge only opens up once the horse is lined up on its mark.
+- **The bodyguard** (`afGuardTheBows`): a foe within `guardR` of one of our bowmen with no swordsman
+  beside him gets the nearest free swordsman (not mid-duel, within `guardReach`) sent for him
+  (`b.detail`, `detailSecs`); a horse he can't catch he meets at the bowman's side, between them,
+  shield up. A pressed archer now gives ground BEHIND HIS OWN SWORDS (`afArcherRetreat` pulls to
+  `bowGap` behind the foot's centre) instead of into open sand.
+- **The claim is weighed by the job** (`afAssignTargets`): a swordsman leaves the bows to the horse
+  while an enemy line stands (+6) and a galloping horse to itself (+4); a bowman shoots the rider
+  bearing down (−6), a man in the open over one already in a scrum with a friend (+5), and the
+  wounded; a rider never waits his turn on a victim (he strikes in passing); a bodyguard's detail
+  is his mark before anything. Archers walking in with the line loose an approach volley from
+  `bowVolley` (a longer draw).
+- **The bench** (`perf/arena-tactics.js`): seeded headless fights through the real sim, every man an
+  NPC, read for what the tactics did — where the lines met (0.5 = the dead centre), each rider's
+  path and time to his first blow and on whom, when the archers opened and who killed them, the
+  doctrines drawn, the winner. `--trace seed --rider idx` prints one horse every half second;
+  `--gamejs other.js` runs the same seeds through another build; `--smoke` runs the odd lobbies (a
+  free-for-all, the pits, all horse, all bows, a standing human, 30 a side). Same 30 seeds, the
+  user's 5-a-side (a swordsman, guardsman, brute, archer and rider each), before → after:
+
+  | | before | after |
+  |---|---|---|
+  | where the lines met, spread over 30 fights (0 = the same spot every time) | 0.04 | 0.71 |
+  | doctrine pairings seen | 1 (line vs line) | 14 |
+  | rider: paces ridden before his first blow / when it landed | 92 / 16.9 s | 76 / 15.0 s |
+  | seed 6's hunting rider: first blow | 38.5 s (a lap of the pit) | 12 s |
+  | fights that ran to the 120 s clock | 5 / 30 | 0 / 30 |
+  | mean fight length | 69.8 s | 48.4 s |
+  | archers felled / of them by horse | 50 of 60 / 41 | 43 of 60 / 29 |
+
+  With the patient hold and the ride-down (same seeds): one side or both hold in 14 of 30 fights,
+  the horse draws *trample* in 12 of 60 squadrons, the archers loose 6.5 arrows each (5.4 before,
+  6.0 in the old always-advance fights), and every fight still resolves inside the clock.
+
+  The bows are still what every horse is for — they die to riders, on both sides, by design; the
+  leftover-infantry mop-up is met by the bodyguard in the fights where a free swordsman is left
+  (5 of 6 seeds detail one), which at five a side is not many. An 8-a-side (two bows, two riders)
+  reads the same way. The world-map battles (`BATTLES.md`, `warHostThink`) are a separate brain and
+  are not touched by this.
+
 **Perf at scale**: `afSepFrom` (called once per NPC, every tick) and `afSeparate` were both true
 O(n²) full scans — fine at a dozen fighters, a real cost at hundreds. Both now use a shared spatial
 grid rebuilt once per tick (`afRebuildGrid`, the same idiom the world-map battle sim already uses),
@@ -1077,6 +1156,8 @@ BV.arenaPump(frames, dt)                      // whole frames incl. network + ca
 BV.arenaInput({ atk: n })                     // poke the local input record
 BV.arena({ xp: 'green', npcXp, arch })       // test overrides: XP band, per-seat XP, one archetype for all
 BV.arenaAutoMe(xp)                            // hand my fighter to the brain (pure NPC battles)
+BV.arenaTactics()                             // the captains' plans and orders, every man's mark / cavalry cycle / bodyguard detail, shots, kills, who felled whom
+BV.arenaMix([[...team 0 archetypes], [...]]) // deal the NPC seats' classes by hand before arenaStart (the tactics bench uses it)
 BV.arenaHorses() / BV.arenaHorseHit(id, dmg)  // every horse's state; wound one (test the throw)
 BV.arenaKill(idx)                             // fell a man (his horse goes loose)
 BV.arenaInvite(name) / BV.arenaAccept()       // send / accept a challenge without the UI

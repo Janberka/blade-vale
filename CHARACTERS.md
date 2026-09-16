@@ -131,7 +131,9 @@ TONE, `look.body` — the man's skin unweathered and a shade paler (the chest th
 the collar (a tan line), painted per vertex by `lookBodyColour` with the muscle read as shade: the midline dark from the sternum to
 the belly and down the spine (20 segments a ring now, so a vertex sits on the midline, set in a little for a real groove), a crease
 under the pecs, the belly shaded into the sash. And it is slimmer than the plate: 0.90 × the cuirass's width and 0.87 × its depth
-with an 8 % waist (the padding under armour, the plate's own stand-off), the arms 0.7 of the sleeve's girth.
+with an 8 % waist (the padding under armour, the plate's own stand-off), the arms 0.66 of the sleeve's girth — and an arm is an
+ELLIPSE, 0.84 across by 1.04 front-to-back ("from front and back the arms look still a bit wide"): the narrow way round is what
+the front and the back see, the side keeps the biceps' depth.
 
 ## The surface pass (2026-09-16, "our chars look too low poly")
 

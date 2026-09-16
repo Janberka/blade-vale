@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Bake assets/rigs/warrior/pieces.json: which armour piece every triangle of the warrior's armour mesh belongs to
-(helmet, pauldron, sleeve, elbow, vambrace, cuirass, skirt, straps, knee, greaves, pouch), what the palette says each
+(helmet, visor, pauldron, sleeve, elbow, vambrace, cuirass, skirt, straps, knee, greaves, pouch), what the palette says each
 vertex is made of (steel / cloth / leather / dark / skin), and the head's hair and beard regions on the body mesh.
+The VISOR is the sallet's face plate and chin (the bevor), cut off the helmet by position so an open-faced helm can drop it.
 game.js reads it to dress every fighter differently: pieces are dropped per look and painted by vertex colour.
 Run from the repo root: python3 tools/realmesh/warrior_pieces.py   (needs Pillow)"""
 import json, struct, os, sys
@@ -75,6 +76,12 @@ for node in g['nodes']:
     if short == 'armor':                                                    # the cuirass component carries the cloth too: upper-arm sleeves and the skirt's front
         for v in range(nv):
             if vclass[v] == 'cuirass' and vmat[v] == 'cloth': vclass[v] = 'sleeve' if pos[v * 3 + 1] > 1.15 else 'skirt'
+    # THE VISOR: the sallet's face plate (from under the brim down to the chin) and the bevor's underside, by the triangle's centre
+    # (bind pose, model units, the face looks +z). The brim at the brow (y ~1.70, out to z 0.21) stays, and so do the cheek walls
+    # beside the face (z < 0.06) and the ear discs — an open-faced sallet keeps its skull, brim and cheeks and shows the face.
+    def visor_tri(a, b, c):
+        cx = (pos[a * 3] + pos[b * 3] + pos[c * 3]) / 3; cy = (pos[a * 3 + 1] + pos[b * 3 + 1] + pos[c * 3 + 1]) / 3; cz = (pos[a * 3 + 2] + pos[b * 3 + 2] + pos[c * 3 + 2]) / 3
+        return (cy < 1.69 and cz > 0.06) or (cy < 1.535 and cz > 0.0)
     if short == 'body':                                                     # hair and beard: regions of the bald head (bind pose, model units)
         for v in range(nv):
             if vclass[v] != 'head': continue
@@ -87,10 +94,13 @@ for node in g['nodes']:
             elif 1.655 < y < 1.705 and z > 0.07 and 0.025 < abs(x) < 0.1: vclass[v] = 'socket'                            # round the eyes
             elif z > 0.06 and 0.03 < abs(x) < 0.095 and abs((y - 1.665) + 0.9 * (abs(x) - 0.06)) < 0.014: vclass[v] = 'scarL' if x < 0 else 'scarR'   # a cut across one cheek
     classes = sorted(set(vclass)); mats = sorted(set(vmat))
+    if short == 'armor': classes.append('visor')                            # (a class of triangles, not vertices: its vertices stay 'helmet', so it is painted with the helm)
     tri = []
     for t in range(0, len(idx), 3):
-        a, b, c = vclass[idx[t]], vclass[idx[t + 1]], vclass[idx[t + 2]]; tri.append(classes.index(a if a == b else (b if b == c else a)))
+        a, b, c = vclass[idx[t]], vclass[idx[t + 1]], vclass[idx[t + 2]]; cls = a if a == b else (b if b == c else a)
+        if cls == 'helmet' and visor_tri(idx[t], idx[t + 1], idx[t + 2]): cls = 'visor'
+        tri.append(classes.index(cls))
     out[short] = {'classes': classes, 'tri': tri, 'mats': mats, 'vmat': [mats.index(m) for m in vmat], 'vclass': [classes.index(c) for c in vclass]}
-    print(short, {c: vclass.count(c) for c in classes}, {m: vmat.count(m) for m in mats})
+    print(short, {c: vclass.count(c) for c in classes}, {m: vmat.count(m) for m in mats}, 'tris', {c: tri.count(i) for i, c in enumerate(classes)})
 json.dump(out, open(base + 'pieces.json', 'w'), separators=(',', ':'))
 print('wrote', base + 'pieces.json', os.path.getsize(base + 'pieces.json'), 'bytes')

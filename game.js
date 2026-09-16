@@ -1502,7 +1502,7 @@ BV.modelRig = { load: loadModelRig, wear: wearModelRig, live: () => MODEL_LIVE.l
 
 // ---------- LOOKS: no two fighters alike ----------
 // The warrior's armour is one sculpted mesh; pieces.json (tools/realmesh/warrior_pieces.py) says which PIECE every
-// triangle belongs to (helmet, pauldron, sleeve, elbow, vambrace, cuirass, skirt, straps, knee, greaves, pouch), what
+// triangle belongs to (helmet, visor, pauldron, sleeve, elbow, vambrace, cuirass, skirt, straps, knee, greaves, pouch), what
 // the palette makes each vertex of (steel, cloth, leather, dark, skin) and where the bald head's hair and beard would
 // be. A LOOK is rolled per fighter from his NAME (host and guests roll the same man), the armour he wears and his
 // class: which pieces he has on, what each is painted, his skin, hair and beard, whether he wears a cloak, and which
@@ -1660,7 +1660,7 @@ function lookRoll(name, arch, gear, pal, o = {}) {
   const r = lookRng(lookSeed(name) ^ 0x5bd1e995), A = AF_ARCH[arch] || AF_ARCH.swordsman, kind = gear && gear.armor && LOOK_ARMOR[gear.armor] ? gear.armor : 'none', O = LOOK_ARMOR[kind], K = LOOK_CLASS[arch] || {};
   const p = k => o.full ? 1 : clamp((O[k] || 0) + (K[k] || 0), 0, 1), pick = a => a[Math.floor(r() * a.length)];
   const c = new THREE.Color(), team = new THREE.Color(pal ? pal.cloth : 0x8a8a8a);
-  const look = { kind, hide: [], paint: {}, clothOf: {}, cloth: 0, cloakC: 0, leather: pick(LOOK_LEATHER), skin: 0, hair: null, beard: null, cloak: false, shield: 'none', helmet: false, plume: false, round: 0 };
+  const look = { kind, hide: [], paint: {}, clothOf: {}, cloth: 0, cloakC: 0, leather: pick(LOOK_LEATHER), skin: 0, hair: null, beard: null, cloak: false, shield: 'none', helmet: false, open: false, plume: false, round: 0 };
   // the man: skin, hair, beard (rolled first, so a change of kit never changes his face)
   const LK = (gear && gear.look) || null, has = k => !!(LK && LK[k] != null);   // (the barber's picks, if he made any)
   const skinPick = pick(LOOK_SKIN), weather = r() * 0.35;
@@ -1676,7 +1676,8 @@ function lookRoll(name, arch, gear, pal, o = {}) {
   const scar = r(); look.scar = scar < 0.18 ? 'scarL' : scar < 0.36 ? 'scarR' : null; look.scarC = c.copy(skinC).lerp(new THREE.Color(0xe8a0a0), 0.45).multiplyScalar(1.05).getHex();
   // the kit
   look.helmet = !!(gear && (gear.helm || gear.plume));                                              // (a bought plume needs a helm to sit on)
-  for (const k of ['pauldron', 'elbow', 'knee', 'straps', 'pouch']) if (r() >= p(k)) look.hide.push(k); if (!look.helmet) look.hide.push('helmet');
+  const hm = look.helmet && gear.helm && window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS[gear.helm] : null; look.open = !!(hm && hm.open);   // an OPEN-FACED helm (the ware's `open`): the sallet's skull, brim and cheeks without its face plate — the 'visor' piece comes off and the face shows
+  for (const k of ['pauldron', 'elbow', 'knee', 'straps', 'pouch']) if (r() >= p(k)) look.hide.push(k); if (!look.helmet) look.hide.push('helmet'); if (!look.helmet || look.open) look.hide.push('visor');
   look.hide.push('skirtTop'); if (O.naked) { look.hide.push('cuirass', 'sleeve', 'pouch'); look.naked = true; }   // bare to the waist: the body under the armour shows (instanceModelRig's 'naked' mesh); the belt stays on, the belt pouches come off (two leather blocks that only read tucked under a back plate — a box on a bare back otherwise)
   look.cloak = o.full ? true : r() < p('cloak'); look.plume = o.full || (r() < p('plume')) || !!(gear && gear.plume);
   look.shield = !A.shield && !o.full ? 'none' : (gear && gear.shield === 'heater_shield') ? 'heater' : 'round'; look.round = Math.floor(r() * 4);
@@ -1773,17 +1774,19 @@ function lookApply(L, look) {
   L.shieldKind = look.shield; if (look.shield === 'round') lookRoundShield(L, look); else if (L.mRound) L.mRound.visible = false;
   if (L.mShield && L.mShield.material && L.mShield.material.color) L.mShield.material.color.setHex(look.cloth).lerp(new THREE.Color(0xffffff), 0.35);
 }
-// THE HELM IN HIS HAND: the sculpted helmet lifted off the body as a piece of its own — its triangles copied into a geometry of its own in the
-// head bone's space (every helmet vertex rides that bone at full weight, so under the head bone at identity it sits exactly where the body's
-// own did), painted with the same vertex colours as the body's, and hung on the sword hand while he walks in (L.helmHand); the don lifts it
-// from the hand onto the head (L.helmK 0→1, a world-space lerp in modelHelmPlace) and the body's own helmet takes over. Built once per figure.
+// THE HELM IN HIS HAND: the sculpted helmet lifted off the body as a piece of its own — its triangles (the visor's too, unless his helm is
+// open-faced) copied into a geometry of its own in the head bone's space (every helmet vertex rides that bone at full weight, so under the head
+// bone at identity it sits exactly where the body's own did), painted with the same vertex colours as the body's, and hung on the sword hand
+// while he walks in (L.helmHand); the don lifts it from the hand onto the head (L.helmK 0→1, a world-space lerp in modelHelmPlace) and the
+// body's own helmet takes over. Built once per figure — and again if he changes to or from an open-faced helm (the shop's preview).
 function lookHelmBuild(L) {
-  if (L.mHelm !== undefined) return L.mHelm; L.mHelm = null;
+  const open = !!(L.lookBase && L.lookBase.open); if (L.mHelm !== undefined && L.mHelmOpen === open) return L.mHelm;
+  if (L.mHelm) { if (L.mHelm.parent) L.mHelm.parent.remove(L.mHelm); L.mHelm.geometry.dispose(); } L.mHelm = null; L.mHelmOpen = open;
   const R = MODEL_RIGS.get(L.g.userData.model); if (!R) return null;
-  for (const [nm, sm] of Object.entries(L.inst.skinned)) { const pj = sm.userData.pieces; if (!pj) continue; const hI = pj.classes.indexOf('helmet'); if (hI < 0) continue;
+  for (const [nm, sm] of Object.entries(L.inst.skinned)) { const pj = sm.userData.pieces; if (!pj) continue; const hI = pj.classes.indexOf('helmet'), vI = open ? -1 : pj.classes.indexOf('visor'); if (hI < 0) continue;
     const g0 = sm.userData.geo0, pos0 = g0.getAttribute('position'), nrm0 = g0.getAttribute('normal'), uv0 = g0.getAttribute('uv'), si = g0.getAttribute('skinIndex'), i0 = g0.index.array, tri = pj.tri, mm = R.meshes.find(x => x.name === nm);
     const map = [], of = new Map(), idx = []; let j = -1;
-    for (let t = 0; t < tri.length; t++) { if (tri[t] !== hI) continue; for (let k = 0; k < 3; k++) { const v = i0[t * 3 + k]; let o = of.get(v); if (o == null) { o = map.length; of.set(v, o); map.push(v); if (j < 0) j = si.getX(v); } idx.push(o); } }
+    for (let t = 0; t < tri.length; t++) { if (tri[t] !== hI && tri[t] !== vI) continue; for (let k = 0; k < 3; k++) { const v = i0[t * 3 + k]; let o = of.get(v); if (o == null) { o = map.length; of.set(v, o); map.push(v); if (j < 0) j = si.getX(v); } idx.push(o); } }
     if (!map.length || !mm) continue;
     const M = new THREE.Matrix4().fromArray(mm.ibm, j * 16).multiply(sm.bindMatrix), N = new THREE.Matrix3().getNormalMatrix(M), n = map.length, p = new THREE.Vector3();
     const pos = new Float32Array(n * 3), nrm = new Float32Array(n * 3), uv = new Float32Array(n * 2), col0 = sm.geometry.getAttribute('color');
@@ -1824,7 +1827,7 @@ function lookDraw(L, look) {
     for (let t = 0; t < tri.length; t++) { if (hide.has(pj.classes[tri[t]])) continue; idx.array[n] = i0[t * 3]; idx.array[n + 1] = i0[t * 3 + 1]; idx.array[n + 2] = i0[t * 3 + 2]; n += 3; }
     idx.needsUpdate = true; sm.geometry.setDrawRange(0, n); }
 }
-function lookWorn(L, look) { return L.helmOff && (look.helmet || !look.hide.includes('helmet')) ? Object.assign({}, look, { helmet: false, hide: look.hide.concat('helmet') }) : look; }   // bareheaded: the sculpted helm dropped, the plume with it
+function lookWorn(L, look) { return L.helmOff && (look.helmet || !look.hide.includes('helmet')) ? Object.assign({}, look, { helmet: false, hide: look.hide.concat('helmet', 'visor') }) : look; }   // bareheaded: the sculpted helm dropped, its visor and the plume with it
 // the helm off and on again — the home and the barber's chair (his face and hair are the point there, as the sword and shield lie on the floor),
 // and the walk into the pit: every man comes in bareheaded and sets it on in the countdown's last breaths (afDonStep). Only the index, the plume and the hair cap change.
 function lookHelmOff(L, off) { if (!L || !!L.helmOff === !!off) return; L.helmOff = !!off; if (!L.lookBase || !L.inst) return; const look = L.look = lookWorn(L, L.lookBase); lookDraw(L, look); if (L.plume) L.plume.visible = !!(look.helmet && look.plume); lookHairApply(L, look); }
@@ -2006,7 +2009,7 @@ function lookRoundPaint(col, pt, look) {
   const faceOf = i => look.round === 0 ? team : look.round === 1 ? (i < N / 2 ? team : dev) : look.round === 2 ? (Math.floor(i / (N / 4)) % 2 ? dev : team) : (i % 2 ? dev : team);
   for (let v = 0; v < col.count; v++) { const p = pt[v]; c.copy(p < N ? faceOf(p) : p === N ? rim : p === N + 1 ? boss : backC); col.setXYZ(v, c.r * 255, c.g * 255, c.b * 255); } col.needsUpdate = true;
 }
-BV.look = { roll: lookRoll, apply: lookApply, live: () => MODEL_LIVE.map(L => ({ name: L.P.lookName, arch: L.P.lookArch, full: !!L.P.lookFull, shield: L.shieldKind, look: L.look && { kind: L.look.kind, hide: L.look.hide, helmet: L.look.helmet, cloak: L.look.cloak, plume: L.look.plume, hair: L.look.hair, beard: L.look.beard, skin: L.look.skin, hairStyle: L.look.hairStyle, beardStyle: L.look.beardStyle, faceShape: L.look.faceShape, hairMesh: !!(L.mHair && L.mHair.visible) } })) };   // (test: every live figure's look)
+BV.look = { roll: lookRoll, apply: lookApply, live: () => MODEL_LIVE.map(L => ({ name: L.P.lookName, arch: L.P.lookArch, full: !!L.P.lookFull, shield: L.shieldKind, look: L.look && { kind: L.look.kind, hide: L.look.hide, helmet: L.look.helmet, open: L.look.open, cloak: L.look.cloak, plume: L.look.plume, hair: L.look.hair, beard: L.look.beard, skin: L.look.skin, hairStyle: L.look.hairStyle, beardStyle: L.look.beardStyle, faceShape: L.look.faceShape, hairMesh: !!(L.mHair && L.mHair.visible) } })) };   // (test: every live figure's look)
 const MODEL_ON = !/[?&]plastic\b/.test(location.search);   // the warrior is the base soldier; ?plastic brings the plastic figures back
 const MODEL_NAME = 'warrior';
 BV.modelLoad = MODEL_ON ? loadModelRig(MODEL_NAME).then(() => { BV.modelReady = true; console.log('[model] warrior ready'); }, e => console.error('[model] load failed', e)) : Promise.resolve();   // (the home / market figure waits on this — the plastic placeholder is never shown)
@@ -20666,7 +20669,7 @@ function afNpcGear(entry, xp, r) {
   if (xp < 20) g.armor = r() < 0.3 ? 'gambeson' : undefined;                                     // (nothing = a shirt and breeches)
   else if (xp < 40) g.armor = pelt ? north : r() < 0.55 ? 'leather' : r() < 0.5 ? 'gambeson' : undefined;
   else g.armor = xp < 60 ? (pelt ? north : 'mail') : xp < 82 ? (r() < 0.4 ? 'brigandine' : 'plate') : xp < 95 ? 'champion_plate' : (r() < 0.35 ? 'dragon_plate' : 'champion_plate');
-  if (r() < lookOdds(g.armor || 'none', entry.arch, 'helm')) g.helm = 'sallet';                   // a helm by his armour and his class (lookOdds)
+  { const ho = lookOdds(g.armor || 'none', entry.arch, 'helm'), hr = r(); if (hr < ho) g.helm = hr < ho * 0.35 ? 'open_sallet' : 'sallet'; }   // a helm by his armour and his class (lookOdds); a third of them open-faced (one draw, so the same men wear one as before)
   g.shield = xp < 45 ? 'round_shield' : r() < 0.65 ? 'heater_shield' : 'round_shield';
   if (A.weapon === 'bow') g.bow = xp < 40 ? 'hunting_bow' : xp < 70 ? 'longbow' : xp < 90 ? 'warbow' : 'recurve';
   if (A.weapon === 'horse') g.horse = xp < 35 ? 'nag' : xp < 65 ? 'courser' : xp < 85 ? 'destrier' : 'warhorse';

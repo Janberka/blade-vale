@@ -92,6 +92,18 @@ a man carries one at all is still his class (`AF_ARCH.shield`). NPCs roll all of
 Adding a ware: an entry in ARENA_ITEMS (slot, price, rank, stats), a `LOOK_ARMOR` row if it is armour (paint per piece,
 `bare: true` for skin), the plastic fallback in `AF_LOOK.armor`, and a thumbnail branch in `afThumb` if the slot is new.
 
+## The open sallet (2026-09-16, "add a face open version of the current helmet")
+The sallet is one welded shell on the warrior mesh: skull, comb, brim, cheek walls, a face plate with an eye slit and
+breaths, and a bevor closed under the chin, plus two ear discs. The bake now cuts the face plate and the bevor off as a
+piece of their own, `visor` (`visor_tri` in warrior_pieces.py: helmet triangles whose centre lies under the brim and in
+front of the cheeks, z > 0.06 below y 1.69, or under the chin) — a class of TRIANGLES only, its vertices stay `helmet`,
+so it is painted with the helm. The market sells the **Open sallet** (`open_sallet`, `open: true`, 140 g, lighter: +5
+health, +2 poise): `lookRoll` reads the ware's `open` and drops `visor` from the index, so the man wears the skull, brim,
+cheeks and ear discs and his face — beard, scar and all — shows under the brim. A bare head drops `visor` with `helmet`
+(`lookWorn`), the helm carried in on the walk (`lookHelmBuild`) is cut the same way and is rebuilt when the preview
+figure changes to or from an open helm, and NPCs roll a third of their helms open (`afNpcGear`, the same draw as before,
+so the same men wear a helm). Test: `BV.showcase({name, gear: {helm: 'open_sallet'}})`, `BV.look.live()[i].look.open`.
+
 ## The barber (2026-09-14, "we should be able to edit the hair style, hair color, beard style, skin color")
 The "✂ Look" chip in the home's gear row opens THE BARBER, a page of the shell like the market (`page-barber`,
 `afBarberOpen` / `afBarberRender`; the user: "the barber cannot be a modal on the home page, it should be a separate

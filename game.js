@@ -20543,9 +20543,9 @@ function afBuildSword(g, sw, tint) {
     const hy = y0 + len - 0.3, hw = w, dark = mat(sw.guard || 0x3a2a18, { metal: 1, shared: false }), sh = new THREE.Shape();
     sh.moveTo(-0.075, 0.2); sh.lineTo(0.075, 0.2); sh.quadraticCurveTo(hw * 0.5, 0.26, hw * 0.9, 0.36); sh.quadraticCurveTo(hw * 1.14, 0.08, hw * 1.0, -0.2); sh.quadraticCurveTo(hw * 0.92, -0.4, hw * 0.7, -0.5);
     sh.quadraticCurveTo(hw * 0.6, -0.28, hw * 0.36, -0.14); sh.lineTo(0.075, -0.16); sh.lineTo(-0.075, -0.16); sh.closePath();
-    const head = new THREE.Mesh(new THREE.ExtrudeGeometry(sh, { depth: t * 0.9, bevelEnabled: false }), bladeM); head.position.set(0, hy, -t * 0.45); head.castShadow = true; g.add(head);
+    const head = new THREE.Mesh(new THREE.ExtrudeGeometry(sh, { depth: t * 0.9, bevelEnabled: false }), bladeM); head.rotation.y = Math.PI; head.position.set(0, hy, t * 0.45); head.castShadow = true; g.add(head);   // (turned half round on the haft: the profile's +x came out facing the holder — the edge must face the enemy)
     const sock = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.08, 0.4, 8), dark); sock.position.y = hy + 0.02; g.add(sock);   // the socket: an iron collar round the haft
-    if (sw.great) { const poll = boxMesh(hw * 0.32, 0.22, t * 1.6, dark); poll.position.set(-hw * 0.2, hy + 0.02, 0); g.add(poll); }   // (the Dane axe: a hammer poll behind)
+    if (sw.great) { const poll = boxMesh(hw * 0.32, 0.22, t * 1.6, dark); poll.position.set(hw * 0.2, hy + 0.02, 0); g.add(poll); }   // (the Dane axe: a hammer poll behind the edge)
   } else if (sw.style === 'thin') {
     const blade = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.045, len, 6), bladeM); blade.position.y = y0 + len / 2 + 0.02; blade.castShadow = true; g.add(blade);
     const tip = new THREE.Mesh(new THREE.ConeGeometry(0.03, 0.14, 6), bladeM); tip.position.y = y0 + len + 0.09; g.add(tip);

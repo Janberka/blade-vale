@@ -1034,10 +1034,10 @@ const MODEL_RIGS = new Map(), MODEL_LIVE = [];
 // plate steel, the mail under it, cloth, leather, skin), and normals averaged across the split vertices under a crease limit so
 // the plate reads as curved metal and keeps its rims. The low tier keeps the cheap Phong (modelMaterial hands either out;
 // modelRefreshMaterials swaps them when the tier changes). BV.modelDetail({ tile, mailTile, str, ... }) tunes the uniforms live.
-const MODEL_DETAIL = { tile: 2.2, mailTile: 11.0, str: 0.8, plateTile: 3.0, plateStr: 0.3, plateR0: 0.28, plateR1: 0.30, inkTile: 1.4, envI: 0.9, crease: 55 };
+const MODEL_DETAIL = { tile: 2.2, mailTile: 11.0, str: 0.8, plateTile: 3.0, plateStr: 0.3, plateR0: 0.28, plateR1: 0.30, inkTile: 1.4, skinTile: 14, skinStr: 0.35, envI: 0.9, crease: 55 };   // (skinTile × tile: the pores' repeat per model unit; skinStr × str: their depth)
 const MODEL_KIND = { steel: 0, mail: 1, cloth: 2, leather: 3, skin: 4, flat: 5, inkWolf: 6, inkBlood: 7, engraved: 8 };   // (8: steel with knotwork cut into it — the berserker's bracers)   // (6, 7: skin under blue-black knotwork / red war-marks — the ink wares)
 const MODEL_DETAIL_U = {};                                   // the shared uniforms (one object across every program, so a tune lands everywhere)
-for (const k of ['tile', 'mailTile', 'str', 'plateTile', 'plateStr', 'plateR0', 'plateR1', 'inkTile']) MODEL_DETAIL_U['u' + k[0].toUpperCase() + k.slice(1)] = { value: MODEL_DETAIL[k] };
+for (const k of ['tile', 'mailTile', 'str', 'plateTile', 'plateStr', 'plateR0', 'plateR1', 'inkTile', 'skinTile', 'skinStr']) MODEL_DETAIL_U['u' + k[0].toUpperCase() + k.slice(1)] = { value: MODEL_DETAIL[k] };
 let MODEL_DTEX = null;
 function modelDetailOn() { return qualityTier !== 'low'; }
 function modelDetailTextures() {                             // drawn once: height fields → tangent-space normal maps (RepeatWrapping), plus a grey ring mask for the mail
@@ -1053,13 +1053,17 @@ function modelDetailTextures() {                             // drawn once: heig
     for (let dy = -11; dy <= 11; dy++) for (let dx = -11; dx <= 11; dx++) { const d = Math.hypot(dx, dy), t = (d - ringR) / ringW; if (t <= -1 || t >= 1) continue; const hh = 1 - t * t, x = ((cx + dx) % N + N) % N, y = ((cy + dy) % N + N) % N; if (hh > mail[y * N + x]) mail[y * N + x] = hh; } }
   const mailC = new Float32Array(N * N); for (let i = 0; i < N * N; i++) mailC[i] = 0.35 + 0.65 * mail[i];
   // PLATE: a soft value noise (two octaves) and hairline scratches — the hammered, brushed surface of a breastplate
-  const plate = new Float32Array(N * N), grid = (cells, amp) => { const G = new Float32Array(cells * cells); for (let i = 0; i < G.length; i++) G[i] = rnd(); const sm = t => t * t * (3 - 2 * t);
+  const plate = new Float32Array(N * N), grid = (dst, cells, amp) => { const G = new Float32Array(cells * cells); for (let i = 0; i < G.length; i++) G[i] = rnd(); const sm = t => t * t * (3 - 2 * t);   // (tileable value noise, one octave, added onto dst)
     for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) { const fx = x / N * cells, fy = y / N * cells, ix = Math.floor(fx), iy = Math.floor(fy), tx = sm(fx - ix), ty = sm(fy - iy), g = (a, b) => G[((b % cells) * cells) + (a % cells)];
-      const v = (g(ix, iy) * (1 - tx) + g(ix + 1, iy) * tx) * (1 - ty) + (g(ix, iy + 1) * (1 - tx) + g(ix + 1, iy + 1) * tx) * ty; plate[y * N + x] += (v - 0.5) * amp; } };
-  grid(8, 0.5); grid(32, 0.3); for (let i = 0; i < N * N; i++) plate[i] += 0.5;
+      const v = (g(ix, iy) * (1 - tx) + g(ix + 1, iy) * tx) * (1 - ty) + (g(ix, iy + 1) * (1 - tx) + g(ix + 1, iy + 1) * tx) * ty; dst[y * N + x] += (v - 0.5) * amp; } };
+  grid(plate, 8, 0.5); grid(plate, 32, 0.3); for (let i = 0; i < N * N; i++) plate[i] += 0.5;
   for (let i = 0; i < 50; i++) { let x = rnd() * N, y = rnd() * N; const a = rnd() * Math.PI, len = 20 + rnd() * 70, dx = Math.cos(a), dy = Math.sin(a), dep = 0.05 + rnd() * 0.09; for (let k = 0; k < len; k++) { plate[((Math.round(y) % N + N) % N) * N + ((Math.round(x) % N + N) % N)] -= dep; x += dx; y += dy; } }
   { const b = new Float32Array(N * N); for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) { let a = 0; for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) a += plate[((y + j + N) % N) * N + (x + i + N) % N]; b[y * N + x] = a / 9; } plate.set(b); }   // (a 3×3 soften: the pixel-stepped scratches read as jagged lightning up close)
   const plateR = new Float32Array(N * N); for (let i = 0; i < N * N; i++) plateR[i] = 0.5 + (plate[i] - 0.5) * 0.9;
+  // SKIN (2026-09-16, the faces): a soft swell of two octaves under a grain of pores — small round dimples, each a smooth pit
+  const skin = new Float32Array(N * N); grid(skin, 6, 0.30); grid(skin, 24, 0.22); for (let i = 0; i < N * N; i++) skin[i] += 0.5;
+  for (let i = 0; i < 2600; i++) { const cx = rnd() * N, cy = rnd() * N, r = 1.4 + rnd() * 1.6, dep = 0.10 + rnd() * 0.16; for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) { const d = Math.hypot(dx, dy) / r; if (d >= 1) continue; const x = ((Math.round(cx) + dx) % N + N) % N, y = ((Math.round(cy) + dy) % N + N) % N; skin[y * N + x] -= dep * (1 - d * d) * (1 - d * d); } }
+  const skinR = new Float32Array(N * N); for (let i = 0; i < N * N; i++) skinR[i] = 0.5 + (skin[i] - 0.5) * 0.8;
   // CLOTH: a plain weave
   const cloth = new Float32Array(N * N); for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) cloth[y * N + x] = 0.5 + 0.25 * (Math.sin(x * Math.PI / 4) + Math.sin(y * Math.PI / 4));
   // INK: knotwork, a triskele, chevrons and runes as a white-on-black mask (drawn with the 2D canvas, tiled on the skin)
@@ -1069,13 +1073,13 @@ function modelDetailTextures() {                             // drawn once: heig
   g.lineWidth = 5; for (let i = 0; i < 5; i++) { g.beginPath(); g.moveTo(126 + i * 24, 108); g.lineTo(138 + i * 24, 132); g.lineTo(150 + i * 24, 108); g.stroke(); }   // chevrons
   for (const [x, y] of [[22, 232], [126, 238], [224, 120], [246, 22]]) { g.beginPath(); g.moveTo(x, y - 18); g.lineTo(x, y + 18); g.moveTo(x, y - 10); g.lineTo(x + 14, y); g.stroke(); }   // runes
   const inkT = new THREE.CanvasTexture(ic); inkT.wrapS = inkT.wrapT = THREE.RepeatWrapping;
-  MODEL_DTEX = { mailN: normalOf(mail, 3.0), mailC: greyOf(mailC), plateN: normalOf(plate, 1.2), plateR: greyOf(plateR), clothN: normalOf(cloth, 1.5), inkT };
+  MODEL_DTEX = { mailN: normalOf(mail, 3.0), mailC: greyOf(mailC), plateN: normalOf(plate, 1.2), plateR: greyOf(plateR), clothN: normalOf(cloth, 1.5), skinN: normalOf(skin, 2.0), skinR: greyOf(skinR), inkT };
   return MODEL_DTEX;
 }
-function modelSmoothNormals(geo, creaseDeg) {               // average the normals of every vertex sharing a position — but only with faces within the crease angle, so plate rims stay rims
+function modelSmoothNormals(geo, creaseDeg, only) {         // average the normals of every vertex sharing a position — but only with faces within the crease angle, so plate rims stay rims (only: a vertex filter — the rest keep theirs)
   const pos = geo.getAttribute('position'), nrm = geo.getAttribute('normal'); if (!pos || !nrm) return;
-  const n = pos.count, groups = new Map(); for (let i = 0; i < n; i++) { const k = Math.round(pos.getX(i) * 1e4) + ',' + Math.round(pos.getY(i) * 1e4) + ',' + Math.round(pos.getZ(i) * 1e4); let g = groups.get(k); if (!g) groups.set(k, g = []); g.push(i); }
-  const out = new Float32Array(n * 3), cosC = Math.cos(creaseDeg * Math.PI / 180);
+  const n = pos.count, groups = new Map(); for (let i = 0; i < n; i++) { if (only && !only(i)) continue; const k = Math.round(pos.getX(i) * 1e4) + ',' + Math.round(pos.getY(i) * 1e4) + ',' + Math.round(pos.getZ(i) * 1e4); let g = groups.get(k); if (!g) groups.set(k, g = []); g.push(i); }
+  const out = only ? new Float32Array(nrm.array) : new Float32Array(n * 3), cosC = Math.cos(creaseDeg * Math.PI / 180);
   for (const g of groups.values()) for (const i of g) { let x = 0, y = 0, z = 0; const ix = nrm.getX(i), iy = nrm.getY(i), iz = nrm.getZ(i);
     for (const j of g) { const jx = nrm.getX(j), jy = nrm.getY(j), jz = nrm.getZ(j); if (ix * jx + iy * jy + iz * jz >= cosC) { x += jx; y += jy; z += jz; } }
     const l = Math.hypot(x, y, z) || 1; out[i * 3] = x / l; out[i * 3 + 1] = y / l; out[i * 3 + 2] = z / l; }
@@ -1101,7 +1105,7 @@ const MODEL_DETAIL_GLSL = {
   vertPos: `#include <worldpos_vertex>\n vTri = transformed; vKind = kind;`,
   fragHead: `#include <common>
 varying float vKind; varying vec3 vTri; varying vec3 vTriN; varying mat3 vTriM;
-uniform sampler2D tPlateN, tMailN, tClothN, tPlateR, tMailC, tInk; uniform float uTile, uMailTile, uStr, uPlateTile, uPlateStr, uPlateR0, uPlateR1, uInkTile;
+uniform sampler2D tPlateN, tMailN, tClothN, tSkinN, tPlateR, tMailC, tSkinR, tInk; uniform float uTile, uMailTile, uStr, uPlateTile, uPlateStr, uPlateR0, uPlateR1, uInkTile, uSkinTile, uSkinStr;
 vec3 triW(vec3 n) { vec3 w = pow(abs(n), vec3(4.0)); return w / (w.x + w.y + w.z); }
 vec3 triNormal(sampler2D t, vec3 p, vec3 wn, float s, float str) { vec3 w = triW(wn);
   vec3 nx = texture2D(t, p.zy * s).xyz * 2.0 - 1.0, ny = texture2D(t, p.xz * s).xyz * 2.0 - 1.0, nz = texture2D(t, p.xy * s).xyz * 2.0 - 1.0;
@@ -1113,12 +1117,13 @@ float triGray(sampler2D t, vec3 p, vec3 wn, float s) { vec3 w = triW(wn); return
   if (k == 0 || k == 8) pn = triNormal(tPlateN, vTri, wn, uTile * uPlateTile, uStr * uPlateStr);
   else if (k == 1) pn = triNormal(tMailN, vTri, wn, uMailTile, uStr);
   else if (k == 2 || k == 3) pn = triNormal(tClothN, vTri, wn, uTile * 1.6, uStr * 0.35);
-  normal = normalize(vTriM * pn); }`,
+  else if (k == 4 || k == 6 || k == 7) pn = triNormal(tSkinN, vTri, wn, uTile * uSkinTile, uStr * uSkinStr);
+  normal = normalize(vTriM * pn); }`,   // (4, 6, 7: skin, bare or inked — the pores)
   fragRough: `float roughnessFactor = roughness; { int k = int(vKind + 0.5);
   if (k == 0) roughnessFactor = uPlateR0 + uPlateR1 * triGray(tPlateR, vTri, vTriN, uTile * uPlateTile * 1.7);
   else if (k == 8) roughnessFactor = uPlateR0 + 0.1 + 0.5 * smoothstep(0.2, 0.6, triGray(tInk, vTri, vTriN, uInkTile * 2.4));
   else if (k == 1) roughnessFactor = 0.45 + 0.35 * (1.0 - triGray(tMailC, vTri, vTriN, uMailTile));
-  else if (k == 2) roughnessFactor = 0.92; else if (k == 3) roughnessFactor = 0.70; else if (k == 4 || k >= 6) roughnessFactor = 0.55; else roughnessFactor = 0.4; }`,
+  else if (k == 2) roughnessFactor = 0.92; else if (k == 3) roughnessFactor = 0.70; else if (k == 4 || k >= 6) roughnessFactor = 0.42 + 0.26 * triGray(tSkinR, vTri, vTriN, uTile * uSkinTile * 0.7); else roughnessFactor = 0.4; }`,   // (skin: an oily sheen over the swells, matte in the pores)
   fragMetal: `float metalnessFactor = metalness; { int k = int(vKind + 0.5); metalnessFactor = (k == 0 || k == 8) ? 0.88 : (k == 1) ? 0.80 : 0.0; }`,
   fragIbl: `{ if (int(vKind + 0.5) >= 2) iblIrradiance *= 0.45; }
 #include <lights_fragment_end>`,   // (the sky's ambient washed the dyed cloth pink: cloth, leather and skin take less of it)
@@ -1135,7 +1140,7 @@ function modelMaterial(R, o = {}) {                          // the figure's mat
   if (!det) m = new THREE.MeshPhongMaterial(noMap ? { color: col, shininess: 4, specular: 0x050505, skinning: !!o.skinning } : { map: R.tex, color: col, shininess: 6, specular: 0x111111, skinning: !!o.skinning, vertexColors: !!o.vc });
   else { const T = modelDetailTextures(); modelEnvFor(ctx);
     m = new THREE.MeshStandardMaterial({ map: noMap ? null : R.tex, color: col, metalness: 1, roughness: 1, skinning: !!o.skinning, vertexColors: !!o.vc, envMapIntensity: MODEL_DETAIL.envI });
-    m.onBeforeCompile = sh => { const G = MODEL_DETAIL_GLSL; Object.assign(sh.uniforms, MODEL_DETAIL_U, { tPlateN: { value: T.plateN }, tMailN: { value: T.mailN }, tClothN: { value: T.clothN }, tPlateR: { value: T.plateR }, tMailC: { value: T.mailC }, tInk: { value: T.inkT } });
+    m.onBeforeCompile = sh => { const G = MODEL_DETAIL_GLSL; Object.assign(sh.uniforms, MODEL_DETAIL_U, { tPlateN: { value: T.plateN }, tMailN: { value: T.mailN }, tClothN: { value: T.clothN }, tPlateR: { value: T.plateR }, tMailC: { value: T.mailC }, tSkinN: { value: T.skinN }, tSkinR: { value: T.skinR }, tInk: { value: T.inkT } });
       sh.vertexShader = sh.vertexShader.replace('#include <common>', G.vertHead).replace('#include <defaultnormal_vertex>', G.vertNormal).replace('#include <worldpos_vertex>', G.vertPos);
       sh.fragmentShader = sh.fragmentShader.replace('#include <common>', G.fragHead).replace('#include <normal_fragment_maps>', G.fragNormal).replace('#include <roughnessmap_fragment>', G.fragRough).replace('#include <metalnessmap_fragment>', G.fragMetal).replace('#include <map_fragment>', G.fragMap).replace('#include <lights_fragment_end>', G.fragIbl); };
     m.customProgramCacheKey = () => 'bv-surface'; }
@@ -1166,14 +1171,14 @@ async function loadModelRig(name) {
   let pieces = null; try { const pr = await fetch(base + 'pieces.json'); if (pr.ok) pieces = await pr.json(); } catch (e) { pieces = null; }
   if (pieces) for (const m of meshes) { const key = Object.keys(pieces).find(k => m.name.indexOf('_' + k + '_') >= 0); const pj = key && pieces[key]; if (!pj) continue; m.pieces = pj; m.short = key;
     const ci = pj.mats.indexOf('cloth'), uv = m.geo.getAttribute('uv'); if (ci >= 0 && uv) { for (let v = 0; v < uv.count; v++) if (pj.vmat[v] === ci) uv.setXY(v, LOOK_WHITE_UV[0], LOOK_WHITE_UV[1]); uv.needsUpdate = true; }   // (the blue cloth → a white cell: the vertex colour IS the dye)
-    if (key === 'body') lookRuggedHead(m.geo, pj);
+    if (key === 'body') { lookHeadRefine(m.geo, pj); lookRuggedHead(m.geo, pj); }   // (the face: refined one level, then roughened)
     if (key === 'armor') { const sk = pj.classes.indexOf('skirt'), sl = pj.classes.indexOf('sleeve'), cl = pj.mats.indexOf('cloth'), ps = m.geo.getAttribute('position'), idx = m.geo.index.array;   // the bake files the cloth showing at the ELBOWS under "skirt" (one connected cloth component; the arms hang at waist height in the bind pose) — only the flank tells: out past |x| 0.24 it is the arm's
       if (sk >= 0 && sl >= 0 && cl >= 0) { for (let v = 0; v < ps.count; v++) if (pj.vclass[v] === sk && pj.vmat[v] === cl && Math.abs(ps.getX(v)) >= 0.24) pj.vclass[v] = sl;
         for (let t = 0; t < pj.tri.length; t++) if (pj.tri[t] === sk && pj.vclass[idx[t * 3]] === sl && pj.vclass[idx[t * 3 + 1]] === sl && pj.vclass[idx[t * 3 + 2]] === sl) pj.tri[t] = sl;
         const st = pj.classes.push('skirtTop') - 1;        // and the cloth above the belt (y > 0.99) — under the cuirass before, it would peek over the belt of a bare man
         for (let v = 0; v < ps.count; v++) if (pj.vclass[v] === sk && pj.vmat[v] === cl && ps.getY(v) > 0.99) pj.vclass[v] = st;
         for (let t = 0; t < pj.tri.length; t++) if (pj.tri[t] === sk && [0, 1, 2].every(k => pj.vclass[idx[t * 3 + k]] === st)) pj.tri[t] = st; } } }
-  for (const m of meshes) { modelKindAttr(m); modelSmoothNormals(m.geo, MODEL_DETAIL.crease); }   // the surface pass: what each vertex is made of, and normals rounded under a crease limit
+  for (const m of meshes) { modelKindAttr(m); modelSmoothNormals(m.geo, MODEL_DETAIL.crease); if (m.pieces && m.pieces.classes.indexOf('hair') >= 0) lookFaceNormals(m.geo, m.pieces); }   // the surface pass: what each vertex is made of, and normals rounded under a crease limit (a face under none of it)
   if (modelDetailOn()) MODEL_DETAIL_LIVE = true;           // (so the pit's hour builds the sky the steel reflects before the first man is dressed)
   const entry = { name, spec, g, meshes, tex, pieces }; MODEL_RIGS.set(name, entry); return entry;
 }
@@ -1396,6 +1401,83 @@ function lookRuggedHead(geo, pj) {
       for (const v of vs) pos.setXYZ(v, pos.getX(v), cy + (pos.getY(v) - cy) * 0.62, pos.getZ(v) - 0.004); } }
   pos.needsUpdate = true; geo.computeVertexNormals();
 }
+// ---- THE FACE'S SURFACE (2026-09-16, "character faces are too low poly") ----
+// The head is a few big triangles (~750 for the skull and its features, split at every palette seam, the eyes ~290 more), so
+// under the surface pass it still read as a paper mask: flat facets, a nose of four planes. Once, at load, the head's and the
+// eyes' triangles are refined one level by PHONG TESSELLATION (Boubekeur & Alexa 2008): every vertex the artist placed stays
+// where it is — so every position band in this file (lookRuggedHead, the bake's regions, lookFacePoint, the hairline) still
+// means what it did — and each edge gains a midpoint lifted onto the smooth surface the vertex normals imply: the midpoint
+// projected onto the tangent plane at either end, the two averaged, blended in by LOOK_REFINE_LIFT. Local and interpolating,
+// it needs no fans or valences, so the forehead's tall thin triangles and the brow's flap take it without a ripple (a
+// butterfly stencil furrowed the forehead). The vertices are split at the seams, so the normals it lifts by are the WELDED
+// ones (every triangle at a position) and the new vertices are emitted per split edge — seams and palette cells survive. A
+// new vertex takes its piece from the ends of its edge (a seam between two pieces: the bake's own position rules say which
+// side — lookBakeHeadClass, a port of tools/realmesh/warrior_pieces.py), its palette cell and skin weights from the ends;
+// pieces.json's per-vertex and per-triangle arrays grow with it. The normals: a breastplate's rims want the 55° crease, a face
+// wants none of it (lookFaceNormals). ~3 100 triangles more a bare head.
+const LOOK_REFINE_CLASSES = new Set(['head', 'hair', 'beard', 'brow', 'socket', 'scarL', 'scarR', 'eye']);
+const LOOK_REFINE_LIFT = 0.75;                               // how far a new midpoint leaves the flat edge for the tangent planes (0: flat, 1: the full Phong lift)
+const LOOK_FACE_CREASE = 120;                                // the face's normals average across anything gentler than this: only the nostrils and the fold of the lips stay edges
+function lookBakeHeadClass(x, y, z) {                        // the bake's regions of the bald head (raw bind pose, model units, the face looks +z) — warrior_pieces.py, kept in step
+  const ax = Math.abs(x), face = z > 0.045 && y < 1.775;     // the forehead and face stay skin
+  if ((y > 1.725 && !face) || (z < -0.03 && y > 1.60) || (ax > 0.085 && y > 1.69 && !face)) return 'hair';
+  if (y > 1.705 && y < 1.74 && z > 0.085 && ax < 0.095) return 'brow';                                          // the brow ridge over the eyes
+  if (y > 1.47 && y < 1.615 && z > -0.03 && ax < 0.115) return 'beard';                                         // jaw, chin, lips: a full beard
+  if (y >= 1.615 && y < 1.665 && ax > 0.075 && z > 0.0) return 'beard';                                         // sideburns up the cheek
+  if (y > 1.655 && y < 1.705 && z > 0.07 && ax > 0.025 && ax < 0.1) return 'socket';                            // round the eyes
+  if (z > 0.06 && ax > 0.03 && ax < 0.095 && Math.abs((y - 1.665) + 0.9 * (ax - 0.06)) < 0.014) return x < 0 ? 'scarL' : 'scarR';   // a cut across one cheek
+  return 'head';
+}
+function lookHeadRefine(geo, pj) {
+  const pos = geo.getAttribute('position'), uv = geo.getAttribute('uv'), si = geo.getAttribute('skinIndex'), sw = geo.getAttribute('skinWeight'), idx = geo.index.array, nv = pos.count, nt = idx.length / 3;
+  const split = new Uint8Array(nt); let ns = 0; for (let t = 0; t < nt; t++) if (LOOK_REFINE_CLASSES.has(pj.classes[pj.tri[t]])) { split[t] = 1; ns++; } if (!ns || !si || !sw) return;
+  // the welded mesh: one id per position, and at each one the normal of every triangle meeting there (area-weighted)
+  const wid = new Int32Array(nv), W = []; { const m = new Map(); for (let v = 0; v < nv; v++) { const k = Math.round(pos.getX(v) * 1e4) + ',' + Math.round(pos.getY(v) * 1e4) + ',' + Math.round(pos.getZ(v) * 1e4); let w = m.get(k); if (w == null) { w = W.length; m.set(k, w); W.push([pos.getX(v), pos.getY(v), pos.getZ(v)]); } wid[v] = w; } }
+  const WN = new Float32Array(W.length * 3);
+  for (let t = 0; t < nt; t++) { if (!split[t]) continue; const a = wid[idx[t * 3]], b = wid[idx[t * 3 + 1]], c = wid[idx[t * 3 + 2]], A = W[a], B = W[b], C = W[c];
+    const ux = B[0] - A[0], uy = B[1] - A[1], uz = B[2] - A[2], vx = C[0] - A[0], vy = C[1] - A[1], vz = C[2] - A[2], nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    for (const w of [a, b, c]) { WN[w * 3] += nx; WN[w * 3 + 1] += ny; WN[w * 3 + 2] += nz; } }
+  for (let w = 0; w < W.length; w++) { const l = Math.hypot(WN[w * 3], WN[w * 3 + 1], WN[w * 3 + 2]) || 1; WN[w * 3] /= l; WN[w * 3 + 1] /= l; WN[w * 3 + 2] /= l; }
+  const edgePoint = (a, b) => { const A = W[a], B = W[b], m = [(A[0] + B[0]) / 2, (A[1] + B[1]) / 2, (A[2] + B[2]) / 2], q = [0, 0, 0];   // the midpoint dropped onto the tangent plane at either end, averaged
+    for (const [P, w] of [[A, a], [B, b]]) { const nx = WN[w * 3], ny = WN[w * 3 + 1], nz = WN[w * 3 + 2], d = (m[0] - P[0]) * nx + (m[1] - P[1]) * ny + (m[2] - P[2]) * nz; q[0] += (m[0] - d * nx) / 2; q[1] += (m[1] - d * ny) / 2; q[2] += (m[2] - d * nz) / 2; }
+    return [m[0] + (q[0] - m[0]) * LOOK_REFINE_LIFT, m[1] + (q[1] - m[1]) * LOOK_REFINE_LIFT, m[2] + (q[2] - m[2]) * LOOK_REFINE_LIFT]; };
+  // the new vertices, one per split edge — attributes from the edge's ends, the piece from the bake's rules at a seam
+  const P2 = [], UV2 = [], SI2 = [], SW2 = [], edgeV = new Map(), classOf = i => pj.classes[pj.vclass[i]];
+  const mid = (i, j) => { const k = i < j ? i + ',' + j : j + ',' + i; let o = edgeV.get(k); if (o != null) return o; o = nv + P2.length / 3; edgeV.set(k, o);
+    const q = edgePoint(wid[i], wid[j]); P2.push(q[0], q[1], q[2]); if (uv) UV2.push((uv.getX(i) + uv.getX(j)) / 2, (uv.getY(i) + uv.getY(j)) / 2);
+    const w = new Map(); for (const v of [i, j]) for (let c = 0; c < 4; c++) { const ww = sw.array[v * 4 + c]; if (ww > 0) { const bn = si.array[v * 4 + c]; w.set(bn, (w.get(bn) || 0) + ww / 2); } }
+    const top = [...w].sort((x, y) => y[1] - x[1]).slice(0, 4); let sum = 0; for (const t of top) sum += t[1]; for (let c = 0; c < 4; c++) { SI2.push(top[c] ? top[c][0] : 0); SW2.push(top[c] && sum > 0 ? top[c][1] / sum : 0); }
+    const ci = classOf(i), cj = classOf(j), rule = ci !== cj && LOOK_HEAD_CLASSES.has(ci) && LOOK_HEAD_CLASSES.has(cj) ? lookBakeHeadClass(q[0], q[1], q[2]) : null, cls = ci === cj ? ci : rule === ci || rule === cj ? rule : ci === 'head' ? cj : ci;   // (inside a piece it stays that piece, so no boundary goes jagged)
+    let ki = pj.classes.indexOf(cls); if (ki < 0) ki = pj.vclass[i]; pj.vclass.push(ki); pj.vmat.push(pj.vmat[i]); return o; };
+  const I2 = [], T2 = [], triClass = (a, b, c) => { const A = pj.vclass[a], B = pj.vclass[b], C = pj.vclass[c]; return A === B ? A : B === C ? B : A; };   // (the bake's majority rule)
+  for (let t = 0; t < nt; t++) { const i = idx[t * 3], j = idx[t * 3 + 1], k = idx[t * 3 + 2];
+    if (!split[t]) { I2.push(i, j, k); T2.push(pj.tri[t]); continue; }
+    const a = mid(i, j), b = mid(j, k), c = mid(k, i); for (const tri of [[i, a, c], [j, b, a], [k, c, b], [a, b, c]]) { I2.push(tri[0], tri[1], tri[2]); T2.push(triClass(tri[0], tri[1], tri[2])); } }
+  const nv2 = nv + P2.length / 3, grow = (attr, extra, n) => { const a = new attr.array.constructor(nv2 * n); a.set(attr.array); a.set(extra, nv * n); return new THREE.BufferAttribute(a, n, attr.normalized); };
+  geo.setAttribute('position', grow(pos, P2, 3)); if (uv) geo.setAttribute('uv', grow(uv, UV2, 2)); geo.setAttribute('skinIndex', grow(si, SI2, 4)); geo.setAttribute('skinWeight', grow(sw, SW2, 4));
+  geo.deleteAttribute('normal'); geo.setIndex(new THREE.BufferAttribute(nv2 > 65535 ? new Uint32Array(I2) : new Uint16Array(I2), 1)); pj.tri = T2; pj.refined = true;
+}
+// the face's normals: averaged across the seams and the facets under LOOK_FACE_CREASE (after the crease pass), then SOFTENED — a few
+// rounds of each welded vertex's normal averaged with its neighbours' (the crease still respected). The forehead and the cheeks are
+// tall thin triangles fanning from a few vertices; normals that bend at every one of them shade as vertical bands (Mach bands along
+// the edges, on the coarse head too), and a normal field spread over the ring reads as one curved brow. The welded neighbourhood is
+// built once per rig from the refined head (lookFaceAdj) — every body's copy shares its topology, so lookFaceApply reuses it.
+const LOOK_FACE_SOFTEN = 2;
+function lookFaceAdj(geo, pj) {
+  if (pj.faceAdj) return pj.faceAdj; const pos = geo.getAttribute('position'), idx = geo.index.array, key = new Map(), wid = new Int32Array(pos.count).fill(-1), groups = [];
+  for (let v = 0; v < pos.count; v++) { if (!LOOK_REFINE_CLASSES.has(pj.classes[pj.vclass[v]])) continue; const k = Math.round(pos.getX(v) * 1e4) + ',' + Math.round(pos.getY(v) * 1e4) + ',' + Math.round(pos.getZ(v) * 1e4); let w = key.get(k); if (w == null) { w = groups.length; key.set(k, w); groups.push([]); } groups[w].push(v); wid[v] = w; }
+  const nb = groups.map(() => new Set()); for (let t = 0; t < idx.length; t += 3) { const a = wid[idx[t]], b = wid[idx[t + 1]], c = wid[idx[t + 2]]; if (a < 0 || b < 0 || c < 0) continue; nb[a].add(b).add(c); nb[b].add(a).add(c); nb[c].add(a).add(b); }
+  return (pj.faceAdj = { groups, nbr: nb.map(s => [...s]) });
+}
+function lookFaceNormals(geo, pj) {
+  modelSmoothNormals(geo, LOOK_FACE_CREASE, v => LOOK_REFINE_CLASSES.has(pj.classes[pj.vclass[v]]));
+  const adj = lookFaceAdj(geo, pj), nrm = geo.getAttribute('normal'), n = adj.groups.length, cosC = Math.cos(LOOK_FACE_CREASE * Math.PI / 180); let cur = new Float32Array(n * 3), nxt = new Float32Array(n * 3);
+  for (let w = 0; w < n; w++) { const v = adj.groups[w][0]; cur[w * 3] = nrm.getX(v); cur[w * 3 + 1] = nrm.getY(v); cur[w * 3 + 2] = nrm.getZ(v); }
+  for (let it = 0; it < LOOK_FACE_SOFTEN; it++) { for (let w = 0; w < n; w++) { const wx = cur[w * 3], wy = cur[w * 3 + 1], wz = cur[w * 3 + 2]; let x = wx, y = wy, z = wz;
+      for (const j of adj.nbr[w]) { const jx = cur[j * 3], jy = cur[j * 3 + 1], jz = cur[j * 3 + 2]; if (jx * wx + jy * wy + jz * wz >= cosC) { x += jx; y += jy; z += jz; } }
+      const l = Math.hypot(x, y, z) || 1; nxt[w * 3] = x / l; nxt[w * 3 + 1] = y / l; nxt[w * 3 + 2] = z / l; } const t = cur; cur = nxt; nxt = t; }
+  for (let w = 0; w < n; w++) for (const v of adj.groups[w]) nrm.setXYZ(v, cur[w * 3], cur[w * 3 + 1], cur[w * 3 + 2]); nrm.needsUpdate = true;
+}
 const LOOK_HAIR = [0x1a1210, 0x1a1210, 0x2a1a12, 0x3a2416, 0x3a2416, 0x5c3a1e, 0x8a5a2e, 0x6a6a68, 0x4a3a3a];   // black, black, near-black, dark brown ×2, brown, auburn, grey, ash — cropped and dark, mostly
 const LOOK_SKIN = [0xf0d4b8, 0xe4c4a4, 0xd8b090, 0xc89a78, 0xa87858, 0x8a5c40];
 // THE BARBER (gear.look = { s, f, h, c, b }, indexes below; ARENA_LOOK in arena-items.js holds the ranges): what a player picks
@@ -1485,11 +1567,11 @@ function lookRoll(name, arch, gear, pal, o = {}) {
 // the face: beard styles are regions of the bald head — the baked beard class cut by position (bind pose, model units,
 // the face looks +z): the chin for a goatee, the lip for a moustache. The hair is the cap (lookHairApply); the scalp under
 // it is painted too, but only well inside the hairline — a painted vertex at the edge would bleed down the forehead
-function lookFaceColour(look, cls, mt, x, y, z) {
-  const hs = look.hairStyle | 0, bs = look.beardStyle | 0;
-  if (look.hair != null && cls === 'hair' && lookHairUnder(hs, x, y, z)) return look.hair;
+function lookFaceColour(look, cls, mt, x, y, z, scalp, brow) {
+  const bs = look.beardStyle | 0;
+  if (look.hair != null && cls === 'hair' && scalp) return look.hair;   // (scalp: this vertex is well under the cap — lookScalpMask; brow: well inside the brow — lookBrowMask)
   if (cls === 'beard' && look.beard != null) { const on = bs === 2 || bs === 5 || bs === 1 || (bs === 3 && Math.abs(x) < 0.05) || (bs === 4 && y > 1.585 && z > 0.1); if (on) return bs === 1 ? look.stubble : look.beard; }
-  if (cls === 'brow') return look.brow; if (cls === 'socket') return look.socket; if (cls === 'scarL' || cls === 'scarR') return look.scar === cls ? look.scarC : look.skin; if (cls === 'eye') return 0xd8d0c8;
+  if (cls === 'brow') return brow ? look.brow : look.skin; if (cls === 'socket') return look.socket; if (cls === 'scarL' || cls === 'scarR') return look.scar === cls ? look.scarC : look.skin; if (cls === 'eye') return 0xd8d0c8;
   if (mt === 'leather') return look.lip;                     // (the palette's lip/brow brown: no painted lips)
   return look.skin;
 }
@@ -1528,8 +1610,8 @@ function lookApply(L, look) {
     else if (sm.userData.ownUv) { sm.geometry.setAttribute('uv', uv0); sm.userData.ownUv = false; }
     // skin vertices carry a per-vertex colour, so the palette's skin (~#ffdcb4) × tint: the tint is chosen so tint × skin ≈ the tone wanted
     if (skinTint) lookFaceApply(sm, look, pj);                 // (the bones: this body's own head positions)
-    const pos = sm.userData.geo0.getAttribute('position');
-    for (let v = 0; v < nv; v++) { const cls = pj.classes[pj.vclass[v]], mt = pj.mats[pj.vmat[v]]; c.setHex(skinTint ? lookFaceColour(look, cls, mt, pos.getX(v), pos.getY(v), pos.getZ(v)) : lookColour(look, cls, mt)); if ((skinTint || pj.naked) && mt === 'skin' && cls !== 'eye') { c.r = Math.min(1, c.r / 1.0); c.g = Math.min(1, c.g / 0.86); c.b = Math.min(1, c.b / 0.70); } col.setXYZ(v, c.r * 255, c.g * 255, c.b * 255); } col.needsUpdate = true;
+    const pos = sm.userData.geo0.getAttribute('position'), scalp = skinTint ? lookScalpMask(sm, look, pj) : null, brow = skinTint ? lookBrowMask(sm, pj) : null;
+    for (let v = 0; v < nv; v++) { const cls = pj.classes[pj.vclass[v]], mt = pj.mats[pj.vmat[v]]; c.setHex(skinTint ? lookFaceColour(look, cls, mt, pos.getX(v), pos.getY(v), pos.getZ(v), !!(scalp && scalp[v]), !!(brow && brow[v])) : lookColour(look, cls, mt)); if ((skinTint || pj.naked) && mt === 'skin' && cls !== 'eye') { c.r = Math.min(1, c.r / 1.0); c.g = Math.min(1, c.g / 0.86); c.b = Math.min(1, c.b / 0.70); } col.setXYZ(v, c.r * 255, c.g * 255, c.b * 255); } col.needsUpdate = true;
     const kd0 = sm.userData.geo0.getAttribute('kind');           // this body's own kinds, following the paint (lookKind)
     if (kd0 && !skinTint) { if (!sm.userData.ownKind) { sm.geometry.setAttribute('kind', kd0.clone()); sm.userData.ownKind = true; } const kd = sm.geometry.getAttribute('kind');
       for (let v = 0; v < nv; v++) kd.setX(v, lookKind(look, pj.classes[pj.vclass[v]], pj.mats[pj.vmat[v]], kd0.getX(v))); kd.needsUpdate = true; }
@@ -1607,6 +1689,24 @@ function lookHairline(hs, a) {
 function lookBearing(x, z) { return Math.atan2(x, z - LOOK_SKULL.zc) * 180 / Math.PI; }
 // is a scalp vertex well under the cap (painted) — 3 cm inside the hairline, and under the fin alone for a mohawk
 function lookHairUnder(hs, x, y, z) { if (hs <= 0) return false; if (hs === 4 && Math.abs(x) > 0.045) return false; return y > lookHairline(hs, lookBearing(x, z)) + 0.03; }
+// the scalp under the cap is painted the hair's colour — but only at a vertex none of whose triangles reaches out from under it. A
+// painted vertex at the edge bled its colour down every triangle it touched, and the forehead is tall slivers fanning from the crown:
+// on the refined head that read as a comb of dark bands down to the brow. One mask per style per rig (the welded neighbourhood of lookFaceAdj).
+function lookScalpMask(sm, look, pj) {
+  const hs = look.hairStyle | 0; if (hs <= 0 || look.hair == null) return null; pj.scalpMask = pj.scalpMask || {}; if (pj.scalpMask[hs]) return pj.scalpMask[hs];
+  const g0 = sm.userData.geo0, pos = g0.getAttribute('position'), adj = lookFaceAdj(g0, pj), n = adj.groups.length, under = new Uint8Array(n), mask = new Uint8Array(pos.count);
+  for (let w = 0; w < n; w++) { const v = adj.groups[w][0]; under[w] = pj.classes[pj.vclass[v]] === 'hair' && lookHairUnder(hs, pos.getX(v), pos.getY(v), pos.getZ(v)) ? 1 : 0; }
+  for (let w = 0; w < n; w++) { if (!under[w] || !adj.nbr[w].every(j => under[j])) continue; for (const v of adj.groups[w]) mask[v] = 1; }
+  return (pj.scalpMask[hs] = mask);
+}
+// the brow the same way: the bake's brow box takes the eyebrow's ridge AND the skin round its root, and that skin's paint ran up the
+// forehead's slivers to the hairline. Painted only where every neighbour is brow too — the ridge, and the skin right under it.
+function lookBrowMask(sm, pj) {
+  if (pj.browMask) return pj.browMask; const g0 = sm.userData.geo0, adj = lookFaceAdj(g0, pj), n = adj.groups.length, bi = pj.classes.indexOf('brow'), is = new Uint8Array(n), mask = new Uint8Array(g0.getAttribute('position').count);
+  for (let w = 0; w < n; w++) is[w] = pj.vclass[adj.groups[w][0]] === bi ? 1 : 0;
+  for (let w = 0; w < n; w++) { if (!is[w] || !adj.nbr[w].every(j => is[j])) continue; for (const v of adj.groups[w]) mask[v] = 1; }
+  return (pj.browMask = mask);
+}
 // the skull's triangles (the head's classes, not the eyes) in the bind pose, flat: 9 floats a triangle
 function lookSkullTris(R) {
   if (R.skullTris) return R.skullTris; const m = R.meshes.find(m => m.pieces && m.pieces.classes.indexOf('hair') >= 0); if (!m) return (R.skullTris = new Float32Array(0));
@@ -1723,7 +1823,7 @@ function lookFaceApply(sm, look, pj) {
   if (!sm.userData.ownPos) { geo.setAttribute('position', g0.getAttribute('position').clone()); geo.setAttribute('normal', g0.getAttribute('normal').clone()); sm.userData.ownPos = true; }
   const p0 = g0.getAttribute('position'), p = geo.getAttribute('position'), o = [0, 0, 0];
   for (let v = 0; v < p.count; v++) { const x = p0.getX(v), y = p0.getY(v), z = p0.getZ(v); if (LOOK_HEAD_CLASSES.has(pj.classes[pj.vclass[v]])) { lookFacePoint(f, x, y, z, o); p.setXYZ(v, o[0], o[1], o[2]); } else p.setXYZ(v, x, y, z); }
-  p.needsUpdate = true; geo.computeVertexNormals(); sm.userData.face = f;
+  p.needsUpdate = true; geo.computeVertexNormals(); modelSmoothNormals(geo, MODEL_DETAIL.crease); lookFaceNormals(geo, pj); sm.userData.face = f;   // (the normals as at load: the crease pass, then the face's)
 }
 // A ROUND SHIELD in the figure's shield hand: a faceted disc with a rim and a boss, skinned to the same bone as the
 // figure's own heater so it rides the arm exactly as that does. Painted per look: plain, halves, quarters, or rays.

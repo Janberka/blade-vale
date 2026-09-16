@@ -117,6 +117,66 @@ The scalp is still painted under it, but only 3 cm inside the hairline (`lookHai
 brow; all below the hairline, so one cap fits every face), applied on this body's own copy of the positions and normals
 (`lookFaceApply`; shape 0 'hard' shares the rig's). Rolled from the name on its own stream, so nobody's hair or kit changed.
 
+## The bare man's waist (2026-09-16, "why my char has a naked ass and a box on it")
+A bare look (the pelt, the berserker's mantle) drops the cuirass, and two things went with it. THE BOX: the two belt pouches on the
+back of the belt (`pouch` in pieces.json, painted leather) only read tucked under a back plate — on a bare back they were a black
+block; a naked look now hides them too (`lookRoll`, odds 0 on those rows). THE NAKED ASS: the plate's own skirt overlaps the sash,
+so a torso lathed to the plate's width stood out THROUGH the sash — bare skin below the waist, the cloth's top edge lost inside it —
+and the waist belt is the cuirass' leather, gone with the plate. `modelBodyBuild` now holds every ring at hip height inside the skirt's
+cloth (`inSash`: the cloth's centre and 93 % of its width) and lathes a BELT of its own — a leather band a finger thick, class `belt`,
+mat `leather` on the white palette cell so `look.leather` paints it — over the sash's ragged back edge, so the sash hangs from the belt.
+The sculpted belt is not split out and shown instead: it lies on the plate's surface, where the body cuts through it.
+Same day, "he looks like he is wearing a sweater which is skin color … make the arms and upper body thinner": the body has ITS OWN
+TONE, `look.body` — the man's skin unweathered and a shade paler (the chest that never sees the sun), the face's weather returning at
+the collar (a tan line), painted per vertex by `lookBodyColour` with the muscle read as shade: the midline dark from the sternum to
+the belly and down the spine (20 segments a ring now, so a vertex sits on the midline, set in a little for a real groove), a crease
+under the pecs, the belly shaded into the sash. And it is slimmer than the plate: 0.90 × the cuirass's width and 0.87 × its depth
+with an 8 % waist (the padding under armour, the plate's own stand-off) and shoulders broadening ×1.34 toward the collar, the arms 0.66 of the sleeve's girth — and an arm is an
+ELLIPSE, 0.84 across by 1.04 front-to-back ("from front and back the arms look still a bit wide"): the narrow way round is what
+the front and the back see, the side keeps the biceps' depth.
+THE CHEST ("add some chest muscle detail"): the torso is lathed on 22 rings now (the plate's 12 bands interpolated, `bandAt`), and
+`chestShape` moves each ring's vertices by their place round it — the pecs a plate of muscle either side of the sternum (the two
+vertices next to the midline out 7.5 %, the next 3 %), fullest at three quarters of the torso's height (just under the collar bone; "too low" at two thirds) and fading toward the crease
+and the collar bone, the sternum sinking between them, a crease under them (the front set in 4 %) that the paint darkens too.
+THE SHOULDER ("arms are too close to body, the top of the arm joins the body with a weird angle"): the shoulder bone sits INSIDE
+the torso (x 0.176 against a torso edge near 0.19) and the upper arm runs 35° outward to the elbow, so a tube from the bone came
+out of the body at an angle and lay against it. The tube starts from the deltoid instead — 5.5 cm out past the torso's edge and
+1.2 cm up, in the bone's own frame so it holds in every pose — and runs to the elbow, where the bracer is: more upright, clear of
+the body. Test hook: `BV.showcasePose('relax')` puts the showcase figure in one of the animator's poses.
+THE V ("now we have a gap between body and arms and head — slightly more v shaped and the chest bigger"): the torso broadens
+to half again the plate's width at the shoulder line (`prof`: ×1.5 from 45 % of the height up to 85 %, held to the top), the
+chest is deepened 12 % where the pecs are and the pec vertices go out 10 % (the next pair 5 %), and the ring that closes toward
+the neck stays at 62 % of the top band's width (was 50 %) so the traps fill the gap under the jaw.
+THE NECK ("still a bit gap between body and the neck, maybe put the head lower"): the head mesh's own neck is 4 cm of thin stalk
+(r 0.04) before the jaw, and a body closed flat under it showed that stalk as a gap. The head bone stays where it is (the helm rides
+it, and every armoured man's collar); instead the traps slope up to a thick neck of the body's own — a ring at 4.2 cm above the
+head mesh's base (r 0.082 × 0.076) and a top ring inside the jaw's width at 7.5 cm (r 0.072 × 0.068, weighted 40 % chest / 60 %
+head bone so it turns with the head) — so the head sits down on the shoulders.
+
+## The ink is the barber's (2026-09-16, "the ink in market does literally nothing visually … move it to customize instead, it can be free")
+Two faults. The ink WAS drawn, but at `inkTile` 1.4 the mask tiled every 71 cm: a whole torso got one band of rings hidden under the
+pauldrons and one rune, and on the LOW tier the plain material has no kind branch at all, so a phone never saw it. Now the mask tiles
+every 29 cm (3.5) with a second band (a chain of lozenges), and the low tier's Phong material takes the ink and the engraving branch
+alone (`fragHeadInk` / `fragMapInk`: the kind attribute and one mask sample, no normal maps, no sky). And it is no ware: `gear.look.i`
+(`ARENA_LOOK.i`, 0 none / 1 wolf knotwork / 2 blood marks) is a row in the barber, free, saved with the look like the face; the
+market's Ink tab is gone, 'ink' is no slot (the server refuses to sell or equip it), and the two wares stay in the catalogue as
+`retired` only so a career that bought one still reads — the vale's northerners roll theirs onto their look in `afNpcGear`.
+Same day, "they work but look so lame — big abstract shapes that go through your arms and face": the knotwork is the ENGRAVING's
+now (`tKnot`, the bracers, at its own fixed tile), and the ink has a bold mask of its own (`tInk`, 512 px on a 70 cm tile): a great
+wave that runs across the whole tile and round again (its ends meet, so it wraps without a seam), a thinner second wave, a curling fan
+of five spikes, a crescent, three claw marks and bold dots — round-brush strokes that swell and taper, every shape drawn wrapped so the
+tile's edges cut nothing. Projected by position (triplanar), one stroke runs off the chest onto an arm, and the great wave crosses the
+face at the eyes. THE FACE AND THE HANDS take the ink now (`lookApply`, the head mesh on its own copy of the kinds): the face, the eye
+sockets, a scar, the hands, the chin where no beard grows and the scalp when it is shaved; the eyes, hair, beard and brows never.
+Then "they look so random, no continuity": a stamp by position can never follow a body. The ink is a DESIGN IN BODY SPACE now: the lathed
+body carries its own ink uv (`inkUv` — bearing round the ring × height; the torso hips → neck, each arm shoulder → wrist, mirrored on the
+right), the head gets one at load (bearing round the skull × height chin → crown), and `tInk` is an ATLAS of panels those uvs point into
+(the torso the left half, an arm the third quarter, the head the last): a chest piece — a swoosh from each shoulder sweeping in to the
+sternum, a sun there, one spike down the belly, a hook under each pec — that meets the sleeves at a shoulder band and climbs the neck into
+the face (two lines to the eyes, a band across them, three stripes down one cheek); a back piece of two wings off the spine; a sleeve that
+spirals once and a half down the arm with spikes off it and a cuff. Strokes are drawn wrapped in their panel (the bearing wraps), the
+atlas clamps (panels never bleed), and its black corner is what the belt, the hands and the armour sample. The hands stay bare.
+
 ## The surface pass (2026-09-16, "our chars look too low poly")
 
 The user brought a "game-ready" Knight Templar USDZ to compare. It has ~2,200 triangles a figure (ours has 8,250) and 37

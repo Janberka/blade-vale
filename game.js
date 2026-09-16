@@ -1892,12 +1892,22 @@ function lookChin(R) {                                       // the rig's chin: 
 function lookBraidGeo(R, at) {
   const key = at.map(a => a.toFixed(3)).join(','); R.braidGeo = R.braidGeo || {}; if (R.braidGeo[key] !== undefined) return R.braidGeo[key];
   const m = R.meshes.find(x => x.pieces && x.pieces.classes.indexOf('hair') >= 0); if (!m) return (R.braidGeo[key] = null);
-  const headNode = R.g.nodes.findIndex(x => x.name === R.spec.map.head), joint = Math.max(0, m.joints.indexOf(headNode)), parts = [], y0 = at[1] - 0.012, z0 = at[2] - 0.018;   // (the first bead's centre just inside the chin's front underside: rooted, not hung under it)
-  for (let i = 0; i < 5; i++) { const t = i / 4, r = 0.016 - t * 0.004, g = new THREE.SphereGeometry(r, 7, 5); g.scale(1.2, 1, 1); g.translate((i % 2 ? 1 : -1) * 0.004, y0 - i * 0.022, z0 - t * 0.006); parts.push(g); }   // (the beads overlap: one rope, not a necklace; it hangs straight, leaning back to the chest a little)
-  { const g = new THREE.CylinderGeometry(0.011, 0.009, 0.014, 6); g.translate(0, y0 - 4 * 0.022 - 0.016, z0 - 0.006); parts.push(g); }   // the tie
-  let P = [], I = [], off = 0; for (const g of parts) { const p = g.getAttribute('position'), idx = g.index.array; for (let v = 0; v < p.count; v++) P.push(p.getX(v), p.getY(v), p.getZ(v)); for (let k = 0; k < idx.length; k++) I.push(idx[k] + off); off += p.count; }
-  const nv = P.length / 3, si = new Uint16Array(nv * 4), sw = new Float32Array(nv * 4); for (let v = 0; v < nv; v++) { si[v * 4] = joint; sw[v * 4] = 1; }
-  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); geo.setAttribute('skinIndex', new THREE.BufferAttribute(si, 4)); geo.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4)); geo.setIndex(I); geo.computeVertexNormals();
+  const headNode = R.g.nodes.findIndex(x => x.name === R.spec.map.head), joint = Math.max(0, m.joints.indexOf(headNode));
+  // A PLAIT, not a necklace of beads ("it still looks weird"): a tapered rope with a three-lobed section that turns as it
+  // falls — the lobes are the braid's strands — gathered wide at the chin (the top ring sits inside it), tied off near the
+  // end with a band, the loose ends flaring below. It hangs straight from the chin's front and leans back to the chest.
+  const y0 = at[1] - 0.010, z0 = at[2] - 0.014, L = 0.105, K = 16, M = 9, rings = [];
+  const ring = (t, rad, lobe, twist) => { const y = y0 - L * t, z = z0 - 0.035 * t * t, o = []; for (let k = 0; k < M; k++) { const a = k / M * Math.PI * 2, r = rad * (1 + lobe * Math.cos(3 * a + twist)); o.push([Math.cos(a) * r * 1.15, y, z + Math.sin(a) * r]); } return o; };
+  for (let i = 0; i <= K; i++) { const t = i / K; rings.push(ring(t, 0.020 * (1 - 0.5 * t), 0.32, t * Math.PI * 2 * 2.2)); }   // the rope: 2.2 turns over its length
+  const tie = 0.93; rings.push(ring(tie, 0.0075, 0, 0), ring(tie + 0.045, 0.0075, 0, 0));                                    // the band
+  rings.push(ring(tie + 0.06, 0.006, 0, 0), ring(tie + 0.16, 0.011, 0.3, 1), ring(tie + 0.24, 0.004, 0, 0));                // the loose ends: a tuft that flares and closes
+  const P = [], I = [], cap = (r0, out) => { const c = [0, 0, 0]; for (const p of r0) { c[0] += p[0] / M; c[1] += p[1] / M; c[2] += p[2] / M; } const ci = P.length / 3; P.push(c[0], c[1], c[2]); const b = ci - M; for (let k = 0; k < M; k++) { const k1 = (k + 1) % M; if (out) I.push(ci, b + k1, b + k); else I.push(ci, b + k, b + k1); } };
+  for (const r0 of rings) for (const p of r0) P.push(p[0], p[1], p[2]);
+  for (let i = 0; i + 1 < rings.length; i++) for (let k = 0; k < M; k++) { const a = i * M + k, b = i * M + (k + 1) % M, c = a + M, d = b + M; I.push(a, c, b, b, c, d); }
+  cap(rings[rings.length - 1], true);
+  let geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); geo.setIndex(I); geo = geo.toNonIndexed(); geo.computeVertexNormals();   // (faceted, like the hair cap)
+  const nv = geo.getAttribute('position').count, si = new Uint16Array(nv * 4), sw = new Float32Array(nv * 4); for (let v = 0; v < nv; v++) { si[v * 4] = joint; sw[v * 4] = 1; }
+  geo.setAttribute('skinIndex', new THREE.BufferAttribute(si, 4)); geo.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4));
   return (R.braidGeo[key] = geo);
 }
 function lookBraidApply(L, look) {

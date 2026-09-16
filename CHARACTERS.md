@@ -95,7 +95,9 @@ needs no re-bake. v=216
 "The braids look super weird, it's floating in front of our face": the plait hung from a FIXED point an inch under the old chin. It
 hangs from the chin now — the rig's chin tip (`lookChin`: the front-most midline vertex under the lip, after lookRuggedHead) moved by
 this face's cast (lookFacePoint), the geometry cached per anchor — the first bead rooted just inside the chin's front underside, five
-beads that overlap into one rope (was seven with gaps, a necklace), hanging straight and leaning back a little to the chest. v=217
+a rope, not beads ("it still looks weird": beads in a line read as a necklace): a tapered tube whose three-lobed section turns 2.2
+times as it falls — the lobes are the strands — 2 cm wide at the chin (the top ring inside it), a band near the end and a tuft of loose
+ends below, 10 cm long, hanging straight from the chin's front and leaning back to the chest; faceted like the hair cap. v=218
 
 ## The wardrobe is the marketplace (2026-09-14, "any item we add should be available in the marketplace")
 Six slots now: sword, armor, helm, shield, bow, horse (`ARENA_SLOTS` in arena-items.js; the server validates against the

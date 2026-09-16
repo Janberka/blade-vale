@@ -1510,21 +1510,22 @@ BV.modelRig = { load: loadModelRig, wear: wearModelRig, live: () => MODEL_LIVE.l
 // of the body's own index; the paint is a vertex colour over the palette (the blue cloth is re-pointed at a white
 // cell at load, so the team dye takes on the sleeves and the skirt).
 const LOOK_WHITE_UV = [1.5 / 16, 0.5 / 16];               // palette cell (1,0) = #eeeeee
-// THE FACE: the model's head is a smooth, boyish one. Once, at load, every man's head is roughened in the bind pose
-// (model units, the face looks +z): a wider jaw, the chin and the brow pushed forward and the brow lowered so the eyes
-// sit deep, cheekbones out. The eyes are their own meshes and stay put.
+// THE FACE: the model's head is a smooth, boyish one. Once, at load, every man's head is firmed up in the bind pose
+// (model units, the face looks +z): a defined jaw — widest at its angle under the ear, tapering to the chin — a firm chin
+// forward, a level brow brought a little forward (never lowered: a brow pushed out and down over slitted eyes was the
+// caveman of "I didn't mean to make it a Neanderthal"), high cheekbones. The eyes are their own meshes and stay open.
 function lookRuggedHead(geo, pj) {
   const pos = geo.getAttribute('position'), head = new Set(['head', 'hair', 'beard', 'brow', 'socket', 'scarL', 'scarR']);
   for (let v = 0; v < pos.count; v++) { if (!head.has(pj.classes[pj.vclass[v]])) continue; let x = pos.getX(v), y = pos.getY(v), z = pos.getZ(v);
-    if (y > 1.49 && y < 1.61 && z > -0.04) x *= 1.13;                                    // the jaw
-    if (y > 1.49 && y < 1.565 && z > 0.06) z += 0.014;                                   // the chin
-    if (y > 1.70 && y < 1.745 && z > 0.08) { z += 0.014; y -= 0.007; }                   // the brow: heavier, lower
-    if (y > 1.625 && y < 1.685 && Math.abs(x) > 0.08) x *= 1.07;                         // cheekbones
+    if (y > 1.49 && y < 1.61 && z > -0.04) x *= 1.07 - 0.03 * clamp((z - 0.02) / 0.06, 0, 1);   // the jaw: 7 % at the angle, 4 % toward the chin (a jawline, not a slab)
+    if (y > 1.49 && y < 1.565 && z > 0.06) z += 0.012;                                   // the chin: firm, forward
+    if (y > 1.70 && y < 1.745 && z > 0.08) { z += 0.006; y -= 0.002; }                   // the brow: defined, level
+    if (y > 1.625 && y < 1.685 && Math.abs(x) > 0.08) x *= 1.07;                         // cheekbones: high and out
     pos.setXYZ(v, x, y, z); }
-  // the eyes: narrowed to a hard squint and tucked under the brow (each eye about its own centre)
+  // the eyes: a touch narrower than the boy's (steady, not a squint) and set just under the brow (each eye about its own centre)
   const ei = pj.classes.indexOf('eye'); if (ei >= 0) { const eyes = { L: [], R: [] }; for (let v = 0; v < pos.count; v++) if (pj.vclass[v] === ei) eyes[pos.getX(v) < 0 ? 'L' : 'R'].push(v);
     for (const vs of [eyes.L, eyes.R]) { if (!vs.length) continue; let cy = 0; for (const v of vs) cy += pos.getY(v); cy /= vs.length;
-      for (const v of vs) pos.setXYZ(v, pos.getX(v), cy + (pos.getY(v) - cy) * 0.62, pos.getZ(v) - 0.004); } }
+      for (const v of vs) pos.setXYZ(v, pos.getX(v), cy + (pos.getY(v) - cy) * 0.84, pos.getZ(v) - 0.002); } }
   pos.needsUpdate = true; geo.computeVertexNormals();
 }
 // ---- THE FACE'S SURFACE (2026-09-16, "character faces are too low poly") ----
@@ -1671,7 +1672,7 @@ function lookRoll(name, arch, gear, pal, o = {}) {
   look.hairStyle = has('h') ? LK.h : bald ? 0 : styleRoll < 0.64 ? 1 : styleRoll < 0.74 ? 2 : styleRoll < 0.94 ? 3 : 4;   // most cropped, some long, a mohawk now and then
   look.beardStyle = has('b') ? LK.b : !beardOn ? 0 : beardKind < 0.12 ? 3 : beardKind < 0.17 ? 4 : beardKind < 0.25 ? 5 : fullBeard ? 2 : 1;   // (5: the plait of the north)      // most wear a beard, most of those a full one
   look.hair = look.hairStyle === 0 ? null : hairC; look.beard = look.beardStyle ? c.setHex(hairC).lerp(skinC, 0.08).getHex() : null; look.stubble = c.setHex(hairC).lerp(skinC, 0.45).getHex();
-  look.brow = c.setHex(hairC).lerp(skinC, 0.3).getHex(); look.socket = c.copy(skinC).multiplyScalar(0.78).getHex(); look.lip = c.copy(skinC).multiplyScalar(0.88).getHex();   // heavy dark brows, eyes deep in shadow, a hard mouth
+  look.brow = c.setHex(hairC).lerp(skinC, 0.3).getHex(); look.socket = c.copy(skinC).multiplyScalar(0.91).getHex(); look.lip = c.copy(skinC).multiplyScalar(0.88).getHex();   // dark brows, a light shadow round the eyes (0.78 sank them into a skull), a hard mouth
   look.faceShape = has('f') ? LK.f : Math.floor(lookRng(lookSeed(name) ^ 0x2545f491)() * LOOK_FACE_SHAPES.length);   // (its own stream: the bones came later, nobody's hair or kit re-rolls for them)
   const scar = r(); look.scar = scar < 0.18 ? 'scarL' : scar < 0.36 ? 'scarR' : null; look.scarC = c.copy(skinC).lerp(new THREE.Color(0xe8a0a0), 0.45).multiplyScalar(1.05).getHex();
   // the kit
@@ -1701,7 +1702,7 @@ function lookFaceColour(look, cls, mt, x, y, z, scalp, brow) {
   const bs = look.beardStyle | 0;
   if (look.hair != null && cls === 'hair' && scalp) return look.hair;   // (scalp: this vertex is well under the cap — lookScalpMask; brow: well inside the brow — lookBrowMask)
   if (cls === 'beard' && look.beard != null) { const on = bs === 2 || bs === 5 || bs === 1 || (bs === 3 && Math.abs(x) < 0.05) || (bs === 4 && y > 1.585 && z > 0.1); if (on) return bs === 1 ? look.stubble : look.beard; }
-  if (cls === 'brow') return brow ? look.brow : look.skin; if (cls === 'socket') return look.socket; if (cls === 'scarL' || cls === 'scarR') return look.scar === cls ? look.scarC : look.skin; if (cls === 'eye') return 0xd8d0c8;
+  if (cls === 'brow') return brow ? look.brow : look.skin; if (cls === 'socket') return look.socket; if (cls === 'scarL' || cls === 'scarR') return look.scar === cls ? look.scarC : look.skin; if (cls === 'eye') return 0xece8e2;
   if (mt === 'leather') return look.lip;                     // (the palette's lip/brow brown: no painted lips)
   return look.skin;
 }
@@ -1722,7 +1723,7 @@ function lookColour(look, cls, mt) {
   if (mt === 'cloth') return look.clothOf[cls] != null ? look.clothOf[cls] : look.cloth; if (mt === 'dark') return 0xffffff;
   if (mt === 'leather') return cls === 'brow' ? look.brow : cls === 'beard' ? (look.beard != null ? look.beard : look.lip) : (cls === 'head' || cls === 'socket' || cls === 'scarL' || cls === 'scarR') ? look.lip : look.leather;   // (the palette's lip/brow brown on the face: no painted lips)
   if (mt === 'skin') return cls === 'hair' ? (look.hair != null ? look.hair : look.skin) : cls === 'beard' ? (look.beard != null ? look.beard : look.skin) : cls === 'brow' ? look.brow
-    : cls === 'socket' ? look.socket : (cls === 'scarL' || cls === 'scarR') ? (look.scar === cls ? look.scarC : look.skin) : cls === 'eye' ? 0xd8d0c8 : look.skin;   // (eye whites dimmed: no doe eyes)
+    : cls === 'socket' ? look.socket : (cls === 'scarL' || cls === 'scarR') ? (look.scar === cls ? look.scarC : look.skin) : cls === 'eye' ? 0xece8e2 : look.skin;   // (eye whites a shade off white: clear, not doe-eyed)
   return look.paint[cls] != null ? look.paint[cls] : 0xffffff;
 }
 // what a painted vertex is MADE OF for the surface pass (modelMaterial's `kind`): the palette says steel, but a poor man's
@@ -1955,12 +1956,12 @@ function lookFacePoint(f, x, y, z, out) {
   const ax = Math.abs(x), jaw = y > 1.50 && y < 1.62 && z > -0.03, chin = y < 1.575 && z > 0.06 && ax < 0.06, cheek = y > 1.60 && y < 1.665 && ax > 0.055 && z > 0.02,
     nose = y > 1.605 && y < 1.70 && z > 0.124 && ax < 0.05, tip = nose && y < 1.66, brow = y > 1.70 && y < 1.75 && z > 0.08 && ax < 0.075, bone = y > 1.655 && y < 1.69 && ax > 0.085 && z > 0;
   switch (f) {
-    case 1: if (jaw) x *= 1.14; if (chin) { y -= 0.008; z += 0.008; } if (brow) z += 0.005; break;                                        // square: a wide jaw, a blunt chin, a flat brow
+    case 1: if (jaw) x *= 1.07; if (chin) { y -= 0.008; z += 0.008; } if (brow) z += 0.004; break;                                        // square: a wide jaw, a blunt chin, a flat brow
     case 2: if (y < 1.655 && z > -0.01) y -= (1.655 - y) * 0.28 * Math.min(1, (z + 0.01) / 0.07) * Math.max(0, Math.min(1, (y - 1.49) / 0.05));   // long: the face drawn down below the eyes
       if (jaw) x *= 0.92; if (nose) z += 0.008; if (tip) y -= 0.005; if (cheek) x *= 0.96; break;
-    case 3: if (cheek) { x *= 1.12; z += 0.008; } if (jaw) x *= 1.08; if (jaw && y < 1.55) y += 0.010; if (nose) z -= 0.008; if (brow) y += 0.003; break;   // round: full cheeks, a short chin, a small nose
+    case 3: if (cheek) { x *= 1.10; z += 0.008; } if (jaw) x *= 1.04; if (jaw && y < 1.55) y += 0.010; if (nose) z -= 0.008; if (brow) y += 0.003; break;   // round: full cheeks, a short chin, a small nose
     case 4: if (nose) z += 0.022; if (tip) y -= 0.010; if (cheek && ax < 0.10 && z > 0.03) { x *= 0.91; z -= 0.008; } if (bone) x *= 1.08; if (jaw) x *= 0.94; if (chin) { z += 0.008; y -= 0.005; } break;   // hawk: a beak, hollow cheeks, a pointed chin
-    case 5: if (nose && y < 1.68) x += 0.018; if (tip) z -= 0.010; if (brow) { z += 0.008; y -= 0.005; } if (jaw) x *= 1.09; if (cheek && x < 0) z += 0.008; break;   // broken: a nose bent and flattened, a heavy brow, a swollen cheek
+    case 5: if (nose && y < 1.68) x += 0.018; if (tip) z -= 0.010; if (brow) { z += 0.006; y -= 0.003; } if (jaw) x *= 1.04; if (cheek && x < 0) z += 0.008; break;   // broken: a nose bent and flattened, a heavy brow, a swollen cheek
   }
   out[0] = x; out[1] = y; out[2] = z; return out;
 }

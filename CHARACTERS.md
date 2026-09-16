@@ -80,6 +80,12 @@ Faces (same day, "put some alpha male look on the faces"): `lookRuggedHead` roug
 wider jaw, chin and brow forward and the brow lowered, cheekbones out, the eye meshes narrowed to a squint — and the
 roll gives dark cropped hair or a shaved head, a full beard on most, heavy dark brows (`brow`), shadowed eye sockets
 (`socket`), weathered skin, dimmed eye whites, no painted lips, and a scar across one cheek on a third (`scarL`/`scarR`).
+Two days on, "I didn't mean to make it a Neanderthal — they need to be charismatic not ugly": the roughening is now a firming.
+The jaw is a jawline, not a slab (7 % wider at its angle under the ear, 4 % toward the chin; was 13 % throughout, and the
+square cast stacked another 14 % on it — 7 % now, the round and broken casts 4 %), the chin still firm and forward, the brow
+brought a little forward but LEVEL (was pushed out 14 mm and dropped 7 mm: a shelf over slitted eyes), the cheekbones high as
+before, the eyes open (84 % of the boy's height, was 62 %) and set only a touch under the brow, the sockets a light shadow
+(×0.91, was ×0.78: sunk into a skull) and the whites clear (`0xece8e2`, were `0xd8d0c8`). Dark brows and a hard mouth stay.
 
 ## The wardrobe is the marketplace (2026-09-14, "any item we add should be available in the marketplace")
 Six slots now: sword, armor, helm, shield, bow, horse (`ARENA_SLOTS` in arena-items.js; the server validates against the

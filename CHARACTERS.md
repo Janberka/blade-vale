@@ -147,6 +147,11 @@ THE V ("now we have a gap between body and arms and head — slightly more v sha
 to half again the plate's width at the shoulder line (`prof`: ×1.5 from 45 % of the height up to 85 %, held to the top), the
 chest is deepened 12 % where the pecs are and the pec vertices go out 10 % (the next pair 5 %), and the ring that closes toward
 the neck stays at 62 % of the top band's width (was 50 %) so the traps fill the gap under the jaw.
+THE NECK ("still a bit gap between body and the neck, maybe put the head lower"): the head mesh's own neck is 4 cm of thin stalk
+(r 0.04) before the jaw, and a body closed flat under it showed that stalk as a gap. The head bone stays where it is (the helm rides
+it, and every armoured man's collar); instead the traps slope up to a thick neck of the body's own — a ring at 4.2 cm above the
+head mesh's base (r 0.082 × 0.076) and a top ring inside the jaw's width at 7.5 cm (r 0.072 × 0.068, weighted 40 % chest / 60 %
+head bone so it turns with the head) — so the head sits down on the shoulders.
 
 ## The surface pass (2026-09-16, "our chars look too low poly")
 

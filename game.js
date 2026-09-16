@@ -1230,9 +1230,14 @@ function modelBodyBuild(R) {
   const hipR = (() => { const b0 = bands[0]; return inSash(hipY - 0.03, b0.cx, b0.cz, b0.rx * 0.94, b0.rz * 0.94); })();
   tRings.push(ring(new THREE.Vector3(hipR.cx, hipY - 0.03, hipR.cz), U, V, hipR.rx, hipR.rz, [[pelvis, 1]], 0));
   for (let r = 0; r < NR; r++) { const h = r / (NR - 1), y = y0 + h * (y1 - y0), S = bandAt(y); tRings.push(ring(S.c, U, V, S.rx, S.rz, tw(y), 0, chestShape(h))); }
-  { const bt = bands[NB - 1], r = neck.r * 1.15; tRings.push(ring(new THREE.Vector3(0, neck.y + 0.03, bt.cz * 0.5), U, V, Math.max(r, bt.rx * 0.62), Math.max(r, bt.rz * 0.7), [[chest, 1]], 0)); }   // the shoulders close toward the neck just under the head — not all the way: the traps fill the gap under the jaw
+  // THE NECK: the head mesh's own neck is 4 cm of thin stalk (r 0.04) before the jaw, and a body closed flat under it showed that stalk as a gap
+  // between body and head. The traps slope up to a thick neck of the body's own that rises into the jaw (its top ring inside the jaw's width,
+  // riding the head bone so it turns with the head) — the head sits lower on the shoulders without moving the head bone (the helm rides it)
+  const headJ = joint(M.head), neckW = headJ >= 0 ? [[chest, 0.4], [headJ, 0.6]] : [[chest, 1]], neckTop = neck.y + 0.075;
+  { const bt = bands[NB - 1]; tRings.push(ring(new THREE.Vector3(0, neck.y + 0.042, bt.cz * 0.5), U, V, Math.max(0.082, bt.rx * 0.36), Math.max(0.076, bt.rz * 0.45), [[chest, 0.7], [headJ >= 0 ? headJ : chest, 0.3]], 0));
+    tRings.push(ring(new THREE.Vector3(0, neckTop, bt.cz * 0.3), U, V, 0.072, 0.068, neckW, 0)); }
   for (let i = 1; i < tRings.length; i++) stitch(tRings[i - 1], tRings[i], 0);
-  { const bt = bands[NB - 1]; cap(tRings[0], new THREE.Vector3(hipR.cx, hipY - 0.03, hipR.cz), new THREE.Vector3(0, -1, 0), hipR.rx, [[pelvis, 1]], 0); cap(tRings[tRings.length - 1], new THREE.Vector3(0, neck.y + 0.03, bt.cz * 0.5), new THREE.Vector3(0, 1, 0), neck.r, [[chest, 1]], 0); }   // closed top and bottom
+  { const bt = bands[NB - 1]; cap(tRings[0], new THREE.Vector3(hipR.cx, hipY - 0.03, hipR.cz), new THREE.Vector3(0, -1, 0), hipR.rx, [[pelvis, 1]], 0); cap(tRings[tRings.length - 1], new THREE.Vector3(0, neckTop, bt.cz * 0.3), new THREE.Vector3(0, 1, 0), 0.06, neckW, 0); }   // closed top and bottom
   // THE BELT: a bare man keeps his belt. The sculpted one is the cuirass' leather (the bake files it under "cuirass", and it lies ON the
   // plate, where a body lathed to the plate's width would cut through it), so it comes off with the plate; this band is lathed just
   // outside the skin on the sash's top edge — leather, painted by the look (look.leather) — and the sash hangs from it
@@ -1272,7 +1277,7 @@ function modelBodyBuild(R) {
   const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); geo.setAttribute('uv', new THREE.Float32BufferAttribute(UV, 2));
   geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(SI, 4)); geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(SW, 4)); geo.setIndex(IDX); geo.computeVertexNormals();
   geo.setAttribute('kind', new THREE.BufferAttribute(Float32Array.from(VM, m => m ? MODEL_KIND.leather : MODEL_KIND.skin), 1));
-  const pieces = { classes: ['torso', 'armL', 'armR', 'belt'], mats: ['skin', 'leather'], tri: TRI, vclass: VC, vmat: VM, naked: true, body: { y0: hipY - 0.03, y1, neckY: neck.y + 0.03 } };   // (body: the torso's heights, for lookBodyColour's shading)
+  const pieces = { classes: ['torso', 'armL', 'armR', 'belt'], mats: ['skin', 'leather'], tri: TRI, vclass: VC, vmat: VM, naked: true, body: { y0: hipY - 0.03, y1, neckY: neckTop } };   // (body: the torso's heights, for lookBodyColour's shading)
   return (R.body = { geo, pieces });
 }
 // build a fresh skeleton + skinned meshes for one body

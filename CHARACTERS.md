@@ -153,6 +153,15 @@ it, and every armoured man's collar); instead the traps slope up to a thick neck
 head mesh's base (r 0.082 × 0.076) and a top ring inside the jaw's width at 7.5 cm (r 0.072 × 0.068, weighted 40 % chest / 60 %
 head bone so it turns with the head) — so the head sits down on the shoulders.
 
+## The ink is the barber's (2026-09-16, "the ink in market does literally nothing visually … move it to customize instead, it can be free")
+Two faults. The ink WAS drawn, but at `inkTile` 1.4 the mask tiled every 71 cm: a whole torso got one band of rings hidden under the
+pauldrons and one rune, and on the LOW tier the plain material has no kind branch at all, so a phone never saw it. Now the mask tiles
+every 29 cm (3.5) with a second band (a chain of lozenges), and the low tier's Phong material takes the ink and the engraving branch
+alone (`fragHeadInk` / `fragMapInk`: the kind attribute and one mask sample, no normal maps, no sky). And it is no ware: `gear.look.i`
+(`ARENA_LOOK.i`, 0 none / 1 wolf knotwork / 2 blood marks) is a row in the barber, free, saved with the look like the face; the
+market's Ink tab is gone, 'ink' is no slot (the server refuses to sell or equip it), and the two wares stay in the catalogue as
+`retired` only so a career that bought one still reads — the vale's northerners roll theirs onto their look in `afNpcGear`.
+
 ## The surface pass (2026-09-16, "our chars look too low poly")
 
 The user brought a "game-ready" Knight Templar USDZ to compare. It has ~2,200 triangles a figure (ours has 8,250) and 37

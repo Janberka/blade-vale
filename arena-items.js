@@ -54,13 +54,15 @@
     seax:           { slot: 'sword', name: 'Seax',              price: 180,  rank: 0, dmg: 0.95, reach: -0.15, desc: 'a broken-back northern knife — short, quick, close' },
     bearded_axe:    { slot: 'sword', name: 'Bearded axe',       price: 450,  rank: 1, dmg: 1.18, reach: -0.05, desc: 'a northern axe with a hooked beard — it bites deep' },
     dane_axe:       { slot: 'sword', name: 'Dane axe',          price: 1800, rank: 2, dmg: 1.28, reach: 0.25, desc: 'a long-hafted broad axe, swung with the whole body' },
-    wolf_ink:       { slot: 'ink',   name: 'Wolf ink',          price: 150,  rank: 0, ink: 'wolf', desc: 'blue-black knotwork over chest and arms — it shows on bare skin (the wolf pelt, the berserker\'s mantle)' },
-    blood_ink:      { slot: 'ink',   name: 'Blood ink',         price: 150,  rank: 0, ink: 'blood', desc: 'red war-marks over chest and arms — it shows on bare skin' },
+    // RETIRED (2026-09-16, "we can just move it to customize instead, it can be free"): the ink is a pick in the barber now (ARENA_LOOK.i) — these two
+    // stay in the catalogue only so a career that bought one still reads; 'ink' is no slot any more, so they cannot be bought or equipped
+    wolf_ink:       { slot: 'ink',   name: 'Wolf ink',          price: 150,  rank: 0, ink: 'wolf', retired: true, desc: 'blue-black knotwork over chest and arms — now a free pick in the barber' },
+    blood_ink:      { slot: 'ink',   name: 'Blood ink',         price: 150,  rank: 0, ink: 'blood', retired: true, desc: 'red war-marks over chest and arms — now a free pick in the barber' },
   };
-  var ARENA_SLOTS = ['sword', 'armor', 'helm', 'shield', 'ink', 'bow', 'horse', 'plume', 'trim'];   // (ink: cosmetic, bought like the rest)
+  var ARENA_SLOTS = ['sword', 'armor', 'helm', 'shield', 'bow', 'horse', 'plume', 'trim'];   // (the ink was a slot here once; it is the barber's now — ARENA_LOOK.i)
   // YOUR LOOK (the barber): skin tone, face shape, hair style, hair colour, beard style — indexes into the client's lists;
   // the server keeps them in the career's meta and every guest paints the same face
-  var ARENA_LOOK = { s: 6, f: 6, h: 5, c: 9, b: 6 };   // (b 6: 'braided' joined the beards, 2026-09-16)
+  var ARENA_LOOK = { s: 6, f: 6, h: 5, c: 9, b: 6, i: 3 };   // (b 6: 'braided' joined the beards, 2026-09-16; i: the ink — none, wolf knotwork, blood marks — free, on whatever skin the kit leaves bare)
   function cleanLook(l) { if (!l || typeof l !== 'object') return null; var o = {}, any = false; for (var k in ARENA_LOOK) { var v = l[k]; if (typeof v === 'number' && v === (v | 0) && v >= 0 && v < ARENA_LOOK[k]) { o[k] = v; any = true; } } return any ? o : null; }
   // THE VALE'S MEN — the NPC name pool. A name is an NPC's identity (his profile, his record), so the lobby, the
   // world's warbands and the server's own simulated bouts all draw from this one list.
@@ -127,6 +129,7 @@
   // why an item can't be bought (null = it can)
   function lockReason(id, career) {
     var it = ARENA_ITEMS[id]; if (!it) return 'no such item';
+    if (it.retired) return 'retired';                                       // (the ink: the barber's now, free — not for sale, not counted among what you can afford)
     if (it.unique) return 'loot only';
     if ((career.items || []).indexOf(id) >= 0) return 'owned';
     var r = rankOf(career.xp | 0); if (r < it.rank) return 'needs ' + ARENA_RANKS[it.rank][0];

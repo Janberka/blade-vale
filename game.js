@@ -1034,7 +1034,7 @@ const MODEL_RIGS = new Map(), MODEL_LIVE = [];
 // plate steel, the mail under it, cloth, leather, skin), and normals averaged across the split vertices under a crease limit so
 // the plate reads as curved metal and keeps its rims. The low tier keeps the cheap Phong (modelMaterial hands either out;
 // modelRefreshMaterials swaps them when the tier changes). BV.modelDetail({ tile, mailTile, str, ... }) tunes the uniforms live.
-const MODEL_DETAIL = { tile: 2.2, mailTile: 11.0, str: 0.8, plateTile: 3.0, plateStr: 0.3, plateR0: 0.28, plateR1: 0.30, inkTile: 1.4, envI: 0.9, crease: 55 };
+const MODEL_DETAIL = { tile: 2.2, mailTile: 11.0, str: 0.8, plateTile: 3.0, plateStr: 0.3, plateR0: 0.28, plateR1: 0.30, inkTile: 3.5, envI: 0.9, crease: 55 };   // (inkTile 3.5: at 1.4 a whole torso got one band of rings under the pauldrons and one rune — "the ink does literally nothing visually")
 const MODEL_KIND = { steel: 0, mail: 1, cloth: 2, leather: 3, skin: 4, flat: 5, inkWolf: 6, inkBlood: 7, engraved: 8 };   // (8: steel with knotwork cut into it — the berserker's bracers)   // (6, 7: skin under blue-black knotwork / red war-marks — the ink wares)
 const MODEL_DETAIL_U = {};                                   // the shared uniforms (one object across every program, so a tune lands everywhere)
 for (const k of ['tile', 'mailTile', 'str', 'plateTile', 'plateStr', 'plateR0', 'plateR1', 'inkTile']) MODEL_DETAIL_U['u' + k[0].toUpperCase() + k.slice(1)] = { value: MODEL_DETAIL[k] };
@@ -1065,6 +1065,7 @@ function modelDetailTextures() {                             // drawn once: heig
   // INK: knotwork, a triskele, chevrons and runes as a white-on-black mask (drawn with the 2D canvas, tiled on the skin)
   const ic = document.createElement('canvas'); ic.width = ic.height = N; const g = ic.getContext('2d'); g.fillStyle = '#000'; g.fillRect(0, 0, N, N); g.strokeStyle = '#fff'; g.lineCap = 'round'; g.lineJoin = 'round'; g.lineWidth = 6;
   for (let i = 0; i < 6; i++) { g.beginPath(); g.arc(28 + i * 40, 60, 21, 0, Math.PI * 2); g.stroke(); } g.beginPath(); g.moveTo(0, 60); g.lineTo(N, 60); g.stroke();   // a band of linked rings on a line
+  g.lineWidth = 5; for (let i = 0; i < 8; i++) { g.beginPath(); g.moveTo(i * 32, 214); g.lineTo(i * 32 + 16, 198); g.lineTo(i * 32 + 32, 214); g.lineTo(i * 32 + 16, 230); g.closePath(); g.stroke(); } g.lineWidth = 6;   // a second band, a chain of lozenges
   const tri = (cx, cy, r) => { for (let k = 0; k < 3; k++) { const a = k * Math.PI * 2 / 3; g.beginPath(); g.arc(cx + Math.cos(a) * r * 0.5, cy + Math.sin(a) * r * 0.5, r * 0.5, a + Math.PI, a + Math.PI * 2.15); g.stroke(); } }; tri(70, 172, 48); tri(196, 196, 40);
   g.lineWidth = 5; for (let i = 0; i < 5; i++) { g.beginPath(); g.moveTo(126 + i * 24, 108); g.lineTo(138 + i * 24, 132); g.lineTo(150 + i * 24, 108); g.stroke(); }   // chevrons
   for (const [x, y] of [[22, 232], [126, 238], [224, 120], [246, 22]]) { g.beginPath(); g.moveTo(x, y - 18); g.lineTo(x, y + 18); g.moveTo(x, y - 10); g.lineTo(x + 14, y); g.stroke(); }   // runes
@@ -1122,6 +1123,13 @@ float triGray(sampler2D t, vec3 p, vec3 wn, float s) { vec3 w = triW(wn); return
   fragMetal: `float metalnessFactor = metalness; { int k = int(vKind + 0.5); metalnessFactor = (k == 0 || k == 8) ? 0.88 : (k == 1) ? 0.80 : 0.0; }`,
   fragIbl: `{ if (int(vKind + 0.5) >= 2) iblIrradiance *= 0.45; }
 #include <lights_fragment_end>`,   // (the sky's ambient washed the dyed cloth pink: cloth, leather and skin take less of it)
+  fragHeadInk: `#include <common>
+varying float vKind; varying vec3 vTri; varying vec3 vTriN; varying mat3 vTriM; uniform sampler2D tInk; uniform float uInkTile;
+vec3 triW(vec3 n) { vec3 w = pow(abs(n), vec3(4.0)); return w / (w.x + w.y + w.z); }
+float triGray(sampler2D t, vec3 p, vec3 wn, float s) { vec3 w = triW(wn); return texture2D(t, p.zy * s).r * w.x + texture2D(t, p.xz * s).r * w.y + texture2D(t, p.xy * s).r * w.z; }`,
+  fragMapInk: `#include <map_fragment>
+{ int k = int(vKind + 0.5); if (k == 8) { float m = smoothstep(0.2, 0.6, triGray(tInk, vTri, vTriN, uInkTile * 2.4)); diffuseColor.rgb *= 1.0 - 0.6 * m; }
+  if (k == 6 || k == 7) { float m = triGray(tInk, vTri, vTriN, uInkTile); vec3 ic = (k == 6) ? vec3(0.07, 0.10, 0.15) : vec3(0.42, 0.08, 0.07); diffuseColor.rgb = mix(diffuseColor.rgb, ic, smoothstep(0.2, 0.6, m) * 0.9); } }`,   // (the low tier's share of fragMap: the engraving and the ink)
   fragMap: `#include <map_fragment>
 { int k = int(vKind + 0.5); if (k == 1) { float g = triGray(tMailC, vTri, vTriN, uMailTile); diffuseColor.rgb *= mix(0.55, 1.25, g); } if (k == 0) { float g = triGray(tPlateR, vTri, vTriN, uTile * uPlateTile * 1.7); diffuseColor.rgb *= mix(0.92, 1.04, g); }
   if (k == 8) { float m = smoothstep(0.2, 0.6, triGray(tInk, vTri, vTriN, uInkTile * 2.4)); diffuseColor.rgb *= 1.0 - 0.6 * m; }   // engraved: the knotwork as dark grooves in the steel
@@ -1132,7 +1140,12 @@ function modelMaterial(R, o = {}) {                          // the figure's mat
   const key = [det ? 'd' : 'p', o.vc ? 'vc' : '', o.skinning ? 'sk' : '', noMap ? 'nomap' : '', ctx].join('|');
   R.mats = R.mats || {}; if (o.color == null && R.mats[key]) return R.mats[key];
   let m;
-  if (!det) m = new THREE.MeshPhongMaterial(noMap ? { color: col, shininess: 4, specular: 0x050505, skinning: !!o.skinning } : { map: R.tex, color: col, shininess: 6, specular: 0x111111, skinning: !!o.skinning, vertexColors: !!o.vc });
+  if (!det) { m = new THREE.MeshPhongMaterial(noMap ? { color: col, shininess: 4, specular: 0x050505, skinning: !!o.skinning } : { map: R.tex, color: col, shininess: 6, specular: 0x111111, skinning: !!o.skinning, vertexColors: !!o.vc });
+    if (!noMap && o.vc) { const T = modelDetailTextures(), G = MODEL_DETAIL_GLSL;   // THE INK on the low tier too: the plain material takes just the kind attribute and the mask — no normal maps, no sky — so a tattooed man is tattooed on a phone ("the ink does literally nothing visually")
+      m.onBeforeCompile = sh => { Object.assign(sh.uniforms, { tInk: { value: T.inkT }, uInkTile: MODEL_DETAIL_U.uInkTile });
+        sh.vertexShader = sh.vertexShader.replace('#include <common>', G.vertHead).replace('#include <defaultnormal_vertex>', G.vertNormal).replace('#include <worldpos_vertex>', G.vertPos);
+        sh.fragmentShader = sh.fragmentShader.replace('#include <common>', G.fragHeadInk).replace('#include <map_fragment>', G.fragMapInk); };
+      m.customProgramCacheKey = () => 'bv-ink'; } }
   else { const T = modelDetailTextures(); modelEnvFor(ctx);
     m = new THREE.MeshStandardMaterial({ map: noMap ? null : R.tex, color: col, metalness: 1, roughness: 1, skinning: !!o.skinning, vertexColors: !!o.vc, envMapIntensity: MODEL_DETAIL.envI });
     m.onBeforeCompile = sh => { const G = MODEL_DETAIL_GLSL; Object.assign(sh.uniforms, MODEL_DETAIL_U, { tPlateN: { value: T.plateN }, tMailN: { value: T.mailN }, tClothN: { value: T.clothN }, tPlateR: { value: T.plateR }, tMailC: { value: T.mailC }, tInk: { value: T.inkT } });
@@ -1440,6 +1453,7 @@ const LOOK_SKIN = [0xf0d4b8, 0xe4c4a4, 0xd8b090, 0xc89a78, 0xa87858, 0x8a5c40];
 // for his own face; the vale's men roll theirs from the name
 const LOOK_HAIR_PICK = [0x1a1210, 0x3a2416, 0x5c3a1e, 0x8a5a2e, 0xa04a20, 0xb08040, 0xd0b078, 0x8a8a88, 0xd8d4cc];   // black, dark brown, brown, auburn, red, fair, blond, grey, white
 const LOOK_HAIR_STYLES = ['shaved', 'short crop', 'crown', 'long', 'mohawk'];
+const LOOK_INK = [null, 'wolf', 'blood'], LOOK_INK_NAMES = ['none', 'wolf knotwork', 'blood marks'];   // the ink (gear.look.i): free, the barber's — it shows on whatever skin the kit leaves bare
 const LOOK_BEARD_STYLES = ['clean', 'stubble', 'full beard', 'goatee', 'moustache', 'braided'];   // (braided: the full beard painted, and a plait hanging from the chin — lookBraidApply)
 const LOOK_SKIN_NAMES = ['fair', 'light', 'tan', 'olive', 'brown', 'dark'];
 // THE FACE'S BONES (gear.look.f): six casts of the same head — a displacement of the head's vertices in the bind pose on
@@ -1518,7 +1532,7 @@ function lookRoll(name, arch, gear, pal, o = {}) {
   for (const pc of LOOK_PIECES) look.paint[pc] = O.paint && O.paint[pc] != null ? resolve(O.paint[pc]) : base;
   for (const k in (O.clothOf || {})) look.clothOf[k] = resolve(O.clothOf[k]);
   look.cloakC = O.cloakC ? resolve(O.cloakC) : look.cloth;
-  const II = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}; look.ink = gear && gear.ink && II[gear.ink] && II[gear.ink].ink ? II[gear.ink].ink : null;   // THE INK (a ware): tattoos on whatever skin his kit leaves bare — lookKind hands those vertices the inked-skin kind
+  look.ink = LK && LK.i ? LOOK_INK[LK.i] || null : null;                                            // THE INK (the barber's pick, gear.look.i): tattoos on whatever skin his kit leaves bare — lookKind hands those vertices the inked-skin kind
   return look;
 }
 // the face: beard styles are regions of the bald head — the baked beard class cut by position (bind pose, model units,
@@ -18399,7 +18413,7 @@ function vrMenuDraw() {
     B(VRM.leaveArmed ? 'Sure? The fight ends for everyone' : 'Leave the pit', skipOk ? 544 : 302, 262, 420, 64, 'leave-fight', { fs: VRM.leaveArmed ? 19 : 22, col: VRM.leaveArmed ? '#ff6a5a' : undefined, ...(VRM.leaveArmed ? {} : DIM) });
     T('the panel hangs under your eyes — the fight goes on above it', W / 2, 348, '500 16px system-ui', '#6b5e7a', 'center');
   } else if (page === 'market') {
-    const cr = AF.career, TABS = [['sword', 'Swords'], ['armor', 'Armor'], ['helm', 'Helms'], ['shield', 'Shields'], ['ink', 'Ink'], ['bow', 'Bows'], ['horse', 'Horses'], ['unique', 'Uniques']]; if (!AF.marketTab) AF.marketTab = 'sword'; const tab = AF.marketTab; if (VRM.mkTab !== tab) { VRM.mkTab = tab; VRM.mkPg = 0; }
+    const cr = AF.career, TABS = [['sword', 'Swords'], ['armor', 'Armor'], ['helm', 'Helms'], ['shield', 'Shields'], ['bow', 'Bows'], ['horse', 'Horses'], ['unique', 'Uniques']]; if (!AF.marketTab) AF.marketTab = 'sword'; const tab = AF.marketTab; if (VRM.mkTab !== tab) { VRM.mkTab = tab; VRM.mkPg = 0; }
     T('MARKETPLACE', 40, 24, '900 40px system-ui', '#ffd34d');
     T(cr ? cr.rank.name + '  ·  ' + cr.gold + ' gold  ·  🏆 ' + cr.trophies : u ? 'reaching the war-net…' : 'sign in to buy — until then the pit lends plain gear', 400, 34, '600 24px system-ui', '#ffe2a8', 'left', 580);
     TABS.forEach(([k, l], i) => B(l, 40 + i * 136, 84, 130, 46, 'mk:tab:' + k, { fs: 18, bg: tab === k ? ON : undefined }));
@@ -20466,7 +20480,7 @@ function afNpcGear(entry, xp, r) {
   if (A.weapon === 'longsword' && xp >= 45) g.sword = xp < 82 ? 'cleaver' : 'doomsword';     // a brute swings something broad
   const pelt = A.weapon !== 'bow' && r() < 0.14, north = pelt ? (r() < 0.5 ? 'wolf_pelt' : 'berserker') : null;   // a northerner in a wolf pelt or a berserker's mantle, now and then
   if (north && xp >= 25 && r() < 0.65) g.sword = xp < 60 ? pick(['bearded_axe', 'seax']) : 'dane_axe';      // and he swings an axe
-  if (north && r() < 0.6) g.ink = r() < 0.7 ? 'wolf_ink' : 'blood_ink';                                     // most northerners are inked
+  if (north && r() < 0.6) g.look = Object.assign({}, g.look || {}, { i: r() < 0.7 ? 1 : 2 });                // most northerners are inked (the barber's pick, on his look)
   if (xp < 20) g.armor = r() < 0.3 ? 'gambeson' : undefined;                                     // (nothing = a shirt and breeches)
   else if (xp < 40) g.armor = pelt ? north : r() < 0.55 ? 'leather' : r() < 0.5 ? 'gambeson' : undefined;
   else g.armor = xp < 60 ? (pelt ? north : 'mail') : xp < 82 ? (r() < 0.4 ? 'brigandine' : 'plate') : xp < 95 ? 'champion_plate' : (r() < 0.35 ? 'dragon_plate' : 'champion_plate');
@@ -23521,10 +23535,6 @@ function afThumb(id) {
       m.geometry.computeBoundingBox(); const cc = m.geometry.boundingBox.getCenter(new THREE.Vector3()); m.position.set(-cc.x, -cc.y, -cc.z);
       const wrap = new THREE.Group(); wrap.add(m); wrap.rotation.y = -Math.PI / 2; wrap.rotation.z = 0.35; wrap.scale.setScalar(3);   // (the face looks +x in bind space: turned to the lens, tilted a little)
       url = afThumbShot(wrap); }
-    else if (it.slot === 'ink') {                            // the ink on a bare-chested bust (the berserker's mantle shows the most skin)
-      if (MODEL_ON && !BV.modelReady) { BV.modelLoad.then(() => { if (AF.marketOpen) afMarketRender(); }); return null; }
-      const h = afThumbRig(); afDressGear(h.parts, { armor: 'berserker', ink: id }, pal); h.group.rotation.y = 0.4;
-      url = afThumbShot(h.group, new THREE.Box3(new THREE.Vector3(-0.95, 1.55, -3), new THREE.Vector3(0.95, 3.45, 3))); }
     else if (it.slot === 'armor' || it.slot === 'helm') {    // a bust of the figure wearing it (the warrior, tinted — so it waits for him); a helm over a leather jerkin
       if (MODEL_ON && !BV.modelReady) { BV.modelLoad.then(() => { if (AF.marketOpen) afMarketRender(); }); return null; }
       const h = afThumbRig(); afDressGear(h.parts, it.slot === 'helm' ? { helm: id, armor: 'leather' } : { armor: id }, pal); h.group.rotation.y = 0.4;
@@ -23860,6 +23870,7 @@ function afBarberRender() {
     + row('Hair', 'the cut', chips('h', LOOK_HAIR_STYLES))
     + row('Colour', 'hair and beard', sw('c', LOOK_HAIR_PICK, ['black', 'dark brown', 'brown', 'auburn', 'red', 'fair', 'blond', 'grey', 'white']))
     + row('Beard', 'the chin', chips('b', LOOK_BEARD_STYLES))
+    + row('Ink', 'on bare skin — the wolf pelt, the berserker\'s mantle', chips('i', LOOK_INK_NAMES))
     + '<div class="bb-foot"><button class="bb-reset" data-reset="1">Let the barber choose</button><span>(the face your name rolls)</span></div>';
   for (const b of p.querySelectorAll('button')) b.onclick = e => { e.stopPropagation(); if (b.dataset.reset) { afLookClear(); return; } afLookSet({ [b.dataset.k]: +b.dataset.i }); };
 }
@@ -23963,12 +23974,12 @@ function afMarketRender() {
     '<div id="af-market-msg" style="display:' + (AF.marketMsg ? '' : 'none') + ';margin-bottom:6px;padding:6px 9px;border-radius:8px;background:rgba(255,211,77,.12);border:1px solid rgba(255,207,91,.5);font-size:12px;font-weight:700;color:' + (AF.marketMsg && AF.marketMsg.bad ? '#ff9a9a' : '#ffe089') + '">' + (AF.marketMsg ? AF.marketMsg.t : '') + '</div>' +
     '';
   // RIGHT: one tab at a time — a picture card per ware; the card is a TRY-ON, its button the buy
-  const TABS = [['sword', 'Swords'], ['armor', 'Armor'], ['helm', 'Helms'], ['shield', 'Shields'], ['ink', 'Ink'], ['bow', 'Bows'], ['horse', 'Horses'], ['unique', 'Uniques']]; if (!AF.marketTab) AF.marketTab = 'sword'; const tab = AF.marketTab;
+  const TABS = [['sword', 'Swords'], ['armor', 'Armor'], ['helm', 'Helms'], ['shield', 'Shields'], ['bow', 'Bows'], ['horse', 'Horses'], ['unique', 'Uniques']]; if (!AF.marketTab) AF.marketTab = 'sword'; const tab = AF.marketTab;
   let html = '<div class="mk-tabs">' + TABS.map(([k, l]) => '<button data-act="tab:' + k + '" class="' + (tab === k ? 'on' : '') + '">' + l + '</button>').join('') + '</div>';
   const statOf = it => [it.dmg ? '×' + it.dmg + ' dmg' : '', it.reach ? (it.reach > 0 ? '+' : '') + it.reach + ' reach' : '', it.hp ? (it.slot === 'horse' ? it.hp + ' hp' : '+' + it.hp + ' hp') : '', it.poise ? '+' + it.poise + ' poise' : '', it.move ? Math.round(it.move * 100) + '% speed' : '', it.speed && it.speed !== 1 ? '×' + it.speed + ' pace' : ''].filter(Boolean).join(' · ');
   const ids = Object.keys(I).filter(id => tab === 'unique' ? I[id].unique : I[id].slot === tab && !I[id].unique);
   if (tab !== 'unique') { const eq = c ? (c.equipped[tab] || AF_GEAR_LENT[tab] || null) : (AF_GEAR_FREE[tab] || null);
-    html += '<div class="mk-head">' + (eq ? 'Wearing <b>' + I[eq].name + '</b>' + (tab !== 'sword' && c && c.equipped[tab] ? ' ' + btn('unequip:' + tab, 'take off') : '') : tab === 'armor' ? 'A linen shirt and wool breeches — no armour yet' : tab === 'helm' ? 'Bareheaded — no helm yet' : tab === 'ink' ? 'Bare skin — no ink yet. It shows wherever your kit leaves skin bare: the wolf pelt, the berserker\'s mantle' : 'None yet — ' + (tab === 'bow' ? 'a bow lets you ride in as an archer' : 'a horse lets you ride in')) + '</div>'; }
+    html += '<div class="mk-head">' + (eq ? 'Wearing <b>' + I[eq].name + '</b>' + (tab !== 'sword' && c && c.equipped[tab] ? ' ' + btn('unequip:' + tab, 'take off') : '') : tab === 'armor' ? 'A linen shirt and wool breeches — no armour yet' : tab === 'helm' ? 'Bareheaded — no helm yet' : 'None yet — ' + (tab === 'bow' ? 'a bow lets you ride in as an archer' : 'a horse lets you ride in')) + '</div>'; }
   else html += '<div class="mk-head">Loot only — a look, and a hair of power.</div>';
   html += '<div class="mk-grid">' + ids.map(id => {
     const it = I[id], owned = !!(c && c.items.includes(id)), eq = c ? (c.equipped[it.slot] === id || (!c.equipped[it.slot] && AF_GEAR_LENT[it.slot] === id)) : (!it.unique && AF_GEAR_FREE[it.slot] === id), trying = AF.tryItem === id, why = it.unique ? null : (c ? ARENA_CAT.lockReason(id, c) : 'sign in'), th = afThumb(id);

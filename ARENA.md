@@ -260,7 +260,16 @@ ground clamps included; in a headset your own eyes), so the countdown starts wit
 (`AF.noSweep`). The shot lasts until you stand on your mark and a beat more (`until` in `afIntroStep`, at most
 `maxDur`); anyone still walking then finishes during the countdown (`AF.introTail`, `afIntroBody` keeps marching him)
 and takes his mark at the bell at the latest (`afIntroTailEnd`). A star holding the middle lets go at the walk-in's
-start. When you only watch, the finale is the face-off over your star's shoulder as before, with the cut. Every act
+start. When you only watch, the finale is the face-off over your star's shoulder as before, with the cut.
+**Bareheaded, blade at the hip** (2026-09-16): every man walks in with his helm off and his sword sheathed at his left
+hip (`afDonReset` at the start — `parts.sheathed` and `lookHelmOff`; the hip blade is a copy of the figure's own
+sword hung on the hips bone, `mHip` in `wearModelRig`, shown by `syncModelRigs` while sheathed and on an archer while
+his bow is out). A star draws to rally (`afRally`). In the countdown's last breaths (`AF_DON.at`, a per-man jitter)
+`afDonStep` runs the beats: the hand to the crown (`donHelm`), the helm on (index rebuild only — `lookDraw`), the
+hand across to the hip (`drawHip`), the blade out and up (`drawOut`), then guard. A man without a helm skips the
+first, an archer keeps the bow. Whoever is still walking in at the bell does it all at once (`afDonAll` in
+`afIntroTailEnd`). Test: `BV.arenaDon()` (each man's sheathed / bareheaded / beat), `BV.hipSword({x,y,z,rx,ry,rz})`
+re-hangs the blade on every live figure. Every act
 is built from the same lens kit (`afIntroLens`: pen, gate,
 star, profile, backlit, ride, behind, column, dolly, front, stands, crane, aerial, top, orbit, face-off, walk-in) and the same
 route system (`afIntroRoute`: waypoints with speed, gait, a pause and a facing). The **stars rally** their men

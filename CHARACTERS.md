@@ -103,6 +103,15 @@ cheeks and ear discs and his face — beard, scar and all — shows under the br
 (`lookWorn`), the helm carried in on the walk (`lookHelmBuild`) is cut the same way and is rebuilt when the preview
 figure changes to or from an open helm, and NPCs roll a third of their helms open (`afNpcGear`, the same draw as before,
 so the same men wear a helm). Test: `BV.showcase({name, gear: {helm: 'open_sallet'}})`, `BV.look.live()[i].look.open`.
+**The face irons** (same day, "cover the cheeks and nose with extensions"): in place of the plate the open sallet wears a
+NASAL — a steel bar from under the brim down the ridge of the nose to above the lip — and two CHEEK PIECES, plates hung from
+the helm's cheek walls at the temple, over the cheeks from under the eyes to the jaw, leaving the eyes, the mouth and the chin
+free. They are cast onto the face the way the hair cap is cast onto the skull (`lookHelmExtGeo`: rays from the skull's axis
+through the head in the look's face shape, `lookFaceTris`, pushed out by a pad — so a hawk's beak and a round man's cheeks wear
+them alike), built once per rig and face shape (`LOOK_NASAL`, `LOOK_CHEEK`: bearings and heights, model units), skinned to the
+head bone and painted the helm's steel on the figure's own copy — the palette's steel cell × the helm's paint, the kind following
+it, so a champion's are gold (`lookHelmExtApply`, from `lookApply` and `lookHelmOff`: on with an open helm, gone with the helm).
+The helm carried in on the walk wears the same irons, appended in the head bone's space (`lookHelmBuild`).
 
 ## The barber (2026-09-14, "we should be able to edit the hair style, hair color, beard style, skin color")
 The "✂ Look" chip in the home's gear row opens THE BARBER, a page of the shell like the market (`page-barber`,

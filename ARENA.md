@@ -55,7 +55,7 @@ has a touchscreen (a touch laptop, an iPad with a keyboard and trackpad) gets th
 for pointer lock; where no lock can be had (iPadOS Safari has none) the held button aims by drag, like
 the thumb. The canvas is re-fitted to the window every frame, not only on the resize event, so a rotation
 or fullscreen change that fired resize early can never leave the picture in half the screen.
-| Roll — forward, back, either side or anything between (invulnerable for most of it; you come up still facing your man) | C rolls the way you're moving (a side if you stand still); Q / E are always the sides | double-tap the stick, then push the way you want to go |
+| Roll — forward, back, either side or anything between (invulnerable for most of it; you come up still facing your man) | C rolls the way you're moving (a side if you stand still); Q / E are always the sides | tap JUMP twice — you roll the way the stick leans (a side if it rests) |
 
 When you fall you spectate: drag to orbit the pit, wheel to zoom. The fight ends when one
 team is left standing, or after 3 minutes (most fighters standing, then most health, wins).
@@ -649,9 +649,12 @@ that stops it dead (BRACED). A horse at speed is never shoved back by the man it
 
 **The roll** (`afRollPose`): a dodge is a full tumble along its heading — over the shoulder for a sideways
 roll, head over heels forward or back — tucked into a ball and pivoted about its middle, the feet swinging over
-and landing on the far side. It never changes your facing. A player rolls the way he asks: Space (or the
-stick's **double-tap-and-push** on touch) takes the direction he is moving or pushing, Q / E force a side; the
-heading goes over the wire as a world angle (`locIn.rollDir`, null = the way you move) so host and guest agree.
+and landing on the far side. It never changes your facing. A player rolls the way he asks: C takes the direction he is
+moving, Q / E force a side; on touch a **double-tap of JUMP** (2026-09-16 — the stick's own double-tap-and-push is gone:
+the stick only runs, so a hurried thumb never tumbles you by accident) rolls the way the stick leans, or as C does with
+the stick at rest. The first tap of JUMP waits `JUMP_DBL_MS` 280 ms before it leaps, since the sim refuses a roll to a
+man in the air; the second tap inside that window is the roll instead. The heading goes over the wire as a world angle
+(`locIn.rollDir`, null = the way you move) so host and guest agree.
 NPCs always roll to a side, away from the danger (a roll along their line of advance would carry them onto the
 blade). The heading relative to the facing (`rollRel`) rides the snapshot's move slot for state 7 so guests
 draw the same tumble.
@@ -739,7 +742,7 @@ a second. `run01` climbs while the stick is held forward along the facing (`up` 
 it, and at full stride the push in `afDrive` and the drag in `afIntegrate` both scale by `1 − inertia·run01` — the
 same terminal speed, a slower response (0.14 s → 0.47 s), so a sprinter slides half a stride to a stop and swings
 wide through a turn. A hit, a stagger, a clash or being ridden down zero it. The leap (`I.jump`, Space / the JUMP
-button, edge-triggered like the roll and carried on the wire) needs both feet on the ground and no blow in hand:
+button — on touch a single tap, held 280 ms for the double-tap that is the roll — edge-triggered like the roll and carried on the wire) needs both feet on the ground and no blow in hand:
 `v` 6.6 up under `g` 18 (a ~1.2-unit hop, 0.73 s), nothing steers in the air and there is no ground to drag on, so
 you fly where you left it. A standing hop draws the knees up and lands on bent knees (`land` 0.22 s, no load allowed); a RUNNING leap (2026-09-15) is a **dive** — the body pitches head-first about the hips (`diveAng` 1.15 rad by mid-flight, the 'dive' pose flings both arms open, legs trail) and lands in a **roll** over the shoulder along the line of flight (`roll` 0.5 s, `afRollPose`, state code 16) and comes up through the crouch. **The jump attack** (`b.airAtk`): a tap or a press in the first `atkBy` 0.4 s of any leap turns it into an overhead blow instead — no dive, no tackle; the blade coils over the head on the way up (windupHeavy) and comes down with the body at `strikeY` 0.5 on the way down as a HEAVY at full weight (it cracks a raised guard) with `atkReach` 0.6 more reach; the landing is hard (landT × 1.6) with a breath before the next blow. State code 17 (move slot 1 once the blade has come down). `afTackle` (host,
 in the air): with `leapSp` ≥ `tackleAt` × move behind the leap, the nearest foe within `tackleR` and not behind you — and the men within `knot` 1.6 of him, up to `men` 3 (a knot of soldiers goes down under you) —

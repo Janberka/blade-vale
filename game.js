@@ -1120,12 +1120,19 @@ function wearModelRig(h, name, o = {}) {
   if (P.shield) { mount(P.shield, R.spec.shieldArm); P.shield.visible = false; P.shield.userData.modelHidden = true; }   // the figure's own shield shows instead
   let plume = null; { g.traverse(x => { if (x.name === 'plume') plume = x; });   // the plume rides the figure's head bone, on the helmet's crown (rig.json plumeY = crown height above the head bone, model units)
     if (plume && R.spec.map.head && inst.byName[R.spec.map.head]) { mount(plume, R.spec.map.head); plume.position.set(0, (R.spec.plumeY != null ? R.spec.plumeY : 0.35) * S - 0.04, -0.1); plume.rotation.x = 0.6; } }
+  // THE SHEATHED SWORD: a copy of the figure's own blade hung at the left hip on the hips bone (the walk into the pit — P.sheathed — and an archer's sidearm while his bow is out; syncModelRigs)
+  let mHip = null; { const hipL = R.spec.map.hipL && inst.byName[R.spec.map.hipL], pi = hipL ? inst.parent[inst.nodes.indexOf(hipL)] : -1, hips = pi >= 0 ? inst.nodes[pi] : null, geo = hips && modelPropGeo(R, 'sword');
+    if (geo) { const holder = new THREE.Group(); holder.name = 'hipHolder'; holder.quaternion.copy(inst.restWorld[pi]).invert(); holder.scale.setScalar(1 / S); hips.add(holder);
+      mHip = new THREE.Mesh(geo, new THREE.MeshPhongMaterial({ map: R.tex, shininess: 6, specular: 0x111111 })); mHip.name = 'hipSword'; mHip.castShadow = true; mHip.scale.setScalar(S); mHip.visible = false; modelHipPlace(mHip); holder.add(mHip); } }
   // team colour: the cloak is dyed outright, the shield's face is tinted — the steel stays steel
   if (o.team != null) { const cloak = inst.skinned[M.cloak]; if (cloak) cloak.material = new THREE.MeshPhongMaterial({ color: o.team, shininess: 4, specular: 0x050505, skinning: true });
     if (mShield) mShield.material = new THREE.MeshPhongMaterial({ map: R.tex, color: new THREE.Color(o.team).lerp(new THREE.Color(0xffffff), 0.35), shininess: 6, specular: 0x111111, skinning: true }); }
-  const live = { h, P, g, inst, drive, mSword, mShield, mRound: null, shieldKind: 'heater', plume, q: new THREE.Quaternion(), w: [], armBase, armAmt: armBase, body: null, bodyLooked: 0 };
+  const live = { h, P, g, inst, drive, mSword, mShield, mHip, mRound: null, shieldKind: 'heater', plume, q: new THREE.Quaternion(), w: [], armBase, armAmt: armBase, body: null, bodyLooked: 0 };
   MODEL_LIVE.push(live); P.modelRig = live; g.userData.model = name; return true;
 }
+// where the sheathed blade hangs (rig units off the hips bone, +x = his left): grip at the hip, the blade down and swept back along the thigh
+const MODEL_HIP = { x: 0.30, y: -0.06, z: -0.12, rx: Math.PI / 2 + 0.38, ry: 0, rz: -0.22 };
+function modelHipPlace(m) { m.position.set(MODEL_HIP.x, MODEL_HIP.y, MODEL_HIP.z); m.rotation.set(MODEL_HIP.rx, MODEL_HIP.ry, MODEL_HIP.rz); }
 // every render: copy the pivots onto the bones, top-down (unmapped bones keep their rest pose)
 const _tmpQ = new THREE.Quaternion();
 function syncModelRigs() {
@@ -1141,8 +1148,9 @@ function syncModelRigs() {
       W[i] = pw ? pw.clone().multiply(b.quaternion) : b.quaternion.clone(); }
     // the sword in his hand: the figure's own for the plain iron blade, the loadout's BUILT one for anything else
     // (the market sells fifteen — a falchion must look like a falchion on him); afDressGear stamps P.gearSword
-    const vr = !!L.P.vrGear, showGear = vr || (!!L.P.gearSword && !L.P.noModelSword), drawn = !!(L.P.sword && L.P.sword.visible);   // (vrGear: the plastic steel rides the VR controllers, the figure's own is hidden — vrDress)
-    if (L.mSword) L.mSword.visible = !vr && drawn && !showGear && !L.P.noModelSword;
+    const vr = !!L.P.vrGear, sheathed = !vr && !!L.P.sheathed, showGear = vr || (!!L.P.gearSword && !L.P.noModelSword && !sheathed), drawn = !!(L.P.sword && L.P.sword.visible);   // (vrGear: the plastic steel rides the VR controllers, the figure's own is hidden — vrDress; sheathed: the walk into the pit, the blade at his hip — afDonStep)
+    if (L.mSword) L.mSword.visible = !vr && drawn && !showGear && !L.P.noModelSword && !sheathed;
+    if (L.mHip) L.mHip.visible = !vr && !L.P.noModelSword && (sheathed || !drawn);            // at the hip: while sheathed, and an archer's sidearm while the bow is in his hands
     if (L.P.shield) L.P.shield.visible = vr ? !!L.P.vrShieldOn : false;                          // (afMakeBody re-shows and rescales it; the figure's own shield is the one)
     if (L.P.sword) L.P.sword.traverse(m => { if (m.isMesh && m.visible !== showGear) m.visible = showGear; });   // (afBuildSword rebuilds it on every gear pass)
     const shieldOn = !vr && !L.P.noModelShield && !!(L.P.bow ? !L.P.bow.visible : true);   // (his LOOK says which shield, if any — lookApply)
@@ -1283,8 +1291,7 @@ function lookColour(look, cls, mt) {
 }
 // dress a live figure in a look: paint the vertices, drop the pieces he goes without, cloak, plume, shield
 function lookApply(L, look) {
-  if (!L || !L.inst) return; L.lookBase = look;                          // (the look as rolled: lookHelmOff re-applies it with the helm on or off)
-  if (L.helmOff && (look.helmet || !look.hide.includes('helmet'))) look = Object.assign({}, look, { helmet: false, hide: look.hide.concat('helmet') });   // bareheaded: the sculpted helm dropped, the plume with it
+  if (!L || !L.inst) return; L.lookBase = look; look = lookWorn(L, look);   // (the look as rolled, and the look as worn now — bareheaded while L.helmOff)
   L.look = look; const c = new THREE.Color(), R = MODEL_RIGS.get(L.g.userData.model), M = (R && R.spec.meshes) || {};
   for (const sm of Object.values(L.inst.skinned)) { const pj = sm.userData.pieces; if (!pj) continue;
     const col = sm.geometry.getAttribute('color'), nv = col.count, hide = new Set(look.hide), skinTint = pj.classes.indexOf('hair') >= 0;
@@ -1297,17 +1304,26 @@ function lookApply(L, look) {
     if (skinTint) lookFaceApply(sm, look, pj);                 // (the bones: this body's own head positions)
     const pos = sm.userData.geo0.getAttribute('position');
     for (let v = 0; v < nv; v++) { const cls = pj.classes[pj.vclass[v]], mt = pj.mats[pj.vmat[v]]; c.setHex(skinTint ? lookFaceColour(look, cls, mt, pos.getX(v), pos.getY(v), pos.getZ(v)) : lookColour(look, cls, mt)); if (skinTint && mt === 'skin' && cls !== 'eye') { c.r = Math.min(1, c.r / 1.0); c.g = Math.min(1, c.g / 0.86); c.b = Math.min(1, c.b / 0.70); } col.setXYZ(v, c.r * 255, c.g * 255, c.b * 255); } col.needsUpdate = true;
-    const i0 = sm.userData.geo0.index.array, tri = pj.tri, idx = sm.geometry.index; let n = 0;
-    for (let t = 0; t < tri.length; t++) { if (hide.has(pj.classes[tri[t]])) continue; idx.array[n] = i0[t * 3]; idx.array[n + 1] = i0[t * 3 + 1]; idx.array[n + 2] = i0[t * 3 + 2]; n += 3; }
-    idx.needsUpdate = true; sm.geometry.setDrawRange(0, n); }
+  }
+  lookDraw(L, look);
   const cloak = L.inst.skinned[M.cloak]; if (cloak) { cloak.visible = !!look.cloak; if (cloak.material && cloak.material.color && !cloak.material.map) cloak.material.color.setHex(look.cloakC); }
   if (L.plume) L.plume.visible = !!(look.helmet && look.plume);
   lookHairApply(L, look);                                                // the cut: a cap on the skull when he stands bareheaded
   L.shieldKind = look.shield; if (look.shield === 'round') lookRoundShield(L, look); else if (L.mRound) L.mRound.visible = false;
   if (L.mShield && L.mShield.material && L.mShield.material.color) L.mShield.material.color.setHex(look.cloth).lerp(new THREE.Color(0xffffff), 0.35);
 }
-// the helm off and on again (the home, the barber's chair: his face and hair are the point there, as the sword and shield lie on the floor)
-function lookHelmOff(L, off) { if (!L || !!L.helmOff === !!off) return; L.helmOff = !!off; if (L.lookBase) lookApply(L, L.lookBase); }
+// the pieces he goes without leave the body's own index (no draw call for them, no seam) — the only part of the look a helm toggle has to redo
+function lookDraw(L, look) {
+  const hide = new Set(look.hide);
+  for (const sm of Object.values(L.inst.skinned)) { const pj = sm.userData.pieces; if (!pj) continue;
+    const i0 = sm.userData.geo0.index.array, tri = pj.tri, idx = sm.geometry.index; let n = 0;
+    for (let t = 0; t < tri.length; t++) { if (hide.has(pj.classes[tri[t]])) continue; idx.array[n] = i0[t * 3]; idx.array[n + 1] = i0[t * 3 + 1]; idx.array[n + 2] = i0[t * 3 + 2]; n += 3; }
+    idx.needsUpdate = true; sm.geometry.setDrawRange(0, n); }
+}
+function lookWorn(L, look) { return L.helmOff && (look.helmet || !look.hide.includes('helmet')) ? Object.assign({}, look, { helmet: false, hide: look.hide.concat('helmet') }) : look; }   // bareheaded: the sculpted helm dropped, the plume with it
+// the helm off and on again — the home and the barber's chair (his face and hair are the point there, as the sword and shield lie on the floor),
+// and the walk into the pit: every man comes in bareheaded and sets it on in the countdown's last breaths (afDonStep). Only the index, the plume and the hair cap change.
+function lookHelmOff(L, off) { if (!L || !!L.helmOff === !!off) return; L.helmOff = !!off; if (!L.lookBase || !L.inst) return; const look = L.look = lookWorn(L, L.lookBase); lookDraw(L, look); if (L.plume) L.plume.visible = !!(look.helmet && look.plume); lookHairApply(L, look); }
 // ---- THE HAIR: a cap of geometry on the skull ----
 // the hairline's height at a bearing (deg) round the skull's axis, a smooth curve through the style's keys (mirrored left/right)
 function lookHairline(hs, a) {
@@ -1664,6 +1680,10 @@ const POSES = {
   // the home floor: stooping to take up the sword (right hand) or the shield (left) planted in the sand before him
   pickR:      { shRx: -0.80, shRz:  0.12, elR: -0.10, shLx:  0.12, shLz: -0.30, elL: -0.25, leanX:  0.55, twistY: -0.20, wristX: -0.5 },
   pickL:      { shRx:  0.12, shRz:  0.30, elR: -0.25, shLx: -0.80, shLz: -0.12, elL: -0.10, leanX:  0.55, twistY:  0.20, wristX: -0.5 },
+  // the countdown's last beats (afDonStep): the sword hand up to the crown to set the helm, then across to the left hip for the grip, and the draw — out and up
+  donHelm:    { shRx: -2.55, shRz: -0.42, elR: -2.45, shLx:  0.10, shLz: -0.30, elL: -0.30, leanX: -0.04, twistY:  0.05, wristX:  0.30 },
+  drawHip:    { shRx: -0.35, shRz: -0.70, elR: -1.55, shLx:  0.05, shLz: -0.30, elL: -0.35, leanX:  0.18, twistY: -0.35, wristX: -0.90 },
+  drawOut:    { shRx: -1.70, shRz:  0.80, elR: -0.45, shLx: -0.30, shLz: -0.10, elL: -0.60, leanX: -0.02, twistY:  0.30, wristX:  0.60 },
 };
 
 // Attack moves: which guards to snap between. Combos cycle through them.
@@ -19257,7 +19277,7 @@ const AF_RALLIES = {
     [{ pose: 'rally', dur: 0.8, face: 'men' }, { pose: 'rallyPump', dur: 0.3, face: 'men' }, { pose: 'rally', dur: 0.5, face: 'men' }, { pose: 'guard', dur: 0.4, face: 'foe' }],
   ],
 };
-function afRally(b, kind) { const set = AF_RALLIES[kind], S = b.intro; if (!set || !S) return; S.rally = { steps: set[(S.rallyPick + (kind === 'pen' ? 0 : 1)) % set.length], i: 0, t: 0 }; if (kind !== 'pen') AF.roar = Math.max(AF.roar, 1.1); }
+function afRally(b, kind) { const set = AF_RALLIES[kind], S = b.intro; if (!set || !S) return; if (b.weapon !== 'bow') b.parts.sheathed = false; S.rally = { steps: set[(S.rallyPick + (kind === 'pen' ? 0 : 1)) % set.length], i: 0, t: 0 }; if (kind !== 'pen') AF.roar = Math.max(AF.roar, 1.1); }
 function afRallyYaw(b, face) {                             // 'men': back at his own ranks · 'foe' / 'gate': across the pit
   const I = AF.intro || AF.introTail; if (!I) return b.yaw;    // (a star arriving during the countdown rallies from the film's tail)
   if (face === 'men') { const F = I.frames[b.team]; return b.intro.phase === 'wait' ? F.face + Math.PI : Math.atan2(F.ux, F.uz); }
@@ -19612,7 +19632,7 @@ function afIntroBody(b, sdt) {
   } else {
     b.moving = false; b.vx = b.vz = 0; restLegs(b.parts, sdt, S.phase === 'done' || S.pauseT > 0);
     if (S.rally) setPose(b.anim, S.rally.steps[S.rally.i].pose, 0.2);
-    else setPose(b.anim, (S.phase === 'done' || S.pauseT > 0) && b.weapon !== 'bow' ? 'guard' : 'relax', 0.4);
+    else setPose(b.anim, (S.phase === 'done' || S.pauseT > 0) && b.weapon !== 'bow' && !b.parts.sheathed ? 'guard' : 'relax', 0.4);   // (his blade still at his hip: he stands easy at his mark)
   }
   if (b.mounted && b.horse) { b.horse.x = b.x; b.horse.z = b.z; b.horse.yaw = b.yaw; }
   b.group.visible = Math.hypot(b.x, b.z) < F.R + AF_INTRO.tunnel - 1.2;
@@ -19636,7 +19656,35 @@ function afIntroEnd() {
   afIntroUi(false); afHud();
   const fade = document.getElementById('af-intro-fade'); if (fade && !smooth) { fade.style.transition = 'none'; fade.style.opacity = '1'; setTimeout(() => { fade.style.transition = 'opacity .55s'; fade.style.opacity = '0'; }, 60); }
 }
+// ---- THE DON: every man walks into the pit bareheaded with his sword at his hip. In the countdown's last breaths he sets the helm on his head
+// (if he owns one) and draws: the hand to the crown, the helm, the hand across to the hip, the blade out and up to guard. A man still walking in at
+// the bell does it all at once (afIntroTailEnd); an archer keeps the bow in his hands and the sidearm at his hip.
+const AF_DON = { at: 2.45, jitter: 0.35, helm: [0.42, 0.22, 0.30], draw: [0.34, 0.08, 0.38] };   // when it starts (countdown seconds left, less a per-man jitter), and the beats: up / hold / down, to the hip / hold / the sweep
+function afDonReset(b) { b.parts.sheathed = true; b.don = null; b.donned = false; const L = b.parts.modelRig; if (L) lookHelmOff(L, true); }
+function afDonHelm(b) { const L = b.parts.modelRig; return !!(L && L.lookBase && L.lookBase.helmet); }   // does he own a helm to set on
+function afDonFinish(b) { b.parts.sheathed = false; b.don = null; b.donned = true; const L = b.parts.modelRig; if (L) lookHelmOff(L, false); }
+function afDonAll() { for (const b of AF.bodies || []) if (!b.donned) afDonFinish(b); }
+function afDonStep(b, dt) {                                 // drives the arms through the beats; true while it owns the pose
+  if (b.donned) return false;
+  if (!b.don) { const jit = ((b.idx * 7919) % 97) / 97 * AF_DON.jitter; if (AF.countdown > AF_DON.at - jit || b.intro) return false;   // (a straggler still walking in draws at the bell)
+    if (b === AF.me && VR.on) { afDonFinish(b); return false; }                              // (in the headset your own hands are the controllers)
+    b.don = { stage: afDonHelm(b) ? 'helm' : 'draw', t: 0 }; if (b.don.stage === 'draw' && b.weapon === 'bow') { afDonFinish(b); return false; } }   // (no helm and a bow already in hand: nothing to do)
+  const D = b.don; D.t += dt;
+  if (D.stage === 'helm') { const [up, hold, down] = AF_DON.helm;
+    if (D.t < up) setPose(b.anim, 'donHelm', up);
+    else if (D.t < up + hold) { const L = b.parts.modelRig; if (L && L.helmOff) lookHelmOff(L, false); }
+    else if (D.t < up + hold + down) setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', down);
+    else { if (b.weapon === 'bow') { afDonFinish(b); return false; } D.stage = 'draw'; D.t = 0; }
+    return true; }
+  const [toHip, hold, sweep] = AF_DON.draw;
+  if (D.t < toHip) setPose(b.anim, 'drawHip', toHip);
+  else if (D.t < toHip + hold) b.parts.sheathed = false;
+  else if (D.t < toHip + hold + sweep) setPose(b.anim, 'drawOut', sweep * 0.6);
+  else afDonFinish(b);
+  return true;
+}
 function afIntroTailEnd() {                                 // the bell: whoever is still on his way takes his mark now (a step at most — the walk-in waited for you, and the countdown for the rest)
+  afDonAll();                                              // (and whoever has not set his helm on and drawn does it now)
   if (!AF.introTail) return; AF.introTail = null;
   for (const b of AF.bodies) { if (!b.intro) continue; if (b.home) { b.x = b.home.x; b.z = b.home.z; b.yaw = b.home.yaw; b.lookYaw = b.yaw; b.inp.yaw = b.yaw; b.tx = b.x; b.tz = b.z; b.tyaw = b.yaw; }
     b.vx = b.vz = 0; b.moving = false; b.intro = null; b.yOff = 0; if (b.mounted && b.horse) { b.horse.x = b.x; b.horse.z = b.z; b.horse.yaw = b.yaw; if (b.parts.mount) b.parts.mount.userData.rig.speed01 = 0; } afCommit(b, 0.016); }
@@ -21856,7 +21904,7 @@ function afFrame(now, noRaf) {
     afNetTick(dt);
   } else if (AF.phase === 'countdown') {
     for (const b of AF.bodies) { if (b.intro && AF.introTail) { afIntroBody(b, dt); if (b.intro && b.intro.phase === 'done') { b.intro = null; b.yOff = 0; } continue; }   // (still walking in from the film: he takes his mark, then his guard)
-      restLegs(b.parts, dt, true); setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.3); afCommit(b, dt); }
+      restLegs(b.parts, dt, true); if (!afDonStep(b, dt)) setPose(b.anim, b.weapon === 'bow' || b.parts.sheathed ? 'relax' : 'guard', 0.3); afCommit(b, dt); }   // (a sheathed man stands easy; the last breaths: the helm on, the blade out)
     if (AF.role === 'guest') afNetTick(dt);
   } else if (AF.phase === 'intro') {                         // the entrance: the march in and the cut run here, no sim
     afIntroStep(dt);
@@ -22394,6 +22442,7 @@ function afBoot(spec) {
   const I = AF.locIn; I.atk = I.heavy = I.dodge = 0; I.block = false; AF.keys.clear();
   if (AF.me) { AF.cam.yaw = AF.me.yaw; AF.cam.pitch = 0.3; AF.me.seenAtk = AF.me.seenHeavy = AF.me.seenDodge = 0; }
   else if (AF.role === 'guest') { console.warn('[arena] no seat for me in the roster', window.coop && window.coop.id, spec.roster.map(e => e.name + ':' + e.kind + ':' + e.peer)); setTimeout(() => { if (AF.on && !AF.me) afBanner('NO SEAT IN THIS FIGHT', 'the lobby had no place for you — you watch this one', 4); }, 3200); }   // (never silent: a spectator should know why he is one)
+  for (const b of AF.bodies) afDonReset(b);                 // every man comes in bareheaded, his sword at his hip (afDonStep sets the helm on and draws before the bell)
   AF.phase = 'countdown'; AF.countdown = AF_F.countdown; AF.t = 0; AF.over = false; AF.leaving = false; AF.reportP = null; AF.winner = -1; AF.standings = null; AF.events = []; AF._hc = 0; AF.last = 0; AF.hitstop = 0; AF.assignT = 0; afNetReset(); trauma = 0; camKick.set(0, 0, 0); fovPunch = 0;
   AF.spec = { mode: 'orbit', target: null, fx: 0, fz: 0, touched: false };
   AF.orbit.theta = AF.me ? AF.me.yaw + Math.PI : 0.4; AF.roar = 0; AF.waveT = 0; AF.nextWave = 22 + Math.random() * 10;
@@ -23484,6 +23533,8 @@ BV.arenaHorseHit = (id, amt) => { const h = AF.horses[id]; if (h) afDamageHorse(
 BV.arenaSeat = (w) => { const s = AF.lobby && afHostSeat(); if (s) { s.weapon = w; AF.lobby.weapon = w; } return s && s.weapon; };   // test: what the host rides in with (sword / bow / horse), bypassing the gear check
 BV.arenaMount = (idx, hid) => { const b = AF.bodies[idx], h = AF.horses[hid]; if (!b || !h || h.dead) return null; if (h.rider) { const r = h.rider; afDismount(r, false, true); r.mountCd = 99; } if (b.mounted) afDismount(b, false, true); b.mountCd = 0; afMount(b, h, true); return { mounted: b.mounted, weapon: b.weapon, canBow: b.canBow }; };   // test: put a man in a saddle (its rider steps down)
 BV.arenaKill = (idx) => { const b = AF.bodies[idx]; if (b && !b.dead) afKill(b, null); return BV.arenaStatus(); };   // test: fell a man
+BV.arenaDon = () => (AF.bodies || []).map(b => ({ name: b.name, weapon: b.weapon, sheathed: !!b.parts.sheathed, helmOff: !!(b.parts.modelRig && b.parts.modelRig.helmOff), ownsHelm: afDonHelm(b), stage: b.don ? b.don.stage : null, donned: !!b.donned, pose: b.anim.name, hip: !!(b.parts.modelRig && b.parts.modelRig.mHip && b.parts.modelRig.mHip.visible) }));   // test: the don — who is bareheaded / sheathed, and where each man is in it
+BV.hipSword = o => { Object.assign(MODEL_HIP, o || {}); for (const L of MODEL_LIVE) if (L.mHip) modelHipPlace(L.mHip); return { ...MODEL_HIP }; };   // test: re-hang the sheathed blade on every live figure
 BV.previewPick = (kind) => { const P = AF.preview; return P && P.floor ? { ok: kind ? afPreviewPickup(kind) : null, held: { ...P.floor.held }, busy: P.floor.busy, yaw: +P.yaw.toFixed(2), sword: P.floor.sword && P.floor.sword.visible, shield: P.floor.shield && P.floor.shield.visible, helm: !(P.rig && P.rig.parts.modelRig && P.rig.parts.modelRig.helmOff) } : null; };   // test: the home floor — pick 'sword' | 'shield', or read it
 BV.previewPose = (name) => { const P = AF.preview; if (P && P.anim) { setPose(P.anim, name, 0.01); updateAnimator(P.anim, 1); } return !!P; };   // test: pose the market figure
 BV.arenaHorses = () => AF.horses.map(h => ({ id: h.id, hp: Math.round(h.hp), dead: h.dead, rider: h.rider ? h.rider.name : null, x: +h.x.toFixed(1), z: +h.z.toFixed(1), sp: +h.sp01.toFixed(2), pace: h.pace }));
@@ -23500,7 +23551,7 @@ BV.arenaStatus = () => ({ on: AF.on, stam: AF.me && AF.me.maxStam ? +AF.me.stam.
 BV.arenaIntro = (cmd) => { if (cmd === 'skip') afIntroSkip(); else if (typeof cmd === 'number' && AF.intro) { const I = AF.intro, n = clamp(cmd, 0, I.shots.length - 1); for (let k = I.i + 1; k < n; k++) if (I.shots[k].onStart) I.shots[k].onStart(); I.i = n; afIntroApplyShot(); } /* (a jump still fires the beats it skips over) */ else if (cmd && cmd.advance && AF.intro) { for (let t = 0; t < cmd.advance && AF.intro; t += 1 / 60) { afIntroStep(1 / 60); if (AF.intro) afIntroCamera(1 / 60); } } const I = AF.intro; return I ? { film: I.film, shot: I.i, of: I.shots.length, t: +I.t.toFixed(1), shotT: +I.shotT.toFixed(2), ts: AF.timeScale, released: I.released, cap: I.cap, stars: I.stars.map(a => a.map(b => b.name + ':' + b.xp)), gates: AF.gates.map(g => +g.open.toFixed(2)), march: AF.bodies.map(b => b.intro ? b.intro.phase[0] : '-').join('') } : { shot: -1, phase: AF.phase }; };   // test: the entrance (skip / jump to a shot / read it)
 BV.arenaOutro = (cmd) => { const O = AF.outro; if (cmd === 'skip') afOutroSkip(); else if (typeof cmd === 'number' && O) { const n = clamp(cmd, 0, O.shots.length - 1); for (let k = O.i + 1; k < n; k++) if (O.shots[k].onStart) O.shots[k].onStart(); O.i = n; afOutroApplyShot(); } else if (cmd && cmd.advance && O) { for (let t = 0; t < cmd.advance && AF.outro; t += 1 / 60) { afTick(1 / 60); afOutroStep(1 / 60); if (AF.outro) afOutroCamera(1 / 60); } }
   const V = AF.victory, P = AF.outro, ndc = V && V.mvp ? tmpV.set(V.mvp.x, afY(V.mvp.x, V.mvp.z) + 2, V.mvp.z).project(camera) : null; return { film: !!P, mvpScreen: ndc ? [+ndc.x.toFixed(2), +ndc.y.toFixed(2)] : null, view: camera.view ? [camera.view.enabled, camera.view.offsetX, camera.view.fullWidth] : null, shot: P ? P.i : -1, of: P ? P.shots.length : 0, t: P ? +P.t.toFixed(1) : 0, shotT: P ? +P.shotT.toFixed(2) : 0, mvp: V && V.mvp ? V.mvp.name + (V.mvp.dead ? ' (fallen)' : '') : null, winners: V ? V.winners.map(b => b.name + ':' + (b.anim ? b.anim.name : '-')).join(' ') : '', roar: +AF.roar.toFixed(2), cam: [camera.position.x, camera.position.y, camera.position.z].map(v => +v.toFixed(1)), fov: +AF.fov.toFixed(0) }; };   // test: the end-game film (skip / jump to a shot / advance seconds / read it)
-BV.arenaStep = (steps = 60, dt = 1 / 60) => { if (AF.phase === 'intro') afIntroEnd(); if (AF.phase === 'countdown') { AF.phase = 'fight'; AF.countdown = 0; } for (let i = 0; i < steps; i++) afTick(dt); return BV.arenaStatus(); };
+BV.arenaStep = (steps = 60, dt = 1 / 60) => { if (AF.phase === 'intro') afIntroEnd(); if (AF.phase === 'countdown') { AF.phase = 'fight'; AF.countdown = 0; afIntroTailEnd(); } for (let i = 0; i < steps; i++) afTick(dt); return BV.arenaStatus(); };
 BV.arenaInput = (patch) => { Object.assign(AF.locIn, patch || {}); return { ...AF.locIn }; };
 BV.arenaStam = (v) => { const b = AF.me; if (!b) return null; if (v != null) { afStamina(b, 0); b.stam = clamp(v, 0, b.maxStam); } return { stam: b.stam, winded: b.winded, max: b.maxStam, regen: b.stamRegen }; };   // test: read / set your stamina
 

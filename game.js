@@ -1551,7 +1551,7 @@ function lookBakeHeadClass(x, y, z) {                        // the bake's regio
   if ((y > 1.725 && !face) || (z < -0.03 && y > 1.60) || (ax > 0.085 && y > 1.69 && !face)) return 'hair';
   if (y > 1.705 && y < 1.74 && z > 0.085 && ax < 0.095) return 'brow';                                          // the brow ridge over the eyes
   if (y > 1.47 && y < 1.615 && z > -0.03 && ax < 0.115) return 'beard';                                         // jaw, chin, lips: a full beard
-  if (y >= 1.615 && y < 1.665 && ax > 0.075 && z > 0.0) return 'beard';                                         // sideburns up the cheek
+  if (y >= 1.615 && y < 1.665 && ax > 0.075 && z > 0.035) return 'beard';                                       // sideburns up the cheek — in FRONT of the ear (its root and lobe sit at z 0 … 0.02, and z > 0 grew hair out of them)
   if (y > 1.655 && y < 1.705 && z > 0.07 && ax > 0.025 && ax < 0.1) return 'socket';                            // round the eyes
   if (z > 0.06 && ax > 0.03 && ax < 0.095 && Math.abs((y - 1.665) + 0.9 * (ax - 0.06)) < 0.014) return x < 0 ? 'scarL' : 'scarR';   // a cut across one cheek
   return 'head';
@@ -1702,7 +1702,7 @@ function lookRoll(name, arch, gear, pal, o = {}) {
 function lookFaceColour(look, cls, mt, x, y, z, scalp, brow) {
   const bs = look.beardStyle | 0;
   if (look.hair != null && cls === 'hair' && scalp) return look.hair;   // (scalp: this vertex is well under the cap — lookScalpMask; brow: well inside the brow — lookBrowMask)
-  if (cls === 'beard' && look.beard != null) { const on = bs === 2 || bs === 5 || bs === 1 || (bs === 3 && Math.abs(x) < 0.05) || (bs === 4 && y > 1.585 && z > 0.1); if (on) return bs === 1 ? look.stubble : look.beard; }
+  if (cls === 'beard' && look.beard != null && !(y >= 1.615 && z < 0.035)) { const on = bs === 2 || bs === 5 || bs === 1 || (bs === 3 && Math.abs(x) < 0.05) || (bs === 4 && y > 1.585 && z > 0.1); if (on) return bs === 1 ? look.stubble : look.beard; }   // (the baked sideburn band took the ear's root and lobe — pieces.json still carries that; the cut here keeps the beard on the cheek, in front of the ear: "it looks like it's coming out of ears")
   if (cls === 'brow') return brow ? look.brow : look.skin; if (cls === 'socket') return look.socket; if (cls === 'scarL' || cls === 'scarR') return look.scar === cls ? look.scarC : look.skin; if (cls === 'eye') return 0xece8e2;
   if (mt === 'leather') return look.lip;                     // (the palette's lip/brow brown: no painted lips)
   return look.skin;

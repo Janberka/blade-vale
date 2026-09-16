@@ -88,6 +88,10 @@ before, the eyes open (84 % of the boy's height, was 62 %) and set only a touch 
 (×0.91, was ×0.78: sunk into a skull) and the whites clear (`0xece8e2`, were `0xd8d0c8`). Dark brows and a hard mouth stay.
 Then "the chin is toooo long": everything under the lip line (y < 1.565, the front) is drawn up by a third, fading round to the jaw's
 underside so the neck keeps its seat; the long cast draws the face down 22 % (was 28 %). v=215
+"What's wrong with this dude's facial hair, it looks like it's coming out of ears": the bake's sideburn band (y 1.615–1.665, wide of
+the cheek, z > 0) took the ear's root and lobe, which sit at z 0 … 0.02. The band is in FRONT of the ear now (z > 0.035, in
+warrior_pieces.py and its port lookBakeHeadClass), and lookFaceColour cuts the baked class the same way, so the shipped pieces.json
+needs no re-bake. v=216
 
 ## The wardrobe is the marketplace (2026-09-14, "any item we add should be available in the marketplace")
 Six slots now: sword, armor, helm, shield, bow, horse (`ARENA_SLOTS` in arena-items.js; the server validates against the

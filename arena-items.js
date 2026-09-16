@@ -31,6 +31,10 @@
     brigandine:     { slot: 'armor', name: 'Brigandine',        price: 1000, rank: 2, hp: 45, poise: 10, move: -0.03, desc: 'steel plates riveted under cloth — little weight to speak of' },
     dragon_plate:   { slot: 'armor', name: 'Dragon plate',      price: 7000, rank: 5, skill: ['sword', 5], hp: 110, poise: 30, move: -0.3, desc: 'black steel, red trim, spiked shoulders — a walking fortress' },
     sallet:         { slot: 'helm',  name: 'Sallet',            price: 200,  rank: 0, hp: 8,  poise: 3, desc: 'a visored steel helm — without one you fight bareheaded' },
+    // ANIMAL FUR HELMS (2026-09-16): a beast's head worn as a hood over a fur-lined cap, its hide down the nape — pelt: which beast (the client builds the head on the figure: lookPeltGeo)
+    wolf_helm:      { slot: 'helm',  name: "Wolf's head",       price: 260,  rank: 0, hp: 6,  poise: 5, pelt: 'wolf', desc: "a grey wolf's head over your crown, its jaws open over your brow, the pelt down your neck — the north's helm" },
+    bear_helm:      { slot: 'helm',  name: "Bear's head",       price: 480,  rank: 1, hp: 10, poise: 6, pelt: 'bear', desc: "a brown bear's head and its thick hide over the crown — heavy, warm, hard to rattle" },
+    lion_helm:      { slot: 'helm',  name: "Lion's mane",       price: 950,  rank: 2, hp: 8,  poise: 8, pelt: 'lion', desc: "a tawny mane round your head and the lion's face over your brow — a southern king's trophy" },
     round_shield:   { slot: 'shield', name: 'Round shield',     price: 0,    rank: 0, desc: 'a painted wooden round — the pit lends every fighter one' },
     heater_shield:  { slot: 'shield', name: 'Heater shield',    price: 350,  rank: 1, poise: 5, desc: 'steel-faced and team-painted' },
     hunting_bow:    { slot: 'bow',   name: 'Hunting bow',       price: 200,  rank: 0, dmg: 1.0,  desc: 'lets you ride in with a bow at all' },

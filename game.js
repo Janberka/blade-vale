@@ -1359,6 +1359,7 @@ function syncModelRigs() {
     if (L.mSword) L.mSword.visible = !vr && drawn && !showGear && !L.P.noModelSword && !sheathed;
     if (L.mHip) L.mHip.visible = !vr && !L.P.noModelSword && (sheathed || !drawn);            // at the hip: while sheathed, and an archer's sidearm while the bow is in his hands
     if (L.mHelm) { const on = !vr && !!L.helmOff && !!L.helmHand; L.mHelm.visible = on; if (on) modelHelmPlace(L); }   // the helm in his hand on the walk in, and on its way onto his head (afDonStep)
+    lookPeltSync(L, vr);                                                                          // (a fur helm's beast head: on the carried helm, or on his head)
     if (L.P.shield) L.P.shield.visible = vr ? !!L.P.vrShieldOn : false;                          // (afMakeBody re-shows and rescales it; the figure's own shield is the one)
     if (L.P.sword) L.P.sword.traverse(m => { if (m.isMesh && m.visible !== showGear) m.visible = showGear; });   // (afBuildSword rebuilds it on every gear pass)
     const shieldOn = !vr && !L.P.noModelShield && !!(L.P.bow ? !L.P.bow.visible : true);   // (his LOOK says which shield, if any — lookApply)
@@ -1424,8 +1425,8 @@ const LOOK_HAIR_CUT = { 1: { pad: 0.009, top: 0.004 }, 2: { pad: 0.014, top: 0.0
 const LOOK_ARMOR = {
   none:           { helm: 0.08, pauldron: 0,    elbow: 0,    knee: 0,    cloak: 0.12, plume: 0,    straps: 0.3, pouch: 0.5, cloth: 0.5,  base: 'shirt',   paint: { skirt: 'breeches', greaves: 'breeches', boot: 'leather', helmet: 'iron' }, clothOf: { skirt: 'breeches' } },   // a linen shirt and wool breeches
   gambeson:       { helm: 0.15, pauldron: 0,    elbow: 0.3,  knee: 0.15, cloak: 0.25, plume: 0,    straps: 0.6, pouch: 0.5, cloth: 0.35, base: 'leather', paint: { cuirass: 'jack', skirt: 'jack', boot: 'leather', helmet: 'iron' } },
-  wolf_pelt:      { helm: 0.02, pauldron: 1,    elbow: 0,    knee: 0,    cloak: 1,    plume: 0,    straps: 0.7, pouch: 0.6, cloth: 0,    base: 'fur',     bare: true, naked: true, paint: { cuirass: 'skin', vambrace: 'leather', pauldron: 'furDark', boot: 'leather', helmet: 'iron' }, clothOf: { sleeve: 'skin', skirt: 'fur' }, cloakC: 'furDark' },   // bare-chested under the pelt (naked: the body under the armour shows, cuirass and sleeves dropped)
-  berserker:      { helm: 0.02, pauldron: 1,    elbow: 0,    knee: 0,    cloak: 0.35, plume: 0,    straps: 1,   pouch: 0.7, cloth: 0.1,  base: 'breeches', bare: true, naked: true, paint: { cuirass: 'skin', vambrace: 'ironEngraved', pauldron: 'furGrey', boot: 'leather', helmet: 'iron', straps: 'leather', pouch: 'leather' }, clothOf: { sleeve: 'skin', skirt: 'sash' }, cloakC: 'furGrey' },   // the northern raider (2026-09-16): a grey wolf mantle on the shoulders, a bare inked chest, steel bracers, a sash in the team dye, wool breeches
+  wolf_pelt:      { helm: 0.35, pauldron: 1,    elbow: 0,    knee: 0,    cloak: 1,    plume: 0,    straps: 0.7, pouch: 0.6, cloth: 0,    base: 'fur',     bare: true, naked: true, paint: { cuirass: 'skin', vambrace: 'leather', pauldron: 'furDark', boot: 'leather', helmet: 'iron' }, clothOf: { sleeve: 'skin', skirt: 'fur' }, cloakC: 'furDark' },   // bare-chested under the pelt (naked: the body under the armour shows, cuirass and sleeves dropped)
+  berserker:      { helm: 0.3,  pauldron: 1,    elbow: 0,    knee: 0,    cloak: 0.35, plume: 0,    straps: 1,   pouch: 0.7, cloth: 0.1,  base: 'breeches', bare: true, naked: true, paint: { cuirass: 'skin', vambrace: 'ironEngraved', pauldron: 'furGrey', boot: 'leather', helmet: 'iron', straps: 'leather', pouch: 'leather' }, clothOf: { sleeve: 'skin', skirt: 'sash' }, cloakC: 'furGrey' },   // the northern raider (2026-09-16): a grey wolf mantle on the shoulders, a bare inked chest, steel bracers, a sash in the team dye, wool breeches
   leather:        { helm: 0.25, pauldron: 0.2,  elbow: 0.5,  knee: 0.3,  cloak: 0.35, plume: 0,    straps: 0.6, pouch: 0.5, cloth: 0.35, base: 'leather', paint: { helmet: 'iron' } },
   brigandine:     { helm: 0.5,  pauldron: 0.35, elbow: 0.7,  knee: 0.5,  cloak: 0.4,  plume: 0.1,  straps: 0.6, pouch: 0.5, cloth: 0.15, base: 0x606268,  paint: { cuirass: 0xa03030, skirt: 'leather' } },
   mail:           { helm: 0.6,  pauldron: 0.4,  elbow: 0.8,  knee: 0.6,  cloak: 0.5,  plume: 0.15, straps: 0.6, pouch: 0.5, cloth: 0.1,  base: 0xa8acb4,  paint: { helmet: 0xb4b8c0 } },
@@ -1440,6 +1441,13 @@ const LOOK_LEATHER = [0x8a6a48, 0x6e4e30, 0x5a3e26, 0x7a5a3a];
 const LOOK_PLATE = [0xffffff, 0xffffff, 0xe8ecf4, 0xd0d4dc];
 const LOOK_WOOL = [0x5a4a3a, 0x4a4a4c, 0x6a5040, 0x3e3a36];                 // breeches
 const LOOK_FUR = [0x4a3626, 0x5a4432, 0x3e2e22];
+// THE BEASTS' HEADS (the fur helm wares, arena-items `pelt`): the sculpted helmet is painted the beast's fur and a head is
+// built over it (lookPeltGeo) — fur: the cap and the skull, dark: the hide's hem and the tufts' tips, light: the muzzle
+const LOOK_PELT = {
+  wolf: { fur: 0x6e685e, dark: 0x3a352e, light: 0x8c867a, nose: 0x161412, eye: 0xd8b040, teeth: 0xe8e0d0 },
+  bear: { fur: 0x3e2c1e, dark: 0x241810, light: 0x5a4430, nose: 0x120e0c, eye: 0x1c1410, teeth: 0xe8e0d0 },
+  lion: { fur: 0xb8863e, dark: 0x6a4018, light: 0xd4b078, nose: 0x2a1c14, eye: 0xc89a30, teeth: 0xe8e0d0 },
+};
 function lookSeed(s) { let h = 2166136261 >>> 0; s = String(s || ''); for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return h; }
 function lookRng(seed) { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
 function lookOdds(kind, arch, k) { const O = LOOK_ARMOR[kind] || LOOK_ARMOR.none, K = LOOK_CLASS[arch] || {}; return clamp((O[k] || 0) + (K[k === 'helm' ? 'helmet' : k] || 0), 0, 1); }   // (afNpcGear rolls a helm with it)
@@ -1465,6 +1473,7 @@ function lookRoll(name, arch, gear, pal, o = {}) {
   const scar = r(); look.scar = scar < 0.18 ? 'scarL' : scar < 0.36 ? 'scarR' : null; look.scarC = c.copy(skinC).lerp(new THREE.Color(0xe8a0a0), 0.45).multiplyScalar(1.05).getHex();
   // the kit
   look.helmet = !!(gear && (gear.helm || gear.plume));                                              // (a bought plume needs a helm to sit on)
+  const II = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}; look.pelt = gear && gear.helm && II[gear.helm] && LOOK_PELT[II[gear.helm].pelt] ? II[gear.helm].pelt : null;   // a beast's head for a helm (the fur helm wares)
   for (const k of ['pauldron', 'elbow', 'knee', 'straps', 'pouch']) if (r() >= p(k)) look.hide.push(k); if (!look.helmet) look.hide.push('helmet');
   look.hide.push('skirtTop'); if (O.naked) { look.hide.push('cuirass', 'sleeve'); look.naked = true; }   // bare to the waist: the body under the armour shows (instanceModelRig's 'naked' mesh)
   look.cloak = o.full ? true : r() < p('cloak'); look.plume = o.full || (r() < p('plume')) || !!(gear && gear.plume);
@@ -1479,7 +1488,8 @@ function lookRoll(name, arch, gear, pal, o = {}) {
   for (const pc of LOOK_PIECES) look.paint[pc] = O.paint && O.paint[pc] != null ? resolve(O.paint[pc]) : base;
   for (const k in (O.clothOf || {})) look.clothOf[k] = resolve(O.clothOf[k]);
   look.cloakC = O.cloakC ? resolve(O.cloakC) : look.cloth;
-  const II = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}; look.ink = gear && gear.ink && II[gear.ink] && II[gear.ink].ink ? II[gear.ink].ink : null;   // THE INK (a ware): tattoos on whatever skin his kit leaves bare — lookKind hands those vertices the inked-skin kind
+  if (look.pelt) { look.paint.helmet = LOOK_PELT[look.pelt].fur; look.plume = false; }   // the fur helm: the cap under the beast's head is its fur, and there is no crown for a plume
+  look.ink = gear && gear.ink && II[gear.ink] && II[gear.ink].ink ? II[gear.ink].ink : null;   // THE INK (a ware): tattoos on whatever skin his kit leaves bare — lookKind hands those vertices the inked-skin kind
   return look;
 }
 // the face: beard styles are regions of the bald head — the baked beard class cut by position (bind pose, model units,
@@ -1508,6 +1518,7 @@ function lookInkKind(look, K) { return look.ink === 'wolf' ? K.inkWolf : look.in
 function lookKind(look, cls, mt, kd0) {
   const O = LOOK_ARMOR[look.kind] || LOOK_ARMOR.none, K = MODEL_KIND;
   if (mt === 'steel') { const p = O.paint && O.paint[cls] != null ? O.paint[cls] : O.base;
+    if (cls === 'helmet' && look.pelt) return K.leather;   // (a fur helm's cap)
     if (p === 'ironEngraved') return K.engraved; if (p === 'shirt' || p === 'breeches' || p === 'jack') return K.cloth; if (p === 'leather' || p === 'fur' || p === 'furDark' || p === 'furGrey') return K.leather; if (p === 'skin') return lookInkKind(look, K);
     return look.kind === 'mail' && LOOK_MAIL_PIECES.has(cls) ? K.mail : K.steel; }
   if (mt === 'cloth') { const c = O.clothOf && O.clothOf[cls]; return c === 'skin' ? lookInkKind(look, K) : c === 'fur' ? K.leather : K.cloth; }
@@ -1535,6 +1546,7 @@ function lookApply(L, look) {
       for (let v = 0; v < nv; v++) kd.setX(v, lookKind(look, pj.classes[pj.vclass[v]], pj.mats[pj.vmat[v]], kd0.getX(v))); kd.needsUpdate = true; }
   }
   lookDraw(L, look); if (lookHelmBuild(L)) lookHelmPaint(L);
+  lookPeltApply(L, look);                                                // the beast's head on a fur helm
   if (L.inst.skinned.naked) L.inst.skinned.naked.visible = !!look.naked;
   const cloak = L.inst.skinned[M.cloak]; if (cloak) { cloak.visible = !!look.cloak; if (cloak.material && cloak.material.color && !cloak.material.map) cloak.material.color.setHex(look.cloakC); }
   if (L.plume) L.plume.visible = !!(look.helmet && look.plume);
@@ -1564,13 +1576,70 @@ function lookHelmBuild(L) {
     geo.setAttribute('color', new THREE.BufferAttribute(new col0.array.constructor(n * 3), 3, col0.normalized)); geo.setIndex(idx); geo.computeBoundingSphere();
     const mmH = { ctx: L.inst.ctx || 'main', vc: true };   // (the painted material without its skinning: this piece is rigid)
     const m = new THREE.Mesh(geo, modelMaterial(R, mmH)); m.userData.mm = mmH; m.userData.mmR = R.name; m.name = 'helmInHand'; m.castShadow = true; m.visible = false; m.userData.map = map; m.userData.src = sm;
-    L.mHelm = m; L.helmHead = L.inst.nodes[mm.joints[j]]; L.helmHandBone = R.spec.swordHand ? L.inst.byName[R.spec.swordHand] : null; break; }
+    L.mHelm = m; L.helmHead = L.inst.nodes[mm.joints[j]]; L.helmHandBone = R.spec.swordHand ? L.inst.byName[R.spec.swordHand] : null; L.helmM = M; break; }
   return L.mHelm;
 }
 function lookHelmPaint(L) {                                  // the same paint as the body's helmet (a champion's gold, a rookie's iron)
   const m = L.mHelm; if (!m) return; const src = m.userData.src.geometry.getAttribute('color'), dst = m.geometry.getAttribute('color'), map = m.userData.map;
   for (let o = 0; o < map.length; o++) { const v = map[o] * 3, w = o * 3; dst.array[w] = src.array[v]; dst.array[w + 1] = src.array[v + 1]; dst.array[w + 2] = src.array[v + 2]; } dst.needsUpdate = true;
 }
+// THE BEAST'S HEAD (the fur helm wares — wolf, bear, lion): a low-poly animal head built over the sculpted helmet in the
+// bind pose (model units, the face looks +z; the helmet's crown is about y 1.88, its visor juts to z 0.2 at the brow) — a
+// skull sunk into the crown, a muzzle out over the brow with the jaws open and fangs showing, ears, eyes, a nose, the hide
+// hanging down the nape, and for the lion a ruff of tufts round the whole head. Vertex-coloured, flat-shaded, carried into
+// the head bone's space (lookHelmBuild's matrix) so one rigid mesh rides the head bone worn, or the carried helm in his hand.
+// Built once per rig and beast; the mesh is the figure's own (L.mPelt).
+let LOOK_PELT_MAT = null;
+function lookPeltGeo(R, kind, M) {
+  R.peltGeo = R.peltGeo || {}; if (R.peltGeo[kind] !== undefined) return R.peltGeo[kind]; const C = LOOK_PELT[kind]; if (!C) return (R.peltGeo[kind] = null);
+  const parts = [], c0 = new THREE.Color(), c1 = new THREE.Color(), ck = new THREE.Color(), PI = Math.PI;
+  // add(primitive, colour, tip colour, place): the tip colour graded up the primitive's own y (its base to its tip) before place() sets it on the head
+  const add = (g, c, c2, place) => { g = g.toNonIndexed(); const p = g.getAttribute('position'), n = p.count, cl = new Uint8Array(n * 3); g.computeBoundingBox(); const y0 = g.boundingBox.min.y, y1 = g.boundingBox.max.y;
+    c0.setHex(c); c1.setHex(c2 != null ? c2 : c); for (let v = 0; v < n; v++) { const t = c2 != null && y1 > y0 ? (p.getY(v) - y0) / (y1 - y0) : 0; ck.copy(c0).lerp(c1, t); cl[v * 3] = ck.r * 255; cl[v * 3 + 1] = ck.g * 255; cl[v * 3 + 2] = ck.b * 255; }
+    g.setAttribute('color', new THREE.BufferAttribute(cl, 3, true)); if (place) place(g); parts.push(g); };
+  const sphere = (r, sx, sy, sz, x, y, z, c, c2) => add(new THREE.SphereGeometry(r, 8, 6), c, c2, g => { g.scale(sx, sy, sz); g.translate(x, y, z); });
+  const snout = (r0, r1, len, tilt, x, y, z, c) => add(new THREE.CylinderGeometry(r0, r1, len, 7), c, null, g => { g.rotateX(PI / 2 + tilt); g.translate(x, y, z); });   // the narrow end forward, dipping by tilt
+  const fang = (x, y, z, up) => add(new THREE.ConeGeometry(0.008, 0.03, 4), C.teeth, null, g => { if (!up) g.rotateX(PI); g.translate(x, y, z); });
+  const hide = (r0, r1, h, y, th0, th1) => add(new THREE.CylinderGeometry(r0, r1, h, 10, 1, true, th0, th1), C.dark, C.fur, g => { g.translate(0, y, -0.01); });   // the pelt down the nape: fur at the top, its hem dark
+  const tuft = (a, r, y, len, tilt, w) => add(new THREE.ConeGeometry(w, len, 5), C.fur, C.dark, g => { g.translate(0, len / 2, 0); g.rotateZ(-PI / 2 - tilt); g.rotateY(a - PI / 2); g.translate(Math.sin(a) * r, y, Math.cos(a) * r - 0.005); });   // a cone from the skull's axis outward at bearing a (0 the brow), dipping by tilt
+  if (kind === 'wolf') {
+    sphere(0.115, 1.0, 0.82, 1.15, 0, 1.875, 0.0, C.fur); snout(0.048, 0.088, 0.17, 0.22, 0, 1.815, 0.19, C.light); snout(0.035, 0.07, 0.14, 0.55, 0, 1.745, 0.17, C.fur);
+    sphere(0.03, 1, 0.9, 1, 0, 1.80, 0.275, C.nose); fang(-0.038, 1.762, 0.245, false); fang(0.038, 1.762, 0.245, false); fang(-0.03, 1.735, 0.215, true); fang(0.03, 1.735, 0.215, true);
+    sphere(0.017, 1, 1, 1, -0.048, 1.85, 0.115, C.eye); sphere(0.017, 1, 1, 1, 0.048, 1.85, 0.115, C.eye);
+    for (const sd of [-1, 1]) add(new THREE.ConeGeometry(0.038, 0.1, 5), C.fur, C.dark, g => { g.rotateX(-0.2); g.rotateZ(-0.35 * sd); g.translate(0.082 * sd, 1.975, -0.01); });   // the ears, leaning out and back
+    hide(0.155, 0.21, 0.26, 1.60, PI * 0.62, PI * 0.76);
+  } else if (kind === 'bear') {
+    sphere(0.13, 1.1, 0.85, 1.05, 0, 1.885, -0.01, C.fur); snout(0.062, 0.095, 0.13, 0.18, 0, 1.82, 0.17, C.light); snout(0.05, 0.08, 0.11, 0.5, 0, 1.755, 0.16, C.fur);
+    sphere(0.036, 1.2, 0.8, 1, 0, 1.812, 0.245, C.nose); fang(-0.045, 1.768, 0.225, false); fang(0.045, 1.768, 0.225, false); fang(-0.035, 1.735, 0.205, true); fang(0.035, 1.735, 0.205, true);
+    sphere(0.015, 1, 1, 1, -0.055, 1.855, 0.115, C.eye); sphere(0.015, 1, 1, 1, 0.055, 1.855, 0.115, C.eye);
+    for (const sd of [-1, 1]) sphere(0.04, 1, 1, 0.55, 0.105 * sd, 1.965, -0.03, C.fur, C.dark);   // small round ears
+    hide(0.165, 0.25, 0.32, 1.575, PI * 0.58, PI * 0.84);
+  } else {                                                   // the lion
+    sphere(0.115, 1.05, 0.85, 1.1, 0, 1.87, 0.01, C.fur); snout(0.06, 0.082, 0.12, 0.2, 0, 1.815, 0.165, C.light); snout(0.045, 0.07, 0.1, 0.5, 0, 1.755, 0.155, C.light);
+    sphere(0.03, 1.3, 0.7, 1, 0, 1.805, 0.232, C.nose); fang(-0.04, 1.77, 0.215, false); fang(0.04, 1.77, 0.215, false); fang(-0.03, 1.735, 0.195, true); fang(0.03, 1.735, 0.195, true);
+    sphere(0.017, 1, 1, 1, -0.05, 1.85, 0.11, C.eye); sphere(0.017, 1, 1, 1, 0.05, 1.85, 0.11, C.eye);
+    for (const sd of [-1, 1]) sphere(0.033, 1, 1, 0.6, 0.095 * sd, 1.95, -0.02, C.fur, C.dark);
+    // THE MANE: three rings of tufts round the skull's axis — the crown's, the ruff round the cheeks and jaw, and the one hanging to the shoulders; none in the face
+    for (let i = 0; i < 12; i++) { const a = (i + 0.5) / 12 * 2 * PI; if (Math.abs(Math.atan2(Math.sin(a), Math.cos(a))) < 0.7) continue; tuft(a, 0.125, 1.76, 0.16, 0.15, 0.05); }
+    for (let i = 0; i < 14; i++) { const a = (i + 0.5) / 14 * 2 * PI; if (Math.abs(Math.atan2(Math.sin(a), Math.cos(a))) < 0.45) continue; tuft(a, 0.15, 1.64, 0.2, 0.5, 0.055); }
+    for (let i = 0; i < 12; i++) { const a = (i + 0.5) / 12 * 2 * PI; if (Math.abs(Math.atan2(Math.sin(a), Math.cos(a))) < 0.35) continue; tuft(a, 0.19, 1.54, 0.2, 0.95, 0.055); }
+  }
+  let n = 0; for (const g of parts) n += g.getAttribute('position').count;
+  const pos = new Float32Array(n * 3), col = new Uint8Array(n * 3); let o = 0;
+  for (const g of parts) { const p = g.getAttribute('position'), c = g.getAttribute('color'); pos.set(p.array, o * 3); col.set(c.array, o * 3); o += p.count; g.dispose(); }
+  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); geo.setAttribute('color', new THREE.BufferAttribute(col, 3, true));
+  geo.applyMatrix4(M); geo.computeVertexNormals(); geo.computeBoundingSphere(); return (R.peltGeo[kind] = geo);
+}
+function lookPeltApply(L, look) {                            // the beast's head for the look's fur helm, on the head bone (lookPeltSync moves it to the carried helm)
+  const kind = look.pelt, R = MODEL_RIGS.get(L.g.userData.model), geo = kind && R && L.helmHead && L.helmM ? lookPeltGeo(R, kind, L.helmM) : null;
+  if (!geo) { if (L.mPelt) L.mPelt.visible = false; return; }
+  if (!L.mPelt) { LOOK_PELT_MAT = LOOK_PELT_MAT || new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 5, specular: 0x161616, flatShading: true, side: THREE.DoubleSide });
+    const m = new THREE.Mesh(geo, LOOK_PELT_MAT); m.name = 'pelt'; m.castShadow = true; m.frustumCulled = false; L.mPelt = m; }
+  L.mPelt.geometry = geo; L.mPelt.userData.kind = kind; L.mPelt.visible = !!look.helmet; lookPeltPlace(L, false);
+}
+function lookPeltPlace(L, inHand) { const m = L.mPelt, p = inHand ? L.mHelm : L.helmHead; if (!m || !p) return; if (m.parent !== p) { p.add(m); m.position.set(0, 0, 0); m.rotation.set(0, 0, 0); m.scale.setScalar(1); } }
+// every render, and on a helm toggle: the beast's head rides the carried helm while that shows, the head bone while the helm is worn, and hides bareheaded
+function lookPeltSync(L, vr) { const m = L.mPelt; if (!m) return; const pelt = !!(L.look && L.look.pelt), carried = !!(L.mHelm && L.mHelm.visible), worn = !vr && !L.helmOff && !!(L.look && L.look.helmet); m.visible = pelt && (carried || worn); if (m.visible) lookPeltPlace(L, carried); }
 // where the helm hangs in the sword hand (model units, in the hand bone's frame) — BV.helmHand(o) to re-hang it live
 const MODEL_HELM_HAND = { x: 0.03, y: 0.12, z: -0.08, rx: 0, ry: 0, rz: 0 };   // (hand frame: +x up the forearm, +y down past the fingers, +z toward the body — the rim at the fingers, the helm hanging crown-down below the fist)
 const _hm = { A: new THREE.Matrix4(), B: new THREE.Matrix4(), O: new THREE.Matrix4(), pa: new THREE.Vector3(), pb: new THREE.Vector3(), qa: new THREE.Quaternion(), qb: new THREE.Quaternion(), sa: new THREE.Vector3(), sb: new THREE.Vector3() };
@@ -1597,7 +1666,7 @@ function lookDraw(L, look) {
 function lookWorn(L, look) { return L.helmOff && (look.helmet || !look.hide.includes('helmet')) ? Object.assign({}, look, { helmet: false, hide: look.hide.concat('helmet') }) : look; }   // bareheaded: the sculpted helm dropped, the plume with it
 // the helm off and on again — the home and the barber's chair (his face and hair are the point there, as the sword and shield lie on the floor),
 // and the walk into the pit: every man comes in bareheaded and sets it on in the countdown's last breaths (afDonStep). Only the index, the plume and the hair cap change.
-function lookHelmOff(L, off) { if (!L || !!L.helmOff === !!off) return; L.helmOff = !!off; if (!L.lookBase || !L.inst) return; const look = L.look = lookWorn(L, L.lookBase); lookDraw(L, look); if (L.plume) L.plume.visible = !!(look.helmet && look.plume); lookHairApply(L, look); }
+function lookHelmOff(L, off) { if (!L || !!L.helmOff === !!off) return; L.helmOff = !!off; if (!L.lookBase || !L.inst) return; const look = L.look = lookWorn(L, L.lookBase); lookDraw(L, look); if (L.plume) L.plume.visible = !!(look.helmet && look.plume); lookHairApply(L, look); lookPeltSync(L, !!(L.P && L.P.vrGear)); }
 // ---- THE HAIR: a cap of geometry on the skull ----
 // the hairline's height at a bearing (deg) round the skull's axis, a smooth curve through the style's keys (mirrored left/right)
 function lookHairline(hs, a) {
@@ -1758,7 +1827,7 @@ function lookRoundPaint(col, pt, look) {
   const faceOf = i => look.round === 0 ? team : look.round === 1 ? (i < N / 2 ? team : dev) : look.round === 2 ? (Math.floor(i / (N / 4)) % 2 ? dev : team) : (i % 2 ? dev : team);
   for (let v = 0; v < col.count; v++) { const p = pt[v]; c.copy(p < N ? faceOf(p) : p === N ? rim : p === N + 1 ? boss : backC); col.setXYZ(v, c.r * 255, c.g * 255, c.b * 255); } col.needsUpdate = true;
 }
-BV.look = { roll: lookRoll, apply: lookApply, live: () => MODEL_LIVE.map(L => ({ name: L.P.lookName, arch: L.P.lookArch, full: !!L.P.lookFull, shield: L.shieldKind, look: L.look && { kind: L.look.kind, hide: L.look.hide, helmet: L.look.helmet, cloak: L.look.cloak, plume: L.look.plume, hair: L.look.hair, beard: L.look.beard, skin: L.look.skin, hairStyle: L.look.hairStyle, beardStyle: L.look.beardStyle, faceShape: L.look.faceShape, hairMesh: !!(L.mHair && L.mHair.visible) } })) };   // (test: every live figure's look)
+BV.look = { roll: lookRoll, apply: lookApply, live: () => MODEL_LIVE.map(L => ({ name: L.P.lookName, arch: L.P.lookArch, full: !!L.P.lookFull, shield: L.shieldKind, look: L.look && { kind: L.look.kind, hide: L.look.hide, helmet: L.look.helmet, pelt: L.look.pelt || null, peltMesh: !!(L.mPelt && L.mPelt.visible), cloak: L.look.cloak, plume: L.look.plume, hair: L.look.hair, beard: L.look.beard, skin: L.look.skin, hairStyle: L.look.hairStyle, beardStyle: L.look.beardStyle, faceShape: L.look.faceShape, hairMesh: !!(L.mHair && L.mHair.visible) } })) };   // (test: every live figure's look)
 const MODEL_ON = !/[?&]plastic\b/.test(location.search);   // the warrior is the base soldier; ?plastic brings the plastic figures back
 const MODEL_NAME = 'warrior';
 BV.modelLoad = MODEL_ON ? loadModelRig(MODEL_NAME).then(() => { BV.modelReady = true; console.log('[model] warrior ready'); }, e => console.error('[model] load failed', e)) : Promise.resolve();   // (the home / market figure waits on this — the plastic placeholder is never shown)
@@ -20418,7 +20487,7 @@ function afNpcGear(entry, xp, r) {
   if (xp < 20) g.armor = r() < 0.3 ? 'gambeson' : undefined;                                     // (nothing = a shirt and breeches)
   else if (xp < 40) g.armor = pelt ? north : r() < 0.55 ? 'leather' : r() < 0.5 ? 'gambeson' : undefined;
   else g.armor = xp < 60 ? (pelt ? north : 'mail') : xp < 82 ? (r() < 0.4 ? 'brigandine' : 'plate') : xp < 95 ? 'champion_plate' : (r() < 0.35 ? 'dragon_plate' : 'champion_plate');
-  if (r() < lookOdds(g.armor || 'none', entry.arch, 'helm')) g.helm = 'sallet';                   // a helm by his armour and his class (lookOdds)
+  { const hr = r(); if (hr < lookOdds(g.armor || 'none', entry.arch, 'helm')) g.helm = north ? (hr < 0.12 ? 'bear_helm' : 'wolf_helm') : xp >= 82 && hr < 0.1 ? 'lion_helm' : 'sallet'; }   // a helm by his armour and his class (lookOdds): a northerner wears a wolf's or a bear's head, a champion now and then a lion's mane
   g.shield = xp < 45 ? 'round_shield' : r() < 0.65 ? 'heater_shield' : 'round_shield';
   if (A.weapon === 'bow') g.bow = xp < 40 ? 'hunting_bow' : xp < 70 ? 'longbow' : xp < 90 ? 'warbow' : 'recurve';
   if (A.weapon === 'horse') g.horse = xp < 35 ? 'nag' : xp < 65 ? 'courser' : xp < 85 ? 'destrier' : 'warhorse';
@@ -24016,9 +24085,13 @@ BV.showcase = (o) => {
   else if (o.model !== false && MODEL_RIGS.size && (o.model || MODEL_ON)) { wearModelRig(h, o.model || MODEL_NAME, { team: pal.cloth });
     h.parts.lookName = o.name != null ? o.name : ''; h.parts.lookArch = o.arch || 'swordsman'; if (o.full) h.parts.lookFull = true; afDressGear(h.parts, o.gear || {}, pal); }   // (his look: {name, arch, gear:{armor}, full})
   const fwd = new THREE.Vector3(); camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
-  const p = o.at ? new THREE.Vector3().fromArray(o.at) : camera.position.clone().add(fwd.multiplyScalar(o.dist || 7)); p.y = o.y != null ? o.y : (typeof afY === 'function' && AF.on ? afY(p.x, p.z) : 0);
+  const p = o.at ? new THREE.Vector3().fromArray(o.at) : camera.position.clone().add(fwd.multiplyScalar(o.dist || 7)); p.y = o.y != null ? o.y : (typeof afY === 'function' && AF.on ? afY(p.x, p.z) : o.ground ? mapElevY(p.x, p.z) : 0);   // (ground: on the overworld's terrain)
   h.group.position.copy(p); h.group.rotation.y = o.yaw != null ? o.yaw : Math.atan2(camera.position.x - p.x, camera.position.z - p.z);
   scene.add(h.group); BV._show = h; return h;
+};
+BV.showcaseHelm = (o) => {                           // test: the showcase figure's helm off / in his hand / lifting onto his head (k 0..1) — a fur helm's beast head follows it (lookPeltSync)
+  const h = BV._show, L = h && h.parts.modelRig; if (!L) return null; o = o || {}; lookHelmOff(L, !!o.off); L.helmHand = !!o.off && !!o.hand && !!lookHelmBuild(L); L.helmK = o.k == null ? null : o.k;
+  return { helmOff: !!L.helmOff, hand: L.helmHand, k: L.helmK, pelt: (L.look && L.look.pelt) || null, peltOn: !!(L.mPelt && L.mPelt.visible), peltParent: L.mPelt && L.mPelt.parent ? L.mPelt.parent.name : null, hair: !!(L.mHair && L.mHair.visible) };
 };
 BV.shot = (w = 1280, h = 800, pose) => {              // a still of the scene from a given camera {pos, look, fov}: no sim step, no post — for character renders
   const sz = renderer.getSize(new THREE.Vector2()), pr = renderer.getPixelRatio();

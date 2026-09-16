@@ -168,6 +168,14 @@ of five spikes, a crescent, three claw marks and bold dots — round-brush strok
 tile's edges cut nothing. Projected by position (triplanar), one stroke runs off the chest onto an arm, and the great wave crosses the
 face at the eyes. THE FACE AND THE HANDS take the ink now (`lookApply`, the head mesh on its own copy of the kinds): the face, the eye
 sockets, a scar, the hands, the chin where no beard grows and the scalp when it is shaved; the eyes, hair, beard and brows never.
+Then "they look so random, no continuity": a stamp by position can never follow a body. The ink is a DESIGN IN BODY SPACE now: the lathed
+body carries its own ink uv (`inkUv` — bearing round the ring × height; the torso hips → neck, each arm shoulder → wrist, mirrored on the
+right), the head gets one at load (bearing round the skull × height chin → crown), and `tInk` is an ATLAS of panels those uvs point into
+(the torso the left half, an arm the third quarter, the head the last): a chest piece — a swoosh from each shoulder sweeping in to the
+sternum, a sun there, one spike down the belly, a hook under each pec — that meets the sleeves at a shoulder band and climbs the neck into
+the face (two lines to the eyes, a band across them, three stripes down one cheek); a back piece of two wings off the spine; a sleeve that
+spirals once and a half down the arm with spikes off it and a cuff. Strokes are drawn wrapped in their panel (the bearing wraps), the
+atlas clamps (panels never bleed), and its black corner is what the belt, the hands and the armour sample. The hands stay bare.
 
 ## The surface pass (2026-09-16, "our chars look too low poly")
 

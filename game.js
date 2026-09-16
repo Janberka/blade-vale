@@ -1070,20 +1070,44 @@ function modelDetailTextures() {                             // drawn once: heig
   g.lineWidth = 5; for (let i = 0; i < 5; i++) { g.beginPath(); g.moveTo(126 + i * 24, 108); g.lineTo(138 + i * 24, 132); g.lineTo(150 + i * 24, 108); g.stroke(); }   // chevrons
   for (const [x, y] of [[22, 232], [126, 238], [224, 120], [246, 22]]) { g.beginPath(); g.moveTo(x, y - 18); g.lineTo(x, y + 18); g.moveTo(x, y - 10); g.lineTo(x + 14, y); g.stroke(); }   // runes
   const knotT = new THREE.CanvasTexture(ic); knotT.wrapS = knotT.wrapT = THREE.RepeatWrapping;   // (the knotwork: the engraving on the berserker's bracers)
-  // THE INK proper: BIG abstract shapes — swooshes, a fan of spikes, a crescent, claw marks, a lozenge — as islands on a tile the size of a man
-  // (inkTile 1.0), so one stroke runs off the chest and onto an arm, up the neck and over the face. Round-brush strokes that taper; islands, so
-  // the tile's edges never cut a shape ("the knotwork looks so lame — big abstract shapes that go through your arms and face")
-  const B = 512, bc = document.createElement('canvas'); bc.width = bc.height = B; const q = bc.getContext('2d'); q.fillStyle = '#000'; q.fillRect(0, 0, B, B); q.fillStyle = '#fff'; q.strokeStyle = '#fff'; q.lineCap = 'round';
-  const dot = (x, y, r) => { for (const ox of [-B, 0, B]) for (const oy of [-B, 0, B]) { q.beginPath(); q.arc(x + ox, y + oy, r, 0, Math.PI * 2); q.fill(); } };   // (drawn wrapped, so a shape leaving one edge comes in at the other: the tile is seamless)
-  const brush = (pts, wf, n = 110) => { const [a, b, c, d] = pts; for (let i = 0; i <= n; i++) { const t = i / n, u = 1 - t, x = u * u * u * a[0] + 3 * u * u * t * b[0] + 3 * u * t * t * c[0] + t * t * t * d[0], y = u * u * u * a[1] + 3 * u * u * t * b[1] + 3 * u * t * t * c[1] + t * t * t * d[1]; dot(x, y, wf(t) / 2); } };   // a cubic bezier laid with a round brush, wf(t) wide
+  // THE INK proper is a DESIGN in body space, not a stamp ("they look so random, no continuity"): an atlas of panels the body's own ink uvs
+  // point into — the torso (the left half: u the bearing round the chest, a quarter turn the front, three quarters the back; v hips → neck),
+  // an arm (the third quarter: u the bearing, v shoulder → wrist, mirrored on the right arm) and the head (the last quarter: u the bearing
+  // round the skull, the front at its middle; v chin → crown). One chest piece meets the sleeves at the shoulder band and climbs the neck
+  // into the face; the sleeves spiral down the arms. Drawn with a round brush that swells and tapers; the panels' left/right edges meet
+  // (the bearing wraps), so strokes are drawn wrapped within their panel. The atlas's corner (0,0) stays black: anything without an ink uv
+  // — the belt, the hands, the armour — samples it and shows no ink
+  const B = 1024, BH = 512, bc = document.createElement('canvas'); bc.width = B; bc.height = BH; const q = bc.getContext('2d'); q.fillStyle = '#000'; q.fillRect(0, 0, B, BH); q.fillStyle = '#fff'; q.strokeStyle = '#fff'; q.lineCap = 'round';
+  const PAN = { torso: [0, 512], arm: [512, 256], head: [768, 256] };   // [x0, width] in px; v runs up the canvas (uv v 0 = the bottom row)
+  const dotP = (pan, u, v, r) => { const [x0, w] = PAN[pan]; for (const du of [-1, 0, 1]) { const x = x0 + (u + du) * w, y = (1 - v) * BH; if (x + r < x0 || x - r > x0 + w) continue; q.save(); q.beginPath(); q.rect(x0, 0, w, BH); q.clip(); q.beginPath(); q.arc(x, y, r, 0, Math.PI * 2); q.fill(); q.restore(); } };   // a dot at panel uv, wrapped in u and clipped to its panel
+  const brushP = (pan, pts, wf, n = 120) => { const [a, b, c, d] = pts; for (let i = 0; i <= n; i++) { const t = i / n, w1 = 1 - t, u = w1 * w1 * w1 * a[0] + 3 * w1 * w1 * t * b[0] + 3 * w1 * t * t * c[0] + t * t * t * d[0], v = w1 * w1 * w1 * a[1] + 3 * w1 * w1 * t * b[1] + 3 * w1 * t * t * c[1] + t * t * t * d[1]; dotP(pan, u, v, wf(t) / 2); } };   // a cubic bezier in panel uv laid with a round brush wf(t) px wide
   const taper = (w0, w1) => t => w0 + (w1 - w0) * t, swell = (w0, w1) => t => w0 + (w1 - w0) * Math.sin(t * Math.PI);
-  brush([[0, 380], [170, 250], [340, 510], [512, 380]], swell(34, 78));                                // THE GREAT WAVE: across the whole tile and round again (its ends meet), swelling in the middle
-  brush([[0, 150], [200, 60], [300, 240], [512, 150]], swell(22, 46));                                 // a second wave, thinner
-  for (let k = 0; k < 5; k++) { const a = -1.2 + k * 0.42, L = 210 - k * 22; brush([[150, 120], [150 + Math.cos(a) * L * 0.4, 120 + Math.sin(a) * L * 0.4], [150 + Math.cos(a + 0.22) * L * 0.8, 120 + Math.sin(a + 0.22) * L * 0.8], [150 + Math.cos(a + 0.32) * L, 120 + Math.sin(a + 0.32) * L]], taper(54, 4), 70); }   // a fan of spikes, curling
-  q.lineWidth = 34; for (const ox of [-B, 0, B]) for (const oy of [-B, 0, B]) { q.beginPath(); q.arc(400 + ox, 170 + oy, 96, Math.PI * 0.75, Math.PI * 2.1); q.stroke(); }   // the crescent
-  for (let k = 0; k < 3; k++) brush([[300 + k * 44, 250], [318 + k * 44, 310], [330 + k * 44, 370], [312 + k * 44, 440]], taper(30, 4), 60);              // claw marks
-  for (const [x, y, r] of [[60, 470], [470, 470], [250, 20], [40, 40]]) dot(x, y, 26);                                                            // bold dots in the gaps
-  const inkT = new THREE.CanvasTexture(bc); inkT.wrapS = inkT.wrapT = THREE.RepeatWrapping;
+  const mirror = (pan, about, pts) => pts.map(([u, v]) => [2 * about - u, v]);
+  // THE CHEST PIECE (front centre u .25): from each shoulder a thick swoosh sweeps in and down to the sternum, then one spike runs down the belly
+  for (const side of [1, -1]) { const S = pts => side > 0 ? pts : mirror('torso', 0.25, pts);
+    brushP('torso', S([[0.02, 0.86], [0.12, 0.84], [0.19, 0.72], [0.25, 0.60]]), swell(22, 44));                 // shoulder → sternum
+    brushP('torso', S([[0.25, 0.60], [0.235, 0.52], [0.245, 0.40], [0.25, 0.22]]), taper(30, 4), 80);            // the belly spike (both sides lay it, one line)
+    brushP('torso', S([[0.06, 0.78], [0.13, 0.74], [0.16, 0.66], [0.155, 0.56]]), taper(18, 3), 70);             // a hook under the pec
+    brushP('torso', S([[0.25, 0.86], [0.27, 0.90], [0.29, 0.95], [0.30, 1.0]]), taper(14, 6), 50);               // up the neck, into the face
+    // THE BACK PIECE (back centre u .75): two wings from the spine out to the shoulder blades, and the spine
+    brushP('torso', S([[0.75, 0.55], [0.72, 0.68], [0.66, 0.80], [0.56, 0.86]]), swell(20, 40));                   // spine → blade
+    brushP('torso', S([[0.75, 0.45], [0.71, 0.55], [0.64, 0.66], [0.58, 0.70]]), taper(26, 4), 70);               // a second, shorter wing
+    brushP('torso', S([[0.75, 0.86], [0.77, 0.90], [0.79, 0.95], [0.80, 1.0]]), taper(12, 5), 50); }             // up the nape
+  brushP('torso', [[0.75, 0.30], [0.75, 0.45], [0.75, 0.62], [0.75, 0.80]], swell(8, 22), 80);                    // the spine
+  dotP('torso', 0.25, 0.68, 20);                                                                                  // the sun at the sternum
+  // THE SHOULDER BAND: round the top of the torso (v .88) on both sides, where the sleeves begin — the same band opens the arm panel
+  for (const u0 of [0.0, 0.5]) brushP('torso', [[u0 - 0.12, 0.885], [u0 - 0.04, 0.905], [u0 + 0.04, 0.905], [u0 + 0.12, 0.885]], swell(16, 30), 60);
+  // THE SLEEVE: a band round the shoulder, then a spiral that turns once and a half down to the wrist, with spikes off it, and a cuff ring
+  brushP('arm', [[-0.5, 0.05], [-0.2, 0.05], [0.2, 0.05], [0.5, 0.05]], t => 34, 60); brushP('arm', [[0.5, 0.05], [0.8, 0.05], [1.2, 0.05], [1.5, 0.05]], t => 34, 60);   // the shoulder band (wraps)
+  for (let k = -1; k <= 1; k++) brushP('arm', [[0 + k, 0.10], [0.5 + k, 0.30], [1.0 + k, 0.50], [1.5 + k, 0.70]], swell(14, 30), 120);                                  // the spiral (three copies, so it wraps)
+  for (const [u, v] of [[0.15, 0.16], [0.65, 0.36], [0.15, 0.56]]) brushP('arm', [[u, v], [u + 0.08, v + 0.10], [u + 0.1, v + 0.22], [u + 0.06, v + 0.32]], taper(24, 2), 50);   // spikes hanging off the spiral
+  brushP('arm', [[-0.5, 0.88], [0, 0.88], [0.5, 0.88], [1.0, 0.88]], t => 18, 60); brushP('arm', [[0.5, 0.88], [1.0, 0.88], [1.5, 0.88], [2.0, 0.88]], t => 18, 60);           // the cuff
+  // THE FACE (front u .5): the neck lines arrive under the jaw and rise as two lines to the eyes, a band across the eyes tapering to the temples, three stripes down one cheek
+  for (const side of [1, -1]) { const S = pts => side > 0 ? pts : mirror('head', 0.5, pts);
+    brushP('head', S([[0.54, 0.0], [0.55, 0.12], [0.56, 0.28], [0.57, 0.40]]), taper(10, 6), 50); }                // the neck line up to under the eye
+  brushP('head', [[0.30, 0.50], [0.42, 0.56], [0.58, 0.56], [0.70, 0.50]], swell(4, 30), 90);                     // the band across the eyes
+  for (let k = 0; k < 3; k++) brushP('head', [[0.60 + k * 0.045, 0.12], [0.61 + k * 0.045, 0.24], [0.62 + k * 0.045, 0.34], [0.60 + k * 0.045, 0.44]], taper(12, 2), 50);   // stripes down the left cheek
+  const inkT = new THREE.CanvasTexture(bc); inkT.wrapS = inkT.wrapT = THREE.ClampToEdgeWrapping;
   MODEL_DTEX = { mailN: normalOf(mail, 3.0), mailC: greyOf(mailC), plateN: normalOf(plate, 1.2), plateR: greyOf(plateR), clothN: normalOf(cloth, 1.5), inkT, knotT };
   return MODEL_DTEX;
 }
@@ -1111,11 +1135,11 @@ function modelEnvFor(ctx) {                                  // the sky the stee
   MODEL_DETAIL_LIVE = true; if (!ENV_CUR) setEnvMap(envDefault());
 }
 const MODEL_DETAIL_GLSL = {
-  vertHead: `#include <common>\nattribute float kind; varying float vKind; varying vec3 vTri; varying vec3 vTriN; varying mat3 vTriM;`,
+  vertHead: `#include <common>\nattribute float kind; attribute vec2 inkUv; varying float vKind; varying vec3 vTri; varying vec3 vTriN; varying mat3 vTriM; varying vec2 vInkUv;`,
   vertNormal: `#include <defaultnormal_vertex>\n vTriN = normalize(objectNormal); vTriM = normalMatrix;`,   // (object space: post-skinning, in the figure's own frame — the pattern rides him instead of sliding through him)
-  vertPos: `#include <worldpos_vertex>\n vTri = transformed; vKind = kind;`,
+  vertPos: `#include <worldpos_vertex>\n vTri = transformed; vKind = kind; vInkUv = inkUv;`,
   fragHead: `#include <common>
-varying float vKind; varying vec3 vTri; varying vec3 vTriN; varying mat3 vTriM;
+varying float vKind; varying vec3 vTri; varying vec3 vTriN; varying mat3 vTriM; varying vec2 vInkUv;
 uniform sampler2D tPlateN, tMailN, tClothN, tPlateR, tMailC, tInk, tKnot; uniform float uTile, uMailTile, uStr, uPlateTile, uPlateStr, uPlateR0, uPlateR1, uInkTile;
 vec3 triW(vec3 n) { vec3 w = pow(abs(n), vec3(4.0)); return w / (w.x + w.y + w.z); }
 vec3 triNormal(sampler2D t, vec3 p, vec3 wn, float s, float str) { vec3 w = triW(wn);
@@ -1138,16 +1162,16 @@ float triGray(sampler2D t, vec3 p, vec3 wn, float s) { vec3 w = triW(wn); return
   fragIbl: `{ if (int(vKind + 0.5) >= 2) iblIrradiance *= 0.45; }
 #include <lights_fragment_end>`,   // (the sky's ambient washed the dyed cloth pink: cloth, leather and skin take less of it)
   fragHeadInk: `#include <common>
-varying float vKind; varying vec3 vTri; varying vec3 vTriN; varying mat3 vTriM; uniform sampler2D tInk, tKnot; uniform float uInkTile;
+varying float vKind; varying vec3 vTri; varying vec3 vTriN; varying mat3 vTriM; varying vec2 vInkUv; uniform sampler2D tInk, tKnot; uniform float uInkTile;
 vec3 triW(vec3 n) { vec3 w = pow(abs(n), vec3(4.0)); return w / (w.x + w.y + w.z); }
 float triGray(sampler2D t, vec3 p, vec3 wn, float s) { vec3 w = triW(wn); return texture2D(t, p.zy * s).r * w.x + texture2D(t, p.xz * s).r * w.y + texture2D(t, p.xy * s).r * w.z; }`,
   fragMapInk: `#include <map_fragment>
 { int k = int(vKind + 0.5); if (k == 8) { float m = smoothstep(0.2, 0.6, triGray(tKnot, vTri, vTriN, 3.4)); diffuseColor.rgb *= 1.0 - 0.6 * m; }
-  if (k == 6 || k == 7) { float m = triGray(tInk, vTri, vTriN, uInkTile); vec3 ic = (k == 6) ? vec3(0.07, 0.10, 0.15) : vec3(0.42, 0.08, 0.07); diffuseColor.rgb = mix(diffuseColor.rgb, ic, smoothstep(0.35, 0.55, m) * 0.92); } }`,   // (the low tier's share of fragMap: the engraving and the ink)
+  if (k == 6 || k == 7) { float m = texture2D(tInk, vInkUv).r; vec3 ic = (k == 6) ? vec3(0.07, 0.10, 0.15) : vec3(0.42, 0.08, 0.07); diffuseColor.rgb = mix(diffuseColor.rgb, ic, smoothstep(0.35, 0.55, m) * 0.92); } }`,   // (the low tier's share of fragMap: the engraving and the ink)
   fragMap: `#include <map_fragment>
 { int k = int(vKind + 0.5); if (k == 1) { float g = triGray(tMailC, vTri, vTriN, uMailTile); diffuseColor.rgb *= mix(0.55, 1.25, g); } if (k == 0) { float g = triGray(tPlateR, vTri, vTriN, uTile * uPlateTile * 1.7); diffuseColor.rgb *= mix(0.92, 1.04, g); }
   if (k == 8) { float m = smoothstep(0.2, 0.6, triGray(tKnot, vTri, vTriN, 3.4)); diffuseColor.rgb *= 1.0 - 0.6 * m; }   // engraved: the knotwork as dark grooves in the steel
-  if (k == 6 || k == 7) { float m = triGray(tInk, vTri, vTriN, uInkTile); vec3 ic = (k == 6) ? vec3(0.07, 0.10, 0.15) : vec3(0.42, 0.08, 0.07); diffuseColor.rgb = mix(diffuseColor.rgb, ic, smoothstep(0.35, 0.55, m) * 0.92); } }`,   // the ink: the bold mask over the skin tone   // the rings read at a distance: the palette grey shaded by the ring mask
+  if (k == 6 || k == 7) { float m = texture2D(tInk, vInkUv).r; vec3 ic = (k == 6) ? vec3(0.07, 0.10, 0.15) : vec3(0.42, 0.08, 0.07); diffuseColor.rgb = mix(diffuseColor.rgb, ic, smoothstep(0.35, 0.55, m) * 0.92); } }`,   // the ink: the atlas's design by the body's own uv   // the rings read at a distance: the palette grey shaded by the ring mask
 };
 function modelMaterial(R, o = {}) {                          // the figure's material for a context: Phong on the low tier / thumbnails, the surface pass otherwise; cached per rig unless it carries its own colour
   const ctx = o.ctx || 'main', det = modelDetailOn(), col = o.color != null ? o.color : 0xffffff, noMap = o.map === false;
@@ -1193,7 +1217,10 @@ async function loadModelRig(name) {
   let pieces = null; try { const pr = await fetch(base + 'pieces.json'); if (pr.ok) pieces = await pr.json(); } catch (e) { pieces = null; }
   if (pieces) for (const m of meshes) { const key = Object.keys(pieces).find(k => m.name.indexOf('_' + k + '_') >= 0); const pj = key && pieces[key]; if (!pj) continue; m.pieces = pj; m.short = key;
     const ci = pj.mats.indexOf('cloth'), uv = m.geo.getAttribute('uv'); if (ci >= 0 && uv) { for (let v = 0; v < uv.count; v++) if (pj.vmat[v] === ci) uv.setXY(v, LOOK_WHITE_UV[0], LOOK_WHITE_UV[1]); uv.needsUpdate = true; }   // (the blue cloth → a white cell: the vertex colour IS the dye)
-    if (key === 'body') lookRuggedHead(m.geo, pj);
+    if (key === 'body') { lookRuggedHead(m.geo, pj);
+      const hp = m.geo.getAttribute('position'), iuv = new Float32Array(hp.count * 2), HC = new Set(['head', 'hair', 'beard', 'brow', 'socket', 'scarL', 'scarR']);   // THE FACE'S INK UV: bearing round the skull (the front at the panel's middle) × height chin → crown, the atlas's last quarter
+      for (let v = 0; v < hp.count; v++) { if (!HC.has(pj.classes[pj.vclass[v]])) continue; const x = hp.getX(v), y = hp.getY(v), z = hp.getZ(v) - LOOK_SKULL.zc; iuv[v * 2] = 0.75 + 0.25 * (0.5 + Math.atan2(x, z) / (Math.PI * 2)); iuv[v * 2 + 1] = clamp((y - 1.45) / 0.40, 0, 1); }
+      m.geo.setAttribute('inkUv', new THREE.BufferAttribute(iuv, 2)); }
     if (key === 'armor') { const sk = pj.classes.indexOf('skirt'), sl = pj.classes.indexOf('sleeve'), cl = pj.mats.indexOf('cloth'), ps = m.geo.getAttribute('position'), idx = m.geo.index.array;   // the bake files the cloth showing at the ELBOWS under "skirt" (one connected cloth component; the arms hang at waist height in the bind pose) — only the flank tells: out past |x| 0.24 it is the arm's
       if (sk >= 0 && sl >= 0 && cl >= 0) { for (let v = 0; v < ps.count; v++) if (pj.vclass[v] === sk && pj.vmat[v] === cl && Math.abs(ps.getX(v)) >= 0.24) pj.vclass[v] = sl;
         for (let t = 0; t < pj.tri.length; t++) if (pj.tri[t] === sk && pj.vclass[idx[t * 3]] === sl && pj.vclass[idx[t * 3 + 1]] === sl && pj.vclass[idx[t * 3 + 2]] === sl) pj.tri[t] = sl;
@@ -1217,11 +1244,11 @@ function modelBodyBuild(R) {
   const worldM = new Map(); am.joints.forEach((j, k) => worldM.set(j, new THREE.Matrix4().fromArray(am.ibm, k * 16).invert()));
   const bone = nm => new THREE.Vector3().setFromMatrixPosition(worldM.get(names.indexOf(nm))), M = R.spec.map;
   const cls = c => pj.classes.indexOf(c), pts = c => { const ci = cls(c), out = []; for (let v = 0; v < pos.count; v++) if (pj.vclass[v] === ci) out.push(new THREE.Vector3(pos.getX(v), pos.getY(v), pos.getZ(v))); return out; };
-  const P = [], N = [], UV = [], SI = [], SW = [], IDX = [], VC = [], VM = [], TRI = [], SEG = 20, uvc = [13.5 / 16, 13.5 / 16];   // (the palette's skin cell — the face's — so the face tint paints it the face's tone)
-  let uvNow = uvc, matNow = 0;                              // what the rings are made of: skin (0) on the skin cell — the belt below switches to leather (1) on the white cell, so its vertex colour IS the leather
+  const P = [], N = [], UV = [], IUV = [], SI = [], SW = [], IDX = [], VC = [], VM = [], TRI = [], SEG = 20, uvc = [13.5 / 16, 13.5 / 16];   // (IUV: the INK's own uv — bearing round the ring × height, into the ink atlas's panel for this part; the belt and the caps' centres point at the atlas's black corner)   // (the palette's skin cell — the face's — so the face tint paints it the face's tone)
+  let uvNow = uvc, matNow = 0, inkNow = null;                // (inkNow(i): the ink uv of the ring's i-th vertex, or null for none)                              // what the rings are made of: skin (0) on the skin cell — the belt below switches to leather (1) on the white cell, so its vertex colour IS the leather
   const ring = (c, u, v, rx, rz, w /* [[jointIdx, weight]...] */, cl, shape) => { const base = P.length / 3; for (let i = 0; i < SEG; i++) { const a = i / SEG * Math.PI * 2, q = shape ? shape(i) : 1, x = c.x + (u.x * rx * Math.cos(a) + v.x * rz * Math.sin(a)) * q, y = c.y + (u.y * rx * Math.cos(a) + v.y * rz * Math.sin(a)) * q, z = c.z + (u.z * rx * Math.cos(a) + v.z * rz * Math.sin(a)) * q;
-      P.push(x, y, z); UV.push(uvNow[0], uvNow[1]); VC.push(cl); VM.push(matNow); const si = [0, 0, 0, 0], sw = [0, 0, 0, 0]; w.slice(0, 4).forEach(([j, k], q) => { si[q] = j; sw[q] = k; }); SI.push(...si); SW.push(...sw); } return base; };
-  const cap = (base, c, dir, r, w, cl) => { const ci = P.length / 3, cc = c.clone().addScaledVector(dir, r * 0.35); P.push(cc.x, cc.y, cc.z); UV.push(uvNow[0], uvNow[1]); VC.push(cl); VM.push(matNow); const si = [0, 0, 0, 0], sw = [0, 0, 0, 0]; w.slice(0, 4).forEach(([j, k], q) => { si[q] = j; sw[q] = k; }); SI.push(...si); SW.push(...sw);
+      P.push(x, y, z); UV.push(uvNow[0], uvNow[1]); const iu = inkNow ? inkNow(i) : [0, 0]; IUV.push(iu[0], iu[1]); VC.push(cl); VM.push(matNow); const si = [0, 0, 0, 0], sw = [0, 0, 0, 0]; w.slice(0, 4).forEach(([j, k], q) => { si[q] = j; sw[q] = k; }); SI.push(...si); SW.push(...sw); } return base; };
+  const cap = (base, c, dir, r, w, cl) => { const ci = P.length / 3, cc = c.clone().addScaledVector(dir, r * 0.35); P.push(cc.x, cc.y, cc.z); UV.push(uvNow[0], uvNow[1]); { const iu = inkNow ? inkNow(SEG / 4) : [0, 0]; IUV.push(iu[0], iu[1]); } VC.push(cl); VM.push(matNow); const si = [0, 0, 0, 0], sw = [0, 0, 0, 0]; w.slice(0, 4).forEach(([j, k], q) => { si[q] = j; sw[q] = k; }); SI.push(...si); SW.push(...sw);
     const a = base, b = base + 1, ax = P[a * 3] - cc.x, ay = P[a * 3 + 1] - cc.y, az = P[a * 3 + 2] - cc.z, bx = P[b * 3] - cc.x, by = P[b * 3 + 1] - cc.y, bz = P[b * 3 + 2] - cc.z, nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx, flip = nx * dir.x + ny * dir.y + nz * dir.z < 0;
     for (let i = 0; i < SEG; i++) { const j = (i + 1) % SEG; if (flip) IDX.push(ci, base + j, base + i); else IDX.push(ci, base + i, base + j); TRI.push(cl); } };
   const stitch = (a, b, cl) => { for (let i = 0; i < SEG; i++) { const j = (i + 1) % SEG; IDX.push(a + i, b + i, b + j, a + i, b + j, a + j); TRI.push(cl, cl); } };
@@ -1255,22 +1282,23 @@ function modelBodyBuild(R) {
     const xs = sel.map(p => p.x), zs = sel.map(p => p.z), x0 = Math.min(...xs), x1 = Math.max(...xs), z0 = Math.min(...zs), z1 = Math.max(...zs);
     return { cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, rx: Math.min(rx, (x1 - x0) / 2 * 0.93), rz: Math.min(rz, (z1 - z0) / 2 * 0.93) }; };
   const hipR = (() => { const b0 = bands[0]; return inSash(hipY - 0.03, b0.cx, b0.cz, b0.rx * 0.94, b0.rz * 0.94); })();
-  tRings.push(ring(new THREE.Vector3(hipR.cx, hipY - 0.03, hipR.cz), U, V, hipR.rx, hipR.rz, [[pelvis, 1]], 0));
-  for (let r = 0; r < NR; r++) { const h = r / (NR - 1), y = y0 + h * (y1 - y0), S = bandAt(y); tRings.push(ring(S.c, U, V, S.rx, S.rz, tw(y), 0, chestShape(h))); }
+  const neckTop = neck.y + 0.075, inkT = y => { const v = clamp((y - (hipY - 0.03)) / (neckTop - (hipY - 0.03)), 0, 1); return i => [0.5 * (i / SEG), v]; };   // the torso's panel: the left half of the atlas — u the bearing (a quarter turn is the front), v hips → neck
+  inkNow = inkT(hipY - 0.03); tRings.push(ring(new THREE.Vector3(hipR.cx, hipY - 0.03, hipR.cz), U, V, hipR.rx, hipR.rz, [[pelvis, 1]], 0));
+  for (let r = 0; r < NR; r++) { const h = r / (NR - 1), y = y0 + h * (y1 - y0), S = bandAt(y); inkNow = inkT(y); tRings.push(ring(S.c, U, V, S.rx, S.rz, tw(y), 0, chestShape(h))); }
   // THE NECK: the head mesh's own neck is 4 cm of thin stalk (r 0.04) before the jaw, and a body closed flat under it showed that stalk as a gap
   // between body and head. The traps slope up to a thick neck of the body's own that rises into the jaw (its top ring inside the jaw's width,
   // riding the head bone so it turns with the head) — the head sits lower on the shoulders without moving the head bone (the helm rides it)
-  const headJ = joint(M.head), neckW = headJ >= 0 ? [[chest, 0.4], [headJ, 0.6]] : [[chest, 1]], neckTop = neck.y + 0.075;
-  { const bt = bands[NB - 1]; tRings.push(ring(new THREE.Vector3(0, neck.y + 0.042, bt.cz * 0.5), U, V, Math.max(0.082, bt.rx * 0.36), Math.max(0.076, bt.rz * 0.45), [[chest, 0.7], [headJ >= 0 ? headJ : chest, 0.3]], 0));
-    tRings.push(ring(new THREE.Vector3(0, neckTop, bt.cz * 0.3), U, V, 0.072, 0.068, neckW, 0)); }
+  const headJ = joint(M.head), neckW = headJ >= 0 ? [[chest, 0.4], [headJ, 0.6]] : [[chest, 1]];
+  { const bt = bands[NB - 1]; inkNow = inkT(neck.y + 0.042); tRings.push(ring(new THREE.Vector3(0, neck.y + 0.042, bt.cz * 0.5), U, V, Math.max(0.082, bt.rx * 0.36), Math.max(0.076, bt.rz * 0.45), [[chest, 0.7], [headJ >= 0 ? headJ : chest, 0.3]], 0));
+    inkNow = inkT(neckTop); tRings.push(ring(new THREE.Vector3(0, neckTop, bt.cz * 0.3), U, V, 0.072, 0.068, neckW, 0)); }
   for (let i = 1; i < tRings.length; i++) stitch(tRings[i - 1], tRings[i], 0);
-  { const bt = bands[NB - 1]; cap(tRings[0], new THREE.Vector3(hipR.cx, hipY - 0.03, hipR.cz), new THREE.Vector3(0, -1, 0), hipR.rx, [[pelvis, 1]], 0); cap(tRings[tRings.length - 1], new THREE.Vector3(0, neckTop, bt.cz * 0.3), new THREE.Vector3(0, 1, 0), 0.06, neckW, 0); }   // closed top and bottom
+  { const bt = bands[NB - 1]; inkNow = null; cap(tRings[0], new THREE.Vector3(hipR.cx, hipY - 0.03, hipR.cz), new THREE.Vector3(0, -1, 0), hipR.rx, [[pelvis, 1]], 0); inkNow = inkT(neckTop); cap(tRings[tRings.length - 1], new THREE.Vector3(0, neckTop, bt.cz * 0.3), new THREE.Vector3(0, 1, 0), 0.06, neckW, 0); }   // closed top and bottom
   // THE BELT: a bare man keeps his belt. The sculpted one is the cuirass' leather (the bake files it under "cuirass", and it lies ON the
   // plate, where a body lathed to the plate's width would cut through it), so it comes off with the plate; this band is lathed just
   // outside the skin on the sash's top edge — leather, painted by the look (look.leather) — and the sash hangs from it
   { const cl = pj.mats.indexOf('cloth'), skI = cls('skirt'), sky = []; for (let v = 0; v < pos.count; v++) if (pj.vclass[v] === skI && pj.vmat[v] === cl && pos.getZ(v) < -0.05) sky.push(pos.getY(v));   // (the skirt's cloth as drawn, at the BACK where it is lowest and its cut edge — skirtTop above it is hidden — is ragged: the belt sits over that edge, so the sash hangs from the belt with no skin between)
     if (sky.length > 8) { const yLo = Math.max(...sky) - 0.035, yHi = yLo + 0.075;
-      uvNow = LOOK_WHITE_UV; matNow = 1; const out = 1.045, pad = 0.006, lo = bandAt(yLo), hi = bandAt(yHi), w = [[pelvis, 0.5], [chest, 0.5]];
+      uvNow = LOOK_WHITE_UV; matNow = 1; inkNow = null; const out = 1.045, pad = 0.006, lo = bandAt(yLo), hi = bandAt(yHi), w = [[pelvis, 0.5], [chest, 0.5]];
       const iL = ring(lo.c, U, V, lo.rx, lo.rz, w, 3), oL = ring(lo.c, U, V, lo.rx * out + pad, lo.rz * out + pad, w, 3), oH = ring(hi.c, U, V, hi.rx * out + pad, hi.rz * out + pad, w, 3), iH = ring(hi.c, U, V, hi.rx, hi.rz, w, 3);
       stitch(iL, oL, 3); stitch(oL, oH, 3); stitch(oH, iH, 3);   // the underside, the face, the top: a closed band a finger thick, faces out (stitch winds a→b outward, so inner→outer faces down and outer→inner faces up)
       uvNow = uvc; matNow = 0; } }
@@ -1289,7 +1317,8 @@ function modelBodyBuild(R) {
     // edge and a little up (in the bone's own frame, so it holds in every pose) — and runs to the elbow, where the bracer is: more upright, clear of the body
     const A = A0.clone().add(new THREE.Vector3((Math.sign(A0.x) || 1) * 0.055, 0.012, 0));
     const dU = B.clone().sub(A).normalize(), dF = C.clone().sub(B).normalize(), dM = dU.clone().add(dF).normalize(), [uU, vU] = frame(dU), [uF, vF] = frame(dF), [uM, vM] = frame(dM), rings = [];
-    const R_ = (c, u, v, r, w) => rings.push(ring(c, u, v, r * 0.84, r * 1.04, w, cl));   // an arm is deeper than it is wide (u runs across, v front-to-back): seen from the front or the back it is the narrow way round
+    const NRA = 11, inkA = k => i => [side === 'L' ? 0.5 + 0.25 * (i / SEG) : 0.75 - 0.25 * (i / SEG), k / (NRA - 1)];   // the arm's panel: u the bearing (mirrored on the right arm, so the sleeves match), v shoulder → wrist
+    const R_ = (c, u, v, r, w) => { inkNow = inkA(rings.length); rings.push(ring(c, u, v, r * 0.84, r * 1.04, w, cl)); };   // an arm is deeper than it is wide (u runs across, v front-to-back): seen from the front or the back it is the narrow way round
     // the upper arm: the shoulder's bone alone, so it turns as one piece
     for (const [t, r] of [[0, rE * 0.98], [0.3, rB], [0.62, rE * 1.02], [0.84, rE * 0.96]]) R_(A.clone().lerp(B, t), uU, vU, r, [[jS, 1]]);
     // THE ELBOW: three close rings sharing the two bones 3:1, 1:1, 1:3 — a bend folds the skin across them instead of pinching one ring flat
@@ -1299,9 +1328,9 @@ function modelBodyBuild(R) {
     // the forearm: the elbow's bone, tapering to the wrist; the last ring leans on the hand so the wrist turns with it
     for (const [t, r, w] of [[0.3, rE * 0.9, [[jE, 1]]], [0.6, rE * 0.78, [[jE, 1]]], [0.85, rW * 1.08, [[jE, 0.7], [jH, 0.3]]], [1.0, rW, [[jE, 0.4], [jH, 0.6]]]]) R_(B.clone().lerp(C, t), uF, vF, r, w);
     for (let i = 1; i < rings.length; i++) stitch(rings[i - 1], rings[i], cl);
-    cap(rings[0], A.clone(), dU.clone().negate(), rE * 0.98, [[jS, 1]], cl); cap(rings[rings.length - 1], C.clone(), dF, rW, [[jE, 0.4], [jH, 0.6]], cl); };   // closed at the shoulder and the wrist: seen end-on, the arm no longer opens into the hollow body
+    inkNow = inkA(0); cap(rings[0], A.clone(), dU.clone().negate(), rE * 0.98, [[jS, 1]], cl); inkNow = inkA(NRA - 1); cap(rings[rings.length - 1], C.clone(), dF, rW, [[jE, 0.4], [jH, 0.6]], cl); inkNow = null; };   // closed at the shoulder and the wrist: seen end-on, the arm no longer opens into the hollow body
   arm('L', 1); arm('R', 2);
-  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); geo.setAttribute('uv', new THREE.Float32BufferAttribute(UV, 2));
+  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); geo.setAttribute('uv', new THREE.Float32BufferAttribute(UV, 2)); geo.setAttribute('inkUv', new THREE.Float32BufferAttribute(IUV, 2));
   geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(SI, 4)); geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(SW, 4)); geo.setIndex(IDX); geo.computeVertexNormals();
   geo.setAttribute('kind', new THREE.BufferAttribute(Float32Array.from(VM, m => m ? MODEL_KIND.leather : MODEL_KIND.skin), 1));
   const pieces = { classes: ['torso', 'armL', 'armR', 'belt'], mats: ['skin', 'leather'], tri: TRI, vclass: VC, vmat: VM, naked: true, body: { y0: hipY - 0.03, y1, neckY: neckTop } };   // (body: the torso's heights, for lookBodyColour's shading)
@@ -1318,14 +1347,14 @@ function instanceModelRig(R, ctx = 'main') {
   const skinned = {};
   for (const m of R.meshes) { let geo = m.geo; const own = !!(m.pieces && m.pieces.classes.length > 1);
     if (own) {                                               // this body's own copy of the index (pieces drop out of it) and its own paint; positions, normals, uvs, weights are shared
-      geo = new THREE.BufferGeometry(); for (const k of ['position', 'normal', 'uv', 'skinIndex', 'skinWeight', 'kind']) if (m.geo.getAttribute(k)) geo.setAttribute(k, m.geo.getAttribute(k));
+      geo = new THREE.BufferGeometry(); for (const k of ['position', 'normal', 'uv', 'skinIndex', 'skinWeight', 'kind', 'inkUv']) if (m.geo.getAttribute(k)) geo.setAttribute(k, m.geo.getAttribute(k));
       const i0 = m.geo.index.array; geo.setIndex(new THREE.BufferAttribute(new i0.constructor(i0), 1));
       const nv = m.geo.getAttribute('position').count; geo.setAttribute('color', new THREE.BufferAttribute(new Uint8Array(nv * 3).fill(255), 3, true)); }
     const sm = new THREE.SkinnedMesh(geo, own ? matVC : mat); sm.name = m.name; sm.userData.mm = { ctx, skinning: true, vc: own }; sm.userData.mmR = R.name; sm.frustumCulled = false; sm.castShadow = true; root.add(sm); if (own) { sm.userData.pieces = m.pieces; sm.userData.geo0 = m.geo; }
     const bones = m.joints.map(j => nodes[j]), inv = []; for (let i = 0; i < bones.length; i++) inv.push(new THREE.Matrix4().fromArray(m.ibm, i * 16));
     sm.bind(new THREE.Skeleton(bones, inv), new THREE.Matrix4()); skinned[m.name] = sm; }
   const NB = modelBodyBuild(R), am = R.meshes.find(x => x.short === 'armor');   // THE BODY UNDER THE ARMOUR: this man's own copy, bound to the armour's skeleton, shown when his look goes bare (lookApply)
-  if (NB && am && skinned[am.name]) { const geo = new THREE.BufferGeometry(); for (const k of ['position', 'normal', 'uv', 'skinIndex', 'skinWeight', 'kind']) geo.setAttribute(k, NB.geo.getAttribute(k));
+  if (NB && am && skinned[am.name]) { const geo = new THREE.BufferGeometry(); for (const k of ['position', 'normal', 'uv', 'skinIndex', 'skinWeight', 'kind', 'inkUv']) geo.setAttribute(k, NB.geo.getAttribute(k));
     const i0 = NB.geo.index.array; geo.setIndex(new THREE.BufferAttribute(new i0.constructor(i0), 1)); geo.setAttribute('color', new THREE.BufferAttribute(new Uint8Array(NB.geo.getAttribute('position').count * 3).fill(255), 3, true));
     const sm = new THREE.SkinnedMesh(geo, matVC); sm.name = 'naked'; sm.frustumCulled = false; sm.castShadow = true; sm.visible = false; root.add(sm); sm.userData.pieces = NB.pieces; sm.userData.geo0 = NB.geo; sm.userData.mm = { ctx, skinning: true, vc: true }; sm.userData.mmR = R.name;
     sm.bind(skinned[am.name].skeleton, new THREE.Matrix4()); skinned.naked = sm; }
@@ -1614,7 +1643,7 @@ function lookApply(L, look) {
     if (kd0 && !skinTint) { if (!sm.userData.ownKind) { sm.geometry.setAttribute('kind', kd0.clone()); sm.userData.ownKind = true; } const kd = sm.geometry.getAttribute('kind');
       for (let v = 0; v < nv; v++) kd.setX(v, lookKind(look, pj.classes[pj.vclass[v]], pj.mats[pj.vmat[v]], kd0.getX(v))); kd.needsUpdate = true; }
     else if (kd0 && skinTint) {                                  // THE FACE AND THE HANDS take the ink too ("shapes that go through your arms and face"): the head mesh's skin — the face, the sockets, a scar, the hands, the chin where no beard grows, the scalp when it is shaved — on its own copy of the kinds
-      if (look.ink) { if (!sm.userData.ownKind) { sm.geometry.setAttribute('kind', kd0.clone()); sm.userData.ownKind = true; } const kd = sm.geometry.getAttribute('kind'), ik = lookInkKind(look, MODEL_KIND), on = new Set(['head', 'socket', 'scarL', 'scarR', 'hand']); if (look.beard == null) on.add('beard'); if (!(look.hairStyle | 0)) on.add('hair');
+      if (look.ink) { if (!sm.userData.ownKind) { sm.geometry.setAttribute('kind', kd0.clone()); sm.userData.ownKind = true; } const kd = sm.geometry.getAttribute('kind'), ik = lookInkKind(look, MODEL_KIND), on = new Set(['head', 'socket', 'scarL', 'scarR']); if (look.beard == null) on.add('beard'); if (!(look.hairStyle | 0)) on.add('hair');
         for (let v = 0; v < nv; v++) kd.setX(v, pj.mats[pj.vmat[v]] === 'skin' && on.has(pj.classes[pj.vclass[v]]) ? ik : kd0.getX(v)); kd.needsUpdate = true; }
       else if (sm.userData.ownKind) { sm.geometry.setAttribute('kind', kd0); sm.userData.ownKind = false; } }
   }

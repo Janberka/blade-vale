@@ -1614,7 +1614,7 @@ const LOOK_HAIR_PICK = [0x1a1210, 0x3a2416, 0x5c3a1e, 0x8a5a2e, 0xa04a20, 0xb080
 const LOOK_HAIR_STYLES = ['shaved', 'short crop', 'crown', 'long', 'mohawk'];
 const LOOK_INK = [null, 'wolf', 'serpent', 'tide', 'sun', 'thorn'], LOOK_INK_NAMES = ['none', 'wolf', 'serpent', 'tide', 'sun', 'thorn'];   // the ink's DESIGN (gear.look.i): free, the barber's — it shows on whatever skin the kit leaves bare; bands of the ink atlas, in this order
 const LOOK_INK_COLOURS = [0x12192a, 0x101010, 0x6b1410, 0xe8dcc8, 0x2f5a2a, 0xb8752a, 0x4a2a6a, 0x1f6b6b], LOOK_INK_COLOUR_NAMES = ['blue-black', 'black', 'blood', 'bone', 'moss', 'ochre', 'violet', 'teal'];   // the ink's COLOUR (gear.look.k)
-const LOOK_BEARD_STYLES = ['clean', 'stubble', 'full beard', 'goatee', 'moustache', 'braided'];   // (braided: the full beard painted, and a plait hanging from the chin — lookBraidApply)
+const LOOK_BEARD_STYLES = ['clean', 'stubble', 'full beard', 'goatee', 'moustache'];   // (a sixth, 'braided' — a plait hung from the chin — came and went the same day: "let's just remove this braids"; a saved b 5 fails cleanLook's range and falls back to the roll)
 const LOOK_SKIN_NAMES = ['fair', 'light', 'tan', 'olive', 'brown', 'dark'];
 // THE FACE'S BONES (gear.look.f): six casts of the same head — a displacement of the head's vertices in the bind pose on
 // this body's own copy of the positions (lookFacePoint); the vale's men roll theirs from the name
@@ -1671,7 +1671,7 @@ function lookRoll(name, arch, gear, pal, o = {}) {
   const bald = r() < 0.28, hairRoll = pick(LOOK_HAIR), hairC = has('c') ? LOOK_HAIR_PICK[LK.c] : hairRoll, skinC = new THREE.Color(look.skin);
   const beardOn = r() < 0.75, fullBeard = r() < 0.65, styleRoll = r(), beardKind = r();
   look.hairStyle = has('h') ? LK.h : bald ? 0 : styleRoll < 0.64 ? 1 : styleRoll < 0.74 ? 2 : styleRoll < 0.94 ? 3 : 4;   // most cropped, some long, a mohawk now and then
-  look.beardStyle = has('b') ? LK.b : !beardOn ? 0 : beardKind < 0.12 ? 3 : beardKind < 0.17 ? 4 : beardKind < 0.25 ? 5 : fullBeard ? 2 : 1;   // (5: the plait of the north)      // most wear a beard, most of those a full one
+  look.beardStyle = has('b') ? LK.b : !beardOn ? 0 : beardKind < 0.12 ? 3 : beardKind < 0.17 ? 4 : fullBeard ? 2 : 1;      // most wear a beard, most of those a full one
   look.hair = look.hairStyle === 0 ? null : hairC; look.beard = look.beardStyle ? c.setHex(hairC).lerp(skinC, 0.08).getHex() : null; look.stubble = c.setHex(hairC).lerp(skinC, 0.45).getHex();
   look.brow = c.setHex(hairC).lerp(skinC, 0.3).getHex(); look.socket = c.copy(skinC).multiplyScalar(0.91).getHex(); look.lip = c.copy(skinC).multiplyScalar(0.88).getHex();   // dark brows, a light shadow round the eyes (0.78 sank them into a skull), a hard mouth
   look.faceShape = has('f') ? LK.f : Math.floor(lookRng(lookSeed(name) ^ 0x2545f491)() * LOOK_FACE_SHAPES.length);   // (its own stream: the bones came later, nobody's hair or kit re-rolls for them)
@@ -1702,7 +1702,7 @@ function lookRoll(name, arch, gear, pal, o = {}) {
 function lookFaceColour(look, cls, mt, x, y, z, scalp, brow) {
   const bs = look.beardStyle | 0;
   if (look.hair != null && cls === 'hair' && scalp) return look.hair;   // (scalp: this vertex is well under the cap — lookScalpMask; brow: well inside the brow — lookBrowMask)
-  if (cls === 'beard' && look.beard != null && !(y >= 1.615 && z < 0.035)) { const on = bs === 2 || bs === 5 || bs === 1 || (bs === 3 && Math.abs(x) < 0.05) || (bs === 4 && y > 1.585 && z > 0.1); if (on) return bs === 1 ? look.stubble : look.beard; }   // (the baked sideburn band took the ear's root and lobe — pieces.json still carries that; the cut here keeps the beard on the cheek, in front of the ear: "it looks like it's coming out of ears")
+  if (cls === 'beard' && look.beard != null && !(y >= 1.615 && z < 0.035)) { const on = bs === 2 || bs === 1 || (bs === 3 && Math.abs(x) < 0.05) || (bs === 4 && y > 1.585 && z > 0.1); if (on) return bs === 1 ? look.stubble : look.beard; }   // (the baked sideburn band took the ear's root and lobe — pieces.json still carries that; the cut here keeps the beard on the cheek, in front of the ear: "it looks like it's coming out of ears")
   if (cls === 'brow') return brow ? look.brow : look.skin; if (cls === 'socket') return look.socket; if (cls === 'scarL' || cls === 'scarR') return look.scar === cls ? look.scarC : look.skin; if (cls === 'eye') return 0xece8e2;
   if (mt === 'leather') return look.lip;                     // (the palette's lip/brow brown: no painted lips)
   return look.skin;
@@ -1771,7 +1771,6 @@ function lookApply(L, look) {
   const cloak = L.inst.skinned[M.cloak]; if (cloak) { cloak.visible = !!look.cloak; if (cloak.material && cloak.material.color && !cloak.material.map) cloak.material.color.setHex(look.cloakC); }
   if (L.plume) L.plume.visible = !!(look.helmet && look.plume);
   lookHairApply(L, look);                                                // the cut: a cap on the skull when he stands bareheaded
-  lookBraidApply(L, look);                                               // the plait, if his beard is braided
   L.shieldKind = look.shield; if (look.shield === 'round') lookRoundShield(L, look); else if (L.mRound) L.mRound.visible = false;
   if (L.mShield && L.mShield.material && L.mShield.material.color) L.mShield.material.color.setHex(look.cloth).lerp(new THREE.Color(0xffffff), 0.35);
 }
@@ -1879,44 +1878,6 @@ function lookSkullCast(T, ox, oy, oz, dx, dy, dz) {
 // the crown, each point the skull's surface at that bearing and height pushed out by the pad, a lip down to the skin at
 // the hairline; long hair drapes from the hairline down the neck; a mohawk is a fin along the midline. Flat-shaded,
 // wound outward, skinned to the head bone.
-// THE PLAIT: a braided beard's tail — a run of beads hanging from the chin, swaying a little forward, a leather tie at the end;
-// bind-space model units on the head bone. The plait HANGS FROM THE CHIN — the chin as this rig has it after lookRuggedHead
-// and as this face's cast moves it (lookFacePoint), not a fixed point: a shorter chin left the old fixed beads floating an inch
-// under it ("it's floating in front of our face"). Five beads, the first tucked up into the chin, straight down from there.
-function lookChin(R) {                                       // the rig's chin: the TIP — the front-most point of the head's midline under the lip (the chin's underside runs level from there back to the throat, so its lowest point is under the jaw, and a plait rooted there hung behind the chin)
-  if (R.chin) return R.chin; const m = R.meshes.find(x => x.pieces && x.pieces.classes.indexOf('hair') >= 0); if (!m) return null;
-  const pj = m.pieces, pos = m.geo.getAttribute('position'); let best = null;
-  for (let v = 0; v < pos.count; v++) { if (!LOOK_HEAD_CLASSES.has(pj.classes[pj.vclass[v]])) continue; const x = pos.getX(v), y = pos.getY(v), z = pos.getZ(v); if (Math.abs(x) > 0.015 || y > 1.57 || y < 1.50) continue; if (!best || z > best[2]) best = [x, y, z]; }
-  return (R.chin = best);
-}
-function lookBraidGeo(R, at) {
-  const key = at.map(a => a.toFixed(3)).join(','); R.braidGeo = R.braidGeo || {}; if (R.braidGeo[key] !== undefined) return R.braidGeo[key];
-  const m = R.meshes.find(x => x.pieces && x.pieces.classes.indexOf('hair') >= 0); if (!m) return (R.braidGeo[key] = null);
-  const headNode = R.g.nodes.findIndex(x => x.name === R.spec.map.head), joint = Math.max(0, m.joints.indexOf(headNode));
-  // A PLAIT ("maybe don't build it from some balls"): a flat ribbon of a rope — wider than deep, as a braid is — with the
-  // strands as a HERRINGBONE of bulges, the left half and the right half a half-period out of step so they cross each other
-  // down its length; smooth-shaded, tapering, gathered wide at the chin (the top ring sits inside it), tied off near the end
-  // with a band, the loose ends flaring below. It hangs straight from the chin's front and leans back to the chest.
-  const y0 = at[1] - 0.010, z0 = at[2] - 0.014, L = 0.105, K = 40, M = 12, rings = [], waves = 5.5;
-  const ring = (t, rad, amp, wide, deep) => { const y = y0 - L * t, z = z0 - 0.035 * t * t, o = []; for (let k = 0; k < M; k++) { const a = k / M * Math.PI * 2, cx = Math.cos(a), side = cx >= 0 ? 0 : Math.PI, b = 1 + amp * Math.cos(Math.PI * 2 * waves * t + side) * Math.sqrt(Math.abs(cx)); o.push([cx * rad * wide * b, y, z + Math.sin(a) * rad * deep * b]); } return o; };
-  for (let i = 0; i <= K; i++) { const t = i / K; rings.push(ring(t, 0.017 * (1 - 0.45 * t), 0.2, 1.35, 0.72)); }
-  const tie = 0.93; rings.push(ring(tie, 0.0065, 0, 1.1, 1.1), ring(tie + 0.045, 0.0065, 0, 1.1, 1.1));                  // the band
-  rings.push(ring(tie + 0.06, 0.005, 0, 1.2, 0.8), ring(tie + 0.16, 0.010, 0, 1.4, 0.7), ring(tie + 0.24, 0.003, 0, 1.2, 0.8));   // the loose ends: a tuft that flares and closes
-  const P = [], I = [], cap = (r0, out) => { const c = [0, 0, 0]; for (const p of r0) { c[0] += p[0] / M; c[1] += p[1] / M; c[2] += p[2] / M; } const ci = P.length / 3; P.push(c[0], c[1], c[2]); const b = ci - M; for (let k = 0; k < M; k++) { const k1 = (k + 1) % M; if (out) I.push(ci, b + k1, b + k); else I.push(ci, b + k, b + k1); } };
-  for (const r0 of rings) for (const p of r0) P.push(p[0], p[1], p[2]);
-  for (let i = 0; i + 1 < rings.length; i++) for (let k = 0; k < M; k++) { const a = i * M + k, b = i * M + (k + 1) % M, c = a + M, d = b + M; I.push(a, c, b, b, c, d); }
-  cap(rings[rings.length - 1], true);
-  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); geo.setIndex(I); geo.computeVertexNormals();   // (indexed: smooth across the rings, the strands read as shading, not facets)
-  const nv = geo.getAttribute('position').count, si = new Uint16Array(nv * 4), sw = new Float32Array(nv * 4); for (let v = 0; v < nv; v++) { si[v * 4] = joint; sw[v * 4] = 1; }
-  geo.setAttribute('skinIndex', new THREE.BufferAttribute(si, 4)); geo.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4));
-  return (R.braidGeo[key] = geo);
-}
-function lookBraidApply(L, look) {
-  const on = (look.beardStyle | 0) === 5 && look.beard != null, R = MODEL_RIGS.get(L.g.userData.model), body = on && R && Object.values(L.inst.skinned).find(sm => sm.userData.pieces && sm.userData.pieces.classes.indexOf('hair') >= 0);
-  const chin = body && lookChin(R), g0 = chin && lookBraidGeo(R, lookFacePoint(look.faceShape | 0, chin[0], chin[1], chin[2], [0, 0, 0])); if (!g0) { if (L.mBraid) L.mBraid.visible = false; return; }
-  if (!L.mBraid) { const sm = new THREE.SkinnedMesh(g0, new THREE.MeshPhongMaterial({ color: look.beard, shininess: 8, specular: 0x181818, skinning: true })); sm.frustumCulled = false; sm.castShadow = true; sm.name = 'braid'; body.parent.add(sm); sm.bind(body.skeleton, body.bindMatrix); L.mBraid = sm; }
-  L.mBraid.geometry = g0; L.mBraid.material.color.setHex(look.beard); L.mBraid.visible = true;
-}
 function lookHairGeo(R, hs) {
   R.hairGeo = R.hairGeo || {}; if (R.hairGeo[hs] !== undefined) return R.hairGeo[hs]; const T = lookSkullTris(R); if (!T.length) return (R.hairGeo[hs] = null);
   const m = R.meshes.find(m => m.pieces && m.pieces.classes.indexOf('hair') >= 0), headNode = R.g.nodes.findIndex(n => n.name === R.spec.map.head), joint = Math.max(0, m.joints.indexOf(headNode));

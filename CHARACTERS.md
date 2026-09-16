@@ -101,6 +101,9 @@ ends below, 10 cm long, hanging straight from the chin's front and leaning back 
 balls": it is a flat RIBBON now (wider than deep, as a braid is) with the strands as a herringbone — the left half and the right half
 bulge a half-period out of step, 5½ crossings down its length — smooth-shaded over 40 rings, so the strands read as shading, not as
 stacked lumps. v=219
+Then "let's just remove this braids": the braided beard is gone — the style, its roll, its paint branch, the plait's geometry and mesh
+(`lookChin` / `lookBraidGeo` / `lookBraidApply`). ARENA_LOOK.b is 5 again, so a saved b 5 fails `cleanLook`'s range and the barber's
+roll takes over. v=220, arena-items v=11
 
 ## The wardrobe is the marketplace (2026-09-14, "any item we add should be available in the marketplace")
 Six slots now: sword, armor, helm, shield, bow, horse (`ARENA_SLOTS` in arena-items.js; the server validates against the
@@ -277,9 +280,8 @@ to `sleeve` (vertices and triangles), and the skirt cloth above the belt (y > 0.
 
 Same day: the axes are carried head-UP when a man is at ease (`updateAnimator` turns the sword group by π about its own z
 for `userData.axe` while the pose is `relax`; drawn, the head leads), the axe head is a 2D profile extruded (socket, a bit
-sweeping out and up, a convex edge, the beard hooking down and back; the Dane axe adds a poll), the barber has a sixth beard
-— `braided`: the full beard's paint plus a plait of beads on the head bone (`lookBraidGeo` / `lookBraidApply`; ARENA_LOOK.b is
-6 now) — and the berserker's bracers are `ironEngraved`: steel kind 8, the ink's knotwork cut in as dark, rougher grooves.
+sweeping out and up, a convex edge, the beard hooking down and back; the Dane axe adds a poll), the barber had a sixth beard
+— `braided`, the full beard's paint plus a plait on the head bone (removed the same day, below; ARENA_LOOK.b is 5 again) — and the berserker's bracers are `ironEngraved`: steel kind 8, the ink's knotwork cut in as dark, rougher grooves.
 
 ## The face's surface (2026-09-16, "character faces are too low poly now, let's add them some detail and smoothing like the body and armors")
 

@@ -117,6 +117,16 @@ The scalp is still painted under it, but only 3 cm inside the hairline (`lookHai
 brow; all below the hairline, so one cap fits every face), applied on this body's own copy of the positions and normals
 (`lookFaceApply`; shape 0 'hard' shares the rig's). Rolled from the name on its own stream, so nobody's hair or kit changed.
 
+## The bare man's waist (2026-09-16, "why my char has a naked ass and a box on it")
+A bare look (the pelt, the berserker's mantle) drops the cuirass, and two things went with it. THE BOX: the two belt pouches on the
+back of the belt (`pouch` in pieces.json, painted leather) only read tucked under a back plate — on a bare back they were a black
+block; a naked look now hides them too (`lookRoll`, odds 0 on those rows). THE NAKED ASS: the plate's own skirt overlaps the sash,
+so a torso lathed to the plate's width stood out THROUGH the sash — bare skin below the waist, the cloth's top edge lost inside it —
+and the waist belt is the cuirass' leather, gone with the plate. `modelBodyBuild` now holds every ring at hip height inside the skirt's
+cloth (`inSash`: the cloth's centre and 93 % of its width) and lathes a BELT of its own — a leather band a finger thick, class `belt`,
+mat `leather` on the white palette cell so `look.leather` paints it — over the sash's ragged back edge, so the sash hangs from the belt.
+The sculpted belt is not split out and shown instead: it lies on the plate's surface, where the body cuts through it.
+
 ## The surface pass (2026-09-16, "our chars look too low poly")
 
 The user brought a "game-ready" Knight Templar USDZ to compare. It has ~2,200 triangles a figure (ours has 8,250) and 37

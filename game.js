@@ -1190,10 +1190,11 @@ function modelBodyBuild(R) {
   const worldM = new Map(); am.joints.forEach((j, k) => worldM.set(j, new THREE.Matrix4().fromArray(am.ibm, k * 16).invert()));
   const bone = nm => new THREE.Vector3().setFromMatrixPosition(worldM.get(names.indexOf(nm))), M = R.spec.map;
   const cls = c => pj.classes.indexOf(c), pts = c => { const ci = cls(c), out = []; for (let v = 0; v < pos.count; v++) if (pj.vclass[v] === ci) out.push(new THREE.Vector3(pos.getX(v), pos.getY(v), pos.getZ(v))); return out; };
-  const P = [], N = [], UV = [], SI = [], SW = [], IDX = [], VC = [], TRI = [], SEG = 18, uvc = [13.5 / 16, 13.5 / 16];   // (the palette's skin cell — the face's — so the face tint paints it the face's tone)
+  const P = [], N = [], UV = [], SI = [], SW = [], IDX = [], VC = [], VM = [], TRI = [], SEG = 18, uvc = [13.5 / 16, 13.5 / 16];   // (the palette's skin cell — the face's — so the face tint paints it the face's tone)
+  let uvNow = uvc, matNow = 0;                              // what the rings are made of: skin (0) on the skin cell — the belt below switches to leather (1) on the white cell, so its vertex colour IS the leather
   const ring = (c, u, v, rx, rz, w /* [[jointIdx, weight]...] */, cl) => { const base = P.length / 3; for (let i = 0; i < SEG; i++) { const a = i / SEG * Math.PI * 2, x = c.x + u.x * rx * Math.cos(a) + v.x * rz * Math.sin(a), y = c.y + u.y * rx * Math.cos(a) + v.y * rz * Math.sin(a), z = c.z + u.z * rx * Math.cos(a) + v.z * rz * Math.sin(a);
-      P.push(x, y, z); UV.push(uvc[0], uvc[1]); VC.push(cl); const si = [0, 0, 0, 0], sw = [0, 0, 0, 0]; w.slice(0, 4).forEach(([j, k], q) => { si[q] = j; sw[q] = k; }); SI.push(...si); SW.push(...sw); } return base; };
-  const cap = (base, c, dir, r, w, cl) => { const ci = P.length / 3, cc = c.clone().addScaledVector(dir, r * 0.35); P.push(cc.x, cc.y, cc.z); UV.push(uvc[0], uvc[1]); VC.push(cl); const si = [0, 0, 0, 0], sw = [0, 0, 0, 0]; w.slice(0, 4).forEach(([j, k], q) => { si[q] = j; sw[q] = k; }); SI.push(...si); SW.push(...sw);
+      P.push(x, y, z); UV.push(uvNow[0], uvNow[1]); VC.push(cl); VM.push(matNow); const si = [0, 0, 0, 0], sw = [0, 0, 0, 0]; w.slice(0, 4).forEach(([j, k], q) => { si[q] = j; sw[q] = k; }); SI.push(...si); SW.push(...sw); } return base; };
+  const cap = (base, c, dir, r, w, cl) => { const ci = P.length / 3, cc = c.clone().addScaledVector(dir, r * 0.35); P.push(cc.x, cc.y, cc.z); UV.push(uvNow[0], uvNow[1]); VC.push(cl); VM.push(matNow); const si = [0, 0, 0, 0], sw = [0, 0, 0, 0]; w.slice(0, 4).forEach(([j, k], q) => { si[q] = j; sw[q] = k; }); SI.push(...si); SW.push(...sw);
     const a = base, b = base + 1, ax = P[a * 3] - cc.x, ay = P[a * 3 + 1] - cc.y, az = P[a * 3 + 2] - cc.z, bx = P[b * 3] - cc.x, by = P[b * 3 + 1] - cc.y, bz = P[b * 3 + 2] - cc.z, nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx, flip = nx * dir.x + ny * dir.y + nz * dir.z < 0;
     for (let i = 0; i < SEG; i++) { const j = (i + 1) % SEG; if (flip) IDX.push(ci, base + j, base + i); else IDX.push(ci, base + i, base + j); TRI.push(cl); } };
   const stitch = (a, b, cl) => { for (let i = 0; i < SEG; i++) { const j = (i + 1) % SEG; IDX.push(a + i, b + i, b + j, a + i, b + j, a + j); TRI.push(cl, cl); } };
@@ -1207,12 +1208,31 @@ function modelBodyBuild(R) {
   for (let b = 0; b < NB; b++) if (!bands[b]) { let lo = b - 1, hi = b + 1; while (lo >= 0 && !bands[lo]) lo--; while (hi < NB && !bands[hi]) hi++; const A = bands[lo] || bands[hi], B = bands[hi] || bands[lo], t = (b - lo) / Math.max(1, hi - lo); bands[b] = { y: y0 + (b / (NB - 1)) * (y1 - y0), cx: A.cx + (B.cx - A.cx) * t, cz: A.cz + (B.cz - A.cz) * t, rx: A.rx + (B.rx - A.rx) * t, rz: A.rz + (B.rz - A.rz) * t }; }
   const U = new THREE.Vector3(1, 0, 0), V = new THREE.Vector3(0, 0, 1), tor = cls('torso') < 0 ? 0 : cls('torso'), tw = y => { const k = Math.max(0, Math.min(1, (y - (hipY + 0.05)) / Math.max(0.05, (y1 - 0.08) - (hipY + 0.05)))); return k < 0.001 ? [[pelvis, 1]] : k > 0.999 ? [[chest, 1]] : [[pelvis, 1 - k], [chest, k]]; };
   let prev = null; const tRings = [];
-  { const b0 = bands[0]; tRings.push(ring(new THREE.Vector3(b0.cx, hipY - 0.03, b0.cz), U, V, b0.rx * 0.94, b0.rz * 0.94, [[pelvis, 1]], 0)); }
-  for (let b = 0; b < NB; b++) { const B = bands[b], h = b / (NB - 1), waist = 1 - 0.05 * Math.max(0, 1 - Math.abs(h - 0.25) / 0.2), pecs = 1 + 0.05 * Math.max(0, 1 - Math.abs(h - 0.68) / 0.22), shoulders = 1 + 0.28 * Math.max(0, (h - 0.55) / 0.45);   // (the cuirass narrows under the pauldrons; a man's shoulders don't)
-    tRings.push(ring(new THREE.Vector3(B.cx, B.y, B.cz), U, V, B.rx * 0.98 * waist * shoulders, B.rz * 0.98 * pecs, tw(B.y), 0)); }
+  const prof = h => { const waist = 1 - 0.05 * Math.max(0, 1 - Math.abs(h - 0.25) / 0.2), pecs = 1 + 0.05 * Math.max(0, 1 - Math.abs(h - 0.68) / 0.22), shoulders = 1 + 0.28 * Math.max(0, (h - 0.55) / 0.45); return [0.98 * waist * shoulders, 0.98 * pecs]; };   // the torso's profile over the plate's cross-section, by height 0..1 (the cuirass narrows under the pauldrons; a man's shoulders don't)
+  // THE HIPS sit inside the sash: the plate's own skirt overlaps the cloth, so a torso lathed to the plate's width stood OUT through
+  // the sash — bare skin below the waist with the cloth's top edge lost inside it (the "naked ass"). Where the skirt's cloth wraps
+  // the hips, each ring is held inside it (its centre and a little under its width); above the cloth the plate's measure holds
+  const clI = pj.mats.indexOf('cloth'), sash = []; for (const c of ['skirt', 'skirtTop']) { const ci = cls(c); if (ci < 0 || clI < 0) continue; for (let v = 0; v < pos.count; v++) if (pj.vclass[v] === ci && pj.vmat[v] === clI && Math.abs(pos.getX(v)) < 0.24) sash.push(new THREE.Vector3(pos.getX(v), pos.getY(v), pos.getZ(v))); }
+  const inSash = (y, cx, cz, rx, rz) => { const sel = sash.filter(p => Math.abs(p.y - y) < 0.03); if (sel.length < 8) return { cx, cz, rx, rz };
+    const xs = sel.map(p => p.x), zs = sel.map(p => p.z), x0 = Math.min(...xs), x1 = Math.max(...xs), z0 = Math.min(...zs), z1 = Math.max(...zs);
+    return { cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, rx: Math.min(rx, (x1 - x0) / 2 * 0.93), rz: Math.min(rz, (z1 - z0) / 2 * 0.93) }; };
+  const hipR = (() => { const b0 = bands[0]; return inSash(hipY - 0.03, b0.cx, b0.cz, b0.rx * 0.94, b0.rz * 0.94); })();
+  tRings.push(ring(new THREE.Vector3(hipR.cx, hipY - 0.03, hipR.cz), U, V, hipR.rx, hipR.rz, [[pelvis, 1]], 0));
+  for (let b = 0; b < NB; b++) { const B = bands[b], [kx, kz] = prof(b / (NB - 1)), S = inSash(B.y, B.cx, B.cz, B.rx * kx, B.rz * kz); tRings.push(ring(new THREE.Vector3(S.cx, B.y, S.cz), U, V, S.rx, S.rz, tw(B.y), 0)); }
   { const bt = bands[NB - 1], r = neck.r * 1.15; tRings.push(ring(new THREE.Vector3(0, neck.y + 0.03, bt.cz * 0.5), U, V, Math.max(r, bt.rx * 0.5), Math.max(r, bt.rz * 0.6), [[chest, 1]], 0)); }   // the shoulders close to the neck's girth just under the head
   for (let i = 1; i < tRings.length; i++) stitch(tRings[i - 1], tRings[i], 0);
-  { const b0 = bands[0], bt = bands[NB - 1]; cap(tRings[0], new THREE.Vector3(b0.cx, hipY - 0.03, b0.cz), new THREE.Vector3(0, -1, 0), b0.rx * 0.94, [[pelvis, 1]], 0); cap(tRings[tRings.length - 1], new THREE.Vector3(0, neck.y + 0.03, bt.cz * 0.5), new THREE.Vector3(0, 1, 0), neck.r, [[chest, 1]], 0); }   // closed top and bottom
+  { const bt = bands[NB - 1]; cap(tRings[0], new THREE.Vector3(hipR.cx, hipY - 0.03, hipR.cz), new THREE.Vector3(0, -1, 0), hipR.rx, [[pelvis, 1]], 0); cap(tRings[tRings.length - 1], new THREE.Vector3(0, neck.y + 0.03, bt.cz * 0.5), new THREE.Vector3(0, 1, 0), neck.r, [[chest, 1]], 0); }   // closed top and bottom
+  // THE BELT: a bare man keeps his belt. The sculpted one is the cuirass' leather (the bake files it under "cuirass", and it lies ON the
+  // plate, where a body lathed to the plate's width would cut through it), so it comes off with the plate; this band is lathed just
+  // outside the skin on the sash's top edge — leather, painted by the look (look.leather) — and the sash hangs from it
+  { const cl = pj.mats.indexOf('cloth'), skI = cls('skirt'), sky = []; for (let v = 0; v < pos.count; v++) if (pj.vclass[v] === skI && pj.vmat[v] === cl && pos.getZ(v) < -0.05) sky.push(pos.getY(v));   // (the skirt's cloth as drawn, at the BACK where it is lowest and its cut edge — skirtTop above it is hidden — is ragged: the belt sits over that edge, so the sash hangs from the belt with no skin between)
+    if (sky.length > 8) { const yLo = Math.max(...sky) - 0.035, yHi = yLo + 0.075;
+      const at = y => { let b = 0; while (b < NB - 2 && bands[b + 1].y < y) b++; const A = bands[b], B = bands[b + 1], t = clamp((y - A.y) / Math.max(1e-6, B.y - A.y), 0, 1), [kx, kz] = prof(clamp((y - y0) / (y1 - y0), 0, 1));
+        const S = inSash(y, A.cx + (B.cx - A.cx) * t, A.cz + (B.cz - A.cz) * t, (A.rx + (B.rx - A.rx) * t) * kx, (A.rz + (B.rz - A.rz) * t) * kz); return { c: new THREE.Vector3(S.cx, y, S.cz), rx: S.rx, rz: S.rz }; };   // the skin's own ring at that height
+      uvNow = LOOK_WHITE_UV; matNow = 1; const out = 1.045, pad = 0.006, lo = at(yLo), hi = at(yHi), w = [[pelvis, 0.5], [chest, 0.5]];
+      const iL = ring(lo.c, U, V, lo.rx, lo.rz, w, 3), oL = ring(lo.c, U, V, lo.rx * out + pad, lo.rz * out + pad, w, 3), oH = ring(hi.c, U, V, hi.rx * out + pad, hi.rz * out + pad, w, 3), iH = ring(hi.c, U, V, hi.rx, hi.rz, w, 3);
+      stitch(iL, oL, 3); stitch(oL, oH, 3); stitch(oH, iH, 3);   // the underside, the face, the top: a closed band a finger thick, faces out (stitch winds a→b outward, so inner→outer faces down and outer→inner faces up)
+      uvNow = uvc; matNow = 0; } }
   // THE ARMS: a tube down the bones, shoulder → elbow → hand, sized band by band from the sleeve and the vambrace
   const arm = (side, cl) => { const A = bone(M['shoulder' + side]), B = bone(M['elbow' + side]), C = bone(M['hand' + side]), jS = joint(M['shoulder' + side]), jE = joint(M['elbow' + side]), jH = joint(M['hand' + side]);
     const near = (p, seg) => { const [S, E] = seg, d = E.clone().sub(S), L = d.length(); d.normalize(); const t = Math.max(0, Math.min(1, p.clone().sub(S).dot(d) / L)); return { t, r: p.clone().sub(S).sub(d.multiplyScalar(t * L)).length() }; };
@@ -1238,8 +1258,8 @@ function modelBodyBuild(R) {
   arm('L', 1); arm('R', 2);
   const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); geo.setAttribute('uv', new THREE.Float32BufferAttribute(UV, 2));
   geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(SI, 4)); geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(SW, 4)); geo.setIndex(IDX); geo.computeVertexNormals();
-  geo.setAttribute('kind', new THREE.BufferAttribute(new Float32Array(P.length / 3).fill(MODEL_KIND.skin), 1));
-  const pieces = { classes: ['torso', 'armL', 'armR'], mats: ['skin'], tri: TRI, vclass: VC, vmat: new Array(P.length / 3).fill(0), naked: true };
+  geo.setAttribute('kind', new THREE.BufferAttribute(Float32Array.from(VM, m => m ? MODEL_KIND.leather : MODEL_KIND.skin), 1));
+  const pieces = { classes: ['torso', 'armL', 'armR', 'belt'], mats: ['skin', 'leather'], tri: TRI, vclass: VC, vmat: VM, naked: true };
   return (R.body = { geo, pieces });
 }
 // build a fresh skeleton + skinned meshes for one body
@@ -1424,8 +1444,8 @@ const LOOK_HAIR_CUT = { 1: { pad: 0.009, top: 0.004 }, 2: { pad: 0.014, top: 0.0
 const LOOK_ARMOR = {
   none:           { helm: 0.08, pauldron: 0,    elbow: 0,    knee: 0,    cloak: 0.12, plume: 0,    straps: 0.3, pouch: 0.5, cloth: 0.5,  base: 'shirt',   paint: { skirt: 'breeches', greaves: 'breeches', boot: 'leather', helmet: 'iron' }, clothOf: { skirt: 'breeches' } },   // a linen shirt and wool breeches
   gambeson:       { helm: 0.15, pauldron: 0,    elbow: 0.3,  knee: 0.15, cloak: 0.25, plume: 0,    straps: 0.6, pouch: 0.5, cloth: 0.35, base: 'leather', paint: { cuirass: 'jack', skirt: 'jack', boot: 'leather', helmet: 'iron' } },
-  wolf_pelt:      { helm: 0.02, pauldron: 1,    elbow: 0,    knee: 0,    cloak: 1,    plume: 0,    straps: 0.7, pouch: 0.6, cloth: 0,    base: 'fur',     bare: true, naked: true, paint: { cuirass: 'skin', vambrace: 'leather', pauldron: 'furDark', boot: 'leather', helmet: 'iron' }, clothOf: { sleeve: 'skin', skirt: 'fur' }, cloakC: 'furDark' },   // bare-chested under the pelt (naked: the body under the armour shows, cuirass and sleeves dropped)
-  berserker:      { helm: 0.02, pauldron: 1,    elbow: 0,    knee: 0,    cloak: 0.35, plume: 0,    straps: 1,   pouch: 0.7, cloth: 0.1,  base: 'breeches', bare: true, naked: true, paint: { cuirass: 'skin', vambrace: 'ironEngraved', pauldron: 'furGrey', boot: 'leather', helmet: 'iron', straps: 'leather', pouch: 'leather' }, clothOf: { sleeve: 'skin', skirt: 'sash' }, cloakC: 'furGrey' },   // the northern raider (2026-09-16): a grey wolf mantle on the shoulders, a bare inked chest, steel bracers, a sash in the team dye, wool breeches
+  wolf_pelt:      { helm: 0.02, pauldron: 1,    elbow: 0,    knee: 0,    cloak: 1,    plume: 0,    straps: 0.7, pouch: 0,   cloth: 0,    base: 'fur',     bare: true, naked: true, paint: { cuirass: 'skin', vambrace: 'leather', pauldron: 'furDark', boot: 'leather', helmet: 'iron' }, clothOf: { sleeve: 'skin', skirt: 'fur' }, cloakC: 'furDark' },   // bare-chested under the pelt (naked: the body under the armour shows, cuirass and sleeves dropped)
+  berserker:      { helm: 0.02, pauldron: 1,    elbow: 0,    knee: 0,    cloak: 0.35, plume: 0,    straps: 1,   pouch: 0,   cloth: 0.1,  base: 'breeches', bare: true, naked: true, paint: { cuirass: 'skin', vambrace: 'ironEngraved', pauldron: 'furGrey', boot: 'leather', helmet: 'iron', straps: 'leather', pouch: 'leather' }, clothOf: { sleeve: 'skin', skirt: 'sash' }, cloakC: 'furGrey' },   // the northern raider (2026-09-16): a grey wolf mantle on the shoulders, a bare inked chest, steel bracers, a sash in the team dye, wool breeches
   leather:        { helm: 0.25, pauldron: 0.2,  elbow: 0.5,  knee: 0.3,  cloak: 0.35, plume: 0,    straps: 0.6, pouch: 0.5, cloth: 0.35, base: 'leather', paint: { helmet: 'iron' } },
   brigandine:     { helm: 0.5,  pauldron: 0.35, elbow: 0.7,  knee: 0.5,  cloak: 0.4,  plume: 0.1,  straps: 0.6, pouch: 0.5, cloth: 0.15, base: 0x606268,  paint: { cuirass: 0xa03030, skirt: 'leather' } },
   mail:           { helm: 0.6,  pauldron: 0.4,  elbow: 0.8,  knee: 0.6,  cloak: 0.5,  plume: 0.15, straps: 0.6, pouch: 0.5, cloth: 0.1,  base: 0xa8acb4,  paint: { helmet: 0xb4b8c0 } },
@@ -1466,7 +1486,7 @@ function lookRoll(name, arch, gear, pal, o = {}) {
   // the kit
   look.helmet = !!(gear && (gear.helm || gear.plume));                                              // (a bought plume needs a helm to sit on)
   for (const k of ['pauldron', 'elbow', 'knee', 'straps', 'pouch']) if (r() >= p(k)) look.hide.push(k); if (!look.helmet) look.hide.push('helmet');
-  look.hide.push('skirtTop'); if (O.naked) { look.hide.push('cuirass', 'sleeve'); look.naked = true; }   // bare to the waist: the body under the armour shows (instanceModelRig's 'naked' mesh)
+  look.hide.push('skirtTop'); if (O.naked) { look.hide.push('cuirass', 'sleeve', 'pouch'); look.naked = true; }   // bare to the waist: the body under the armour shows (instanceModelRig's 'naked' mesh); the belt stays on, the belt pouches come off (two leather blocks that only read tucked under a back plate — a box on a bare back otherwise)
   look.cloak = o.full ? true : r() < p('cloak'); look.plume = o.full || (r() < p('plume')) || !!(gear && gear.plume);
   look.shield = !A.shield && !o.full ? 'none' : (gear && gear.shield === 'heater_shield') ? 'heater' : 'round'; look.round = Math.floor(r() * 4);
   // the paint: cloth = the team dye (dulled on a poor man), steel per piece, the named colours resolved here

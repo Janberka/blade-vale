@@ -1211,11 +1211,11 @@ function modelBodyBuild(R) {
   const prof = h => { const waist = 1 - 0.08 * Math.max(0, 1 - Math.abs(h - 0.25) / 0.2), pecs = 1 + 0.05 * Math.max(0, 1 - Math.abs(h - 0.68) / 0.22), shoulders = 1 + 0.34 * Math.max(0, (h - 0.55) / 0.45); return [0.90 * waist * shoulders, 0.87 * pecs]; };   // the torso's profile over the plate's cross-section, by height 0..1: a man is slimmer than his plate (the padding under it, the plate's own stand-off), with a waist; the cuirass narrows under the pauldrons, a man's shoulders don't
   // THE CHEST, by vertex (SEG 20: i 5 is the front midline, 15 the back; 1..9 the front half): the midline set in for the sternum, the belly's
   // line and the spine; the PECS a plate of muscle either side of the sternum from the crease under them up toward the collar bone, fullest at
-  // two thirds of the torso's height, the sternum sinking between them; the crease under the pecs a ring set in across the front
+  // three quarters of the torso's height (just under the collar bone), the sternum sinking between them; the crease under the pecs a ring set in across the front
   const chestShape = h => i => { let q = 1; const F = SEG / 4, mid = i === F || i === SEG - F, pec = Math.abs(i - F) === 1 || Math.abs(i - F) === 2, edge = Math.abs(i - F) === 3, front = Math.abs(i - F) <= 3;
     if (h > 0.06 && h < 0.88 && mid) q *= 0.965;
-    const pk = Math.max(0, 1 - Math.abs(h - 0.66) / 0.17); if (pec) q *= 1 + 0.075 * pk; else if (edge) q *= 1 + 0.03 * pk; else if (i === F) q *= 1 - 0.025 * pk;
-    const cr = Math.max(0, 1 - Math.abs(h - 0.47) / 0.06); if (front) q *= 1 - 0.04 * cr;
+    const pk = Math.max(0, 1 - Math.abs(h - 0.76) / 0.16); if (pec) q *= 1 + 0.075 * pk; else if (edge) q *= 1 + 0.03 * pk; else if (i === F) q *= 1 - 0.025 * pk;
+    const cr = Math.max(0, 1 - Math.abs(h - 0.59) / 0.06); if (front) q *= 1 - 0.04 * cr;
     return q; };
   // the rings: NR of them up the torso, the plate's bands interpolated between (bandAt) — denser than the bands so the chest's shape has rings to sit on
   const NR = 22, bandAt = y => { let b = 0; while (b < NB - 2 && bands[b + 1].y < y) b++; const A = bands[b], B = bands[b + 1], t = clamp((y - A.y) / Math.max(1e-6, B.y - A.y), 0, 1), [kx, kz] = prof(clamp((y - y0) / (y1 - y0), 0, 1));
@@ -1531,7 +1531,7 @@ function lookBodyColour(c, look, cls, x, y, z, B) {
   if (cls === 'torso') { const h = (y - B.y0) / Math.max(0.01, B.y1 - B.y0); let k = 1;
     const tan = clamp((y - (B.y1 - 0.05)) / Math.max(0.01, B.neckY - (B.y1 - 0.05)), 0, 1); if (tan > 0) c.lerp(new THREE.Color(look.skin), tan);
     if (Math.abs(x) < 0.02 && h > 0.05 && h < 0.86) k *= z > 0 ? 0.88 : 0.9;
-    if (z > 0 && Math.abs(h - 0.47) < 0.05) k *= 0.92;
+    if (z > 0 && Math.abs(h - 0.59) < 0.05) k *= 0.92;
     if (h < 0.12) k *= 0.95;
     if (k !== 1) c.multiplyScalar(k); }
   return c;

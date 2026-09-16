@@ -136,7 +136,7 @@ ELLIPSE, 0.84 across by 1.04 front-to-back ("from front and back the arms look s
 the front and the back see, the side keeps the biceps' depth.
 THE CHEST ("add some chest muscle detail"): the torso is lathed on 22 rings now (the plate's 12 bands interpolated, `bandAt`), and
 `chestShape` moves each ring's vertices by their place round it — the pecs a plate of muscle either side of the sternum (the two
-vertices next to the midline out 7.5 %, the next 3 %), fullest at two thirds of the torso's height and fading toward the crease
+vertices next to the midline out 7.5 %, the next 3 %), fullest at three quarters of the torso's height (just under the collar bone; "too low" at two thirds) and fading toward the crease
 and the collar bone, the sternum sinking between them, a crease under them (the front set in 4 %) that the paint darkens too.
 
 ## The surface pass (2026-09-16, "our chars look too low poly")

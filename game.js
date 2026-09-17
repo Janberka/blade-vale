@@ -1212,17 +1212,17 @@ float triGray(sampler2D t, vec3 p, vec3 wn, float s) { vec3 w = triW(wn); return
 };
 function modelMaterial(R, o = {}) {                          // the figure's material for a context: Phong on the low tier / thumbnails, the surface pass otherwise; cached per rig unless it carries its own colour
   const ctx = o.ctx || 'main', det = modelDetailOn(), col = o.color != null ? o.color : 0xffffff, noMap = o.map === false;
-  const key = [det ? 'd' : 'p', o.vc ? 'vc' : '', o.skinning ? 'sk' : '', noMap ? 'nomap' : '', ctx].join('|');
+  const key = [det ? 'd' : 'p', o.vc ? 'vc' : '', o.skinning ? 'sk' : '', noMap ? 'nomap' : '', o.tex ? o.tex.name : '', ctx].join('|');
   R.mats = R.mats || {}; if (o.color == null && R.mats[key]) return R.mats[key];
   let m;
-  if (!det) { m = new THREE.MeshPhongMaterial(noMap ? { color: col, shininess: 4, specular: 0x050505, skinning: !!o.skinning } : { map: R.tex, color: col, shininess: 6, specular: 0x111111, skinning: !!o.skinning, vertexColors: !!o.vc });
+  if (!det) { m = new THREE.MeshPhongMaterial(noMap ? { color: col, shininess: 4, specular: 0x050505, skinning: !!o.skinning } : { map: o.tex || R.tex, color: col, shininess: 6, specular: 0x111111, skinning: !!o.skinning, vertexColors: !!o.vc });
     if (!noMap && o.vc) { const T = modelDetailTextures(), G = MODEL_DETAIL_GLSL;   // THE INK on the low tier too: the plain material takes just the kind attribute and the mask — no normal maps, no sky — so a tattooed man is tattooed on a phone ("the ink does literally nothing visually")
       m.onBeforeCompile = sh => { Object.assign(sh.uniforms, { tInk: { value: T.inkT }, tKnot: { value: T.knotT }, uInkTile: MODEL_DETAIL_U.uInkTile });
         sh.vertexShader = sh.vertexShader.replace('#include <common>', G.vertHead).replace('#include <defaultnormal_vertex>', G.vertNormal).replace('#include <worldpos_vertex>', G.vertPos);
         sh.fragmentShader = sh.fragmentShader.replace('#include <common>', G.fragHeadInk).replace('#include <map_fragment>', G.fragMapInk); };
       m.customProgramCacheKey = () => 'bv-ink'; } }
   else { const T = modelDetailTextures(); modelEnvFor(ctx);
-    m = new THREE.MeshStandardMaterial({ map: noMap ? null : R.tex, color: col, metalness: 1, roughness: 1, skinning: !!o.skinning, vertexColors: !!o.vc, envMapIntensity: MODEL_DETAIL.envI });
+    m = new THREE.MeshStandardMaterial({ map: noMap ? null : (o.tex || R.tex), color: col, metalness: 1, roughness: 1, skinning: !!o.skinning, vertexColors: !!o.vc, envMapIntensity: MODEL_DETAIL.envI });
     m.onBeforeCompile = sh => { const G = MODEL_DETAIL_GLSL; Object.assign(sh.uniforms, MODEL_DETAIL_U, { tPlateN: { value: T.plateN }, tMailN: { value: T.mailN }, tClothN: { value: T.clothN }, tPlateR: { value: T.plateR }, tMailC: { value: T.mailC }, tSkinN: { value: T.skinN }, tSkinR: { value: T.skinR }, tInk: { value: T.inkT }, tKnot: { value: T.knotT } });
       sh.vertexShader = sh.vertexShader.replace('#include <common>', G.vertHead).replace('#include <defaultnormal_vertex>', G.vertNormal).replace('#include <worldpos_vertex>', G.vertPos);
       sh.fragmentShader = sh.fragmentShader.replace('#include <common>', G.fragHead).replace('#include <normal_fragment_maps>', G.fragNormal).replace('#include <roughnessmap_fragment>', G.fragRough).replace('#include <metalnessmap_fragment>', G.fragMetal).replace('#include <map_fragment>', G.fragMap).replace('#include <lights_fragment_end>', G.fragIbl); };
@@ -1242,21 +1242,23 @@ async function loadModelRig(name) {
   const bin = await (await fetch(base + g.buffers[0].uri)).arrayBuffer();
   const CT = { 5121: Uint8Array, 5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array }, NC = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT4: 16 };
   const acc = i => { const a = g.accessors[i], bv = g.bufferViews[a.bufferView], T = CT[a.componentType], n = NC[a.type]; return new T(bin, (bv.byteOffset || 0) + (a.byteOffset || 0), a.count * n); };
-  const tex = new THREE.TextureLoader().load(base + g.images[0].uri); tex.encoding = THREE.sRGBEncoding; tex.flipY = false;
+  const texs = g.images.map((im, i) => { const t = new THREE.TextureLoader().load(base + im.uri); t.encoding = THREE.sRGBEncoding; t.flipY = false; t.name = name + ':' + i; return t; });   // (one per image: the base body's painted atlas, the kit's palette — a mesh takes its material's)
+  const texOf = p => { const mt = g.materials && g.materials[p.material || 0], bc = mt && mt.pbrMetallicRoughness && mt.pbrMetallicRoughness.baseColorTexture; return bc ? texs[g.textures[bc.index].source] : texs[0]; };
+  if (spec.skull) Object.assign(LOOK_SKULL, spec.skull); if (spec.hairline) Object.assign(LOOK_HAIRLINE, spec.hairline); if (spec.face) Object.assign(LOOK_FACE, spec.face);   // the head's measures are the rig's (rig.json): the skull's centre and crown, the hairlines, where the ears and the lips are
   const meshes = g.nodes.filter(n => n.mesh != null).map(n => { const p = g.meshes[n.mesh].primitives[0], geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(acc(p.attributes.POSITION), 3));
     if (p.attributes.NORMAL != null) geo.setAttribute('normal', new THREE.BufferAttribute(acc(p.attributes.NORMAL), 3)); else geo.computeVertexNormals();
     if (p.attributes.TEXCOORD_0 != null) geo.setAttribute('uv', new THREE.BufferAttribute(acc(p.attributes.TEXCOORD_0), 2));
     geo.setAttribute('skinIndex', new THREE.BufferAttribute(acc(p.attributes.JOINTS_0), 4)); geo.setAttribute('skinWeight', new THREE.BufferAttribute(acc(p.attributes.WEIGHTS_0), 4));
     geo.setIndex(new THREE.BufferAttribute(acc(p.indices), 1));
-    const sk = g.skins[n.skin]; return { name: n.name, geo, joints: sk.joints, ibm: acc(sk.inverseBindMatrices) }; });
+    const sk = g.skins[n.skin]; return { name: n.name, geo, joints: sk.joints, ibm: acc(sk.inverseBindMatrices), tex: texOf(p) }; });
   // LOOKS: pieces.json (tools/realmesh/warrior_pieces.py) names every triangle's armour piece and every vertex's stuff
   let pieces = null; try { const pr = await fetch(base + 'pieces.json'); if (pr.ok) pieces = await pr.json(); } catch (e) { pieces = null; }
-  if (pieces) for (const m of meshes) { const key = Object.keys(pieces).find(k => m.name.indexOf('_' + k + '_') >= 0); const pj = key && pieces[key]; if (!pj) continue; m.pieces = pj; m.short = key;
+  if (pieces) for (const m of meshes) { const key = Object.keys(pieces).find(k => m.name.indexOf('_' + k + '_') >= 0 || m.name.endsWith('_' + k)); const pj = key && pieces[key]; if (!pj) continue; m.pieces = pj; m.short = key;
     const ci = pj.mats.indexOf('cloth'), uv = m.geo.getAttribute('uv'); if (ci >= 0 && uv) { for (let v = 0; v < uv.count; v++) if (pj.vmat[v] === ci) uv.setXY(v, LOOK_WHITE_UV[0], LOOK_WHITE_UV[1]); uv.needsUpdate = true; }   // (the blue cloth → a white cell: the vertex colour IS the dye)
-    if (key === 'body') { lookHeadRefine(m.geo, pj); lookRuggedHead(m.geo, pj);   // (the face: refined one level, then roughened; the ink uv below covers the new vertices too)
+    if (key === 'body') { if (!pj.sculpted) { lookHeadRefine(m.geo, pj); lookRuggedHead(m.geo, pj); }   // (a sculpted head — pieces.json `sculpted`, the base — keeps its own face)   // (the face: refined one level, then roughened; the ink uv below covers the new vertices too)
       const hp = m.geo.getAttribute('position'), iuv = new Float32Array(hp.count * 2), HC = new Set(['head', 'hair', 'beard', 'brow', 'socket', 'scarL', 'scarR']);   // THE FACE'S INK UV: bearing round the skull (the front at the panel's middle) × height chin → crown, the atlas's last quarter
-      for (let v = 0; v < hp.count; v++) { if (!HC.has(pj.classes[pj.vclass[v]])) continue; const x = hp.getX(v), y = hp.getY(v), z = hp.getZ(v) - LOOK_SKULL.zc; iuv[v * 2] = 0.8 + 0.2 * (0.5 + Math.atan2(x, z) / (Math.PI * 2)); iuv[v * 2 + 1] = clamp((y - 1.45) / 0.40, 0, 1); }
+      for (let v = 0; v < hp.count; v++) { if (!HC.has(pj.classes[pj.vclass[v]])) continue; const x = hp.getX(v), y = hp.getY(v), z = hp.getZ(v) - LOOK_SKULL.zc; iuv[v * 2] = 0.8 + 0.2 * (0.5 + Math.atan2(x, z) / (Math.PI * 2)); iuv[v * 2 + 1] = clamp((y - LOOK_SKULL.chin) / (LOOK_SKULL.top + 0.02 - LOOK_SKULL.chin), 0, 1); }
       m.geo.setAttribute('inkUv', new THREE.BufferAttribute(iuv, 2)); }
     if (key === 'armor') { const sk = pj.classes.indexOf('skirt'), sl = pj.classes.indexOf('sleeve'), cl = pj.mats.indexOf('cloth'), ps = m.geo.getAttribute('position'), idx = m.geo.index.array;   // the bake files the cloth showing at the ELBOWS under "skirt" (one connected cloth component; the arms hang at waist height in the bind pose) — only the flank tells: out past |x| 0.24 it is the arm's
       if (sk >= 0 && sl >= 0 && cl >= 0) { for (let v = 0; v < ps.count; v++) if (pj.vclass[v] === sk && pj.vmat[v] === cl && Math.abs(ps.getX(v)) >= 0.24) pj.vclass[v] = sl;
@@ -1264,10 +1266,10 @@ async function loadModelRig(name) {
         const st = pj.classes.push('skirtTop') - 1;        // and the cloth above the belt (y > 0.99) — under the cuirass before, it would peek over the belt of a bare man
         for (let v = 0; v < ps.count; v++) if (pj.vclass[v] === sk && pj.vmat[v] === cl && ps.getY(v) > 0.99) pj.vclass[v] = st;
         for (let t = 0; t < pj.tri.length; t++) if (pj.tri[t] === sk && [0, 1, 2].every(k => pj.vclass[idx[t * 3 + k]] === st)) pj.tri[t] = st; } } }
-  if (pieces) { const body = meshes.find(m => m.pieces && m.pieces.classes.indexOf('hair') >= 0); if (body && lookHelmTuck(body.geo.getAttribute('position'), body.pieces, { meshes })) body.geo.computeVertexNormals(); }   // the jaw and the temples inside the helm's shell (lookHelmTuck)
+  if (pieces) { const body = meshes.find(m => m.pieces && m.pieces.classes.indexOf('hair') >= 0); if (body && !body.pieces.sculpted && lookHelmTuck(body.geo.getAttribute('position'), body.pieces, { meshes })) body.geo.computeVertexNormals(); }   // the jaw and the temples inside the helm's shell (lookHelmTuck)
   for (const m of meshes) { modelKindAttr(m); modelSmoothNormals(m.geo, MODEL_DETAIL.crease); if (m.pieces && m.pieces.classes.indexOf('hair') >= 0) lookFaceNormals(m.geo, m.pieces); }   // the surface pass: what each vertex is made of, and normals rounded under a crease limit (a face under none of it)
   if (modelDetailOn()) MODEL_DETAIL_LIVE = true;           // (so the pit's hour builds the sky the steel reflects before the first man is dressed)
-  const entry = { name, spec, g, meshes, tex, pieces }; await Promise.all(Object.keys(HELM_MODELS).map(k => loadHelmModel(entry, k)));   // the helms of their own (the Corinthian) load with him
+  const kit = meshes.find(m => spec.meshes && m.name === spec.meshes.armor), tex = kit ? kit.tex : texs[0], entry = { name, spec, g, meshes, tex, pieces };   // (R.tex: the kit's palette — the shop's props and the old paths read it) await Promise.all(Object.keys(HELM_MODELS).map(k => loadHelmModel(entry, k)));   // the helms of their own (the Corinthian) load with him
   MODEL_RIGS.set(name, entry); return entry;
 }
 // ---------- THE BODY UNDER THE ARMOUR (2026-09-16, "we need a naked body and armours should be attached to it") ----------
@@ -1277,7 +1279,7 @@ async function loadModelRig(name) {
 // the sleeves and vambraces — skinned to the same bones, painted and inked like any other piece through its own pieces map
 // (classes torso / armL / armR, all skin). A look that goes bare (LOOK_ARMOR `naked`) drops the cuirass and sleeves and shows it.
 function modelBodyBuild(R) {
-  if (R.body !== undefined) return R.body;
+  if (R.body !== undefined) return R.body; if (R.spec.fullBody) return (R.body = null);   // (the base is a whole man already: the body under the armour is the body)
   const am = R.meshes.find(x => x.short === 'armor'), pj = am && am.pieces, hd = R.meshes.find(x => x.short === 'body'); if (!pj) return (R.body = null);
   const pos = am.geo.getAttribute('position'), names = R.g.nodes.map(n => n.name), joint = nm => am.joints.indexOf(names.indexOf(nm));
   const worldM = new Map(); am.joints.forEach((j, k) => worldM.set(j, new THREE.Matrix4().fromArray(am.ibm, k * 16).invert()));
@@ -1389,7 +1391,8 @@ function instanceModelRig(R, ctx = 'main') {
       geo = new THREE.BufferGeometry(); for (const k of ['position', 'normal', 'uv', 'skinIndex', 'skinWeight', 'kind', 'inkUv']) if (m.geo.getAttribute(k)) geo.setAttribute(k, m.geo.getAttribute(k));
       const i0 = m.geo.index.array; geo.setIndex(new THREE.BufferAttribute(new i0.constructor(i0), 1));
       const nv = m.geo.getAttribute('position').count; geo.setAttribute('color', new THREE.BufferAttribute(new Uint8Array(nv * 3).fill(255), 3, true)); }
-    const sm = new THREE.SkinnedMesh(geo, own ? matVC : mat); sm.name = m.name; sm.userData.mm = { ctx, skinning: true, vc: own }; sm.userData.mmR = R.name; sm.frustumCulled = false; sm.castShadow = true; root.add(sm); if (own) { sm.userData.pieces = m.pieces; sm.userData.geo0 = m.geo; }
+    const mm = { ctx, skinning: true, vc: own, tex: m.tex !== R.tex ? m.tex : undefined };   // (the base body: its painted atlas; the kit: the palette)
+    const sm = new THREE.SkinnedMesh(geo, mm.tex ? modelMaterial(R, mm) : (own ? matVC : mat)); sm.name = m.name; sm.userData.mm = mm; sm.userData.mmR = R.name; sm.frustumCulled = false; sm.castShadow = true; root.add(sm); if (own) { sm.userData.pieces = m.pieces; sm.userData.geo0 = m.geo; }
     const bones = m.joints.map(j => nodes[j]), inv = []; for (let i = 0; i < bones.length; i++) inv.push(new THREE.Matrix4().fromArray(m.ibm, i * 16));
     sm.bind(new THREE.Skeleton(bones, inv), new THREE.Matrix4()); skinned[m.name] = sm; }
   const NB = modelBodyBuild(R), am = R.meshes.find(x => x.short === 'armor');   // THE BODY UNDER THE ARMOUR: this man's own copy, bound to the armour's skeleton, shown when his look goes bare (lookApply)
@@ -1625,7 +1628,8 @@ const LOOK_HEAD_CLASSES = new Set(['head', 'hair', 'beard', 'brow', 'socket', 's
 // THE HAIR is real geometry: a cap cast onto the skull (lookHairGeo) — paint alone smeared every cut down the forehead,
 // the head being a few big triangles (a painted vertex at the hairline bleeds to the brow). The hairline is a curve by
 // bearing round the skull's axis: 0 the brow, 90 over the ear, 180 the nape (mirrored); model units, bind pose.
-const LOOK_SKULL = { yc: 1.69, zc: -0.005, top: 1.828 };
+const LOOK_SKULL = { yc: 1.69, zc: -0.005, top: 1.828, chin: 1.45, coverY: 1.72 };   // (the warrior's; a rig's own `skull` in rig.json overrides these at load — the base's head sits higher)
+const LOOK_FACE = { earY: 1.615, earZ: 0.035, chinX: 0.05, lipY: 1.585, lipZ: 0.1 };   // the beard's cuts: in front of the ears, the chin's width for a goatee, the upper lip for a moustache (rig.json `face` overrides)
 const LOOK_HAIRLINE = {
   1: [[0, 1.772], [30, 1.768], [50, 1.745], [65, 1.728], [90, 1.722], [120, 1.712], [150, 1.678], [180, 1.652]],   // short crop: high at the brow, down past the temple, over the ear, to the nape
   2: [[0, 1.782], [40, 1.778], [90, 1.765], [180, 1.745]],                                                          // crown: a thick mop on top, the sides shaven
@@ -1707,7 +1711,7 @@ function lookRoll(name, arch, gear, pal, o = {}) {
 function lookFaceColour(look, cls, mt, x, y, z, scalp, brow) {
   const bs = look.beardStyle | 0;
   if (look.hair != null && cls === 'hair' && scalp) return look.hair;   // (scalp: this vertex is well under the cap — lookScalpMask; brow: well inside the brow — lookBrowMask)
-  if (cls === 'beard' && look.beard != null && !(y >= 1.615 && z < 0.035)) { const on = bs === 2 || bs === 1 || (bs === 3 && Math.abs(x) < 0.05) || (bs === 4 && y > 1.585 && z > 0.1); if (on) return bs === 1 ? look.stubble : look.beard; }   // (the baked sideburn band took the ear's root and lobe — pieces.json still carries that; the cut here keeps the beard on the cheek, in front of the ear: "it looks like it's coming out of ears")
+  if (cls === 'beard' && look.beard != null && !(y >= LOOK_FACE.earY && z < LOOK_FACE.earZ)) { const on = bs === 2 || bs === 1 || (bs === 3 && Math.abs(x) < LOOK_FACE.chinX) || (bs === 4 && y > LOOK_FACE.lipY && z > LOOK_FACE.lipZ); if (on) return bs === 1 ? look.stubble : look.beard; }   // (the baked sideburn band took the ear's root and lobe — pieces.json still carries that; the cut here keeps the beard on the cheek, in front of the ear: "it looks like it's coming out of ears")
   if (cls === 'brow') return brow ? look.brow : look.skin; if (cls === 'socket') return look.socket; if (cls === 'scarL' || cls === 'scarR') return look.scar === cls ? look.scarC : look.skin; if (cls === 'eye') return 0xece8e2;
   if (mt === 'leather') return look.lip;                     // (the palette's lip/brow brown: no painted lips)
   return look.skin;
@@ -1759,15 +1763,15 @@ function lookApply(L, look) {
       for (let v = 0; v < nv; v++) { if (pj.vclass[v] === cuI && pj.vmat[v] === stI) uv.setXY(v, LOOK_WHITE_UV[0], LOOK_WHITE_UV[1]); else uv.setXY(v, uv0.getX(v), uv0.getY(v)); } uv.needsUpdate = true; }
     else if (sm.userData.ownUv) { sm.geometry.setAttribute('uv', uv0); sm.userData.ownUv = false; }
     // skin vertices carry a per-vertex colour, so the palette's skin (~#ffdcb4) × tint: the tint is chosen so tint × skin ≈ the tone wanted
-    if (skinTint) lookFaceApply(sm, look, pj);                 // (the bones: this body's own head positions)
+    if (skinTint && !pj.sculpted) lookFaceApply(sm, look, pj);                 // (the bones: this body's own head positions)
     const pos = sm.userData.geo0.getAttribute('position'), scalp = skinTint ? lookScalpMask(sm, look, pj) : null, brow = skinTint ? lookBrowMask(sm, pj) : null;
-    for (let v = 0; v < nv; v++) { const cls = pj.classes[pj.vclass[v]], mt = pj.mats[pj.vmat[v]]; if (pj.naked && mt === 'skin') lookBodyColour(c, look, cls, pos.getX(v), pos.getY(v), pos.getZ(v), pj.body); else c.setHex(skinTint ? lookFaceColour(look, cls, mt, pos.getX(v), pos.getY(v), pos.getZ(v), !!(scalp && scalp[v]), !!(brow && brow[v])) : lookColour(look, cls, mt)); if ((skinTint || pj.naked) && mt === 'skin' && cls !== 'eye') { c.r = Math.min(1, c.r / 1.0); c.g = Math.min(1, c.g / 0.86); c.b = Math.min(1, c.b / 0.70); } col.setXYZ(v, c.r * 255, c.g * 255, c.b * 255); } col.needsUpdate = true;
+    for (let v = 0; v < nv; v++) { const cls = pj.classes[pj.vclass[v]], mt = pj.mats[pj.vmat[v]]; if (pj.naked && mt === 'skin') lookBodyColour(c, look, cls, pos.getX(v), pos.getY(v), pos.getZ(v), pj.body); else c.setHex(skinTint ? lookFaceColour(look, cls, mt, pos.getX(v), pos.getY(v), pos.getZ(v), !!(scalp && scalp[v]), !!(brow && brow[v])) : lookColour(look, cls, mt)); if ((skinTint || pj.naked) && mt === 'skin' && cls !== 'eye') { const lift = pj.sculpted ? 1.16 : 1; /* (a sculpted body's painted skin averages 0.86 of the palette cell — its bright parts sit AT the cell so the paint keeps its shape — so the tone is lifted back) */ c.r = Math.min(1, c.r * lift / 1.0); c.g = Math.min(1, c.g * lift / 0.86); c.b = Math.min(1, c.b * lift / 0.70); } col.setXYZ(v, c.r * 255, c.g * 255, c.b * 255); } col.needsUpdate = true;
     const kd0 = sm.userData.geo0.getAttribute('kind');           // this body's own kinds, following the paint (lookKind)
     if (kd0 && !skinTint) { if (!sm.userData.ownKind) { sm.geometry.setAttribute('kind', kd0.clone()); sm.userData.ownKind = true; } const kd = sm.geometry.getAttribute('kind');
       for (let v = 0; v < nv; v++) kd.setX(v, lookKind(look, pj.classes[pj.vclass[v]], pj.mats[pj.vmat[v]], kd0.getX(v))); kd.needsUpdate = true; }
     if (look.ink) { const ic = new THREE.Color(look.inkC), n4 = new Float32Array(nv * 4); for (let v = 0; v < nv; v++) { n4[v * 4] = ic.r; n4[v * 4 + 1] = ic.g; n4[v * 4 + 2] = ic.b; n4[v * 4 + 3] = look.inkIdx; } sm.geometry.setAttribute('inkCol', new THREE.BufferAttribute(n4, 4)); }   // THE INK'S COLOUR AND DESIGN, per vertex (inkCol: rgb + the atlas band) — this body's own geometry, so every figure keeps its own while the material is shared
     if (kd0 && skinTint) {                                  // THE FACE AND THE HANDS take the ink too ("shapes that go through your arms and face"): the head mesh's skin — the face, the sockets, a scar, the hands, the chin where no beard grows, the scalp when it is shaved — on its own copy of the kinds
-      if (look.ink) { if (!sm.userData.ownKind) { sm.geometry.setAttribute('kind', kd0.clone()); sm.userData.ownKind = true; } const kd = sm.geometry.getAttribute('kind'), ik = lookInkKind(look, MODEL_KIND), on = new Set(['head', 'socket', 'scarL', 'scarR']); if (look.beard == null) on.add('beard'); if (!(look.hairStyle | 0)) on.add('hair');
+      if (look.ink) { if (!sm.userData.ownKind) { sm.geometry.setAttribute('kind', kd0.clone()); sm.userData.ownKind = true; } const kd = sm.geometry.getAttribute('kind'), ik = lookInkKind(look, MODEL_KIND), on = new Set(['head', 'socket', 'scarL', 'scarR']); if (look.beard == null) on.add('beard'); if (!(look.hairStyle | 0)) on.add('hair'); if (pj.sculpted) for (const c of ['torso', 'armL', 'armR', 'handL', 'handR', 'thighL', 'thighR', 'shinL', 'shinR', 'footL', 'footR']) on.add(c);   // (the base: one mesh is the whole man — chest, arms, legs take the ink too)
         for (let v = 0; v < nv; v++) kd.setX(v, pj.mats[pj.vmat[v]] === 'skin' && on.has(pj.classes[pj.vclass[v]]) ? ik : kd0.getX(v)); kd.needsUpdate = true; }
       else if (sm.userData.ownKind) { sm.geometry.setAttribute('kind', kd0); sm.userData.ownKind = false; } }
   }
@@ -1835,12 +1839,17 @@ function modelHelmPlace(L) {                                 // every render whi
   m.matrix.compose(_hm.pa, _hm.qa, _hm.sa).premultiply(_hm.A.copy(root.matrixWorld).invert()); m.matrixWorldNeedsUpdate = true;
 }
 // the pieces he goes without leave the body's own index (no draw call for them, no seam) — the only part of the look a helm toggle has to redo
+const LOOK_UNDER = { torso: 'cuirass', armL: 'sleeve', armR: 'sleeve', foreL: 'vambrace', foreR: 'vambrace', thighL: 'skirt', thighR: 'skirt', shinL: 'greaves', shinR: 'greaves', footL: 'boot', footR: 'boot' };   // a base body part → the kit piece that covers it (lookDraw)
 function lookDraw(L, look) {
   const R = MODEL_RIGS.get(L.g.userData.model), H = look.helmet && look.helmModel && R && R.helms ? R.helms[look.helmModel] : null;
   const hide = new Set(look.hide); if (look.helmet && !H) hide.add('hair');   // (under the sallet the scalp is not drawn: it lies inside the shell, and the tessellated crown would show through it; a helm of its own says what it covers — helmCoverMask)
-  for (const sm of Object.values(L.inst.skinned)) { const pj = sm.userData.pieces; if (!pj) continue;
+  // THE BASE BODY under its kit (pieces.json `sculpted`): a part is not drawn under the piece that covers it — the torso under a cuirass, the upper arms under
+  // sleeves, the forearms under vambraces, the thighs under the skirt, the shins under greaves, the feet in boots — so a stride or a swing never pushes skin
+  // through the cloth (the warrior never had a body under there). A look that drops the piece (naked: cuirass and sleeves) shows what was under it.
+  const hideBody = new Set(hide); for (const k in LOOK_UNDER) if (!hide.has(LOOK_UNDER[k])) hideBody.add(k);
+  for (const sm of Object.values(L.inst.skinned)) { const pj = sm.userData.pieces; if (!pj) continue; const hd = pj.sculpted ? hideBody : hide;
     const i0 = sm.userData.geo0.index.array, tri = pj.tri, idx = sm.geometry.index, cover = H && pj.classes.indexOf('hair') >= 0 ? helmCoverMask(R, H) : null; let n = 0;   // (the head under a helm of its own: what it covers is left out — helmCoverMask)
-    for (let t = 0; t < tri.length; t++) { if (hide.has(pj.classes[tri[t]]) || (cover && cover[t])) continue; idx.array[n] = i0[t * 3]; idx.array[n + 1] = i0[t * 3 + 1]; idx.array[n + 2] = i0[t * 3 + 2]; n += 3; }
+    for (let t = 0; t < tri.length; t++) { if (hd.has(pj.classes[tri[t]]) || (cover && cover[t])) continue; idx.array[n] = i0[t * 3]; idx.array[n + 1] = i0[t * 3 + 1]; idx.array[n + 2] = i0[t * 3 + 2]; n += 3; }
     idx.needsUpdate = true; sm.geometry.setDrawRange(0, n); }
 }
 function lookWorn(L, look) { return L.helmOff && (look.helmet || !look.hide.includes('helmet')) ? Object.assign({}, look, { helmet: false, hide: look.hide.concat('helmet') }) : look; }   // bareheaded: the sculpted helm dropped, the plume with it
@@ -1995,7 +2004,7 @@ function helmCoverMask(R, H) {
   if (!H.shell) { const hp = H.geo.getAttribute('position'), hi = H.geo.index.array, g = H.geo.groups.find(x => x.materialIndex === 0) || { start: 0, count: hi.length }, S = new Float32Array(g.count * 3);   // (the helm's own part, not the crest)
     for (let k = 0; k < g.count; k++) { const v = hi[g.start + k]; S[k * 3] = hp.getX(v); S[k * 3 + 1] = hp.getY(v); S[k * 3 + 2] = hp.getZ(v); } H.shell = S; }
   const pj = m.pieces, pos = m.geo.getAttribute('position'), idx = m.geo.index.array, C = LOOK_SKULL, under = new Uint8Array(pos.count);
-  for (let v = 0; v < pos.count; v++) { const cls = pj.classes[pj.vclass[v]]; if (!LOOK_HEAD_CLASSES.has(cls) || (cls !== 'hair' && pos.getY(v) < HELM_COVER_Y)) continue; const dx = pos.getX(v), dy = pos.getY(v) - C.yc, dz = pos.getZ(v) - C.zc, Ln = Math.hypot(dx, dy, dz) || 1;
+  for (let v = 0; v < pos.count; v++) { const cls = pj.classes[pj.vclass[v]]; if (!LOOK_HEAD_CLASSES.has(cls) || (cls !== 'hair' && pos.getY(v) < (LOOK_SKULL.coverY || HELM_COVER_Y))) continue; const dx = pos.getX(v), dy = pos.getY(v) - C.yc, dz = pos.getZ(v) - C.zc, Ln = Math.hypot(dx, dy, dz) || 1;
     const t = lookSkullCast(H.shell, 0, C.yc, C.zc, dx / Ln, dy / Ln, dz / Ln); if (t > 0 && t >= Ln - HELM_COVER_TOL) { under[v] = 1; continue; }
     if (dz > 0) { const tf = lookSkullCast(H.shell, dx, pos.getY(v), C.zc, 0, 0, 1); if (tf > 0 && tf >= dz - 0.006) under[v] = 1; } }
   const cover = new Uint8Array(pj.tri.length); for (let t = 0; t < pj.tri.length; t++) if (under[idx[t * 3]] && under[idx[t * 3 + 1]] && under[idx[t * 3 + 2]]) cover[t] = 1;
@@ -2092,8 +2101,8 @@ function lookRoundPaint(col, pt, look) {
 }
 BV.look = { roll: lookRoll, apply: lookApply, live: () => MODEL_LIVE.map(L => ({ name: L.P.lookName, arch: L.P.lookArch, full: !!L.P.lookFull, shield: L.shieldKind, look: L.look && { kind: L.look.kind, hide: L.look.hide, helmet: L.look.helmet, helmModel: L.look.helmModel, cloak: L.look.cloak, plume: L.look.plume, hair: L.look.hair, beard: L.look.beard, skin: L.look.skin, hairStyle: L.look.hairStyle, beardStyle: L.look.beardStyle, faceShape: L.look.faceShape, hairMesh: !!(L.mHair && L.mHair.visible) } })) };   // (test: every live figure's look)
 const MODEL_ON = !/[?&]plastic\b/.test(location.search);   // the warrior is the base soldier; ?plastic brings the plastic figures back
-const MODEL_NAME = 'warrior';
-BV.modelLoad = MODEL_ON ? loadModelRig(MODEL_NAME).then(() => { BV.modelReady = true; console.log('[model] warrior ready'); }, e => console.error('[model] load failed', e)) : Promise.resolve();   // (the home / market figure waits on this — the plastic placeholder is never shown)
+const MODEL_NAME = 'base';                                  // (2026-09-17: the base built from the Thor sculpt — assets/rigs/base, tools/realmesh/base/; the palette warrior stays in assets/rigs/warrior as the kit's source)
+BV.modelLoad = MODEL_ON ? loadModelRig(MODEL_NAME).then(() => { BV.modelReady = true; console.log('[model] ' + MODEL_NAME + ' ready'); }, e => console.error('[model] load failed', e)) : Promise.resolve();   // (the home / market figure waits on this — the plastic placeholder is never shown)
 
 // the switch: ?real (or localStorage bv-real) dresses arena teams in the real figures — AZURE knights, CRIMSON centurions, VERDANT hoplites…
 const REAL_ON = /[?&]real\b/.test(location.search);   // opt-in: ?real dresses the arena in the scanned figures (CHARACTER_EXPERIMENTS.md); the Vale knights are the default

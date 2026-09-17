@@ -1,0 +1,74 @@
+<!doctype html><meta charset=utf-8><title>base model</title>
+<style>body{margin:0;background:#2a2d33;font:12px monospace;color:#ddd}canvas{display:block}#ui{position:fixed;left:8px;top:8px;background:#0008;padding:6px;max-height:95vh;overflow:auto}#ui label{display:block}#ui input[type=range]{width:120px}</style>
+<body><div id=ui></div>
+<script src="three.min.js"></script>
+<script>
+// a tiny skinned-glTF viewer (bind pose from the inverse bind matrices, like the game's instanceModelRig)
+const q = new URLSearchParams(location.search);
+const W = innerWidth, H = innerHeight;
+const r = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true }); r.setSize(W, H); r.setPixelRatio(1); r.outputEncoding = THREE.sRGBEncoding; document.body.appendChild(r.domElement);
+const s = new THREE.Scene(); s.background = new THREE.Color(0x2a2d33);
+const c = new THREE.PerspectiveCamera(30, W / H, 0.01, 100);
+let az = (+q.get('az') || 20) * Math.PI / 180, el = (+q.get('el') || 5) * Math.PI / 180, dist = +q.get('d') || 4.2, cy = q.get('cy') != null ? +q.get('cy') : 1.0, cx = 0;
+function cam() { c.position.set(cx + Math.sin(az) * Math.cos(el) * dist, cy + Math.sin(el) * dist, Math.cos(az) * Math.cos(el) * dist); c.lookAt(cx, cy, 0); }
+s.add(new THREE.HemisphereLight(0xffffff, 0x445566, 0.9)); const dl = new THREE.DirectionalLight(0xffffff, 0.9); dl.position.set(2, 4, 3); s.add(dl); const dl2 = new THREE.DirectionalLight(0xffeedd, 0.35); dl2.position.set(-3, 2, -2); s.add(dl2);
+s.add(new THREE.GridHelper(4, 16, 0x555, 0x444));
+const ui = document.getElementById('ui'); const MODELS = {};
+async function loadGltf(dir, o = {}) {
+  const g = await (await fetch(dir + '/scene.gltf?' + Date.now())).json(); const bin = await (await fetch(dir + '/' + g.buffers[0].uri + '?' + Date.now())).arrayBuffer();
+  const CT = { 5121: Uint8Array, 5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array }, NC = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT4: 16 };
+  const acc = i => { const a = g.accessors[i], bv = g.bufferViews[a.bufferView], T = CT[a.componentType], n = NC[a.type]; return new T(bin, (bv.byteOffset || 0) + (a.byteOffset || 0), a.count * n); };
+  const texs = (g.images || []).map(im => { const t = new THREE.TextureLoader().load(dir + '/' + im.uri); t.flipY = false; return t; });
+  const mats = (g.materials || []).map(m => { const p = m.pbrMetallicRoughness || {}; const mm = new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0, skinning: true, side: m.doubleSided ? THREE.DoubleSide : THREE.FrontSide });
+    if (p.baseColorTexture) { mm.map = texs[g.textures[p.baseColorTexture.index].source]; mm.map.encoding = THREE.sRGBEncoding; }
+    if (m.normalTexture && !o.noNormal) mm.normalMap = texs[g.textures[m.normalTexture.index].source];
+    if (m.alphaMode === 'MASK') { mm.alphaTest = m.alphaCutoff || 0.5; mm.transparent = false; } mm.name = m.name; return mm; });
+  const nodes = g.nodes.map(n => { const b = new THREE.Bone(); b.name = n.name; if (n.matrix) new THREE.Matrix4().fromArray(n.matrix).decompose(b.position, b.quaternion, b.scale); return b; });
+  const parent = new Array(nodes.length).fill(-1); g.nodes.forEach((n, i) => (n.children || []).forEach(ch => { parent[ch] = i; nodes[i].add(nodes[ch]); }));
+  const root = new THREE.Group(); root.name = dir; g.nodes.forEach((n, i) => { if (parent[i] < 0 && n.mesh == null) root.add(nodes[i]); });
+  const order = []; const dfs = i => { order.push(i); (g.nodes[i].children || []).forEach(dfs); }; g.nodes.forEach((n, i) => { if (parent[i] < 0) dfs(i); });
+  const meshes = []; const worldM = new Map();
+  for (const n of g.nodes) { if (n.mesh == null) continue; const sk = g.skins[n.skin], ibm = acc(sk.inverseBindMatrices); sk.joints.forEach((j, k) => { if (!worldM.has(j)) { const m = new THREE.Matrix4().fromArray(ibm, k * 16).invert(); if (m.elements.every(Number.isFinite) && Math.abs(m.determinant()) > 1e-6) worldM.set(j, m); } }); }
+  const worldOf = new Map();
+  for (const i of order) { let wm = worldM.get(i); const pw = parent[i] >= 0 ? worldOf.get(parent[i]) : null;
+    if (!wm) { wm = pw ? pw.clone().multiply(nodes[i].matrix) : nodes[i].matrix.clone(); }   // (a bone with no bind: the file's rest offset under its parent's bind)
+    const local = pw ? pw.clone().invert().multiply(wm) : wm.clone(); local.decompose(nodes[i].position, nodes[i].quaternion, nodes[i].scale); nodes[i].updateMatrix(); worldOf.set(i, wm.clone()); }
+  for (const n of g.nodes) { if (n.mesh == null) continue; const p = g.meshes[n.mesh].primitives[0], geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(acc(p.attributes.POSITION), 3));
+    if (p.attributes.NORMAL != null) geo.setAttribute('normal', new THREE.BufferAttribute(acc(p.attributes.NORMAL), 3)); else geo.computeVertexNormals();
+    if (p.attributes.TEXCOORD_0 != null) geo.setAttribute('uv', new THREE.BufferAttribute(acc(p.attributes.TEXCOORD_0), 2));
+    if (p.attributes.COLOR_0 != null) { const a = g.accessors[p.attributes.COLOR_0]; geo.setAttribute('color', new THREE.BufferAttribute(acc(p.attributes.COLOR_0), NC[a.type], a.componentType !== 5126)); }
+    geo.setAttribute('skinIndex', new THREE.BufferAttribute(acc(p.attributes.JOINTS_0), 4)); geo.setAttribute('skinWeight', new THREE.BufferAttribute(acc(p.attributes.WEIGHTS_0), 4)); geo.setIndex(new THREE.BufferAttribute(acc(p.indices), 1));
+    const sk = g.skins[n.skin], ibm = acc(sk.inverseBindMatrices); let mat = mats[p.material || 0] || new THREE.MeshStandardMaterial({ skinning: true, color: 0xaaaaaa }); if (geo.getAttribute('color')) { mat = mat.clone(); mat.vertexColors = true; }
+    const sm = new THREE.SkinnedMesh(geo, mat); sm.name = n.name; sm.frustumCulled = false; root.add(sm);
+    const bones = sk.joints.map(j => nodes[j]), inv = bones.map((b, k) => { const m = new THREE.Matrix4().fromArray(ibm, k * 16); return m.elements.every(Number.isFinite) ? m : new THREE.Matrix4(); });
+    sm.bind(new THREE.Skeleton(bones, inv), new THREE.Matrix4()); meshes.push(sm); }
+  if (o.cls) { try { const pj = (await (await fetch(dir + '/pieces.json?' + Date.now())).json()).body; const sm = meshes.find(m => m.name === 'base_body'); if (pj && sm) { const PAL = [0xd8b090, 0x3a2416, 0x8a5a2e, 0x2020a0, 0x20a0a0, 0xffffff, 0xd8b090, 0xff8080, 0x80ff80, 0xff4040, 0x40ff40, 0x8080ff, 0x4040ff, 0xa0a0ff, 0x6060ff, 0xffff80, 0xffff40]; const n = sm.geometry.getAttribute('position').count, c = new Uint8Array(n * 3); for (let v = 0; v < n; v++) { const k = new THREE.Color(PAL[pj.vclass[v] % PAL.length]); c[v*3] = k.r * 255; c[v*3+1] = k.g * 255; c[v*3+2] = k.b * 255; } sm.geometry.setAttribute('color', new THREE.BufferAttribute(c, 3, true)); sm.material = sm.material.clone(); sm.material.map = null; sm.material.normalMap = null; sm.material.vertexColors = true; } } catch (e) { console.warn(e); } }
+  root.updateMatrixWorld(true);
+  const skel = new THREE.SkeletonHelper(root); skel.visible = false; skel.material.depthTest = false; skel.renderOrder = 9;
+  return { g, root, nodes, parent, order, meshes, skel, worldOf };
+}
+function addUI(key, M, offX) {
+  M.root.position.x = offX; s.add(M.root); s.add(M.skel); MODELS[key] = M;
+  const box = document.createElement('div'); box.innerHTML = '<b>' + key + '</b>'; ui.appendChild(box);
+  const lb = document.createElement('label'); lb.innerHTML = '<input type=checkbox> bones'; lb.querySelector('input').onchange = e => { M.skel.visible = e.target.checked; }; box.appendChild(lb);
+  const lw = document.createElement('label'); lw.innerHTML = '<input type=checkbox> wire'; lw.querySelector('input').onchange = e => { M.meshes.forEach(m => { m.material.wireframe = e.target.checked; }); }; box.appendChild(lw);
+  for (const m of M.meshes) { const l = document.createElement('label'); const short = m.name.replace(/^SK_\d+_\d+_mo_MI_\d+_/, '').replace(/^FantasyWarrior_/, '').replace(/_6_characters_0$/, '').replace(/_0$/, ''); l.innerHTML = '<input type=checkbox checked> ' + short + ' (' + (m.geometry.index.count / 3 | 0) + ' tris)'; l.querySelector('input').onchange = e => { m.visible = e.target.checked; }; box.appendChild(l);
+    if (q.get('hide') && q.get('hide').split(',').some(h => short.toLowerCase().startsWith(h.toLowerCase()))) { m.visible = false; l.querySelector('input').checked = false; } }
+}
+window.__ready = false;
+(async () => {
+  const names = (q.get('m') || 'thor').split(','); let x = 0;
+  for (const nm of names) { const M = await loadGltf("models/" + nm, { noNormal: !!q.get("nn"), cls: !!q.get("cls") }); addUI(nm, M, x); x += 1.4; }
+  cx = (x - 1.4) / 2; cam(); window.__ready = true;
+})();
+let drag = null; addEventListener('mousedown', e => { if (e.target.closest('#ui')) return; drag = [e.clientX, e.clientY]; }); addEventListener('mouseup', () => drag = null);
+addEventListener('mousemove', e => { if (!drag) return; az -= (e.clientX - drag[0]) * 0.01; el = Math.max(-1.4, Math.min(1.4, el + (e.clientY - drag[1]) * 0.01)); drag = [e.clientX, e.clientY]; cam(); });
+addEventListener('wheel', e => { dist = Math.max(0.3, dist * (1 + e.deltaY * 0.001)); cam(); });
+addEventListener('keydown', e => { if (e.key === 'w') cy += 0.1; if (e.key === 's') cy -= 0.1; if (e.key === 'a') cx -= 0.1; if (e.key === 'd') cx += 0.1; cam(); });
+window.__view = (a, e, d, y, x) => { if (a != null) az = a * Math.PI / 180; if (e != null) el = e * Math.PI / 180; if (d != null) dist = d; if (y != null) cy = y; if (x != null) cx = x; cam(); };
+window.__render = () => r.render(s, c); window.__fit = () => { r.setSize(innerWidth, innerHeight); c.aspect = innerWidth / innerHeight; c.updateProjectionMatrix(); };
+window.__save = async (name) => { r.render(s, c); const d = r.domElement.toDataURL('image/jpeg', 0.9); await fetch('/shot?' + name, { method: 'POST', body: d }); return name; };
+addEventListener('resize', window.__fit);
+(function loop() { requestAnimationFrame(loop); r.render(s, c); })();
+</script>

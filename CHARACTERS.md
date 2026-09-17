@@ -347,3 +347,30 @@ things, all in game.js by `lookRuggedHead`:
   and a brow vertex only when every neighbour is brow — the ridge stays dark, the skin round it stays skin.
 
 Hands are not refined (the user asked for faces); `LOOK_REFINE_CLASSES` is the list if they should be.
+
+## The base (2026-09-17, "our soldier model still sucks … make a base model out of it")
+
+The user brought `Thor_UNWORTHY_THOR.usdz` — a rigged, hand-painted sculpt (Fortnite-style: 319 joints, painted muscle, a bald
+rugged head with stubble, hair cards, a cape, a metal prosthetic left arm, a hammer). The figure in the game is now the NAKED man
+built from it: `assets/rigs/base/` (`MODEL_NAME = 'base'`), made by `tools/realmesh/base/` (README there). What was kept: the
+torso, the right arm and hands, the head and eyeballs, the painted body and face textures (one 2048² atlas). What was rebuilt:
+the left arm (the right side mirrored past the shoulder and zipped to the torso), both forearms (lofted from the sleeve cuts to
+the wrists), the pelvis, legs and feet (tubes on the bones, plain skin), and the skeleton (60 bones: the old warrior's map —
+upperBody/head/shoulders/elbows/hands/hips/knees — plus fingers; the file's rest pose is its bind pose; the upper arms and
+thighs had no bind transform and take their rest position). 8k triangles for the whole man.
+
+The kit is the OLD warrior's, carried over: `retarget.js` warps the armour, cloak, shield and sword onto the base, segment by
+segment (a vertex keeps its place along and round its bone; its radius follows the base's girth in that band and sector, plus
+a margin; the helmet is rigid on the head, eyes to eyes), vertex for vertex — so `pieces.json`'s armour entry, every look roll,
+paint, hidden piece, ware, the Corinthian helm, the hair caps, beards and ink work as before. The body's own `pieces.json`
+entry classes the head (hair = the dark paint on the crown, beard = the jaw by position, brow, sockets, eyes) and the parts
+(torso, upper arms, forearms, hands, thighs, shins, feet); it is `sculpted`, so the head-refine, rugged-jaw, face-shape and
+helm-tuck passes are skipped and the rig's own `skull` / `hairline` / `face` measures replace the warrior's constants. The
+atlas is normalised so the palette's skin math still holds (the bright skin at #ffdcb4, the tone lifted ×1.16 for the darker
+mean; the painted hair flattened to skin so the look's colour paints it). `lookDraw` hides each body part under the piece that
+covers it (`LOOK_UNDER`), so a stride never pushes skin through the shirt; a naked look shows the chest and arms.
+
+Open: the fit is a first pass (MARGIN, percentile and sector knobs in retarget.js — the shirt reads a little loose at the
+shoulders); Thor's own cape, bracers, belts, pants, boots, hammer and hair cards are not used — wares to add; the tube limbs
+are plain skin; his normal maps are unused (the surface pass draws the pores). The old figure stays in `assets/rigs/warrior/`
+as the kit's source.

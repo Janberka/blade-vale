@@ -1,0 +1,45 @@
+{
+ "src": "Helmet_of_Leonidas.usdz",
+ "fit": {
+  "s": 0.001298,
+  "tx": 0.00293,
+  "ty": 1.4981,
+  "tz": 0.011,
+  "pitch": 12
+ },
+ "verts": 4285,
+ "tris": 5606,
+ "parts": [
+  {
+   "name": "helm",
+   "start": 0,
+   "count": 4474
+  },
+  {
+   "name": "crest",
+   "start": 4474,
+   "count": 1132
+  }
+ ],
+ "bounds": {
+  "min": [
+   -0.10630750074682646,
+   1.8498837068129503,
+   -0.08997997815400517
+  ],
+  "max": [
+   0.10525441372965437,
+   2.1560035355261626,
+   0.18764961414547274
+  ]
+ },
+ "layout": "position f32x3, normal f32x3, uv f32x2 (origin bottom-left), index u16x3 — in that order, no padding",
+ "metalness": 1,
+ "textures": {
+  "color": "helm_corinthian_color.jpg",
+  "normal": "helm_corinthian_normal.jpg",
+  "rough": "helm_corinthian_rough.jpg",
+  "occl": "helm_corinthian_occl.jpg"
+ },
+ "refit": "carried onto the base head with the sallet: eyes on the eyes, scale 0.845"
+}

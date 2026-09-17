@@ -1,0 +1,153 @@
+{
+ "source": "Thor_UNWORTHY_THOR.usdz (the user, 2026-09-17): body, head, eyes kept; forearms, legs and the left arm rebuilt; the warrior kit carried over by tools/realmesh/base",
+ "height": 2.08,
+ "hipY": 1.092277041468154,
+ "map": {
+  "upperBody": "spine1",
+  "head": "head",
+  "shoulderL": "armL",
+  "elbowL": "foreL",
+  "handL": "handL",
+  "shoulderR": "armR",
+  "elbowR": "foreR",
+  "handR": "handR",
+  "hipL": "thighL",
+  "kneeL": "shinL",
+  "hipR": "thighR",
+  "kneeR": "shinR"
+ },
+ "meshes": {
+  "sword": "FantasyWarrior_sword_6_characters_0",
+  "shield": "FantasyWarrior_shield_6_characters_0",
+  "cloak": "FantasyWarrior_cloak_6_characters_0",
+  "armor": "FantasyWarrior_armor_6_characters_0",
+  "body": "base_body"
+ },
+ "swordHand": "handR",
+ "shieldArm": "foreL",
+ "bowHand": "handL",
+ "cloakBones": [],
+ "reparent": {},
+ "straighten": {
+  "arms": 0.55,
+  "legs": 1
+ },
+ "plumeY": 0.3,
+ "fullBody": true,
+ "skull": {
+  "yc": 1.94,
+  "zc": 0.03,
+  "top": 2.08,
+  "chin": 1.76,
+  "coverY": 2
+ },
+ "hairline": {
+  "1": [
+   [
+    0,
+    2.032
+   ],
+   [
+    30,
+    2.028
+   ],
+   [
+    50,
+    2.009
+   ],
+   [
+    65,
+    1.994
+   ],
+   [
+    90,
+    1.989
+   ],
+   [
+    120,
+    1.98
+   ],
+   [
+    150,
+    1.951
+   ],
+   [
+    180,
+    1.929
+   ]
+  ],
+  "2": [
+   [
+    0,
+    2.04
+   ],
+   [
+    40,
+    2.037
+   ],
+   [
+    90,
+    2.026
+   ],
+   [
+    180,
+    2.009
+   ]
+  ],
+  "3": [
+   [
+    0,
+    2.028
+   ],
+   [
+    30,
+    2.025
+   ],
+   [
+    50,
+    2.006
+   ],
+   [
+    65,
+    1.992
+   ],
+   [
+    90,
+    1.987
+   ],
+   [
+    120,
+    1.979
+   ],
+   [
+    150,
+    1.949
+   ],
+   [
+    180,
+    1.927
+   ]
+  ],
+  "4": [
+   [
+    0,
+    2.034
+   ],
+   [
+    90,
+    2.004
+   ],
+   [
+    180,
+    1.942
+   ]
+  ]
+ },
+ "face": {
+  "earY": 1.905,
+  "earZ": 0.045,
+  "chinX": 0.045,
+  "lipY": 1.875,
+  "lipZ": 0.13
+ }
+}

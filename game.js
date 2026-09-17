@@ -18036,7 +18036,7 @@ function afSetRes(v) {                                      // the home page's r
   return renderer.getPixelRatio();
 }
 BV.res = afSetRes; BV.gfx = afSetGfx; BV.gfxTier = () => ({ tier: qualityTier, q: AF_Q, post: AF_POST.on, pr: renderer.getPixelRatio(), shadow: sun.shadow.mapSize.x, soft: renderer.shadowMap.type === THREE.PCFSoftShadowMap, locked: gfxLocked() });   // test: what the pit draws with
-function afNetOn() { try { return localStorage.getItem('bv-net') === '1'; } catch (e) { return false; } }   // the home page's 'net readout' box (no URL flags: settings live on the home page)
+function afNetOn() { try { return localStorage.getItem('bv-net') === '1'; } catch (e) { return false; } }   // the settings page's 'net readout' box (no URL flags: settings live behind the home page's cog)
 function afNetOverlay() {                                    // a small fixed readout for phone tests, bottom right
   let el = document.getElementById('af-net'); if (!el && !afNetOn()) return;
   if (!el) { el = document.createElement('div'); el.id = 'af-net'; el.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:60;font:11px/1.3 ui-monospace,monospace;color:#e8def8;background:rgba(16,14,24,.7);padding:4px 7px;border-radius:5px;pointer-events:none;white-space:nowrap'; document.body.appendChild(el); }
@@ -24279,7 +24279,7 @@ BV.ladder = (scope, kind) => { afLadderOpen(scope, kind); return LADDER; };     
 // ---- THE SHELL: one layout for every screen outside the fight — the fighter on the left, the page on the right,
 // Back always in the same place, ? a page like any other. #start IS the shell (so everything that hid the title
 // screen still hides it); the pages are its .page children (afShellPage shows one). ----
-const SHELL = { page: null, stack: [], bootHash: (typeof location !== 'undefined' && location.hash) || '', titles: { title: 'Blade Vale', home: 'Blade Vale', career: 'Career & stats', lobby: 'Arena Fights', market: 'Marketplace', barber: 'The barber', help: 'Controls', profile: 'Fighter', ladder: 'Rankings', daily: 'Bout of the day', hall: 'Hall of trophies' } };
+const SHELL = { page: null, stack: [], bootHash: (typeof location !== 'undefined' && location.hash) || '', titles: { title: 'Blade Vale', home: 'Blade Vale', career: 'Career & stats', lobby: 'Arena Fights', market: 'Marketplace', barber: 'The barber', help: 'Controls', profile: 'Fighter', ladder: 'Rankings', daily: 'Bout of the day', hall: 'Hall of trophies', settings: 'Settings' } };
 function afShellVisible() { const st = document.getElementById('start'); return !!(st && !st.classList.contains('hidden') && SHELL.page); }
 function afShellPage(name, o) {
   const st = document.getElementById('start'); if (!st || !document.getElementById('page-' + name)) return;
@@ -24469,6 +24469,7 @@ function afHomeResume() { AF.tryItem = null; afHomeRender(); }   // back on the 
   if (g('home-world-btn')) g('home-world-btn').onclick = () => { requestFullscreenSafe(); if (window.net && window.net.session) enterTheVale(); };
   g('home-char').onclick = () => { if (SHELL.page === 'career') afShellBack(); else { afHomeRender(); afShellPage('career'); } };   // the name card under the figure opens the sheet
   if (g('home-logout')) g('home-logout').onclick = () => window.net && window.net.logout();
+  if (g('home-settings')) g('home-settings').onclick = e => { e.stopPropagation(); afShellPage('settings'); };   // the cog in the footer: graphics, resolution, the net readout (page-settings)
   if (g('home-gfx')) { const sel = g('home-gfx'); let cur = 'auto'; try { cur = localStorage.getItem('bv-gfx') || 'auto'; } catch (e) {} sel.value = cur; sel.onchange = e => afSetGfx(e.target.value); }
   if (g('home-res')) { const sel = g('home-res'); sel.value = resPick(); sel.onchange = e => afSetRes(e.target.value); }
   if (g('home-net')) { g('home-net').checked = afNetOn(); g('home-net').onchange = e => { try { localStorage.setItem('bv-net', e.target.checked ? '1' : '0'); } catch (x) {} }; }   // the net readout during fights (afNetOverlay)

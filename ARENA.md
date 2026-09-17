@@ -1171,7 +1171,7 @@ BV.arenaHorses() / BV.arenaHorseHit(id, dmg)  // every horse's state; wound one 
 BV.arenaKill(idx)                             // fell a man (his horse goes loose)
 BV.arenaInvite(name) / BV.arenaAccept()       // send / accept a challenge without the UI
 BV.arenaNet()                                 // socket id, room, lobby seats, roster peers, go-acks
-BV.net()                                      // the wire: rtt, jit, snapHz, rxHz/txHz, hostHz, delay, extra, pred*, hist, clk (the home page's 'net readout' box pins the line on screen)
+BV.net()                                      // the wire: rtt, jit, snapHz, rxHz/txHz, hostHz, delay, extra, pred*, hist, clk (the settings page's 'net readout' box pins the line on screen)
 coop._drop()                                  // kill the socket as a phone would (it reconnects and resumes)
 ```
 

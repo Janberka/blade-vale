@@ -368,6 +368,13 @@
   #page-help .row { display: flex; gap: 12px; padding: 2px 0; font-size: 13px; }
   #page-help .row b { flex: 0 0 168px; color: #ffcf5b; }
   #page-help .desktop-keys, #page-help .touch-keys { max-width: 640px; }
+  #settings-body { max-width: 640px; }
+  #settings-body h4 { margin: 12px 0 6px; font-size: 11px; letter-spacing: 2.5px; text-transform: uppercase; color: var(--bv-gold); font-weight: 600; }
+  #settings-body .row { display: grid; grid-template-columns: 120px auto; gap: 2px 12px; align-items: center; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,.06); }
+  #settings-body .row label { color: var(--bv-gold2); font-family: var(--bv-fb); letter-spacing: .5px; font-size: 14px; }
+  #settings-body .row select { justify-self: start; background: #16121c; color: #c8ffd6; border: 1px solid #3a3346; border-radius: 4px; font-size: 13px; padding: 3px 6px; }
+  #settings-body .row input { justify-self: start; width: 18px; height: 18px; margin: 0; accent-color: #ffd34d; }
+  #settings-body .row p { grid-column: 1 / -1; margin: 0; font-size: 12px; line-height: 1.4; color: var(--bv-ink2); }
   @media (max-width: 600px) {                      /* a phone upright: the figure above, the page under it */
     #start { flex-direction: column; }
     #shell-left, body.touch #shell-left { flex: 0 0 36vh; border-right: 0; border-bottom: 1px solid #3a3247; }
@@ -1065,8 +1072,18 @@
           <button class="btn world-only" id="home-world-btn">Enter the Vale</button>
         </div>
         <div class="hm-gear" id="hm-gear" title="What you ride in with — tap a piece for its stall in the market"></div>
-        <div id="home-foot">Signed in as <b id="home-name"></b> · <button id="home-logout">sign out</button> · <label title="During a fight: round trip, jitter, snap rate, the host's sim rate — bottom right"><input type="checkbox" id="home-net"> net readout</label> · <label title="Auto: phones fight at low and step down further if the frame rate can't hold. Low: 1× pixels, hard shadows, half the crowd, no bloom. High: everything.">graphics <select id="home-gfx"><option value="auto">auto</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label> · <label title="Auto: the tier's pixel density (low 1.5×, medium 1.5×, high 2×). Sharp: your screen's full density, up to 3× — the crispest picture, the most work for the GPU. Soft: 1× for the weakest devices.">resolution <select id="home-res"><option value="auto">auto</option><option value="sharp">sharp</option><option value="soft">soft</option></select></label></div>
+        <div id="home-foot">Signed in as <b id="home-name"></b> · <button id="home-logout">sign out</button> · <button id="home-settings" title="Graphics, resolution, the net readout">⚙ settings</button></div>
         <div class="sfx-credit">Crowd sounds by Gregor Quendel (CC-BY 4.0) · bow shot by dorkster, from sounds by qubodup (CC-BY-SA 3.0) · more in assets/sfx/CREDITS.md</div>
+      </div>
+      <!-- settings: what the game does on this device — every pick is saved here (bv-* in localStorage), never a URL flag -->
+      <div class="page wide" id="page-settings">
+        <div id="settings-body">
+          <h4>This device</h4>
+          <div class="row"><label for="home-gfx">Graphics</label><select id="home-gfx"><option value="auto">auto</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select><p>Auto: phones fight at low and step down further if the frame rate can't hold. Low: 1× pixels, hard shadows, half the crowd, no bloom. High: everything.</p></div>
+          <div class="row"><label for="home-res">Resolution</label><select id="home-res"><option value="auto">auto</option><option value="sharp">sharp</option><option value="soft">soft</option></select><p>Auto: the tier's pixel density (low 1.5×, medium 1.5×, high 2×). Sharp: your screen's full density, up to 3× — the crispest picture, the most work for the GPU. Soft: 1× for the weakest devices.</p></div>
+          <h4>For testers</h4>
+          <div class="row"><label for="home-net">Net readout</label><input type="checkbox" id="home-net"><p>During a fight, bottom right: round trip and jitter, snapshots a second, the host's sim rate, your own frame rate. Only numbers — nothing in the fight changes.</p></div>
+        </div>
       </div>
       <!-- the career sheet (the name card under the figure opens it) -->
       <div class="page wide" id="page-career">
@@ -1274,6 +1291,6 @@
 <script src="arena-items.js?v=12"></script>
 <script src="net-battle.js?v=6"></script>
 <script src="real-skin.js?v=1"></script>
-<script src="game.js?v=225"></script>
+<script src="game.js?v=226"></script>
 </body>
 </html>

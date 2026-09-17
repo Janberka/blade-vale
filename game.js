@@ -1251,7 +1251,7 @@ async function loadModelRig(name) {
     if (p.attributes.TEXCOORD_0 != null) geo.setAttribute('uv', new THREE.BufferAttribute(acc(p.attributes.TEXCOORD_0), 2));
     geo.setAttribute('skinIndex', new THREE.BufferAttribute(acc(p.attributes.JOINTS_0), 4)); geo.setAttribute('skinWeight', new THREE.BufferAttribute(acc(p.attributes.WEIGHTS_0), 4));
     geo.setIndex(new THREE.BufferAttribute(acc(p.indices), 1));
-    const sk = g.skins[n.skin]; return { name: n.name, geo, joints: sk.joints, ibm: acc(sk.inverseBindMatrices), tex: texOf(p) }; });
+    const sk = g.skins[n.skin], gm = g.materials && g.materials[p.material || 0]; return { name: n.name, geo, joints: sk.joints, ibm: acc(sk.inverseBindMatrices), tex: texOf(p), alphaMask: !!(gm && gm.alphaMode === 'MASK') }; });
   // LOOKS: pieces.json (tools/realmesh/warrior_pieces.py) names every triangle's armour piece and every vertex's stuff
   let pieces = null; try { const pr = await fetch(base + 'pieces.json'); if (pr.ok) pieces = await pr.json(); } catch (e) { pieces = null; }
   if (pieces) for (const m of meshes) { const key = Object.keys(pieces).find(k => m.name.indexOf('_' + k + '_') >= 0 || m.name.endsWith('_' + k)); const pj = key && pieces[key]; if (!pj) continue; m.pieces = pj; m.short = key;
@@ -1392,7 +1392,7 @@ function instanceModelRig(R, ctx = 'main') {
       const i0 = m.geo.index.array; geo.setIndex(new THREE.BufferAttribute(new i0.constructor(i0), 1));
       const nv = m.geo.getAttribute('position').count; geo.setAttribute('color', new THREE.BufferAttribute(new Uint8Array(nv * 3).fill(255), 3, true)); }
     const mm = { ctx, skinning: true, vc: own, tex: m.tex !== R.tex ? m.tex : undefined };   // (the base body: its painted atlas; the kit: the palette)
-    const sm = new THREE.SkinnedMesh(geo, mm.tex ? modelMaterial(R, mm) : (own ? matVC : mat)); sm.name = m.name; sm.userData.mm = mm; sm.userData.mmR = R.name; sm.frustumCulled = false; sm.castShadow = true; root.add(sm); if (own) { sm.userData.pieces = m.pieces; sm.userData.geo0 = m.geo; }
+    const sm = new THREE.SkinnedMesh(geo, m.alphaMask ? new THREE.MeshPhongMaterial({ map: m.tex, alphaTest: 0.5, side: THREE.DoubleSide, skinning: true, shininess: 10, specular: 0x202020 }) : mm.tex ? modelMaterial(R, mm) : (own ? matVC : mat)); sm.name = m.name; if (m.alphaMask) { sm.visible = false; sm.castShadow = false; } else { sm.userData.mm = mm; sm.userData.mmR = R.name; } /* (cards: their own Phong with the cut-out, the look's colour on it — lookHairApply; the surface pass would refresh them away) */ sm.frustumCulled = false; sm.castShadow = true; root.add(sm); if (own) { sm.userData.pieces = m.pieces; sm.userData.geo0 = m.geo; }
     const bones = m.joints.map(j => nodes[j]), inv = []; for (let i = 0; i < bones.length; i++) inv.push(new THREE.Matrix4().fromArray(m.ibm, i * 16));
     sm.bind(new THREE.Skeleton(bones, inv), new THREE.Matrix4()); skinned[m.name] = sm; }
   const NB = modelBodyBuild(R), am = R.meshes.find(x => x.short === 'armor');   // THE BODY UNDER THE ARMOUR: this man's own copy, bound to the armour's skeleton, shown when his look goes bare (lookApply)
@@ -1688,7 +1688,7 @@ function lookRoll(name, arch, gear, pal, o = {}) {
   const I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}, hm = look.helmet && gear.helm ? I[gear.helm] : null; look.helmModel = hm && hm.model && HELM_MODELS[hm.model] ? hm.model : null;   // a helm with a sculpt of its own (the ware's `model` — the Corinthian): the sallet comes off the body, the model rides the head bone (lookHelmModelApply)
   const pl = gear && gear.plume ? I[gear.plume] : null; look.plumeC = pl && pl.plume != null ? pl.plume : null;                       // (the plume ware's dye: such a helm's crest takes it)
   for (const k of ['pauldron', 'elbow', 'knee', 'straps', 'pouch']) if (r() >= p(k)) look.hide.push(k); if (!look.helmet || look.helmModel) look.hide.push('helmet');
-  look.hide.push('skirtTop'); if (O.naked) { look.hide.push('cuirass', 'sleeve', 'pouch'); look.naked = true; }   // bare to the waist: the body under the armour shows (instanceModelRig's 'naked' mesh); the belt stays on, the belt pouches come off (two leather blocks that only read tucked under a back plate — a box on a bare back otherwise)
+  if (!(MODEL_RIGS.get(MODEL_NAME) || {}).spec || !MODEL_RIGS.get(MODEL_NAME).spec.fullBody) look.hide.push('skirtTop'); if (O.naked) { look.hide.push('cuirass', 'sleeve', 'pouch'); look.naked = true; }   // bare to the waist: the body under the armour shows (instanceModelRig's 'naked' mesh); the belt stays on, the belt pouches come off (two leather blocks that only read tucked under a back plate — a box on a bare back otherwise)
   look.cloak = o.full ? true : r() < p('cloak'); look.plume = o.full || (r() < p('plume')) || !!(gear && gear.plume);
   look.shield = !A.shield && !o.full ? 'none' : (gear && gear.shield === 'heater_shield') ? 'heater' : 'round'; look.round = Math.floor(r() * 4);
   // the paint: cloth = the team dye (dulled on a poor man), steel per piece, the named colours resolved here
@@ -1952,6 +1952,10 @@ function lookHairGeo(R, hs) {
 // the figure's hair: the cap for his cut in his colour, riding the head bone; gone under a helm, or shaved
 function lookHairApply(L, look) {
   const hs = look.hairStyle | 0, on = look.hair != null && hs > 0 && !look.helmet;
+  { const HL = L.inst.skinned.hair_long, BC = L.inst.skinned.beard_cards;   // THE BASE'S OWN CARDS: the long mane for the long cut, the beard cards for a full beard — in the look's colours; under a helm the mane goes
+    if (HL) { HL.visible = on && hs === 3; if (HL.visible) HL.material.color.setHex(look.hair); }
+    if (BC) { BC.visible = look.beard != null && (look.beardStyle | 0) === 2; if (BC.visible) BC.material.color.setHex(look.beard); }
+    if (HL && HL.visible) { if (L.mHair) L.mHair.visible = false; return; } }
   const R = MODEL_RIGS.get(L.g.userData.model), body = on && R && Object.values(L.inst.skinned).find(sm => sm.userData.pieces && sm.userData.pieces.classes.indexOf('hair') >= 0);
   const g0 = body && lookHairGeo(R, hs); if (!g0) { if (L.mHair) L.mHair.visible = false; return; }
   if (!L.mHair) { const sm = new THREE.SkinnedMesh(g0, new THREE.MeshPhongMaterial({ color: look.hair, shininess: 10, specular: 0x202020, skinning: true, flatShading: true, side: THREE.DoubleSide }));
@@ -2072,7 +2076,7 @@ const LOOK_ROUND = { r: 0.31, x: 0.47, seg: 12 };
 function lookRoundShieldGeo(R) {
   if (R.roundGeo) return R.roundGeo; const M = R.spec.meshes || {}, m = R.meshes.find(x => x.name === M.shield); if (!m) return null;
   m.geo.computeBoundingBox(); const bb = m.geo.boundingBox, cy = (bb.min.y + bb.max.y) / 2, cz = (bb.min.z + bb.max.z) / 2, j = m.geo.getAttribute('skinIndex').getX(0);
-  const P = [], N = LOOK_ROUND.seg, rr = LOOK_ROUND.r, x0 = LOOK_ROUND.x, part = [];   // part: 0 face seg i (i<N), N = rim, N+1 = boss, N+2 = back
+  const P = [], N = LOOK_ROUND.seg, rr = LOOK_ROUND.r, x0 = R.spec.roundX != null ? R.spec.roundX : LOOK_ROUND.x, part = [];   // (roundX: the base's forearm sits farther out than the warrior's)   // part: 0 face seg i (i<N), N = rim, N+1 = boss, N+2 = back
   const tri = (a, b, c, pt) => { P.push(a, b, c); part.push(pt); };
   const ring = (rad, x) => { const o = []; for (let i = 0; i <= N; i++) { const a = i / N * Math.PI * 2; o.push([x, cy + Math.cos(a) * rad, cz + Math.sin(a) * rad]); } return o; };
   const outer = ring(rr, x0), inner = ring(rr * 0.86, x0 + 0.045), back = ring(rr, x0 - 0.015), bossR = ring(0.075, x0 + 0.055);

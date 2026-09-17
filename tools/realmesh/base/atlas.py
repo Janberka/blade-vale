@@ -45,4 +45,10 @@ def flatten(im):
     return im
 N = Image.new('RGB', (2048, 2048), (128, 128, 255)); N.paste(flatten(bn).resize((1024, 1024)), (0, 0)); N.paste(flatten(hn).resize((1024, 1024)), (1024, 0)); N.save(out + 'atlas_normal.jpg', quality=85)
 json.dump({'body': [0, 0, 0.5, 0.5], 'head': [0.5, 0, 0.5, 0.5], 'eyes': [0, 0.5, 0.125, 0.125], 'skin': [0.125, 0.5, 0.125, 0.125], 'skinMean': [round(m) for m in mean]}, open(out + 'atlas.json', 'w'))
+hp = Image.open(src + 'MI_1039506_Hair_01_baseColor.png').convert('RGBA'); hpx = hp.load(); W2, H2 = hp.size
+lums = [0.299 * hpx[x, y][0] + 0.587 * hpx[x, y][1] + 0.114 * hpx[x, y][2] for y in range(0, H2, 4) for x in range(0, W2, 4) if hpx[x, y][3] > 128]; ml = sum(lums) / len(lums); k = 205 / ml
+for y in range(H2):
+    for x in range(W2):
+        r, g, b, al = hpx[x, y]; l = min(255, int((0.299 * r + 0.587 * g + 0.114 * b) * k)); hpx[x, y] = (l, l, l, al)
+hp.save(out + 'hair.png'); print('hair card texture: mean lum', round(ml), '-> 205')
 print('atlas written')

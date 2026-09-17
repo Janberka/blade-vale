@@ -76,7 +76,7 @@ function leg(side) { const s = side === 'L' ? 1 : -1; const hip = bonePos('thigh
   M.cap(body, footRings[footRings.length - 1], V3.add([tip[0], 0.024, tip[2]], V3.scale(fd, 0.015)), SKIN(0.5, 1), [B('foot' + side), 0, 0, 0], [1, 0, 0, 0], 'foot' + side, false); }
 leg('L'); leg('R');
 // ---- the head and the eyeballs ----
-M.append(body, convert('Head', () => 'head'));
+M.append(body, convert('Head', (b, p) => (p[1] < 1.80 && Math.hypot(p[0], p[2] - 0.03) > 0.11) ? 'torso' : 'head'));   // (the head mesh reaches down over the traps: those are torso — under a cuirass, hidden with it)
 { const eyes = convert('Eyes_01', () => 'eye'); const vid = M.weldIds(eyes), nv = M.nverts(eyes), par = Int32Array.from({ length: nv }, (_, i) => i); const f = x => { while (par[x] !== x) { par[x] = par[par[x]]; x = par[x]; } return x; };
   for (let t = 0; t < eyes.idx.length; t += 3) { const a = f(vid[eyes.idx[t]]), b = f(vid[eyes.idx[t+1]]), c = f(vid[eyes.idx[t+2]]); par[a] = b; par[f(b)] = f(c); }
   const cy = new Map(); for (let v = 0; v < nv; v++) { const r = f(vid[v]); const e = cy.get(r) || { s: 0, n: 0 }; e.s += eyes.pos[v*3+1]; e.n++; cy.set(r, e); }
@@ -89,16 +89,28 @@ if (TRIS > 0) { const { MeshoptSimplifier } = require('/Users/vic/Documents/GitH
   const idx = Uint32Array.from(body.idx), pos = Float32Array.from(body.pos); const [simp, err] = MeshoptSimplifier.simplify(idx, pos, 3, Math.min(idx.length, TRIS * 3), +(process.env.ERR || 0.03), []);
   console.log('decimated', idx.length / 3, '->', simp.length / 3, 'tris, error', err.toFixed(4)); body.idx = Array.from(simp); }
 const fin = M.finish(body); console.log('base body verts', M.nverts(fin), 'tris', fin.idx.length / 3);
+const cards = (() => { const src = R.meshes.find(x => x.short === 'Hair_01'); const m = M.empty(), nv = src.pos.length / 3; const hb = B('head');
+  for (let v = 0; v < nv; v++) M.addVert(m, [src.pos[v*3], src.pos[v*3+1], src.pos[v*3+2]], [src.uv[v*2], src.uv[v*2+1]], [hb, 0, 0, 0], [1, 0, 0, 0], 'hair');
+  for (const i of src.idx) m.idx.push(i);
+  // connected cards (by welded position), each with its centroid and area
+  const vid = M.weldIds(m), par = Int32Array.from({ length: nv }, (_, i) => i); const f = x => { while (par[x] !== x) { par[x] = par[par[x]]; x = par[x]; } return x; };
+  for (let t = 0; t < m.idx.length; t += 3) { const a = f(vid[m.idx[t]]), b = f(vid[m.idx[t+1]]), c = f(vid[m.idx[t+2]]); par[a] = b; par[f(b)] = f(c); }
+  const comp = new Map(); for (let t = 0; t < m.idx.length; t += 3) { const r = f(vid[m.idx[t]]); const e = comp.get(r) || { tris: [], area: 0, c: [0, 0, 0], n: 0 }; e.tris.push(t); const A = M.vpos(m, m.idx[t]), Bp = M.vpos(m, m.idx[t+1]), C = M.vpos(m, m.idx[t+2]); e.area += V3.len(V3.cross(V3.sub(Bp, A), V3.sub(C, A))) / 2; for (const P of [A, Bp, C]) { e.c = V3.add(e.c, P); e.n++; } comp.set(r, e); }
+  const list = [...comp.values()].map(e => ({ ...e, c: V3.scale(e.c, 1 / e.n) })); const isBeard = e => e.c[1] < 1.93 && e.c[2] > 0.05 && Math.abs(e.c[0]) < 0.13;
+  const pick = (sel, budget) => { const out = M.empty(); const map = new Int32Array(nv).fill(-1); let tris = 0; for (const e of list.filter(sel).sort((a, b) => b.area - a.area)) { if (tris + e.tris.length > budget) continue; for (const t of e.tris) { for (const i of [m.idx[t], m.idx[t+1], m.idx[t+2]]) { if (map[i] < 0) map[i] = M.addVert(out, M.vpos(m, i), [m.uv[i*2], m.uv[i*2+1]], [hb, 0, 0, 0], [1, 0, 0, 0], 'hair'); out.idx.push(map[i]); } tris++; } } return out; };
+  const hair = M.finish(pick(e => !isBeard(e), 6000)), beard = M.finish(pick(isBeard, 1800)); console.log('hair cards', list.length, 'kept: hair', hair.idx.length / 3, 'tris, beard', beard.idx.length / 3, 'tris');
+  return { hair, beard }; })();
 const PARTS = [...new Set(fin.part)]; fs.mkdirSync(OUT, { recursive: true });
-G.write(OUT, { meshes: [{ name: 'base_body', pos: Float32Array.from(fin.pos), nrm: Float32Array.from(fin.nrm), uv: Float32Array.from(fin.uv), ji: Uint16Array.from(fin.ji), w: Float32Array.from(fin.w), idx: Uint32Array.from(fin.idx), material: 0 }], skeleton,
-  materials: [{ name: 'base', pbrMetallicRoughness: { baseColorTexture: { index: 0 }, metallicFactor: 0, roughnessFactor: 0.9 }, normalTexture: { index: 1 } }], images: ['atlas.jpg', 'atlas_normal.jpg'] });
+const packM = (nm, f, mat) => ({ name: nm, pos: Float32Array.from(f.pos), nrm: Float32Array.from(f.nrm), uv: Float32Array.from(f.uv), ji: Uint16Array.from(f.ji), w: Float32Array.from(f.w), idx: Uint32Array.from(f.idx), material: mat });
+G.write(OUT, { meshes: [packM('base_body', fin, 0), packM('hair_long', cards.hair, 1), packM('beard_cards', cards.beard, 1)], skeleton,
+  materials: [{ name: 'base', pbrMetallicRoughness: { baseColorTexture: { index: 0 }, metallicFactor: 0, roughnessFactor: 0.9 }, normalTexture: { index: 1 } }, { name: 'hair', pbrMetallicRoughness: { baseColorTexture: { index: 2 }, metallicFactor: 0, roughnessFactor: 0.9 }, alphaMode: 'MASK', alphaCutoff: 0.5, doubleSided: true }], images: ['atlas.jpg', 'atlas_normal.jpg', 'hair.png'] });
 fs.writeFileSync(OUT + '/parts.json', JSON.stringify({ classes: PARTS, vclass: fin.part.map(p => PARTS.indexOf(p)) }));
 const HL = { 1: [[0, 1.772], [30, 1.768], [50, 1.745], [65, 1.728], [90, 1.722], [120, 1.712], [150, 1.678], [180, 1.652]], 2: [[0, 1.782], [40, 1.778], [90, 1.765], [180, 1.745]], 3: [[0, 1.768], [30, 1.764], [50, 1.742], [65, 1.726], [90, 1.720], [120, 1.710], [150, 1.676], [180, 1.650]], 4: [[0, 1.775], [90, 1.740], [180, 1.668]] };   // the warrior's hairlines (game.js LOOK_HAIRLINE), carried up to this skull: the same drop below its crown, scaled by the heads' size ratio
 const TOP = 2.08, HK = 0.86, hairline = {}; for (const k in HL) hairline[k] = HL[k].map(([a, y]) => [a, +(TOP - (1.828 - y) * HK).toFixed(3)]);
 fs.writeFileSync(OUT + '/rig.json', JSON.stringify({ source: 'Thor_UNWORTHY_THOR.usdz (the user, 2026-09-17): body, head, eyes kept; forearms, legs and the left arm rebuilt; the warrior kit carried over by tools/realmesh/base', height: 2.08, hipY: bonePos('thighL')[1],
   map: { upperBody: 'spine1', head: 'head', shoulderL: 'armL', elbowL: 'foreL', handL: 'handL', shoulderR: 'armR', elbowR: 'foreR', handR: 'handR', hipL: 'thighL', kneeL: 'shinL', hipR: 'thighR', kneeR: 'shinR' },
   meshes: { sword: 'FantasyWarrior_sword_6_characters_0', shield: 'FantasyWarrior_shield_6_characters_0', cloak: 'FantasyWarrior_cloak_6_characters_0', armor: 'FantasyWarrior_armor_6_characters_0', body: 'base_body' },
-  swordHand: 'handR', shieldArm: 'foreL', bowHand: 'handL', cloakBones: [], reparent: {}, straighten: { arms: 0.55, legs: 1.0 }, plumeY: 0.30, fullBody: true,
+  swordHand: 'handR', shieldArm: 'foreL', bowHand: 'handL', cloakBones: [], reparent: {}, straighten: { arms: 0.55, legs: 1.0 }, plumeY: 0.30, fullBody: true, roundX: 0.66,
   skull: { yc: 1.94, zc: 0.03, top: TOP, chin: 1.76, coverY: 2.0 }, hairline, face: { earY: 1.905, earZ: 0.045, chinX: 0.045, lipY: 1.875, lipZ: 0.13 } }, null, 1));
 console.log('wrote', OUT);
 })();

@@ -34,6 +34,7 @@
  },
  "plumeY": 0.3,
  "fullBody": true,
+ "roundX": 0.66,
  "skull": {
   "yc": 1.94,
   "zc": 0.03,

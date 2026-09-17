@@ -131,9 +131,11 @@ it the sculpted sallet comes off the body (`lookRoll` hides `helmet` when the wa
 feather stays away: the crest is the plume, and takes a bought plume's dye (`look.plumeC`; `helmModelMaterials`: the crest's
 material dyed, metalness down — horsehair). Its own colour, normal, roughness and occlusion maps, metalness 1, the surface pass's
 sky in it (a Phong with the maps on the low tier); it is not repainted per armour like the sallet. What it covers of the head
-is not drawn while it is worn (`helmCoverMask`, once per rig and helm: head triangles whose vertices all lie under the helm's own
-shell by a ray from the skull's centre, a lifted vertex allowed `HELM_COVER_TOL` out — the forehead showed through its brow;
-nothing on a ray through the eye holes or the face opening is marked). NPCs roll a third of their
+is not drawn while it is worn (`helmCoverMask`, once per rig and helm: scalp triangles, and forehead ones above `HELM_COVER_Y`,
+whose vertices all lie under the helm's own shell by a ray from the skull's centre or straight forward from its axis, a lifted
+vertex allowed `HELM_COVER_TOL` out; nothing on a ray through the eye holes, the face opening or the ear cutouts is marked — the
+sallet's blanket scalp hide opened the nape to the sky behind the ear cutouts, and a mask over the whole face hid cheeks an oblique
+look through the eye holes still found). NPCs roll a third of their
 helms Corinthian (`afNpcGear`, the same draw as before, so the same men wear a helm). Test: `BV.showcase({name, gear: {helm:
 'corinthian'}})`, `BV.look.live()[i].look.helmModel`.
 

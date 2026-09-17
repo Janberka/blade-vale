@@ -1835,8 +1835,8 @@ function modelHelmPlace(L) {                                 // every render whi
 }
 // the pieces he goes without leave the body's own index (no draw call for them, no seam) — the only part of the look a helm toggle has to redo
 function lookDraw(L, look) {
-  const hide = new Set(look.hide); if (look.helmet) hide.add('hair');   // (under a helm the scalp is not drawn: it lies inside the shell, and the tessellated crown would show through it)
   const R = MODEL_RIGS.get(L.g.userData.model), H = look.helmet && look.helmModel && R && R.helms ? R.helms[look.helmModel] : null;
+  const hide = new Set(look.hide); if (look.helmet && !H) hide.add('hair');   // (under the sallet the scalp is not drawn: it lies inside the shell, and the tessellated crown would show through it; a helm of its own says what it covers — helmCoverMask)
   for (const sm of Object.values(L.inst.skinned)) { const pj = sm.userData.pieces; if (!pj) continue;
     const i0 = sm.userData.geo0.index.array, tri = pj.tri, idx = sm.geometry.index, cover = H && pj.classes.indexOf('hair') >= 0 ? helmCoverMask(R, H) : null; let n = 0;   // (the head under a helm of its own: what it covers is left out — helmCoverMask)
     for (let t = 0; t < tri.length; t++) { if (hide.has(pj.classes[tri[t]]) || (cover && cover[t])) continue; idx.array[n] = i0[t * 3]; idx.array[n + 1] = i0[t * 3 + 1]; idx.array[n + 2] = i0[t * 3 + 2]; n += 3; }
@@ -1981,19 +1981,20 @@ function helmModelMaterials(H, ctx, skinning, crestC) {
   const bronze = new THREE.Color(HELM_BRONZE_LIFT[0], HELM_BRONZE_LIFT[1], HELM_BRONZE_LIFT[2]), helm = make(bronze, Math.min(H.metalness, 0.9), 1), crest = crestC != null ? make(new THREE.Color(crestC).multiplyScalar(1.6), 0.15, 0.85) : helm;   // (dyed horsehair: no longer bronze)
   return (H.mats[k] = [helm, crest]);
 }
-// WHAT THE HELM COVERS: a helm of its own is a thin shell too, and the tessellated forehead showed through its brow. Once per rig and
-// helm, every triangle of the head whose three vertices lie under the shell is marked, and lookDraw leaves the marked ones out while
-// the helm is worn. A vertex is under the shell when a ray from the skull's centre through it leaves the helm's own surface beyond it
-// (or short of it by no more than `tol` — a lifted vertex), OR when the shell stands straight in front of it (a ray forward from the
-// skull's axis: the brow ridge at an eye hole's upper rim looks out through the hole from the centre, yet the brow band is before it).
-// Nothing seen through the eye holes or the face opening is marked: no shell lies on those rays.
-const HELM_COVER_TOL = 0.03, HELM_COVER_Y = 1.60;   // (tol: how far out of the shell a vertex may stand and still count as under it — the forehead pushes a snug helm's brow out by a finger; y: only the head above the jaw, so no hole opens under a cheek guard's edge)
+// WHAT THE HELM COVERS: a helm of its own is a thin shell too, with openings of its own — the Corinthian's ear cutouts look in at the
+// nape — so the sallet's blanket rule (the scalp not drawn under a helm) opened the head to the sky there, and a mask over the whole
+// head hid cheeks and brows that an oblique look through the eye holes still found. So, once per rig and helm: only the SCALP (the
+// 'hair' class) and the forehead well above the eye holes (HELM_COVER_Y) are tested, and a triangle is left out while the helm is
+// worn only when its three vertices lie under the shell — a ray from the skull's centre through the vertex leaves the helm's own
+// surface beyond it (or short of it by no more than `tol`, a lifted vertex), or the shell stands straight in front of it (a ray
+// forward from the skull's axis). What a cutout or the face opening shows stays drawn: no shell lies on those rays.
+const HELM_COVER_TOL = 0.03, HELM_COVER_Y = 1.72;
 function helmCoverMask(R, H) {
   if (H.cover !== undefined) return H.cover; const m = R.meshes.find(x => x.pieces && x.pieces.classes.indexOf('hair') >= 0); if (!m) return (H.cover = null);
   if (!H.shell) { const hp = H.geo.getAttribute('position'), hi = H.geo.index.array, g = H.geo.groups.find(x => x.materialIndex === 0) || { start: 0, count: hi.length }, S = new Float32Array(g.count * 3);   // (the helm's own part, not the crest)
     for (let k = 0; k < g.count; k++) { const v = hi[g.start + k]; S[k * 3] = hp.getX(v); S[k * 3 + 1] = hp.getY(v); S[k * 3 + 2] = hp.getZ(v); } H.shell = S; }
   const pj = m.pieces, pos = m.geo.getAttribute('position'), idx = m.geo.index.array, C = LOOK_SKULL, under = new Uint8Array(pos.count);
-  for (let v = 0; v < pos.count; v++) { if (!LOOK_HEAD_CLASSES.has(pj.classes[pj.vclass[v]]) || pos.getY(v) < HELM_COVER_Y) continue; const dx = pos.getX(v), dy = pos.getY(v) - C.yc, dz = pos.getZ(v) - C.zc, Ln = Math.hypot(dx, dy, dz) || 1;
+  for (let v = 0; v < pos.count; v++) { const cls = pj.classes[pj.vclass[v]]; if (!LOOK_HEAD_CLASSES.has(cls) || (cls !== 'hair' && pos.getY(v) < HELM_COVER_Y)) continue; const dx = pos.getX(v), dy = pos.getY(v) - C.yc, dz = pos.getZ(v) - C.zc, Ln = Math.hypot(dx, dy, dz) || 1;
     const t = lookSkullCast(H.shell, 0, C.yc, C.zc, dx / Ln, dy / Ln, dz / Ln); if (t > 0 && t >= Ln - HELM_COVER_TOL) { under[v] = 1; continue; }
     if (dz > 0) { const tf = lookSkullCast(H.shell, dx, pos.getY(v), C.zc, 0, 0, 1); if (tf > 0 && tf >= dz - 0.006) under[v] = 1; } }
   const cover = new Uint8Array(pj.tri.length); for (let t = 0; t < pj.tri.length; t++) if (under[idx[t * 3]] && under[idx[t * 3 + 1]] && under[idx[t * 3 + 2]]) cover[t] = 1;
@@ -3357,18 +3358,24 @@ if (TOUCH) {
   const TJ_R = 60; // stick radius in px
   let moveId = null, lookId = null;
   let tjAnchor = { x: 0, y: 0 }, lookLast = { x: 0, y: 0 };
-  // THE ROLL LIVES ON THE STICK: double-tap it and push — the roll goes the way you push (forward, back, either side,
-  // or anything between). A tap is a touch that comes and goes inside TAP_MS without leaving the deadzone; a second
-  // touch landing within DBL_MS of it is ARMED, and the first push past ROLL_MAG fires the roll (once per touch —
-  // keep holding and you simply run on). Nothing fires on a plain drag, so ordinary running never rolls by accident.
-  const TAP_MS = 250, DBL_MS = 320, ARM_MS = 450, ROLL_MAG = 0.55;
-  let tapEndT = -1e9, tapDownT = 0, tapMoved = false, rollArmed = false;
-  function stickRoll(s, f) {                       // s: right (+), f: forward (+) — the stick's axes, relative to the camera
-    if (AF.on) {
-      if (!AF.me || AF.me.dead) return;
-      const yaw = AF.cam.yaw, x = Math.sin(yaw) * f - Math.cos(yaw) * s, z = Math.cos(yaw) * f + Math.sin(yaw) * s;
-      AF.locIn.rollDir = Math.atan2(x, z); AF.locIn.dodge++;   // (a world heading — host and guest read the same one)
-    } else requestDodge();                         // the vale: the roll follows the stick anyway
+  // THE ROLL IS A DOUBLE-TAP OF JUMP (2026-09-16, the user: "removing rolling with the joystick, if we double tap the
+  // jump button we should roll to the direction joystick shows"). The stick only runs now — no tap on it means anything,
+  // so a thumb that lands twice in a hurry never tumbles you by accident. A tap of JUMP waits JUMP_DBL_MS before it
+  // leaps (the sim refuses a roll to a man in the air, so the leap can't go first); a second tap inside that window is
+  // the ROLL instead, the way the stick leans — forward, back, either side or anything between — or, with the stick
+  // at rest, what a C-roll takes: the way you move, else a side. The leap's edge and the roll's both ride the wire as
+  // they always did (locIn.jump / locIn.dodge + rollDir), so host and guest agree.
+  const JUMP_DBL_MS = 280;
+  let jumpPend = 0;                                // the timer of a first tap still waiting to become a leap (0 = none)
+  function stickHeading() {                        // the stick's lean as a world heading (rad), or null with the stick at rest
+    if (!touchMove.active) return null;
+    const yaw = AF.cam.yaw, s = touchMove.s, f = touchMove.f;   // s: right (+), f: forward (+) — relative to the camera
+    return Math.atan2(Math.sin(yaw) * f - Math.cos(yaw) * s, Math.cos(yaw) * f + Math.sin(yaw) * s);
+  }
+  function jumpTap() {
+    if (!AF.on || !AF.me || AF.me.dead) return;
+    if (jumpPend) { clearTimeout(jumpPend); jumpPend = 0; AF.locIn.rollDir = stickHeading(); AF.locIn.dodge++; return; }   // the second tap: a roll, not a leap
+    jumpPend = setTimeout(() => { jumpPend = 0; if (AF.on && AF.me && !AF.me.dead) AF.locIn.jump++; }, JUMP_DBL_MS);
   }
 
   function controllable() {
@@ -3394,22 +3401,16 @@ if (TOUCH) {
     touchMove.s = (dx / len) * m;   // right = strafe right (D)
     touchMove.f = -(dy / len) * m;  // up    = forward (W)
     touchMove.active = m > 0;
-    if (m > 0) tapMoved = true;
-    if (rollArmed && m >= ROLL_MAG) { rollArmed = false; if (performance.now() - tapDownT < ARM_MS) stickRoll(dx / len, -dy / len); }
   }
   function showStick(x, y) {
     tjAnchor = { x, y };
     tj.style.left = (x - 66) + 'px'; tj.style.top = (y - 66) + 'px'; tj.style.bottom = 'auto';
     touchRoot.classList.add('dragging');
-    const now = performance.now();
-    rollArmed = now - tapEndT < DBL_MS; tapDownT = now; tapMoved = false;
   }
   function hideStick() {
     tj.style.left = ''; tj.style.top = ''; tj.style.bottom = '';
     tjKnob.style.transform = ''; touchRoot.classList.remove('dragging');
     touchMove.f = touchMove.s = 0; touchMove.active = false;
-    const now = performance.now();
-    tapEndT = !tapMoved && now - tapDownT < TAP_MS ? now : -1e9; rollArmed = false;
   }
 
   canvas.addEventListener('touchstart', (e) => {
@@ -3451,8 +3452,8 @@ if (TOUCH) {
   }
   bindBtn('tb-attack', requestAttack, () => { if (AF.on) AF.locIn.atk++; }); // arena: the release swings
   bindBtn('tb-heavy', requestHeavyAttack);
-  bindBtn('tb-dodge', requestDodge);               // (the pit hides it: there the roll is the stick's double-tap-and-push)
-  bindBtn('tb-jump', () => { if (AF.on && AF.me && !AF.me.dead) AF.locIn.jump++; });   // the pit's LEAP (only the pit shows it)
+  bindBtn('tb-dodge', requestDodge);               // (the pit hides it: there the roll is JUMP's double-tap)
+  bindBtn('tb-jump', jumpTap);                     // the pit's LEAP — and, tapped twice, its ROLL (only the pit shows it)
   bindBtn('tb-block', () => { keys['ShiftLeft'] = true; }, () => { keys['ShiftLeft'] = false; });
   bindBtn('tb-weapon', toggleWeapon);
   // The ONE zoom control a phone has (no wheel, no pinch), so it has to land on a rung, not nudge
@@ -18048,7 +18049,7 @@ const AF = {
   on: false, role: 'solo',                 // 'solo' (no peers) | 'host' | 'guest'
   phase: 'lobby',                          // 'lobby' | 'countdown' | 'fight' | 'over'
   bodies: [], arrows: [], ground: null, props: [], seed: 1, cfg: { teams: 2, per: 3 }, roster: [],
-  me: null, keys: new Set(), locIn: { mx: 0, mz: 0, yaw: 0, atk: 0, heavy: 0, dodge: 0, rollDir: null, block: false, hold: false, swap: 0, jump: 0 },   // rollDir: the roll's world heading (rad), or null = the way you move
+  me: null, keys: new Set(), locIn: { mx: 0, mz: 0, yaw: 0, atk: 0, heavy: 0, dodge: 0, rollDir: null, block: false, hold: false, swap: 0, jump: 0 },   // rollDir: the roll's world heading (rad), or null = the way you move (Q / E, or JUMP's double-tap on touch, set it)
   cam: { yaw: 0, pitch: 0.3, dist: 6.5 }, orbit: { theta: 0.4, phi: 0.9, r: 62, drag: false }, spec: { mode: 'orbit', target: null, fx: 0, fz: 0, touched: false },
   last: 0, t: 0, countdown: 0, over: false, winner: -1, standings: null, hudEl: null, events: [],
   inputs: new Map(), snapAcc: 0, inAcc: 0, lastSnap: 0, installed: false, log: [], torches: [], motes: null, hurt: 0, fov: CAM_BASE_FOV,
@@ -21210,7 +21211,7 @@ function afDrive(b, dt, sim) {
     if (b.mounted) { if (b.dodgeCd <= 0) { b.dodgeCd = 1.2; b.vx += Math.sin(b.yaw) * 6; b.vz += Math.cos(b.yaw) * 6; b.iframes = 0.15; try { SFX.foot(b.group.position); } catch (e) {} } }
     else if (b.dodgeCd <= 0 && !(b.atk && b.atk.hit) && b.airT <= 0 && b.landT <= 0 && b.landRollT <= 0 && !b.winded) {   // (winded: no roll in him)
       b.dodgeT = F.dodge.dur; b.iframes = F.dodge.iframes; b.dodgeCd = F.dodge.dur + F.dodge.cd; b.atk = null; b.charge = null; b.queued = false; b.blocking = false; afStamCost(b, F.stam.dodge);
-      // THE ROLL'S HEADING: the one asked for (Q / E, the stick's double-tap-and-push), else — a player — the way he is
+      // THE ROLL'S HEADING: the one asked for (Q / E, JUMP's double-tap the way the stick leans), else — a player — the way he is
       // moving, else a SIDE: the side the stick leans, else a coin. (An NPC always takes a side: he closes on his man,
       // and a roll along his line of advance would carry him onto the blade he is dodging.)
       const rgx = -Math.cos(b.yaw), rgz = Math.sin(b.yaw), lean = mm > 1e-3 ? ux * rgx + uz * rgz : 0;

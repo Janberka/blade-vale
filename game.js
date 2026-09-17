@@ -1609,7 +1609,7 @@ function lookFaceNormals(geo, pj) {
   for (let w = 0; w < n; w++) for (const v of adj.groups[w]) nrm.setXYZ(v, cur[w * 3], cur[w * 3 + 1], cur[w * 3 + 2]); nrm.needsUpdate = true;
 }
 const LOOK_HAIR = [0x1a1210, 0x1a1210, 0x2a1a12, 0x3a2416, 0x3a2416, 0x5c3a1e, 0x8a5a2e, 0x6a6a68, 0x4a3a3a];   // black, black, near-black, dark brown ×2, brown, auburn, grey, ash — cropped and dark, mostly
-const LOOK_SKIN = [0xf0d4b8, 0xe4c4a4, 0xd8b090, 0xc89a78, 0xa87858, 0x8a5c40];
+const LOOK_SKIN = [0xf0d4b8, 0xe4c4a4, 0xd8b090, 0xc89a78, 0xa87858, 0x8a5c40, 0x664028, 0x4a2c1a, 0x321c10, 0x1e1008];   // (2026-09-17: four darker tones after the six — appended, so a saved pick keeps its face; ARENA_LOOK.s in arena-items.js is the count)
 // THE BARBER (gear.look = { s, f, h, c, b }, indexes below; ARENA_LOOK in arena-items.js holds the ranges): what a player picks
 // for his own face; the vale's men roll theirs from the name
 const LOOK_HAIR_PICK = [0x1a1210, 0x3a2416, 0x5c3a1e, 0x8a5a2e, 0xa04a20, 0xb08040, 0xd0b078, 0x8a8a88, 0xd8d4cc];   // black, dark brown, brown, auburn, red, fair, blond, grey, white
@@ -1617,7 +1617,7 @@ const LOOK_HAIR_STYLES = ['shaved', 'short crop', 'crown', 'long', 'mohawk'];
 const LOOK_INK = [null, 'wolf', 'serpent', 'tide', 'sun', 'thorn'], LOOK_INK_NAMES = ['none', 'wolf', 'serpent', 'tide', 'sun', 'thorn'];   // the ink's DESIGN (gear.look.i): free, the barber's — it shows on whatever skin the kit leaves bare; bands of the ink atlas, in this order
 const LOOK_INK_COLOURS = [0x12192a, 0x101010, 0x6b1410, 0xe8dcc8, 0x2f5a2a, 0xb8752a, 0x4a2a6a, 0x1f6b6b], LOOK_INK_COLOUR_NAMES = ['blue-black', 'black', 'blood', 'bone', 'moss', 'ochre', 'violet', 'teal'];   // the ink's COLOUR (gear.look.k)
 const LOOK_BEARD_STYLES = ['clean', 'stubble', 'full beard', 'goatee', 'moustache'];   // (a sixth, 'braided' — a plait hung from the chin — came and went the same day: "let's just remove this braids"; a saved b 5 fails cleanLook's range and falls back to the roll)
-const LOOK_SKIN_NAMES = ['fair', 'light', 'tan', 'olive', 'brown', 'dark'];
+const LOOK_SKIN_NAMES = ['fair', 'light', 'tan', 'olive', 'brown', 'dark', 'deep', 'umber', 'ebony', 'onyx'];
 // THE FACE'S BONES (gear.look.f): six casts of the same head — a displacement of the head's vertices in the bind pose on
 // this body's own copy of the positions (lookFacePoint); the vale's men roll theirs from the name
 const LOOK_FACE_SHAPES = ['hard', 'square', 'long', 'round', 'hawk', 'broken'];
@@ -1668,8 +1668,9 @@ function lookRoll(name, arch, gear, pal, o = {}) {
   // the man: skin, hair, beard (rolled first, so a change of kit never changes his face)
   const LK = (gear && gear.look) || null, has = k => !!(LK && LK[k] != null);   // (the barber's picks, if he made any)
   const skinPick = pick(LOOK_SKIN), weather = r() * 0.35;
-  look.skin = c.setHex(has('s') ? LOOK_SKIN[LK.s] : skinPick).lerp(new THREE.Color(0xc89070), has('s') ? 0.15 : weather).getHex();   // weathered: every tone pulled toward a sun-browned red
-  look.body = c.setHex(has('s') ? LOOK_SKIN[LK.s] : skinPick).lerp(new THREE.Color(0xfff4e8), 0.28).getHex();   // THE BODY under the armour: the same man's skin, unweathered and a shade paler — the chest that never sees the sun; the one tone with the face read as a skin-coloured sweater
+  const skinBase = has('s') ? LOOK_SKIN[LK.s] : skinPick, sunned = new THREE.Color(skinBase).multiply(new THREE.Color(0.84, 0.68, 0.61));   // weathered: the tone itself, darkened and reddened (a fixed tan target lightened the dark tones — a fair man's target is still ~#c89070)
+  look.skin = c.setHex(skinBase).lerp(sunned, has('s') ? 0.15 : weather).getHex();
+  look.body = look.skin;   // THE BODY under the armour: the face's tone exactly (2026-09-17 — the paler unweathered chest read as a different skin colour from the head and hands, worst on the dark tones); lookBodyColour keeps the muscle shading
   const bald = r() < 0.28, hairRoll = pick(LOOK_HAIR), hairC = has('c') ? LOOK_HAIR_PICK[LK.c] : hairRoll, skinC = new THREE.Color(look.skin);
   const beardOn = r() < 0.75, fullBeard = r() < 0.65, styleRoll = r(), beardKind = r();
   look.hairStyle = has('h') ? LK.h : bald ? 0 : styleRoll < 0.64 ? 1 : styleRoll < 0.74 ? 2 : styleRoll < 0.94 ? 3 : 4;   // most cropped, some long, a mohawk now and then

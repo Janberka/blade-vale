@@ -76,7 +76,7 @@ function leg(side) { const s = side === 'L' ? 1 : -1; const hip = bonePos('thigh
   M.cap(body, footRings[footRings.length - 1], V3.add([tip[0], 0.024, tip[2]], V3.scale(fd, 0.015)), SKIN(0.5, 1), [B('foot' + side), 0, 0, 0], [1, 0, 0, 0], 'foot' + side, false); }
 leg('L'); leg('R');
 // ---- the head and the eyeballs ----
-M.append(body, convert('Head', (b, p) => (p[1] < 1.80 && Math.hypot(p[0], p[2] - 0.03) > 0.11) ? 'torso' : 'head'));   // (the head mesh reaches down over the traps: those are torso — under a cuirass, hidden with it)
+M.append(body, convert('Head', (b, p) => (p[1] < 1.86 && Math.hypot(p[0], p[2] - 0.03) > 0.115) ? 'torso' : 'head'));   // (the traps up to the neck proper are torso — under the lifted collar, hidden with the cuirass)   // (the head mesh reaches down over the traps: those are torso — under a cuirass, hidden with it)
 { const eyes = convert('Eyes_01', () => 'eye'); const vid = M.weldIds(eyes), nv = M.nverts(eyes), par = Int32Array.from({ length: nv }, (_, i) => i); const f = x => { while (par[x] !== x) { par[x] = par[par[x]]; x = par[x]; } return x; };
   for (let t = 0; t < eyes.idx.length; t += 3) { const a = f(vid[eyes.idx[t]]), b = f(vid[eyes.idx[t+1]]), c = f(vid[eyes.idx[t+2]]); par[a] = b; par[f(b)] = f(c); }
   const cy = new Map(); for (let v = 0; v < nv; v++) { const r = f(vid[v]); const e = cy.get(r) || { s: 0, n: 0 }; e.s += eyes.pos[v*3+1]; e.n++; cy.set(r, e); }

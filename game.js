@@ -1191,7 +1191,7 @@ float triGray(sampler2D t, vec3 p, vec3 wn, float s) { vec3 w = triW(wn); return
   normal = normalize(vTriM * pn); }`,   // (4, 6, 7: skin, bare or inked — the pores)
   fragRough: `float roughnessFactor = roughness; { int k = int(vKind + 0.5);
   if (k == 0) roughnessFactor = uPlateR0 + uPlateR1 * triGray(tPlateR, vTri, vTriN, uTile * uPlateTile * 1.7);
-  else if (k == 8) roughnessFactor = uPlateR0 + 0.1 + 0.5 * smoothstep(0.2, 0.6, triGray(tKnot, vTri, vTriN, 3.4));
+  else if (k == 8) roughnessFactor = uPlateR0 + 0.1 + 0.5 * smoothstep(0.2, 0.6, triGray(tKnot, vTri, vTriN, 8.0));
   else if (k == 1) roughnessFactor = 0.45 + 0.35 * (1.0 - triGray(tMailC, vTri, vTriN, uMailTile));
   else if (k == 2) roughnessFactor = 0.92; else if (k == 3) roughnessFactor = 0.70; else if (k == 4 || k >= 6) roughnessFactor = 0.42 + 0.26 * triGray(tSkinR, vTri, vTriN, uTile * uSkinTile * 0.7); else roughnessFactor = 0.4; }`,   // (skin: an oily sheen over the swells, matte in the pores)
   fragMetal: `float metalnessFactor = metalness; { int k = int(vKind + 0.5); metalnessFactor = (k == 0 || k == 8) ? 0.88 : (k == 1) ? 0.80 : 0.0; }`,
@@ -1203,11 +1203,11 @@ varying float vKind; varying vec3 vTri; varying vec3 vTriN; varying mat3 vTriM; 
 vec3 triW(vec3 n) { vec3 w = pow(abs(n), vec3(4.0)); return w / (w.x + w.y + w.z); }
 float triGray(sampler2D t, vec3 p, vec3 wn, float s) { vec3 w = triW(wn); return texture2D(t, p.zy * s).r * w.x + texture2D(t, p.xz * s).r * w.y + texture2D(t, p.xy * s).r * w.z; }`,
   fragMapInk: `#include <map_fragment>
-{ int k = int(vKind + 0.5); if (k == 8) { float m = smoothstep(0.2, 0.6, triGray(tKnot, vTri, vTriN, 3.4)); diffuseColor.rgb *= 1.0 - 0.6 * m; }
+{ int k = int(vKind + 0.5); if (k == 8) { float m = smoothstep(0.2, 0.6, triGray(tKnot, vTri, vTriN, 8.0)); diffuseColor.rgb *= 1.0 - 0.28 * m; }
   if (k == 6 || k == 7) { float m = texture2D(tInk, vec2(vInkUv.x, (clamp(vInkUv.y, 0.003, 0.997) + vInkCol.a) / INK_N)).r; vec3 ic = vInkCol.rgb; diffuseColor.rgb = mix(diffuseColor.rgb, ic, smoothstep(0.35, 0.55, m) * 0.92); } }`,   // (the low tier's share of fragMap: the engraving and the ink)
   fragMap: `#include <map_fragment>
 { int k = int(vKind + 0.5); if (k == 1) { float g = triGray(tMailC, vTri, vTriN, uMailTile); diffuseColor.rgb *= mix(0.55, 1.25, g); } if (k == 0) { float g = triGray(tPlateR, vTri, vTriN, uTile * uPlateTile * 1.7); diffuseColor.rgb *= mix(0.92, 1.04, g); }
-  if (k == 8) { float m = smoothstep(0.2, 0.6, triGray(tKnot, vTri, vTriN, 3.4)); diffuseColor.rgb *= 1.0 - 0.6 * m; }   // engraved: the knotwork as dark grooves in the steel
+  if (k == 8) { float m = smoothstep(0.2, 0.6, triGray(tKnot, vTri, vTriN, 8.0)); diffuseColor.rgb *= 1.0 - 0.28 * m; }   // engraved: the knotwork as dark grooves in the steel
   if (k == 6 || k == 7) { float m = texture2D(tInk, vec2(vInkUv.x, (clamp(vInkUv.y, 0.003, 0.997) + vInkCol.a) / INK_N)).r; vec3 ic = vInkCol.rgb; diffuseColor.rgb = mix(diffuseColor.rgb, ic, smoothstep(0.35, 0.55, m) * 0.92); } }`,   // the ink: the atlas's design (the band the attribute names) by the body's own uv, in the attribute's colour   // the rings read at a distance: the palette grey shaded by the ring mask
 };
 function modelMaterial(R, o = {}) {                          // the figure's material for a context: Phong on the low tier / thumbnails, the surface pass otherwise; cached per rig unless it carries its own colour
@@ -1744,7 +1744,7 @@ function lookInkKind(look, K) { return look.ink ? K.inkWolf : K.skin; }   // bar
 function lookKind(look, cls, mt, kd0) {
   const O = LOOK_ARMOR[look.kind] || LOOK_ARMOR.none, K = MODEL_KIND;
   if (mt === 'steel') { const p = O.paint && O.paint[cls] != null ? O.paint[cls] : O.base;
-    if (p === 'ironEngraved') return K.engraved; if (p === 'shirt' || p === 'breeches' || p === 'jack') return K.cloth; if (p === 'leather' || p === 'fur' || p === 'furDark' || p === 'furGrey') return K.leather; if (p === 'skin') return lookInkKind(look, K);
+    if (p === 'ironEngraved') return K.steel;   // (2026-09-18, "just remove that engraving": the knotwork grooves are off — plain steel; the shader's engraved kind stays unused) if (p === 'shirt' || p === 'breeches' || p === 'jack') return K.cloth; if (p === 'leather' || p === 'fur' || p === 'furDark' || p === 'furGrey') return K.leather; if (p === 'skin') return lookInkKind(look, K);
     return look.kind === 'mail' && LOOK_MAIL_PIECES.has(cls) ? K.mail : K.steel; }
   if (mt === 'cloth') { const c = O.clothOf && O.clothOf[cls]; return c === 'skin' ? lookInkKind(look, K) : c === 'fur' ? K.leather : K.cloth; }
   if (mt === 'skin' && (cls === 'torso' || cls === 'armL' || cls === 'armR')) return lookInkKind(look, K);   // the body under the armour: bare skin, inked if he bought ink

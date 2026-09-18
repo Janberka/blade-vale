@@ -673,20 +673,50 @@
   .hm-gear span.none { border-color: rgba(255,255,255,.18); color: var(--bv-ink2); }
   .hm-gear span:hover { background: rgba(143,232,154,.12); }
   .hm-gear span.look { border-color: #ffd34d; color: #ffd34d; }
-  /* THE BARBER (page-barber): rows of swatches and chips, the figure on the left changes as you tap */
-  .bb-row { display: grid; grid-template-columns: 110px 1fr; gap: 14px; align-items: start; padding: 14px 0; border-top: 1px solid #3a3247; }
-  .bb-lbl b { display: block; font-size: 13px; letter-spacing: 3px; text-transform: uppercase; color: #ffd34d; }
-  .bb-lbl span { font-size: 11px; color: #9a90ab; }
-  .bb-opts { display: flex; flex-wrap: wrap; gap: 10px; }
-  .bb-sw { position: relative; width: 44px; height: 44px; border-radius: 50%; border: 2px solid rgba(255,255,255,.18); cursor: pointer; padding: 0; touch-action: manipulation; }
-  .bb-sw span { position: absolute; left: 50%; top: 100%; transform: translateX(-50%); margin-top: 3px; font-size: 9px; letter-spacing: 1px; text-transform: uppercase; color: #9a90ab; white-space: nowrap; }
+  /* THE BARBER (page-barber): full bleed like the home — the figure fills the screen (at dusk, among ruins — afPreviewStage),
+     his choices in a column of EXPANDABLE MENUS down the right edge; each shows his pick closed, its swatches or chips open */
+  #start.barber { display: block; }
+  #start.barber #shell-left { position: absolute; inset: 0; flex: none; border: 0; background: transparent; }
+  #start.barber #home-preview-slot { position: absolute; inset: 0; }
+  #start.barber #af-preview canvas { background: linear-gradient(180deg, #17102a 0%, #3a1f4a 26%, #8a3a3a 44%, #d8703a 52%, #4a2a26 60%, #1a1210 100%) !important; }   /* the dusk sky: violet down to the last orange at the horizon */
+  #start.barber #af-preview-side { display: none; }
+  #start.barber #home-char { position: absolute; left: 12px; bottom: 12px; z-index: 2; width: auto; min-width: 200px; max-width: 320px; box-sizing: border-box; padding: 7px 10px; border: 1px solid var(--bv-gold-b); border-radius: 10px; background: var(--bv-card); box-shadow: 0 6px 20px rgba(0,0,0,.4); }
+  #start.barber #shell-right { position: absolute; inset: 0; z-index: 1; pointer-events: none; background: transparent; }
+  #start.barber #shell-bar { pointer-events: auto; border-bottom: 0; background: linear-gradient(180deg, rgba(8,6,14,.7), rgba(8,6,14,0)); }
+  #start.barber #shell-page { padding: 0; overflow: hidden; display: flex; justify-content: flex-end; }
+  #start.barber #page-barber.on { pointer-events: auto; width: clamp(250px, 30%, 360px); height: 100%; box-sizing: border-box; overflow-y: auto; overscroll-behavior: contain; padding: 6px 12px 20px; gap: 0; border-left: 1px solid var(--bv-gold-b); background: linear-gradient(90deg, rgba(8,6,14,.62), rgba(8,6,14,.86)); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
+  .bb-head { font-size: 10.5px; line-height: 1.4; color: var(--bv-ink2); padding: 4px 0 10px; }
+  .bb-sec { border-top: 1px solid rgba(233,184,61,.18); }
+  .bb-sec:last-of-type { border-bottom: 1px solid rgba(233,184,61,.18); }
+  .bb-hd { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; width: 100%; padding: 11px 4px; background: none; border: 0; color: inherit; text-align: left; cursor: pointer; touch-action: manipulation; }
+  .bb-hd:hover { background: rgba(255,211,77,.06); }
+  .bb-hd b { font-size: 12px; letter-spacing: 3px; text-transform: uppercase; color: #ffd34d; white-space: nowrap; }
+  .bb-hd span { font-size: 11px; letter-spacing: .5px; color: var(--bv-ink2); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bb-hd i { font-style: normal; font-size: 11px; color: #9a90ab; transition: transform .15s ease; }
+  .bb-sec.open .bb-hd i { transform: rotate(180deg); color: #ffd34d; }
+  .bb-sec.open .bb-hd span { color: #ffe2a8; }
+  .bb-bd { display: none; padding: 2px 4px 14px; }
+  .bb-sec.open .bb-bd { display: block; }
+  .bb-sub { font-size: 10.5px; color: #9a90ab; padding-bottom: 8px; }
+  .bb-opts { display: flex; flex-wrap: wrap; gap: 8px; }
+  .bb-sw { position: relative; width: 38px; height: 38px; border-radius: 50%; border: 2px solid rgba(255,255,255,.18); cursor: pointer; padding: 0; touch-action: manipulation; }
+  .bb-sw span { position: absolute; left: 50%; top: 100%; transform: translateX(-50%); margin-top: 2px; font-size: 8px; letter-spacing: 1px; text-transform: uppercase; color: #9a90ab; white-space: nowrap; }
   .bb-sw.on { border-color: #ffd34d; box-shadow: 0 0 0 3px rgba(255,211,77,.35); }
   .bb-sw.on span { color: #ffd34d; }
-  .bb-row:has(.bb-sw) .bb-opts { padding-bottom: 14px; gap: 12px 30px; }
-  .bb-ch { font: 700 12px system-ui, sans-serif; letter-spacing: 1.5px; text-transform: uppercase; color: #e8def8; background: rgba(0,0,0,.3); border: 1px solid rgba(255,207,91,.35); border-radius: 8px; padding: 10px 14px; cursor: pointer; touch-action: manipulation; }
+  .bb-opts:has(.bb-sw) { padding-bottom: 12px; gap: 14px 18px; }
+  .bb-ch { font: 700 11px system-ui, sans-serif; letter-spacing: 1.5px; text-transform: uppercase; color: #e8def8; background: rgba(0,0,0,.3); border: 1px solid rgba(255,207,91,.35); border-radius: 8px; padding: 8px 11px; cursor: pointer; touch-action: manipulation; }
   .bb-ch.on { background: rgba(255,180,80,.32); border-color: #ffcf5b; color: #ffe2a8; }
-  .bb-foot { display: flex; align-items: center; gap: 10px; padding-top: 14px; border-top: 1px solid #3a3247; font-size: 11px; color: #9a90ab; }
-  .bb-reset { font: 700 11px system-ui, sans-serif; letter-spacing: 1.5px; text-transform: uppercase; color: #c9bfda; background: none; border: 1px solid rgba(255,255,255,.2); border-radius: 8px; padding: 8px 12px; cursor: pointer; }
+  .bb-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding-top: 12px; font-size: 10.5px; color: #9a90ab; }
+  .bb-reset { font: 700 10.5px system-ui, sans-serif; letter-spacing: 1.5px; text-transform: uppercase; color: #c9bfda; background: none; border: 1px solid rgba(255,255,255,.2); border-radius: 8px; padding: 7px 11px; cursor: pointer; }
+  @media (max-width: 600px) {                      /* upright phone: the fighter above, the menus stacked under him */
+    #start.barber { display: flex; flex-direction: column; }
+    #start.barber #shell-left { position: relative; inset: auto; flex: 0 0 44vh; }
+    #start.barber #home-char { display: none !important; }
+    #start.barber #shell-right { position: relative; inset: auto; flex: 1; min-height: 0; pointer-events: auto; }
+    #start.barber #shell-bar { background: rgba(0,0,0,.25); }
+    #start.barber #shell-page { overflow-y: auto; }
+    #start.barber #page-barber.on { width: auto; height: auto; overflow: visible; border-left: 0; background: none; backdrop-filter: none; -webkit-backdrop-filter: none; padding: 8px 12px 20px; }
+  }
   #start.home #home-world-btn { font-size: 13px; padding: 9px 14px; margin: 0; }
   @media (min-width: 1100px) and (min-height: 620px) { #start.home #page-home.on, #start.home #home-char { zoom: 1.25; } }
   @media (min-width: 1500px) and (min-height: 820px) { #start.home #page-home.on, #start.home #home-char { zoom: 1.5; } }
@@ -1291,6 +1321,6 @@
 <script src="arena-items.js?v=13"></script>
 <script src="net-battle.js?v=6"></script>
 <script src="real-skin.js?v=1"></script>
-<script src="game.js?v=261"></script>
+<script src="game.js?v=262"></script>
 </body>
 </html>

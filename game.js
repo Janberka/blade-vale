@@ -19429,7 +19429,7 @@ function afMesher() {
 // giant runic sword — exported from the USDZ with its textures baked to vertex colours (scratchpad export.swift), so it
 // sits in the flat-shaded world without a texture. Fetched once at load; the ruins fall back to procedural pieces without it.
 let AF_RUINPACK = null;
-try { fetch('assets/ruins-pack.json').then(r => r.ok ? r.json() : null).then(j => { AF_RUINPACK = j; }).catch(() => {}); } catch (e) {}
+try { fetch('assets/ruins-pack.json').then(r => r.ok ? r.json() : null).then(j => { AF_RUINPACK = j; if (j && typeof afPreviewStage === 'function' && typeof SHELL !== 'undefined' && SHELL.page === 'barber') afPreviewStage(); }).catch(() => {}); } catch (e) {}   // (the barber's ruins are the pack's: if his chair is up before it lands, the stage is dressed then)
 function afPackGeo(name) {                                   // a pack piece as a non-indexed, vertex-coloured geometry in metres (base at y 0, centred in x/z)
   return cachedGeo('pack:' + name, () => { const P = AF_RUINPACK[name], pos = [], col = [], c = new THREE.Color(); for (const i of P.idx) { pos.push(P.pos[i * 3] / 100, P.pos[i * 3 + 1] / 100, P.pos[i * 3 + 2] / 100); c.setHex(P.col[i]); col.push(c.r, c.g, c.b); }
     const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3)); g.computeVertexNormals(); return g; });
@@ -23836,7 +23836,9 @@ function afPreviewEl() {
   const side = document.createElement('div'); side.id = 'af-preview-side'; side.style.cssText = 'position:absolute;left:0;right:0;bottom:0;padding:8px 10px;font-size:12px;line-height:1.45;background:linear-gradient(to top,rgba(8,6,14,.96),rgba(8,6,14,.8) 70%,rgba(8,6,14,0));pointer-events:none'; wrap.appendChild(side);
   const P = AF.preview = { wrap, cv, W: 0, H: 0, renderer: null, scene: new THREE.Scene(), camera: new THREE.PerspectiveCamera(30, 1, 0.1, 60), rig: null, yaw: -0.3, mounted: false, drag: null, crouch: 0 };
   try { P.renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: true }); P.renderer.setPixelRatio(resRatio(Math.min(window.devicePixelRatio || 1, qualityTier === 'low' ? 1.5 : 2))); P.renderer.toneMapping = THREE.ACESFilmicToneMapping; P.renderer.localClippingEnabled = true; } catch (e) { P.renderer = null; }   // (clipping: the planted sword's buried tip is cut at the sand)
-  P.scene.add(new THREE.HemisphereLight(0xbfd8ff, 0x6a5a44, 0.9)); const sun = new THREE.DirectionalLight(0xfff0d0, 1.1); sun.position.set(3, 6, 4); P.scene.add(sun);
+  const hemi = new THREE.HemisphereLight(0xbfd8ff, 0x6a5a44, 0.9), sun = new THREE.DirectionalLight(0xfff0d0, 1.1); sun.position.set(3, 6, 4);   // the day's light: the sky and one sun (afPreviewStage re-sets them per page — the barber's chair stands at dusk)
+  const fill = new THREE.DirectionalLight(0x6a80ff, 0), rim = new THREE.DirectionalLight(0xffc080, 0), front = new THREE.DirectionalLight(0xffe0c0, 0); fill.position.set(6, 3, 2); rim.position.set(2, 4, -6); front.position.set(0, 2, 7);
+  P.lights = { hemi, sun, fill, rim, front }; for (const l of Object.values(P.lights)) P.scene.add(l);
   const disc = new THREE.Mesh(new THREE.CircleGeometry(2.7, 32), mat(0xc9b79a, { shared: false })); disc.rotation.x = -Math.PI / 2; P.scene.add(disc); P.disc = disc;   // (wide enough that the planted sword's buried tip stays under it from the lens)
   const down = e => { P.drag = { x: e.clientX, y: e.clientY, yaw: P.yaw, moved: false }; P.holdT = performance.now(); try { cv.setPointerCapture(e.pointerId); } catch (err) {} }; const move = e => { if (P.drag) { if (Math.hypot(e.clientX - P.drag.x, e.clientY - P.drag.y) > 6) P.drag.moved = true; if (P.drag.moved) { P.yaw = P.drag.yaw + (e.clientX - P.drag.x) * 0.012; P.yawTo = null; } P.holdT = performance.now(); } }; const up = e => { const d = P.drag; P.drag = null; if (d && !d.moved) afPreviewClick(e); };   // a tap (no drag) picks what it lands on
   cv.addEventListener('pointerdown', down); cv.addEventListener('pointermove', move); cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
@@ -23998,8 +24000,10 @@ function afPreviewFrame() {
   const P = AF.preview; if (!P || !afShellVisible() || !P.renderer || !P.rig) { if (P) P.loop = false; return; }
   const w = P.cv.clientWidth, h = P.cv.clientHeight;
   if (w && h && (w !== P.W || h !== P.H)) { P.W = w; P.H = h; P.renderer.setSize(w, h, false); P.camera.aspect = w / h; P.camera.updateProjectionMatrix();
-    const k = Math.max(1, 1 / P.camera.aspect) * 1.08 * (SHELL.page === 'home' ? 1.42 : 1); P.camDef = { pos: new THREE.Vector3(0, P.mounted ? 2.9 : 2.1, (P.mounted ? 9.4 : 6.4) * k), look: new THREE.Vector3(0, P.mounted ? 1.9 : 1.45, 0) };   /* (on the home his canvas is the whole screen with the HUD round him: he stands back so the cards frame him) */
-    P.focus = null; P.cv.style.cursor = 'grab'; afPreviewLens(P, null); }   // a narrow canvas backs off so he fits; he sits a little high, clear of the strip along the bottom (a new page or size: the full figure again, at once)
+    const barber = SHELL.page === 'barber', k = Math.max(1, 1 / P.camera.aspect) * 1.08 * (SHELL.page === 'home' ? 1.42 : barber ? 1.15 : 1); P.camDef = { pos: new THREE.Vector3(0, P.mounted ? 2.9 : 2.1, (P.mounted ? 9.4 : 6.4) * k), look: new THREE.Vector3(0, P.mounted ? 1.9 : barber ? 1.6 : 1.45, 0) };   /* (on the home his canvas is the whole screen with the HUD round him: he stands back so the cards frame him; at the barber's he stands as tall as the screen, clear of the bar) */
+    const pb = barber && document.getElementById('page-barber'), off = pb && pb.offsetWidth && pb.offsetWidth < w * 0.6 ? pb.offsetWidth : 0;   // the barber's menu lies over the canvas's right edge: he stands centred in what it leaves (a phone upright stacks the menu under him instead — nothing to make room for)
+    if (off) P.camera.setViewOffset(w, h, off / 2, 0, w, h); else P.camera.clearViewOffset();
+    P.focus = null; P.cv.style.cursor = 'grab'; if (barber) afBarberSecFocus(); afPreviewLens(P, null); }   // a narrow canvas backs off so he fits (at the barber's, an open menu keeps the lens on its part of him); he sits a little high, clear of the strip along the bottom (a new page or size: the full figure again, at once)
   if (P.yawTo != null && !P.drag) { P.yaw = angleLerp(P.yaw, P.yawTo, clamp(dt0(P) * 6, 0, 1)); if (Math.abs(angleDelta(P.yaw, P.yawTo)) < 0.01) P.yawTo = null; }   // (only a pick turns him; a drag is yours)
   P.rig.group.rotation.y = P.yaw;                           // (he stands where you left him — drag turns him, nothing else does)
   // STANDING: the pose holds, and on top of it he breathes hard, like a man just out of the pit — the chest heaves,
@@ -24300,7 +24304,7 @@ function afShellPage(name, o) {
   const st = document.getElementById('start'); if (!st || !document.getElementById('page-' + name)) return;
   const root = name === 'home' || name === 'title';
   if (root) SHELL.stack.length = 0; else if (SHELL.page && SHELL.page !== name && !(o && o.replace)) SHELL.stack.push(SHELL.page);
-  SHELL.page = name; st.classList.remove('hidden'); st.classList.toggle('home', name === 'home');   // (the home is full bleed: the fighter under the HUD — index.html #start.home)
+  SHELL.page = name; st.classList.remove('hidden'); st.classList.toggle('home', name === 'home'); st.classList.toggle('barber', name === 'barber');   // (the home and the barber's chair are full bleed: the fighter under the HUD — index.html #start.home, #start.barber)
   for (const p of st.querySelectorAll('.page')) p.classList.toggle('on', p.id === 'page-' + name);
   const t = document.getElementById('shell-title'); if (t) t.textContent = SHELL.titles[name] || '';
   const b = document.getElementById('shell-back'); if (b) { b.style.visibility = root && !AF.on ? 'hidden' : ''; b.textContent = name === 'lobby' && AF.lobby && AF.lobby.role === 'guest' ? '← Leave' : AF.on && !SHELL.stack.length && name !== 'lobby' ? '← Fight' : '← Back'; }
@@ -24320,7 +24324,35 @@ function afShellFigure() {                                  // the figure on the
   const pal = prof ? (AF.profile.kind === 'npc' ? AF_TEAMS[1] : AF_TEAMS[0]) : (AF.lobby && afHostSeat() ? AF_TEAMS[AF.lobby.slots.findIndex(r => r.includes(afHostSeat()))] : AF_TEAMS[0]) || AF_TEAMS[0];
   const gear = prof ? AF.profile.gear : afPreviewGear(); if (!AF.preview.rig || JSON.stringify(AF.preview.gear) !== JSON.stringify(afGearClean(gear)) || AF.preview.pal !== pal.pal) afPreviewSet(gear, pal.pal, prof ? !!gear.horse : AF.preview.mounted);
   AF.preview.W = 0; afPreviewPose(0.3); if (AF.preview.rig) afPreviewHelm(AF.preview.rig.parts.modelRig);   // (the same figure: helm in hand on the home and at the barber's, on his head once he has armed)
-  if (AF.preview.disc) AF.preview.disc.material.color.setHex(SHELL.page === 'home' ? 0x120d0c : 0xc9b79a);   // (the home lights him from the HUD's gold ring, not from the sand)
+  afPreviewStage();                                          // the page's light and ground: the sand and the day's sun, the home's dark ring, the barber's dusk among the ruins
+}
+// THE STAGE he stands on, per page (2026-09-18, "put some ruins and make it dusk time, lights from all sides"): the market and
+// a fighter's page keep the plain sand under a noon sun; the home darkens the disc so the HUD's gold ring lights him; the
+// BARBER's chair stands at dusk in an old ruin — the sky violet, the sun low and orange from one side, a cool blue fill
+// from the other, a warm rim from behind and a soft front light, the ground wide and dusk-brown, the pack's broken shell,
+// its rocks and the runic sword behind him with column stumps and a wall stub (procedural, the mesher's) round them.
+function afPreviewStage() {
+  const P = AF.preview, L = P && P.lights; if (!P || !L) return; const page = SHELL.page, dusk = page === 'barber';
+  L.hemi.color.setHex(dusk ? 0x5a4a90 : 0xbfd8ff); L.hemi.groundColor.setHex(dusk ? 0x2a1c18 : 0x6a5a44); L.hemi.intensity = dusk ? 0.4 : 0.9;
+  L.sun.color.setHex(dusk ? 0xffa060 : 0xfff0d0); L.sun.intensity = dusk ? 1.1 : 1.1; L.sun.position.set(dusk ? -6 : 3, dusk ? 2.2 : 6, dusk ? 3 : 4);   // (dusk: the sun is low, from the left)
+  L.fill.intensity = dusk ? 0.4 : 0; L.rim.intensity = dusk ? 0.7 : 0; L.front.intensity = dusk ? 0.25 : 0;
+  if (P.disc) { P.disc.material.color.setHex(page === 'home' ? 0x120d0c : dusk ? 0x3e2e26 : 0xc9b79a); P.disc.scale.setScalar(dusk ? 10 : 1); }   // (the home lights him from the HUD's gold ring, not from the sand; the barber's ground runs to the horizon)
+  if (dusk && (!P.ruins || (!P.ruinsPack && AF_RUINPACK))) afPreviewRuins(P);
+  if (P.ruins) P.ruins.visible = dusk;
+}
+function afPreviewRuins(P) {
+  if (P.ruins) { P.scene.remove(P.ruins); try { P.ruins.geometry.dispose(); P.ruins.material.dispose(); } catch (e) {} P.ruins = null; }
+  const S = afMesher(), seed = _mulberry32(0x5eed), pack = AF_RUINPACK, KS = 1.5, OLD = 0x6e6256, OLD_D = 0x574d42, MOSS = 0x5c604a, DUSK = new THREE.Color(0.6, 0.48, 0.45);   // KS: the pack is human-scale; the preview's man stands ~3.3 tall (afPreviewFloor's S). DUSK: the pack's pale stone, darkened for the hour
+  const stone = () => afTint(seed() < 0.3 ? MOSS : OLD, 0.12, seed());
+  const rock = (x, z, yaw, sc) => { if (pack) S.add(afPackGeo('Rock' + (1 + ((seed() * 4) | 0))), x, -0.15 * sc, z, yaw, null, sc, sc, sc, 0, 0, DUSK); else { const sz = sc * 0.6; S.add(cachedGeo('af-rock', () => new THREE.IcosahedronGeometry(1, 0)), x, sz * 0.3, z, yaw, OLD_D, sz * 1.3, sz * 0.7, sz); } };
+  if (pack) { S.add(afPackGeo('Shell'), -7, -0.25, -14, 0.55, null, KS, KS, KS, 0, 0, DUSK); S.add(afPackGeo('Sword'), 9, -0.3, -16, -0.4, null, KS, KS, KS, 0.06, 0.04, DUSK); }   // the broken shell of a house far behind his left shoulder, the Vale's runic sword far back on his right
+  const col = (x, z, h, yaw) => { const c = stone(); S.box(1.5, 0.5, 1.5, x, 0.05, z, yaw, OLD_D); S.cyl(0.5, 0.56, h, 8, x, 0.3 + h / 2, z, yaw, c); if (h > 6) S.box(1.4, 0.5, 1.4, x, 0.3 + h + 0.25, z, yaw, c); };
+  col(-10, -6, 6.5, 0.2); col(-7.5, -8.5, 2.4, 0.4); col(-5, -11, 4.2, 0.1);   // a colonnade's last three columns march off behind his left, one still whole
+  S.cyl(0.5, 0.5, 3.2, 8, -8.5, 0.4, -4, 0.9, stone(), Math.PI / 2);          // a fallen drum before them
+  { const c = stone(), h = 2.6; S.box(3.4, h, 1.0, 6, h / 2, -12, -0.35, c); S.box(2.0, 0.9, 1.0, 6.4, h + 0.45, -12, -0.35, c); S.box(0.9, 0.8, 1.0, 6.8, h + 1.3, -12, -0.35, afTint(c, 0.1, seed()));   // a wall's two stubs with ragged tops behind his right, the gap between them fallen
+    S.box(2.2, 1.4, 1.0, 9.6, 0.7, -13, -0.35, c); S.box(1.1, 0.7, 1.0, 9.9, 1.75, -13, -0.35, afTint(c, 0.1, seed())); }
+  for (const [x, z, sc] of [[-3.5, -5, 0.8], [4, -6.5, 0.7], [-12, -12, 1.5], [12, -8, 1.0], [2.5, -9.5, 0.55], [-6, -19, 2.0], [14, -14, 1.8], [-14, -3, 1.2]]) rock(x, z, seed() * TAU, sc);   // rubble round the lot, bigger the farther back
+  const m = S.build({ cast: false, receive: false }); m.name = 'ruins'; P.scene.add(m); P.ruins = m; P.ruinsPack = !!pack;
 }
 function afShellBack() {
   const cur = SHELL.page; if (!cur) return;
@@ -24406,20 +24438,30 @@ function afLookSet(patch) {
 }
 function afBarberOpen() { afShellPage('barber'); afBarberRender(); }
 function afBarberRender() {
-  const p = document.getElementById('barber-body'); if (!p) return; const L = afLookGet();
+  const p = document.getElementById('barber-body'); if (!p) return; const L = afLookGet(), open = AF.barberSec || null;
+  const HAIR_COLOURS = ['black', 'dark brown', 'brown', 'auburn', 'red', 'fair', 'blond', 'grey', 'white'];
   const sw = (k, hexes, names) => hexes.map((h, i) => '<button class="bb-sw' + (L[k] === i ? ' on' : '') + '" data-k="' + k + '" data-i="' + i + '" title="' + names[i] + '" style="background:#' + h.toString(16).padStart(6, '0') + '"><span>' + names[i] + '</span></button>').join('');
   const chips = (k, names) => names.map((n, i) => '<button class="bb-ch' + (L[k] === i ? ' on' : '') + '" data-k="' + k + '" data-i="' + i + '">' + n + '</button>').join('');
-  const row = (label, sub, inner) => '<div class="bb-row"><div class="bb-lbl"><b>' + label + '</b><span>' + sub + '</span></div><div class="bb-opts">' + inner + '</div></div>';
-  p.innerHTML = '<div class="mk-head">' + (window.net && net.session ? 'Your face, kept with your career — every fighter in the pit sees it' : 'Kept in this browser — sign in and it follows your career') + ' · tap his head, a hand or the legs to look closer, tap again to step back</div>'
-    + row('Skin', 'the tone', sw('s', LOOK_SKIN, LOOK_SKIN_NAMES))
-    + row('Face', 'the bones', chips('f', LOOK_FACE_SHAPES))
-    + row('Hair', 'the cut', chips('h', LOOK_HAIR_STYLES))
-    + row('Colour', 'hair and beard', sw('c', LOOK_HAIR_PICK, ['black', 'dark brown', 'brown', 'auburn', 'red', 'fair', 'blond', 'grey', 'white']))
-    + row('Beard', 'the chin', chips('b', LOOK_BEARD_STYLES))
-    + row('Ink', 'on bare skin — the wolf pelt, the berserker\'s mantle', chips('i', LOOK_INK_NAMES))
-    + row('Ink colour', 'the dye', sw('k', LOOK_INK_COLOURS, LOOK_INK_COLOUR_NAMES))
+  const cur = (k, names) => L[k] != null && names[L[k]] != null ? names[L[k]] : 'the barber\'s pick';   // (what the closed menu shows: his pick, or none made)
+  // every row is a MENU that opens on a tap (one at a time): the label, his pick, and the choices under it
+  const sec = (id, label, sub, curTxt, inner) => '<div class="bb-sec' + (open === id ? ' open' : '') + '"><button class="bb-hd" data-sec="' + id + '"><b>' + label + '</b><span>' + escHtml(curTxt) + '</span><i>▾</i></button><div class="bb-bd"><div class="bb-sub">' + sub + '</div><div class="bb-opts">' + inner + '</div></div></div>';
+  p.innerHTML = '<div class="bb-head">' + (window.net && net.session ? 'Your face, kept with your career — every fighter in the pit sees it.' : 'Kept in this browser — sign in and it follows your career.') + ' Tap his head, a hand or the legs to look closer; tap again to step back.</div>'
+    + sec('s', 'Skin', 'the tone', cur('s', LOOK_SKIN_NAMES), sw('s', LOOK_SKIN, LOOK_SKIN_NAMES))
+    + sec('f', 'Face', 'the bones', cur('f', LOOK_FACE_SHAPES), chips('f', LOOK_FACE_SHAPES))
+    + sec('h', 'Hair', 'the cut', cur('h', LOOK_HAIR_STYLES), chips('h', LOOK_HAIR_STYLES))
+    + sec('c', 'Colour', 'hair and beard', cur('c', HAIR_COLOURS), sw('c', LOOK_HAIR_PICK, HAIR_COLOURS))
+    + sec('b', 'Beard', 'the chin', cur('b', LOOK_BEARD_STYLES), chips('b', LOOK_BEARD_STYLES))
+    + sec('i', 'Ink', 'on bare skin — the wolf pelt, the berserker\'s mantle', cur('i', LOOK_INK_NAMES), chips('i', LOOK_INK_NAMES))
+    + sec('k', 'Ink colour', 'the dye', cur('k', LOOK_INK_COLOUR_NAMES), sw('k', LOOK_INK_COLOURS, LOOK_INK_COLOUR_NAMES))
     + '<div class="bb-foot"><button class="bb-reset" data-reset="1">Let the barber choose</button><span>(the face your name rolls)</span></div>';
-  for (const b of p.querySelectorAll('button')) b.onclick = e => { e.stopPropagation(); if (b.dataset.reset) { afLookClear(); return; } afLookSet({ [b.dataset.k]: +b.dataset.i }); };
+  for (const b of p.querySelectorAll('button')) b.onclick = e => { e.stopPropagation();
+    if (b.dataset.reset) { afLookClear(); return; }
+    if (b.dataset.sec) { AF.barberSec = AF.barberSec === b.dataset.sec ? null : b.dataset.sec; afBarberSecFocus(); afBarberRender(); return; }   // a menu opens (and the last one closes); the lens comes in on what it dresses
+    afLookSet({ [b.dataset.k]: +b.dataset.i }); };
+}
+function afBarberSecFocus() {                               // the open menu's part of him: the face for skin, bones, hair, colour and beard; the chest for the ink; none open, the whole man
+  const P = AF.preview; if (!P || !P.rig || P.mounted) return; const s = AF.barberSec, part = !s ? null : s === 'i' || s === 'k' ? 'chest' : 'head';
+  P.focus = part ? { part } : null; P.cv.style.cursor = P.focus ? 'zoom-out' : 'grab';
 }
 function afLookClear() {                                    // back to the rolled face: the picks go (the server keeps an empty look as none)
   AF.myLook = null; try { localStorage.removeItem('bv-look'); } catch (e) {}

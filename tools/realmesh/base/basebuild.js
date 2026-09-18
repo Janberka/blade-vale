@@ -15,6 +15,24 @@ for (const side of ['L', 'R']) FING[side].forEach((chain, f) => chain.forEach((n
 const newIndex = new Map(KEEP.map(([nm], i) => [nm, i])), names = KEEP.map(k => k[1]);
 const parentNew = KEEP.map(([nm]) => { let p = R.parent[N.indexOf(nm)]; while (p >= 0 && !newIndex.has(N[p])) p = R.parent[p]; return p >= 0 ? newIndex.get(N[p]) : -1; });
 const worldNew = KEEP.map(([nm]) => W[N.indexOf(nm)]);
+// THE HANDS take the warrior's stance (2026-09-18, "I can see my fingernails when I need to see the palm"): Thor's hang palm-back with the fingers
+// drooping behind; the game's every hand pose is relative to the bind, so the base's hand is turned at the wrist onto the warrior's finger and
+// palm directions (bones and vertices alike), and the hand bone takes the warrior's own axes (+x up the forearm, +y past the fingers, +z to the
+// body — the carried helm and the gear holders are placed in that frame)
+const WR = G.read('view/models/warrior'), WW = G.bindWorlds(WR), wPos = n => G.translation(WW[WR.names.indexOf(n)]), wRot = n => WW[WR.names.indexOf(n)];
+const HANDFIX = {};
+for (const [side, wHand, wTip, wThumb] of [['R', 'n41', 'n52', 'n44'], ['L', 'n17', 'n28', 'n20']]) {
+  const hb = names.indexOf('hand' + side), wrist = G.translation(worldNew[hb]); const tip = G.translation(worldNew[names.indexOf('middle' + side + '3')]), th = G.translation(worldNew[names.indexOf('thumb' + side + '2')]);
+  const frameOf = (o, t, u, sgn) => { const f = V3.norm(V3.sub(t, o)), q = V3.norm(V3.sub(u, o)); let n = V3.norm(V3.cross(q, f)); if (sgn < 0) n = V3.scale(n, -1); const w = V3.norm(V3.cross(n, f)); return [f, w, n]; };   // fingers, across the palm, the palm's normal
+  const Fb = frameOf(wrist, tip, th, side === 'L' ? -1 : 1), Fw = frameOf(wPos(wHand), wPos(wTip), wPos(wThumb), side === 'L' ? -1 : 1);
+  const R = [0, 0, 0, 0, 0, 0, 0, 0, 0]; for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) { let v = 0; for (let k = 0; k < 3; k++) v += Fw[k][i] * Fb[k][j]; R[i * 3 + j] = v; }   // R = Fw · Fbᵀ (rows i, cols j): base directions → warrior directions
+  const rot = p => [R[0] * p[0] + R[1] * p[1] + R[2] * p[2], R[3] * p[0] + R[4] * p[1] + R[5] * p[2], R[6] * p[0] + R[7] * p[1] + R[8] * p[2]];
+  const M = [R[0], R[3], R[6], 0, R[1], R[4], R[7], 0, R[2], R[5], R[8], 0, 0, 0, 0, 1];   // column-major 4x4 of R
+  const about = w => { const t = G.translation(w); const m = G.mul(M, [w[0], w[1], w[2], 0, w[4], w[5], w[6], 0, w[8], w[9], w[10], 0, 0, 0, 0, 1]); const t2 = V3.add(wrist, rot(V3.sub(t, wrist))); m[12] = t2[0]; m[13] = t2[1]; m[14] = t2[2]; return m; };
+  const chain = KEEP.map(([, nm], i) => i).filter(i => { let j = i; while (j >= 0) { if (j === hb) return true; j = parentNew[j]; } return false; });
+  for (const i of chain) worldNew[i] = about(worldNew[i]);
+  { const w = wRot(wHand), t = G.translation(worldNew[hb]); worldNew[hb] = [w[0], w[1], w[2], 0, w[4], w[5], w[6], 0, w[8], w[9], w[10], 0, t[0], t[1], t[2], 1]; }   // the warrior's hand axes on the base's wrist
+  HANDFIX[side] = { wrist, rot, chain: new Set(chain) }; console.log('hand', side, 'turned onto the warrior stance; fingers', Fb[0].map(x => x.toFixed(2)), '->', Fw[0].map(x => x.toFixed(2))); }
 const localNew = worldNew.map((w, i) => parentNew[i] < 0 ? w : G.mul(G.invert(worldNew[parentNew[i]]), w));
 const skeleton = { names, parent: parentNew, world: worldNew, local: localNew };
 // every old bone -> a new one: the nearest kept ancestor, except that anything hanging off the wrist bones goes to the hand
@@ -33,6 +51,7 @@ function convert(short, partOf) { const src = R.meshes.find(x => x.short === sho
 const bodyPart = (b, p) => { const nm = names[b]; if (/^(hand|pinky|ring|middle|index|thumb)/.test(nm)) return 'hand' + nm.slice(-1).replace(/\d/, '') || 'hand'; if (nm.startsWith('arm') || nm.startsWith('fore') || nm.startsWith('clav')) return 'arm' + nm.slice(-1); return 'torso'; };
 const handPart = (b) => { const nm = names[b]; const side = /L\d?$/.test(nm) ? 'L' : 'R'; if (/^(hand|pinky|ring|middle|index|thumb)/.test(nm)) return 'hand' + side; if (/^fore/.test(nm)) return 'fore' + side; if (/^(arm|clav)/.test(nm)) return 'arm' + side; return 'torso'; };   // (parts: what the kit covers — the game hides a part under the piece over it)
 let body = convert('Body', handPart);
+{ const H = HANDFIX.R; const nv = M.nverts(body); let moved = 0; for (let v = 0; v < nv; v++) { let wh = 0; for (let c = 0; c < 4; c++) if (H.chain.has(body.ji[v*4+c])) wh += body.w[v*4+c]; if (wh <= 0) continue; const p = M.vpos(body, v), d = V3.sub(p, H.wrist), q = V3.add(H.wrist, H.rot(d)); const r = V3.lerp(p, q, wh); body.pos[v*3] = r[0]; body.pos[v*3+1] = r[1]; body.pos[v*3+2] = r[2]; moved++; } console.log('hand verts turned', moved); }
 const SKIN = (s, t) => [0.125 + 0.125 * (1 - Math.abs(2 * s - 1)), 0.5 + 0.125 * t];   // the plain skin patch (a triangle wave round the ring so the seam never crosses the patch's edge)
 // ---- the right forearm: a loft from the upper arm's cut to the wrist ----
 let loops = M.openLoops(body); const near = (c, r = 0.15) => loops.reduce((best, L) => { const d = V3.len(V3.sub(L.centre, c)); return d < r && (!best || d < best.d) ? { L, d } : best; }, null);
@@ -110,7 +129,7 @@ const TOP = 2.08, HK = 0.86, hairline = {}; for (const k in HL) hairline[k] = HL
 fs.writeFileSync(OUT + '/rig.json', JSON.stringify({ source: 'Thor_UNWORTHY_THOR.usdz (the user, 2026-09-17): body, head, eyes kept; forearms, legs and the left arm rebuilt; the warrior kit carried over by tools/realmesh/base', height: 2.08, hipY: bonePos('thighL')[1],
   map: { upperBody: 'spine1', head: 'head', shoulderL: 'armL', elbowL: 'foreL', handL: 'handL', shoulderR: 'armR', elbowR: 'foreR', handR: 'handR', hipL: 'thighL', kneeL: 'shinL', hipR: 'thighR', kneeR: 'shinR' },
   meshes: { sword: 'FantasyWarrior_sword_6_characters_0', shield: 'FantasyWarrior_shield_6_characters_0', cloak: 'FantasyWarrior_cloak_6_characters_0', armor: 'FantasyWarrior_armor_6_characters_0', body: 'base_body' },
-  swordHand: 'handR', shieldArm: 'foreL', bowHand: 'handL', cloakBones: [], reparent: {}, straighten: { arms: 0.55, legs: 1.0 }, plumeY: 0.30, fullBody: true, roundX: 0.66,
+  swordHand: 'handR', shieldArm: 'foreL', bowHand: 'handL', cloakBones: [], reparent: {}, straighten: { arms: 0.55, legs: 1.0 }, plumeY: 0.30, fullBody: true, roundX: 0.66, helmHand: { x: 0.03, y: 0.24, z: -0.14, rx: 0, ry: 0, rz: 0 },
   skull: { yc: 1.94, zc: 0.03, top: TOP, chin: 1.76, coverY: 2.0 }, hairline, face: { earY: 1.905, earZ: 0.045, chinX: 0.045, lipY: 1.875, lipZ: 0.13 } }, null, 1));
 console.log('wrote', OUT);
 })();

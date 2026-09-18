@@ -23,14 +23,14 @@
  ],
  "bounds": {
   "min": [
-   -0.10630750074682646,
-   1.8498837068129503,
-   -0.08997997815400517
+   -0.104366016734307,
+   1.8504669469831954,
+   -0.0881965667442636
   ],
   "max": [
-   0.10525441372965437,
-   2.1560035355261626,
-   0.18764961414547274
+   0.10630411403477931,
+   2.1552964079266115,
+   0.18826275089724515
   ]
  },
  "layout": "position f32x3, normal f32x3, uv f32x2 (origin bottom-left), index u16x3 — in that order, no padding",
@@ -41,5 +41,5 @@
   "rough": "helm_corinthian_rough.jpg",
   "occl": "helm_corinthian_occl.jpg"
  },
- "refit": "carried onto the base head with the sallet: eyes on the eyes, scale 0.845"
+ "refit": "carried onto the base head with the sallet: eyes on the eyes, scale 0.841"
 }

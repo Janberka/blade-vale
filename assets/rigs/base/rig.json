@@ -35,6 +35,14 @@
  "plumeY": 0.3,
  "fullBody": true,
  "roundX": 0.66,
+ "helmHand": {
+  "x": 0.03,
+  "y": 0.24,
+  "z": -0.14,
+  "rx": 0,
+  "ry": 0,
+  "rz": 0
+ },
  "skull": {
   "yc": 1.94,
   "zc": 0.03,

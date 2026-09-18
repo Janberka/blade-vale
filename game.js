@@ -1260,7 +1260,7 @@ async function loadModelRig(name) {
     if (key === 'body') { if (!pj.sculpted) { lookHeadRefine(m.geo, pj); lookRuggedHead(m.geo, pj); }   // (a sculpted head — pieces.json `sculpted`, the base — keeps its own face)   // (the face: refined one level, then roughened; the ink uv below covers the new vertices too)
       const hp = m.geo.getAttribute('position'), iuv = new Float32Array(hp.count * 2), HC = new Set(['head', 'hair', 'beard', 'brow', 'socket', 'scarL', 'scarR']);   // THE FACE'S INK UV: bearing round the skull (the front at the panel's middle) × height chin → crown, the atlas's last quarter
       for (let v = 0; v < hp.count; v++) { if (!HC.has(pj.classes[pj.vclass[v]])) continue; const x = hp.getX(v), y = hp.getY(v), z = hp.getZ(v) - LOOK_SKULL.zc; iuv[v * 2] = 0.8 + 0.2 * (0.5 + Math.atan2(x, z) / (Math.PI * 2)); iuv[v * 2 + 1] = clamp((y - LOOK_SKULL.chin) / (LOOK_SKULL.top + 0.02 - LOOK_SKULL.chin), 0, 1); }
-      m.geo.setAttribute('inkUv', new THREE.BufferAttribute(iuv, 2)); }
+      m.geo.setAttribute('inkUv', new THREE.BufferAttribute(pj.sculpted ? lookBodyInkUv(m, pj, g, spec, iuv) : iuv, 2)); }   // (the base: its own chest and arms into the atlas too — the lathed body carried theirs, a sculpted body has to be measured, and its seams split)
     if (key === 'armor') { const sk = pj.classes.indexOf('skirt'), sl = pj.classes.indexOf('sleeve'), cl = pj.mats.indexOf('cloth'), ps = m.geo.getAttribute('position'), idx = m.geo.index.array;   // the bake files the cloth showing at the ELBOWS under "skirt" (one connected cloth component; the arms hang at waist height in the bind pose) — only the flank tells: out past |x| 0.24 it is the arm's
       if (sk >= 0 && sl >= 0 && cl >= 0) { for (let v = 0; v < ps.count; v++) if (pj.vclass[v] === sk && pj.vmat[v] === cl && Math.abs(ps.getX(v)) >= 0.24) pj.vclass[v] = sl;
         for (let t = 0; t < pj.tri.length; t++) if (pj.tri[t] === sk && pj.vclass[idx[t * 3]] === sl && pj.vclass[idx[t * 3 + 1]] === sl && pj.vclass[idx[t * 3 + 2]] === sl) pj.tri[t] = sl;
@@ -1272,6 +1272,53 @@ async function loadModelRig(name) {
   if (modelDetailOn()) MODEL_DETAIL_LIVE = true;           // (so the pit's hour builds the sky the steel reflects before the first man is dressed)
   const kit = meshes.find(m => spec.meshes && m.name === spec.meshes.armor), tex = kit ? kit.tex : texs[0], entry = { name, spec, g, meshes, tex, pieces };   // (R.tex: the kit's palette — the shop's props and the old paths read it) await Promise.all(Object.keys(HELM_MODELS).map(k => loadHelmModel(entry, k)));   // the helms of their own (the Corinthian) load with him
   MODEL_RIGS.set(name, entry); return entry;
+}
+// THE BASE'S INK UV (2026-09-18, "inks are not working now at all"): the ink is a design in body space — the lathed body wrote its own
+// atlas uv ring by ring (modelBodyBuild), the head gets one at load, but the base is one sculpted mesh and its chest and arms had none:
+// they sampled the atlas's blank corner, so only the face took the ink. The same map, measured off the sculpt: the torso by bearing round
+// its axis (a quarter turn is the front) × height, hips → neck, into the first two fifths; each arm by bearing round the bone
+// (shoulder → elbow, elbow → wrist, in the lathed arm's own frame) × the way down it, the left into the third fifth, the right into
+// the fourth mirrored, so a sleeve's spiral matches. The hands, the legs and the feet stay on the blank corner: bare.
+function lookBodyInkUv(m, pj, g, spec, iuv) {
+  const geo = m.geo, pos = geo.getAttribute('position'), names = g.nodes.map(n => n.name), M = spec.map || {}, cls = c => pj.classes.indexOf(c);
+  const worldM = new Map(); m.joints.forEach((j, k) => worldM.set(j, new THREE.Matrix4().fromArray(m.ibm, k * 16).invert()));
+  const bone = nm => { const w = worldM.get(names.indexOf(M[nm] || nm)); return w ? new THREE.Vector3().setFromMatrixPosition(w) : null; };
+  // the panels: a mapping from a point on him into each — the torso's, and each arm's (the upper arm and the forearm along their bones)
+  const tI = cls('torso'); let y0 = 1e9, y1 = -1e9, cx = 0, cz = 0, n = 0;
+  for (let v = 0; v < pos.count; v++) if (pj.vclass[v] === tI) { const y = pos.getY(v); y0 = Math.min(y0, y); y1 = Math.max(y1, y); cx += pos.getX(v); cz += pos.getZ(v); n++; }
+  if (!n) return iuv; cx /= n; cz /= n;
+  const frame = d => { const u = new THREE.Vector3().crossVectors(d, Math.abs(d.z) < 0.9 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(1, 0, 0)).normalize(); return [u, new THREE.Vector3().crossVectors(u, d).normalize()]; };   // (modelBodyBuild's arm frame)
+  const p = new THREE.Vector3(), q = new THREE.Vector3(), segs = {};
+  for (const side of ['L', 'R']) { const A = bone('shoulder' + side), B = bone('elbow' + side), C = bone('hand' + side); if (!A || !B || !C) continue;
+    for (const [c, S, E, v0, v1] of [['arm' + side, A, B, 0, 0.42], ['fore' + side, B, C, 0.42, 1]]) { const d = E.clone().sub(S), L = d.length(); d.normalize(); const [u, w] = frame(d); segs[c] = { S, d, L, u, w, v0, v1, side }; } }
+  const PANEL = { torso: [0, 0.4], armL: [0.4, 0.2], armR: [0.6, 0.2], head: [0.8, 0.2] }, HEAD = new Set(['head', 'hair', 'beard', 'brow', 'socket', 'scarL', 'scarR']);   // (start, width; the head's panel is the loader's — its uv is written there, only its seams are split here)
+  const panelOf = c => c === 'torso' ? 'torso' : (c === 'armL' || c === 'foreL') ? 'armL' : (c === 'armR' || c === 'foreR') ? 'armR' : HEAD.has(c) ? 'head' : null;
+  const mapAt = (panel, seg, x, y, z) => {                   // a point's uv in a panel: seg names the arm's segment (the vertex's own class, or the nearer bone for a borrowed point)
+    if (panel === 'torso') { let b = Math.atan2(z - cz, x - cx) / (Math.PI * 2); b -= Math.floor(b); return [0.4 * b, clamp((y - y0) / Math.max(0.01, y1 - y0), 0, 1)]; }
+    if (panel === 'head') return [0.8 + 0.2 * (0.5 + Math.atan2(x, z - LOOK_SKULL.zc) / (Math.PI * 2)), clamp((y - LOOK_SKULL.chin) / (LOOK_SKULL.top + 0.02 - LOOK_SKULL.chin), 0, 1)];   // (the loader's face uv, for a borrowed point)
+    if (!panel) return [0, 0];
+    let G = segs[seg]; if (!G) { const a = segs['arm' + panel.slice(-1)], f = segs['fore' + panel.slice(-1)]; if (!a || !f) return [0, 0]; p.set(x, y, z); G = p.clone().sub(a.S).dot(a.d) < a.L ? a : f; }
+    p.set(x, y, z).sub(G.S); const t = clamp(p.dot(G.d) / G.L, 0, 1); q.copy(p).addScaledVector(G.d, -p.dot(G.d)); let f = Math.atan2(q.dot(G.w), q.dot(G.u)) / (Math.PI * 2); f -= Math.floor(f);
+    return [G.side === 'L' ? 0.4 + 0.2 * f : 0.8 - 0.2 * f, G.v0 + (G.v1 - G.v0) * t]; };
+  const pcls = pj.vclass.map(ci => panelOf(pj.classes[ci]));
+  for (let v = 0; v < pos.count; v++) { const pn = pcls[v]; if (!pn || pn === 'head') continue; const uv = mapAt(pn, pj.classes[pj.vclass[v]], pos.getX(v), pos.getY(v), pos.getZ(v)); iuv[v * 2] = uv[0]; iuv[v * 2 + 1] = uv[1]; }
+  // THE SEAMS: one mesh, so a triangle can bridge the torso and an arm (two panels), or straddle a panel's wrap (u 0.39 → 0.0) — either
+  // way it smears a whole panel across itself. Such a triangle takes its majority panel: the odd vertex is duplicated with that panel's
+  // uv at its own position, a wrap's low vertices are duplicated at the panel's far edge. The copies carry every other attribute as is.
+  const idx = Array.from(geo.index.array), n0 = pos.count, extra = [], uvx = [], dupOf = new Map();
+  const dup = (v, key, uv) => { const k = v + '|' + key; let d = dupOf.get(k); if (d == null) { d = n0 + extra.length; extra.push(v); uvx.push(uv[0], uv[1]); dupOf.set(k, d); } return d; };
+  const uvAt = v => v < n0 ? [iuv[v * 2], iuv[v * 2 + 1]] : [uvx[(v - n0) * 2], uvx[(v - n0) * 2 + 1]];
+  for (let t = 0; t < idx.length; t += 3) {
+    const vs = [idx[t], idx[t + 1], idx[t + 2]], pn = vs.map(v => pcls[v < n0 ? v : extra[v - n0]]); if (pn.every(x => !x)) continue;
+    const count = {}; for (const x of pn) count[x] = (count[x] || 0) + 1; const maj = Object.keys(count).sort((a, b) => count[b] - count[a] || (a === 'torso' ? -1 : 1))[0], mp = maj === 'null' ? null : maj;
+    for (let k = 0; k < 3; k++) if (pn[k] !== mp) { const v = vs[k], src = v < n0 ? v : extra[v - n0]; idx[t + k] = dup(src, 'p' + mp, mapAt(mp, null, pos.getX(src), pos.getY(src), pos.getZ(src))); }
+    if (!mp) continue; const [s0, W] = PANEL[mp], us = [0, 1, 2].map(k => uvAt(idx[t + k])[0]);
+    if (Math.max(...us) - Math.min(...us) > W * 0.5) for (let k = 0; k < 3; k++) if (us[k] - s0 < W * 0.5) { const v = idx[t + k], src = v < n0 ? v : extra[v - n0]; idx[t + k] = dup(src, 'w' + mp, [s0 + W - 0.002, uvAt(v)[1]]); }   // (the wrap: the low side moved to the far edge — a sliver of the panel, no smear)
+  }
+  if (!extra.length) return iuv;
+  for (const name of Object.keys(geo.attributes)) { const a = geo.attributes[name], sz = a.itemSize, out = new a.array.constructor((n0 + extra.length) * sz); out.set(a.array); for (let e = 0; e < extra.length; e++) for (let k = 0; k < sz; k++) out[(n0 + e) * sz + k] = a.array[extra[e] * sz + k]; geo.setAttribute(name, new THREE.BufferAttribute(out, sz, a.normalized)); }
+  geo.setIndex(new THREE.BufferAttribute(new Uint32Array(idx), 1)); for (const e of extra) { pj.vclass.push(pj.vclass[e]); pj.vmat.push(pj.vmat[e]); }
+  const out = new Float32Array((n0 + extra.length) * 2); out.set(iuv); out.set(uvx, n0 * 2); return out;
 }
 // ---------- THE BODY UNDER THE ARMOUR (2026-09-16, "we need a naked body and armours should be attached to it") ----------
 // The warrior came as armour + a head + hands: a bare-chested look used to paint the CUIRASS skin-colour, so a berserker was a

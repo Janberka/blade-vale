@@ -23806,6 +23806,9 @@ function afLobbyRender() {
   { const row = document.getElementById('al-row-wager'), W = window.ARENA_CAT ? ARENA_CAT.WAGERS : [0];   // THE WAGER: the host's stake, every signed-in player in the pit puts up the same
     if (row) { row.classList.toggle('hidden', !signed); for (const w of W) { const el = document.getElementById('al-wager-' + w); if (el) { el.classList.toggle('on', (L.wager | 0) === w); el.disabled = !host; } }
       const note = document.getElementById('al-wager-note'); if (note) note.textContent = L.wager ? 'Win: the stake back and as much again. Lose: the stake. Nobody stakes more than he has.' : ''; } }
+  { const sm = document.getElementById('al-more-sum'), on = id => { const r = document.getElementById(id); return r && !r.classList.contains('hidden'); };   // THE REST OF THE SETTINGS, folded away (index.html .al-more): closed, the line names what he picked — only of the rows this venue shows
+    if (sm) { const bits = []; if (on('al-row-pit')) bits.push(L.pit || 'wide'); if (on('al-row-time')) bits.push(L.time || 'day'); if (on('al-row-wx')) bits.push(L.weather || 'clear'); if (on('al-row-ground')) bits.push(L.ground || 'broken'); bits.push((L.xp || 'mixed') + ' foes'); if (L.wager) bits.push(L.wager + ' gold on it');
+      sm.textContent = bits.join(' · '); } }
   { const ct2 = document.getElementById('al-career-txt'), rv = AF.career && AF.career.meta && AF.career.meta.rival;   // THE RIVAL: he is seated against you
     if (ct2 && signed && host && rv && AF.career) ct2.innerHTML += ' &nbsp;·&nbsp; ⚔ your rival ' + afProfLink(rv.name, 'npc') + ' is seated against you' + (rv.times > 1 ? ' (he felled you ' + rv.times + ' times)' : ''); }
   const sub = document.getElementById('al-sub'); if (sub) sub.textContent = pit ? (host ? 'An illegal ring in a cellar under the tanners\' quarter: two or three fighters, every man for himself, swords only. Rookies cut their teeth here before the Colosseum.' : L.host + ' called a fight in the pits — every man for himself, swords only. Take a corner and wait for the bell.') : host ? 'Choose the teams, invite players who are online, and every empty place is taken by a fighter of the vale.' : L.host + ' set the teams — pick a side, pick a weapon, and wait for the bell.';
@@ -24693,6 +24696,7 @@ function afLobbyWeapon(w) {
   for (const gr of Object.keys(AF_GROUNDS)) { const el = g('al-gr-' + gr); if (el) el.onclick = () => setOpt('ground', gr); }
   for (const xb of ['green', 'mixed', 'veteran']) { const el = g('al-xp-' + xb); if (el) el.onclick = () => { const L = AF.lobby; if (!L || L.role !== 'host') return; L.xp = xb; afRollNpcMix(L); afLobbyRender(); afLobbyBroadcast(); }; }
   for (const w of (window.ARENA_CAT ? ARENA_CAT.WAGERS : [0])) { const el = g('al-wager-' + w); if (el) el.onclick = () => { const L = AF.lobby; if (!L || L.role !== 'host') return; L.wager = w; afLobbyRender(); afLobbyBroadcast(); }; }
+  if (g('al-more-btn')) g('al-more-btn').onclick = () => { const m = g('al-more'); if (m) m.classList.toggle('open'); };   // the rest of the settings fold open (index.html .al-more)
   if (g('al-market')) g('al-market').onclick = afMarketOpen;
   g('al-inv-btn').onclick = () => { const i = g('al-inv-name'); afInvite(i.value); i.value = ''; };
   g('al-inv-name').addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') { afInvite(g('al-inv-name').value); g('al-inv-name').value = ''; } });

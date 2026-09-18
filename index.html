@@ -390,15 +390,31 @@
     #home-char-name { font-size: 14px; }
   }
   #page-lobby .al-sub { font-size: 14px; opacity: .7; margin: -2px 0 2px; }
+  @media (max-width: 700px) { .al-cfg { gap: 10px 16px; padding: 8px 10px; }
+    #al-cfg .wp-row > span { flex: 1 1 100%; text-align: center; }   /* a narrow screen: the label on its own line, its buttons whole under it (a stepper split across two lines read as two settings) */
+    .al-more.open .al-more-bd { gap: 10px 16px; } }
   .al-cfg { display: flex; gap: 22px; flex-wrap: wrap; justify-content: center; align-items: center;
     padding: 10px 18px; border: 1px solid rgba(255,207,91,.3); border-radius: 10px; background: rgba(0,0,0,.28); pointer-events: auto; }
-  .al-cfg .wp-row { margin: 0; gap: 8px; }
+  .al-cfg .wp-row { margin: 0; gap: 8px; flex-wrap: wrap; justify-content: center; }
+  .al-cfg .wp-row span { flex: 0 0 auto; }
   .al-cfg .wp-row span { width: auto; font-size: 13px; letter-spacing: 1px; text-transform: uppercase; color: #ffe2a8; }
-  .al-cfg .al-wpn { display: flex; gap: 6px; }
+  .al-cfg .al-wpn { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
   .al-cfg .al-wpn button { cursor: pointer; width: auto; height: auto; padding: 5px 12px; border-radius: 6px; border: 1px solid rgba(255,207,91,.4);
     background: rgba(0,0,0,.3); color: #e9eef5; font-size: 13px; }
   .al-cfg .al-wpn button.on { background: rgba(255,180,80,.32); border-color: #ffcf5b; color: #ffe2a8; }
-  #al-teams { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; max-width: 1100px; pointer-events: auto; }
+  /* the rest of the settings - the pit's size, the hour, the sky, the ground, the foes, the wager - behind one line you tap open */
+  .al-more { flex: 1 1 100%; width: 100%; min-width: 0; border-top: 1px solid rgba(255,207,91,.22); margin-top: 2px; }
+  .al-more-hd { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; width: 100%; padding: 9px 4px 7px; background: none; border: 0; color: inherit; cursor: pointer; touch-action: manipulation; }
+  .al-more-hd:hover { background: rgba(255,211,77,.06); }
+  .al-more-hd b { font-size: 13px; letter-spacing: 1px; text-transform: uppercase; color: #ffe2a8; font-weight: 600; }
+  .al-more-hd span { font-size: 12px; letter-spacing: .5px; color: var(--bv-ink2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .al-more-hd i { font-style: normal; font-size: 11px; color: #9a90ab; transition: transform .15s ease; }
+  .al-more.open .al-more-hd i { transform: rotate(180deg); color: #ffd34d; }
+  .al-more.open .al-more-hd span { display: none; }
+  .al-more-bd { display: none; }
+  .al-more.open .al-more-bd { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 10px 22px; padding: 2px 0 8px; }
+  .al-more-bd #al-wager-note { flex: 1 1 100%; text-align: center; }
+  #al-teams { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; width: 100%; max-width: 1100px; pointer-events: auto; }
   .al-team { min-width: 170px; max-width: 220px; flex: 1 1 170px; border-radius: 10px; padding: 10px 12px;
     background: rgba(0,0,0,.32); border: 1px solid var(--tc, #ffcf5b); box-shadow: inset 0 0 0 1px rgba(0,0,0,.4); text-align: left; }
   .al-team .al-tname { font-weight: 800; letter-spacing: 2px; font-size: 13px; color: var(--tc, #ffcf5b); display: flex; justify-content: space-between; align-items: center; }
@@ -408,14 +424,14 @@
   .al-slot.you { background: rgba(255,207,91,.16); color: #ffe2a8; font-weight: 700; }
   .al-slot.player { background: rgba(120,200,255,.14); color: #d6ecff; }
   .al-slot .al-tag { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; opacity: .7; }
-  #al-online { width: min(560px, 92vw); pointer-events: auto; text-align: left; font-size: 13px;
+  #al-online { width: 100%; max-width: 560px; box-sizing: border-box; pointer-events: auto; text-align: left; font-size: 13px;
     border: 1px solid rgba(120,200,255,.3); border-radius: 10px; background: rgba(0,0,0,.28); padding: 10px 14px; }
   #al-online .al-ohead { font-size: 12px; letter-spacing: 2px; text-transform: uppercase; color: #9fd6ff; display: flex; justify-content: space-between; }
   #al-online .al-orow { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; border-top: 1px solid rgba(255,255,255,.06); }
   #al-online button { cursor: pointer; padding: 4px 12px; border-radius: 6px; border: 1px solid #6fa8ff; background: rgba(80,140,255,.16); color: #d6ecff; font-size: 12px; }
   #al-online button:disabled { opacity: .5; cursor: default; }
   #al-online .al-inv { display: flex; gap: 8px; margin-top: 8px; }
-  #al-online .al-inv input { flex: 1; background: rgba(0,0,0,.5); border: 1px solid rgba(120,200,255,.35); border-radius: 6px; color: #e9eef5; padding: 6px 10px; font-size: 13px; outline: none; }
+  #al-online .al-inv input { flex: 1 1 0; min-width: 0; background: rgba(0,0,0,.5); border: 1px solid rgba(120,200,255,.35); border-radius: 6px; color: #e9eef5; padding: 6px 10px; font-size: 13px; outline: none; }
   #al-msg { min-height: 18px; font-size: 13px; color: #ffe089; }
   #al-career { pointer-events: auto; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: center; font-size: 13px; color: #ffe2a8;
     border: 1px solid rgba(255,207,91,.3); border-radius: 10px; background: rgba(0,0,0,.28); padding: 7px 14px; }
@@ -1127,13 +1143,18 @@
     <div class="wp-row" id="al-row-teams"><span id="al-teams-lbl">Teams</span><button id="al-teams-minus">−</button><b id="al-teams-n">2</b><button id="al-teams-plus">+</button></div>
     <div class="wp-row" id="al-row-per"><span>Fighters per team</span><button id="al-per-minus10">«</button><button id="al-per-minus">−</button><b id="al-per-n">3</b><button id="al-per-plus">+</button><button id="al-per-plus10">»</button></div>
     <div class="wp-row"><span>You ride in with</span><div class="al-wpn"><button id="al-wpn-sword" class="on">🗡 Sword</button><button id="al-wpn-bow">🏹 Bow</button><button id="al-wpn-horse">🐎 Horse</button></div></div>
+    <div class="al-more" id="al-more">
+      <button class="al-more-hd" id="al-more-btn"><b>The ground &amp; the hour</b><span id="al-more-sum"></span><i>&#9662;</i></button>
+      <div class="al-more-bd">
     <div class="wp-row" id="al-row-pit"><span>Pit</span><div class="al-wpn"><button id="al-pit-cosy">Cosy</button><button id="al-pit-wide" class="on">Wide</button><button id="al-pit-vast">Vast</button><button id="al-pit-colossal">Colossal</button></div></div>
-    <div class="wp-row" id="al-row-time"><span>Hour</span><div class="al-wpn"><button id="al-time-day" class="on">☀ Day</button><button id="al-time-dusk">🌇 Dusk</button><button id="al-time-night">🌙 Night</button></div></div>
-    <div class="wp-row" id="al-row-wx"><span>Sky</span><div class="al-wpn"><button id="al-wx-clear" class="on">Clear</button><button id="al-wx-rain">🌧 Rain</button></div></div>
-    <div class="wp-row" id="al-row-ground"><span>Ground</span><div class="al-wpn"><button id="al-gr-sand">Sand</button><button id="al-gr-hills">⛰ Hills</button><button id="al-gr-rocks">🪨 Rocks</button><button id="al-gr-broken" class="on">Broken</button></div></div>
-    <div class="wp-row"><span>Foes</span><div class="al-wpn"><button id="al-xp-green">🐣 Green</button><button id="al-xp-mixed" class="on">⚔ Mixed</button><button id="al-xp-veteran">💀 Veteran</button></div></div>
-    <div class="wp-row hidden" id="al-row-wager" title="Gold on the fight: every signed-in player in the pit stakes the same"><span>Wager</span><div class="al-wpn"><button id="al-wager-0" class="on">None</button><button id="al-wager-25">25</button><button id="al-wager-50">50</button><button id="al-wager-100">100</button><button id="al-wager-200">200</button></div></div>
-    <div id="al-wager-note" class="al-sub" style="font-size:12px;opacity:.8"></div>
+      <div class="wp-row" id="al-row-time"><span>Hour</span><div class="al-wpn"><button id="al-time-day" class="on">☀ Day</button><button id="al-time-dusk">🌇 Dusk</button><button id="al-time-night">🌙 Night</button></div></div>
+      <div class="wp-row" id="al-row-wx"><span>Sky</span><div class="al-wpn"><button id="al-wx-clear" class="on">Clear</button><button id="al-wx-rain">🌧 Rain</button></div></div>
+      <div class="wp-row" id="al-row-ground"><span>Ground</span><div class="al-wpn"><button id="al-gr-sand">Sand</button><button id="al-gr-hills">⛰ Hills</button><button id="al-gr-rocks">🪨 Rocks</button><button id="al-gr-broken" class="on">Broken</button></div></div>
+      <div class="wp-row"><span>Foes</span><div class="al-wpn"><button id="al-xp-green">🐣 Green</button><button id="al-xp-mixed" class="on">⚔ Mixed</button><button id="al-xp-veteran">💀 Veteran</button></div></div>
+      <div class="wp-row hidden" id="al-row-wager" title="Gold on the fight: every signed-in player in the pit stakes the same"><span>Wager</span><div class="al-wpn"><button id="al-wager-0" class="on">None</button><button id="al-wager-25">25</button><button id="al-wager-50">50</button><button id="al-wager-100">100</button><button id="al-wager-200">200</button></div></div>
+      <div id="al-wager-note" class="al-sub" style="font-size:12px;opacity:.8"></div>
+    </div>
+    </div>
   </div>
   <div id="al-teams"></div>
   <div id="al-online">
@@ -1320,6 +1341,6 @@
 <script src="arena-items.js?v=13"></script>
 <script src="net-battle.js?v=6"></script>
 <script src="real-skin.js?v=1"></script>
-<script src="game.js?v=267"></script>
+<script src="game.js?v=268"></script>
 </body>
 </html>

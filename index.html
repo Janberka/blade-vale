@@ -589,7 +589,6 @@
   #start.home #shell-left { position: absolute; inset: 0; flex: none; border: 0; background: transparent; }
   #start.home #home-preview-slot { position: absolute; inset: 0; }
   #start.home #home-preview-slot::after { content: ''; position: absolute; left: 50%; bottom: 9%; width: 40%; height: 13%; transform: translateX(-50%); border-radius: 50%; border: 1px solid rgba(233,184,61,.5); box-shadow: 0 0 46px rgba(233,184,61,.28), inset 0 0 36px rgba(233,184,61,.16); background: radial-gradient(ellipse at 50% 50%, rgba(233,184,61,.14), rgba(233,184,61,0) 70%); pointer-events: none; }
-  #start.home #af-preview canvas { background: radial-gradient(ellipse at 50% 62%, rgba(233,184,61,.16), rgba(0,0,0,0) 60%) !important; }
   #start.home #home-char { position: absolute; left: 12px; top: 12px; z-index: 2; width: calc((100% - 24px) * .3); min-width: 200px; max-width: 320px; box-sizing: border-box; padding: 7px 10px; border: 1px solid var(--bv-gold-b); border-radius: 10px; background: var(--bv-card); box-shadow: 0 6px 20px rgba(0,0,0,.4); }
   #start.home #home-char-more, #start.home #home-char-sub .hc-more { display: none; }
   #start.home #shell-right { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
@@ -678,7 +677,7 @@
   #start.barber { display: block; }
   #start.barber #shell-left { position: absolute; inset: 0; flex: none; border: 0; background: transparent; }
   #start.barber #home-preview-slot { position: absolute; inset: 0; }
-  #start.barber #af-preview canvas { background: linear-gradient(180deg, #17102a 0%, #3a1f4a 26%, #8a3a3a 44%, #d8703a 52%, #4a2a26 60%, #1a1210 100%) !important; }   /* the dusk sky: violet down to the last orange at the horizon */
+  #start.dusk #af-preview canvas { background: linear-gradient(180deg, #17102a 0%, #3a1f4a 18%, #8a3a3a 30%, #d8703a 37%, #7a3a34 41%, #1a1210 100%) !important; }   /* the dusk sky behind the canvas (the title, the home, the barber's — afPreviewDusk): violet down to the last orange at the horizon, the ground's fog colour under it */
   #start.barber #af-preview-side { display: none; }
   #start.barber #home-char { position: absolute; left: 12px; bottom: 12px; z-index: 2; width: auto; min-width: 200px; max-width: 320px; box-sizing: border-box; padding: 7px 10px; border: 1px solid var(--bv-gold-b); border-radius: 10px; background: var(--bv-card); box-shadow: 0 6px 20px rgba(0,0,0,.4); }
   #start.barber #shell-right { position: absolute; inset: 0; z-index: 1; pointer-events: none; background: transparent; }
@@ -1321,6 +1320,6 @@
 <script src="arena-items.js?v=13"></script>
 <script src="net-battle.js?v=6"></script>
 <script src="real-skin.js?v=1"></script>
-<script src="game.js?v=262"></script>
+<script src="game.js?v=263"></script>
 </body>
 </html>

@@ -24304,7 +24304,7 @@ function afShellPage(name, o) {
   const st = document.getElementById('start'); if (!st || !document.getElementById('page-' + name)) return;
   const root = name === 'home' || name === 'title';
   if (root) SHELL.stack.length = 0; else if (SHELL.page && SHELL.page !== name && !(o && o.replace)) SHELL.stack.push(SHELL.page);
-  SHELL.page = name; st.classList.remove('hidden'); st.classList.toggle('home', name === 'home'); st.classList.toggle('barber', name === 'barber');   // (the home and the barber's chair are full bleed: the fighter under the HUD — index.html #start.home, #start.barber)
+  SHELL.page = name; st.classList.remove('hidden'); st.classList.toggle('home', name === 'home'); st.classList.toggle('barber', name === 'barber'); st.classList.toggle('dusk', afPreviewDusk(name));   // (the home and the barber's chair are full bleed: the fighter under the HUD — index.html #start.home, #start.barber; .dusk: the sky behind the canvas — afPreviewStage)
   for (const p of st.querySelectorAll('.page')) p.classList.toggle('on', p.id === 'page-' + name);
   const t = document.getElementById('shell-title'); if (t) t.textContent = SHELL.titles[name] || '';
   const b = document.getElementById('shell-back'); if (b) { b.style.visibility = root && !AF.on ? 'hidden' : ''; b.textContent = name === 'lobby' && AF.lobby && AF.lobby.role === 'guest' ? '← Leave' : AF.on && !SHELL.stack.length && name !== 'lobby' ? '← Fight' : '← Back'; }
@@ -24331,27 +24331,29 @@ function afShellFigure() {                                  // the figure on the
 // BARBER's chair stands at dusk in an old ruin — the sky violet, the sun low and orange from one side, a cool blue fill
 // from the other, a warm rim from behind and a soft front light, the ground wide and dusk-brown, the pack's broken shell,
 // its rocks and the runic sword behind him with column stumps and a wall stub (procedural, the mesher's) round them.
+function afPreviewDusk(page) { return page === 'barber' || page === 'home' || page === 'title'; }   // where he stands at dusk among the ruins: the barber's chair, and the first screens — the title and the home
 function afPreviewStage() {
-  const P = AF.preview, L = P && P.lights; if (!P || !L) return; const page = SHELL.page, dusk = page === 'barber';
+  const P = AF.preview, L = P && P.lights; if (!P || !L) return; const page = SHELL.page, dusk = afPreviewDusk(page);
   L.hemi.color.setHex(dusk ? 0x5a4a90 : 0xbfd8ff); L.hemi.groundColor.setHex(dusk ? 0x2a1c18 : 0x6a5a44); L.hemi.intensity = dusk ? 0.4 : 0.9;
   L.sun.color.setHex(dusk ? 0xffa060 : 0xfff0d0); L.sun.intensity = dusk ? 1.1 : 1.1; L.sun.position.set(dusk ? -6 : 3, dusk ? 2.2 : 6, dusk ? 3 : 4);   // (dusk: the sun is low, from the left)
   L.fill.intensity = dusk ? 0.4 : 0; L.rim.intensity = dusk ? 0.7 : 0; L.front.intensity = dusk ? 0.25 : 0;
-  if (P.disc) { P.disc.material.color.setHex(page === 'home' ? 0x120d0c : dusk ? 0x3e2e26 : 0xc9b79a); P.disc.scale.setScalar(dusk ? 10 : 1); }   // (the home lights him from the HUD's gold ring, not from the sand; the barber's ground runs to the horizon)
+  if (P.disc) { P.disc.material.color.setHex(dusk ? 0x3e2e26 : 0xc9b79a); P.disc.scale.setScalar(dusk ? 16 : 1); }   // (at dusk the ground runs to the horizon)
+  P.scene.fog = dusk ? (P.duskFog || (P.duskFog = new THREE.Fog(0x7a3a34, 22, 60))) : null;   // (the far ruins fade into the last of the light; he stands well inside it)
   if (dusk && (!P.ruins || (!P.ruinsPack && AF_RUINPACK))) afPreviewRuins(P);
   if (P.ruins) P.ruins.visible = dusk;
 }
 function afPreviewRuins(P) {
   if (P.ruins) { P.scene.remove(P.ruins); try { P.ruins.geometry.dispose(); P.ruins.material.dispose(); } catch (e) {} P.ruins = null; }
-  const S = afMesher(), seed = _mulberry32(0x5eed), pack = AF_RUINPACK, KS = 1.5, OLD = 0x6e6256, OLD_D = 0x574d42, MOSS = 0x5c604a, DUSK = new THREE.Color(0.6, 0.48, 0.45);   // KS: the pack is human-scale; the preview's man stands ~3.3 tall (afPreviewFloor's S). DUSK: the pack's pale stone, darkened for the hour
+  const S = afMesher(), seed = _mulberry32(0x5eed), pack = AF_RUINPACK, KS = 2.3, OLD = 0x6e6256, OLD_D = 0x574d42, MOSS = 0x5c604a, DUSK = new THREE.Color(0.6, 0.48, 0.45);   // KS: the pack is human-scale; the preview's man stands ~3.3 tall (afPreviewFloor's S). DUSK: the pack's pale stone, darkened for the hour
   const stone = () => afTint(seed() < 0.3 ? MOSS : OLD, 0.12, seed());
   const rock = (x, z, yaw, sc) => { if (pack) S.add(afPackGeo('Rock' + (1 + ((seed() * 4) | 0))), x, -0.15 * sc, z, yaw, null, sc, sc, sc, 0, 0, DUSK); else { const sz = sc * 0.6; S.add(cachedGeo('af-rock', () => new THREE.IcosahedronGeometry(1, 0)), x, sz * 0.3, z, yaw, OLD_D, sz * 1.3, sz * 0.7, sz); } };
-  if (pack) { S.add(afPackGeo('Shell'), -7, -0.25, -14, 0.55, null, KS, KS, KS, 0, 0, DUSK); S.add(afPackGeo('Sword'), 9, -0.3, -16, -0.4, null, KS, KS, KS, 0.06, 0.04, DUSK); }   // the broken shell of a house far behind his left shoulder, the Vale's runic sword far back on his right
-  const col = (x, z, h, yaw) => { const c = stone(); S.box(1.5, 0.5, 1.5, x, 0.05, z, yaw, OLD_D); S.cyl(0.5, 0.56, h, 8, x, 0.3 + h / 2, z, yaw, c); if (h > 6) S.box(1.4, 0.5, 1.4, x, 0.3 + h + 0.25, z, yaw, c); };
-  col(-10, -6, 6.5, 0.2); col(-7.5, -8.5, 2.4, 0.4); col(-5, -11, 4.2, 0.1);   // a colonnade's last three columns march off behind his left, one still whole
-  S.cyl(0.5, 0.5, 3.2, 8, -8.5, 0.4, -4, 0.9, stone(), Math.PI / 2);          // a fallen drum before them
-  { const c = stone(), h = 2.6; S.box(3.4, h, 1.0, 6, h / 2, -12, -0.35, c); S.box(2.0, 0.9, 1.0, 6.4, h + 0.45, -12, -0.35, c); S.box(0.9, 0.8, 1.0, 6.8, h + 1.3, -12, -0.35, afTint(c, 0.1, seed()));   // a wall's two stubs with ragged tops behind his right, the gap between them fallen
-    S.box(2.2, 1.4, 1.0, 9.6, 0.7, -13, -0.35, c); S.box(1.1, 0.7, 1.0, 9.9, 1.75, -13, -0.35, afTint(c, 0.1, seed())); }
-  for (const [x, z, sc] of [[-3.5, -5, 0.8], [4, -6.5, 0.7], [-12, -12, 1.5], [12, -8, 1.0], [2.5, -9.5, 0.55], [-6, -19, 2.0], [14, -14, 1.8], [-14, -3, 1.2]]) rock(x, z, seed() * TAU, sc);   // rubble round the lot, bigger the farther back
+  if (pack) { S.add(afPackGeo('Shell'), -12, -0.25, -24, 0.55, null, KS, KS, KS, 0, 0, DUSK); S.add(afPackGeo('Sword'), 15, -0.3, -27, -0.4, null, KS, KS, KS, 0.06, 0.04, DUSK); }   // the broken shell of a house far behind his left shoulder, the Vale's runic sword far back on his right
+  const col = (x, z, h, yaw) => { const c = stone(); S.box(2.2, 0.7, 2.2, x, 0.05, z, yaw, OLD_D); S.cyl(0.75, 0.84, h, 8, x, 0.4 + h / 2, z, yaw, c); if (h > 9) S.box(2.1, 0.7, 2.1, x, 0.4 + h + 0.35, z, yaw, c); };
+  col(-17, -10, 9.8, 0.2); col(-13, -14.5, 3.6, 0.4); col(-8.5, -19, 6.3, 0.1);   // a colonnade's last three columns march off behind his left, one still whole
+  S.cyl(0.75, 0.75, 4.8, 8, -14, 0.6, -7, 0.9, stone(), Math.PI / 2);          // a fallen drum before them
+  { const c = stone(), h = 3.9, ry = -0.85; S.box(4.6, h, 1.5, 10, h / 2, -20, ry, c); S.box(2.6, 1.35, 1.5, 10.4, h + 0.67, -20.7, ry, c); S.box(1.2, 1.2, 1.5, 10.8, h + 1.95, -21.2, ry, afTint(c, 0.1, seed()));   // a wall's two stubs with ragged tops behind his right, turned to catch the low sun, the gap between them fallen
+    S.box(3.3, 2.1, 1.5, 13.6, 1.05, -24.5, ry, c); S.box(1.65, 1.05, 1.5, 14, 2.6, -25, ry, afTint(c, 0.1, seed())); }
+  for (const [x, z, sc] of [[-6, -9, 1.2], [7, -11, 1.0], [-20, -20, 2.4], [20, -14, 1.6], [4, -16, 0.9], [-10, -32, 3.2], [24, -24, 2.9], [-24, -5, 1.9], [0, -30, 2.2]]) rock(x, z, seed() * TAU, sc);   // rubble round the lot, bigger the farther back
   const m = S.build({ cast: false, receive: false }); m.name = 'ruins'; P.scene.add(m); P.ruins = m; P.ruinsPack = !!pack;
 }
 function afShellBack() {
@@ -24471,6 +24473,7 @@ function afLookClear() {                                    // back to the rolle
 }
 try { AF.myLook = (window.ARENA_CAT && ARENA_CAT.cleanLook(JSON.parse(localStorage.getItem('bv-look') || 'null'))) || null; } catch (e) { AF.myLook = null; }
 BV.look.set = afLookSet; BV.look.get = afLookGet; BV.barber = () => { afBarberOpen(); return afLookGet(); };
+BV.homeOpen = name => { if (window.net && !net.session) net.session = { username: name || 'Test' }; afHomeOpen(name); return SHELL.page; };   // test: the home as a signed-in man sees it (a name stands in for the session when there is none)
 function afHomeClock() {                                    // the bout of the day ends at midnight UTC — the card counts down to it
   const el = document.getElementById('hm-daily-clock'); if (!el) return;
   const now = new Date(), end = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1), sec = Math.max(0, Math.floor((end - now) / 1000)), p = n => String(n).padStart(2, '0');

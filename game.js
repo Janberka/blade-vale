@@ -1170,8 +1170,9 @@ function modelEnvFor(ctx) {                                  // the sky the stee
 }
 const MODEL_DETAIL_GLSL = {
   vertHead: `#include <common>\nattribute float kind; attribute vec2 inkUv; attribute vec4 inkCol; varying float vKind; varying vec3 vTri; varying vec3 vTriN; varying mat3 vTriM; varying vec2 vInkUv; varying vec4 vInkCol;`,
-  vertNormal: `#include <defaultnormal_vertex>\n vTriN = normalize(objectNormal); vTriM = normalMatrix;`,   // (object space: post-skinning, in the figure's own frame — the pattern rides him instead of sliding through him)
-  vertPos: `#include <worldpos_vertex>\n vTri = transformed; vKind = kind; vInkUv = inkUv; vInkCol = inkCol;`,
+  vertBegin: `#include <beginnormal_vertex>\n vTriN = normalize(objectNormal);`,   // the BIND-pose normal (before skinning): the triplanar blend is fixed to the surface
+  vertNormal: `#include <defaultnormal_vertex>\n vTriM = normalMatrix;`,
+  vertPos: `#include <worldpos_vertex>\n vTri = position; vKind = kind; vInkUv = inkUv; vInkCol = inkCol;\n#ifdef USE_SKINNING\n vTriM = normalMatrix * mat3(skinMatrix);\n#endif`,   // (2026-09-18, "the texture on the plate is not moving when the char moves": the pattern is sampled at the vertex's BIND position, so it rides the plate through every swing, and the normal it yields is turned by the bone's skin matrix into the pose — before, `transformed` (post-skinning, root space) let the arm slide through a pattern pinned to the figure's frame)
   fragHead: `#include <common>
 varying float vKind; varying vec3 vTri; varying vec3 vTriN; varying mat3 vTriM; varying vec2 vInkUv; varying vec4 vInkCol;
 #define INK_N 5.0
@@ -1218,13 +1219,13 @@ function modelMaterial(R, o = {}) {                          // the figure's mat
   if (!det) { m = new THREE.MeshPhongMaterial(noMap ? { color: col, shininess: 4, specular: 0x050505, skinning: !!o.skinning } : { map: o.tex || R.tex, color: col, shininess: 6, specular: 0x111111, skinning: !!o.skinning, vertexColors: !!o.vc });
     if (!noMap && o.vc) { const T = modelDetailTextures(), G = MODEL_DETAIL_GLSL;   // THE INK on the low tier too: the plain material takes just the kind attribute and the mask — no normal maps, no sky — so a tattooed man is tattooed on a phone ("the ink does literally nothing visually")
       m.onBeforeCompile = sh => { Object.assign(sh.uniforms, { tInk: { value: T.inkT }, tKnot: { value: T.knotT }, uInkTile: MODEL_DETAIL_U.uInkTile });
-        sh.vertexShader = sh.vertexShader.replace('#include <common>', G.vertHead).replace('#include <defaultnormal_vertex>', G.vertNormal).replace('#include <worldpos_vertex>', G.vertPos);
+        sh.vertexShader = sh.vertexShader.replace('#include <common>', G.vertHead).replace('#include <beginnormal_vertex>', G.vertBegin).replace('#include <defaultnormal_vertex>', G.vertNormal).replace('#include <worldpos_vertex>', G.vertPos);
         sh.fragmentShader = sh.fragmentShader.replace('#include <common>', G.fragHeadInk).replace('#include <map_fragment>', G.fragMapInk); };
       m.customProgramCacheKey = () => 'bv-ink'; } }
   else { const T = modelDetailTextures(); modelEnvFor(ctx);
     m = new THREE.MeshStandardMaterial({ map: noMap ? null : (o.tex || R.tex), color: col, metalness: 1, roughness: 1, skinning: !!o.skinning, vertexColors: !!o.vc, envMapIntensity: MODEL_DETAIL.envI });
     m.onBeforeCompile = sh => { const G = MODEL_DETAIL_GLSL; Object.assign(sh.uniforms, MODEL_DETAIL_U, { tPlateN: { value: T.plateN }, tMailN: { value: T.mailN }, tClothN: { value: T.clothN }, tPlateR: { value: T.plateR }, tMailC: { value: T.mailC }, tSkinN: { value: T.skinN }, tSkinR: { value: T.skinR }, tInk: { value: T.inkT }, tKnot: { value: T.knotT } });
-      sh.vertexShader = sh.vertexShader.replace('#include <common>', G.vertHead).replace('#include <defaultnormal_vertex>', G.vertNormal).replace('#include <worldpos_vertex>', G.vertPos);
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', G.vertHead).replace('#include <beginnormal_vertex>', G.vertBegin).replace('#include <defaultnormal_vertex>', G.vertNormal).replace('#include <worldpos_vertex>', G.vertPos);
       sh.fragmentShader = sh.fragmentShader.replace('#include <common>', G.fragHead).replace('#include <normal_fragment_maps>', G.fragNormal).replace('#include <roughnessmap_fragment>', G.fragRough).replace('#include <metalnessmap_fragment>', G.fragMetal).replace('#include <map_fragment>', G.fragMap).replace('#include <lights_fragment_end>', G.fragIbl); };
     m.customProgramCacheKey = () => 'bv-surface'; }
   m.userData.ctx = ctx; if (o.color == null) R.mats[key] = m;

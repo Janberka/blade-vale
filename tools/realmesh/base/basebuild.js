@@ -81,7 +81,8 @@ console.log('loops', loops.map(L => L.ids.length + '@' + L.centre.map(v => v.toF
   const edge = hl.ids.map(id => { const [ji, w] = M.packW(M.weightsOf(body, id)); const p = M.vpos(body, id); const rel = V3.sub(p, wr); return M.addVert(body, p, SKIN(((Math.atan2(V3.dot(rel, v), V3.dot(rel, u)) + Math.PI) / (2 * Math.PI)), 0.9), ji, w, 'handR'); });
   M.bridgeByAngle(body, edge, ring, wr, u, v);          // the wedge filled: the cut edge (copies on the patch uv) zipped to the ring
   const Bq = { pts: ring.map(id => ({ p: M.vpos(body, id), id })), c: wr };
-  M.tube(body, A, Bq, 6, { part: 'foreR', uv: SKIN, bulge: t => 1 + 0.07 * Math.sin(Math.PI * Math.min(1, t / 0.7)) * (1 - t), weights: (t) => { const g = t < 0.7 ? 0 : (t - 0.7) / 0.3; return M.blendW([[B('foreR'), 1]], 1 - g, [[B('foreR'), 0.5], [B('handR'), 0.5]], g); } });
+  const tr = M.tube(body, A, Bq, 6, { part: 'foreR', uv: SKIN, bulge: t => 1 + 0.07 * Math.sin(Math.PI * Math.min(1, t / 0.7)) * (1 - t), weights: (t) => { const g = t < 0.7 ? 0 : (t - 0.7) / 0.3; return M.blendW([[B('foreR'), 1]], 1 - g, [[B('foreR'), 0.5], [B('handR'), 0.5]], g); } });
+  for (const ring of tr.slice(-3)) for (const id of ring) body.part[id] = 'handR';   /* (the tube's last rings draw with the HAND: under a sleeve the forearm hides, and looking into the cuff the fill's open top ring read as teeth) */
   console.log('wrist: hand', hand.idx.length / 3, '->', cut.mesh.idx.length / 3, 'tris, ring r', Math.min(...rad).toFixed(3), '-', Math.max(...rad).toFixed(3)); }
 // THE HAND TURNS (after the wrist is built): the whole hand from 2 cm above the joint, blended 9 → 2 cm up the forearm tube — by PLACE, so the tube's rings and the hand move as one
 { const H = HANDFIX.R; const nv = M.nverts(body); let moved = 0; const fd = V3.norm(V3.sub(H.wrist, bonePos('foreR')));

@@ -11,7 +11,7 @@ const fingerTips = (names, pos) => { const c = [0, 0, 0]; for (const n of names)
 const SEG = [];
 const seg = (name, sA, sB, tA, tB, srcBones, tgtParts, boneMap) => SEG.push({ name, sA, sB, tA, tB, srcBones, tgtParts, boneMap });
 const headTopS = [0, 1.90, -0.02], headTopT = [0, 2.08, 0.03];
-seg('torso', sPos('n7'), sPos('n12'), tPos('pelvis'), [0, 1.81, 0.0], ['n7', 'n8', 'n9', 'n10', 'n11', 'n75', 'n76', 'n77', 'n78', 'n14', 'n38', 'n62', 'n63', 'n64'], ['torso', 'thighL', 'thighR', { part: 'head', yMax: 1.88 }],
+seg('torso', sPos('n7'), sPos('n12'), tPos('pelvis'), [0, 1.87, 0.0], ['n7', 'n8', 'n9', 'n10', 'n11', 'n75', 'n76', 'n77', 'n78', 'n14', 'n38', 'n62', 'n63', 'n64'], ['torso', 'thighL', 'thighR', { part: 'head', yMax: 1.88 }],
   { n7: 'pelvis', n8: 'spine1', n9: 'spine2', n10: 'spine3', n11: 'chest', n75: 'pelvis', n76: 'pelvis', n77: 'pelvis', n78: 'pelvis', n14: 'clavL', n38: 'clavR', n62: 'spine3', n63: 'spine3', n64: 'spine3' });
 seg('head', sPos('n12'), headTopS, tPos('neck'), headTopT, ['n12', 'n13'], ['head'], { n12: 'head', n13: 'head' });
 for (const [s, sh, el, ha, fb, th, hip, kn, an, toe] of [['L', 'n15', 'n16', 'n17', ['n22', 'n26', 'n30', 'n34'], 'n18', 'n65', 'n66', 'n67', 'n68'], ['R', 'n39', 'n40', 'n41', ['n46', 'n50', 'n54', 'n58'], 'n42', 'n70', 'n71', 'n72', 'n73']]) {
@@ -117,7 +117,7 @@ for (const m of out) { const mm = M.empty(); mm.pos = Array.from(m.pos); mm.uv =
 const g = T.g; const skel = { names: tN, parent: tBones.map(b => b.parent), world: tBones.map((b, i) => { const n = T.g.nodes[i]; return null; }) };
 // (rebuild the skeleton from the existing file's ibm inverses + node matrices)
 const ibm = T.meshes[0].ibm; skel.world = tN.map((_, i) => G.invert(Array.from(ibm.subarray(i * 16, i * 16 + 16)))); skel.local = skel.world.map((w, i) => skel.parent[i] < 0 ? w : G.mul(G.invert(skel.world[skel.parent[i]]), w));
-const extras = T.meshes.filter(m => m.name !== 'base_body').map(m => ({ name: m.name, pos: m.pos, nrm: m.nrm, uv: m.uv, ji: m.ji, w: m.w, idx: m.idx, material: 2 }));   // (the hair and beard cards: through as they are, on the hair material)
+const extras = T.meshes.filter(m => m.name === 'hair_long').map(m => ({ name: m.name, pos: m.pos, nrm: m.nrm, uv: m.uv, ji: m.ji, w: m.w, idx: m.idx, material: 2 }));   // (the hair and beard cards: through as they are, on the hair material)
 const meshes = [{ name: 'base_body', pos: base.pos, nrm: base.nrm, uv: base.uv, ji: base.ji, w: base.w, idx: base.idx, material: 0 }].concat(out, extras);
 fs.copyFileSync('view/models/warrior/6_characters_baseColor.jpg', OUT + '/6_characters_baseColor.jpg');
 G.write(OUT, { meshes, skeleton: skel, materials: [{ name: 'base', pbrMetallicRoughness: { baseColorTexture: { index: 0 }, metallicFactor: 0, roughnessFactor: 0.9 } }, { name: 'kit', pbrMetallicRoughness: { baseColorTexture: { index: 1 }, metallicFactor: 0, roughnessFactor: 0.9 } }, { name: 'hair', pbrMetallicRoughness: { baseColorTexture: { index: 2 }, metallicFactor: 0, roughnessFactor: 0.9 }, alphaMode: 'MASK', alphaCutoff: 0.5, doubleSided: true }], images: ['atlas.jpg', '6_characters_baseColor.jpg', 'hair.png'] });   // (no normal map: the game's surface pass draws the skin's detail; the viewer's normals were the Thor maps)

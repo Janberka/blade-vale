@@ -21,9 +21,10 @@ function chainLoops(adj) { const seen = new Set(), loops = [];
     const fwd = walk(a, -1); const nb = (adj.get(a) || []).find(n => !seen.has(n)); const back = nb != null ? walk(nb, a) : []; loops.push(back.reverse().concat(fwd)); }
   return loops; }
 // resample a closed loop by angle around an axis: N points at angles 2πk/N (positions interpolated along the polyline), with the loop's own weights/uv of the nearest vertex
-function loopByAngle(m, loop, axisDir, N, up) { const c = loop.centre, d = V3.norm(axisDir); let u = V3.norm(V3.cross(up || (Math.abs(d[1]) < 0.9 ? [0, 1, 0] : [0, 0, 1]), d)); const v = V3.norm(V3.cross(d, u));   // u × v frame in the loop plane, v = d × u (outward winding: see north-kit notes)
+function loopByAngle(m, loop, axisDir, N, up, exact) { const c = loop.centre, d = V3.norm(axisDir); let u = V3.norm(V3.cross(up || (Math.abs(d[1]) < 0.9 ? [0, 1, 0] : [0, 0, 1]), d)); const v = V3.norm(V3.cross(d, u));   // u × v frame in the loop plane, v = d × u (outward winding: see north-kit notes)
   const pts = loop.ids.map(id => { const p = V3.sub(vpos(m, id), c); const x = V3.dot(p, u), y = V3.dot(p, v); return { id, ang: Math.atan2(y, x), r: Math.hypot(x, y), t: V3.dot(p, d), p: vpos(m, id) }; });
   pts.sort((a, b) => a.ang - b.ang);
+  if (exact) return { pts: pts.map(q => ({ p: q.p, r: q.r, t: q.t, ang: q.ang, id: q.id })), c, u, v, d };   // (the loop's own vertices, in angle order: a ring on them closes the seam exactly, however oblique the cut)
   const out = []; for (let k = 0; k < N; k++) { const a = -Math.PI + (k + 0.5) / N * 2 * Math.PI; let i1 = pts.findIndex(q => q.ang >= a); if (i1 < 0) i1 = 0; const i0 = (i1 - 1 + pts.length) % pts.length; const q0 = pts[i0], q1 = pts[i1]; let a0 = q0.ang, a1 = q1.ang; if (a1 < a0) { if (a < a0) a0 -= 2 * Math.PI; else a1 += 2 * Math.PI; } const f = a1 === a0 ? 0 : (a - a0) / (a1 - a0);
     out.push({ p: V3.lerp(q0.p, q1.p, f), r: q0.r + (q1.r - q0.r) * f, t: q0.t + (q1.t - q0.t) * f, ang: a, id: f < 0.5 ? q0.id : q1.id }); }
   return { pts: out, c, u, v, d }; }
@@ -36,7 +37,9 @@ function cap(m, ring, centre, uv, ji, w, part, flip) { const ci = addVert(m, cen
 // an analytic ring: centre c, frame (u, v), radius function r(θ) (or [rx, rz] ellipse)
 function ringAt(m, c, u, v, rf, N, uvf, ji, w, part, t) { const ring = []; for (let j = 0; j < N; j++) { const a = -Math.PI + (j + 0.5) / N * 2 * Math.PI; const r = typeof rf === 'function' ? rf(a) : rf; const p = V3.add(c, V3.add(V3.scale(u, r * Math.cos(a)), V3.scale(v, r * Math.sin(a)))); ring.push(addVert(m, p, uvf(j / N, t), ji, w, part)); } return ring; }
 // clip: keep the part where side*(x - X0) < 0; new boundary vertices interpolated; returns { mesh, loops } where loops are ordered lists of NEW vertex ids on the plane
-function clipX(m, X0, keepBelow) { const out = empty(); const nv = nverts(m); const map = new Int32Array(nv).fill(-1); const d = v => keepBelow ? m.pos[v*3] - X0 : X0 - m.pos[v*3];
+function clipX(m, X0, keepBelow) { return clipPlane(m, [X0, 0, 0], keepBelow ? [1, 0, 0] : [-1, 0, 0]); }
+// keep the side where dot(p - P0, N) < 0; new boundary vertices interpolated; returns { mesh, loops } (ordered NEW vertex ids on the plane)
+function clipPlane(m, P0, N) { const out = empty(); const nv = nverts(m); const map = new Int32Array(nv).fill(-1); const d = v => (m.pos[v*3] - P0[0]) * N[0] + (m.pos[v*3+1] - P0[1]) * N[1] + (m.pos[v*3+2] - P0[2]) * N[2];
   const copy = v => { if (map[v] < 0) map[v] = addVert(out, vpos(m, v), [m.uv[v*2], m.uv[v*2+1]], m.ji.slice(v*4, v*4+4), m.w.slice(v*4, v*4+4), m.part[v]); return map[v]; };
   const cutCache = new Map(); const cut = (a, b) => { const k = a < b ? a + '_' + b : b + '_' + a; if (cutCache.has(k)) return cutCache.get(k); const da = d(a), db = d(b), f = da / (da - db); const p = V3.lerp(vpos(m, a), vpos(m, b), f), uv = [m.uv[a*2] + (m.uv[b*2] - m.uv[a*2]) * f, m.uv[a*2+1] + (m.uv[b*2+1] - m.uv[a*2+1]) * f]; const [ji, w] = blendW(weightsOf(m, a), 1 - f, weightsOf(m, b), f); const id = addVert(out, p, uv, ji, w, m.part[a]); cutCache.set(k, id); return id; };
   const bEdges = [];
@@ -64,13 +67,22 @@ function fixOrientation(m) { const vid = weldIds(m), nt = m.idx.length / 3, ek =
   const seen = new Uint8Array(nt); let flipped = 0, comps = 0;
   for (let s = 0; s < nt; s++) { if (seen[s]) continue; comps++; const comp = [s]; seen[s] = 1; const st = [s];
     while (st.length) { const t = st.pop(); const v = tv(t); for (let i = 0; i < 3; i++) { const a = v[i], b = v[(i+1)%3]; for (const n of edgeTris.get(ek(a, b)) || []) { if (seen[n]) continue; seen[n] = 1; if (has(n, a, b)) { flip(n); flipped++; } comp.push(n); st.push(n); } } }
-    let vol = 0; for (const t of comp) { const a = vpos(m, m.idx[t*3]), b = vpos(m, m.idx[t*3+1]), c = vpos(m, m.idx[t*3+2]); vol += V3.dot(a, V3.cross(b, c)); }
+    let vol = 0; const c0 = [0, 0, 0]; for (const t of comp) for (let k = 0; k < 3; k++) { const p = vpos(m, m.idx[t*3+k]); c0[0] += p[0] / (comp.length * 3); c0[1] += p[1] / (comp.length * 3); c0[2] += p[2] / (comp.length * 3); }   // (about the piece's own centroid: about the origin an open piece could read either way)
+    for (const t of comp) { const a = V3.sub(vpos(m, m.idx[t*3]), c0), b = V3.sub(vpos(m, m.idx[t*3+1]), c0), c = V3.sub(vpos(m, m.idx[t*3+2]), c0); vol += V3.dot(a, V3.cross(b, c)); }
     if (vol < 0) { for (const t of comp) flip(t); flipped += comp.length; } }
   return { flipped, comps }; }
+
+// zip two rings of any vertex counts, walking both round by angle about (c, u, v): the exact vertices, no resampling (winding left to fixOrientation)
+function bridgeByAngle(m, A, B, c, u, v) { const ang = id => { const p = V3.sub(vpos(m, id), c); return Math.atan2(V3.dot(p, v), V3.dot(p, u)); };
+  const sa = A.slice().sort((x, y) => ang(x) - ang(y)), sb = B.slice().sort((x, y) => ang(x) - ang(y)); const na = sa.length, nb = sb.length;
+  const aa = i => ang(sa[i % na]) + Math.floor(i / na) * 2 * Math.PI, ab = j => ang(sb[j % nb]) + Math.floor(j / nb) * 2 * Math.PI;
+  let i = 0, j = 0; while (aa(0) - ab(j) > Math.PI) j++; while (ab(0) - aa(i) > Math.PI) i++;   // start both at about the same bearing
+  const i1 = i + na, j1 = j + nb;
+  while (i < i1 || j < j1) { const advA = i < i1 && (j >= j1 || aa(i + 1) <= ab(j + 1)); if (advA) { m.idx.push(sa[i % na], sa[(i + 1) % na], sb[j % nb]); i++; } else { m.idx.push(sa[i % na], sb[(j + 1) % nb], sb[j % nb]); j++; } } }
 function pack(m) { return { pos: Float32Array.from(m.pos), uv: Float32Array.from(m.uv), ji: Uint16Array.from(m.ji), w: Float32Array.from(m.w), idx: Uint32Array.from(m.idx), part: m.part }; }
 // compact + smooth normals (welded by position so uv-seam duplicates share a normal)
 function finish(m) { const nv = nverts(m), used = new Int32Array(nv).fill(-1); let n = 0; for (const i of m.idx) if (used[i] < 0) used[i] = n++; const o = empty(); const inv = new Int32Array(n); for (let v = 0; v < nv; v++) if (used[v] >= 0) inv[used[v]] = v;
   for (let k = 0; k < n; k++) { const v = inv[k]; addVert(o, vpos(m, v), [m.uv[v*2], m.uv[v*2+1]], m.ji.slice(v*4, v*4+4), m.w.slice(v*4, v*4+4), m.part[v]); } for (const i of m.idx) o.idx.push(used[i]);
   const vid = weldIds(o), acc = new Float64Array(n * 3); for (let t = 0; t < o.idx.length; t += 3) { const a = vpos(o, o.idx[t]), b = vpos(o, o.idx[t+1]), c = vpos(o, o.idx[t+2]); const nn = V3.cross(V3.sub(b, a), V3.sub(c, a)); for (const i of [o.idx[t], o.idx[t+1], o.idx[t+2]]) { const w = vid[i]; acc[w*3] += nn[0]; acc[w*3+1] += nn[1]; acc[w*3+2] += nn[2]; } }
   o.nrm = []; for (let v = 0; v < n; v++) { const w = vid[v]; const nn = V3.norm([acc[w*3], acc[w*3+1], acc[w*3+2]]); o.nrm.push(nn[0], nn[1], nn[2]); } return o; }
-module.exports = { fixOrientation, V3, empty, nverts, vpos, addVert, weightsOf, blendW, packW, append, weldIds, openLoops, loopByAngle, tube, stitch, cap, ringAt, clipX, mirrorX, zipper, pack, finish };
+module.exports = { fixOrientation, clipPlane, bridgeByAngle, V3, empty, nverts, vpos, addVert, weightsOf, blendW, packW, append, weldIds, openLoops, loopByAngle, tube, stitch, cap, ringAt, clipX, mirrorX, zipper, pack, finish };

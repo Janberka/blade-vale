@@ -13,7 +13,12 @@ const FING = { L: [['n18', 'n19', 'n20'], ['n22', 'n23', 'n24', 'n25'], ['n27', 
 const FNAME = ['pinky', 'ring', 'middle', 'index', 'thumb'];
 for (const side of ['L', 'R']) FING[side].forEach((chain, f) => chain.forEach((nm, k) => KEEP.push([nm, FNAME[f] + side + k])));
 const newIndex = new Map(KEEP.map(([nm], i) => [nm, i])), names = KEEP.map(k => k[1]);
-const parentNew = KEEP.map(([nm]) => { let p = R.parent[N.indexOf(nm)]; while (p >= 0 && !newIndex.has(N[p])) p = R.parent[p]; return p >= 0 ? newIndex.get(N[p]) : -1; });
+// THE FINGERS HANG OFF THE WRIST ROOT (n135 / n16), not off the bones kept as handR / handL — walked up blindly they found the FOREARM and the
+// hand's four long fingers ended up as the forearm's children: the game drives handR, so the palm turned at the wrist and the fingers stayed behind
+// with the sleeve ("the hand look still broken, its not coming straight"), and the turn onto the warrior stance never reached them either.
+const HANDROOT = { n135: 'n136', n16: 'n17' };
+const parentNew = KEEP.map(([nm]) => { let p = R.parent[N.indexOf(nm)]; const stop = q => newIndex.has(N[q]) || (HANDROOT[N[q]] && HANDROOT[N[q]] !== nm);
+  while (p >= 0 && !stop(p)) p = R.parent[p]; if (p < 0) return -1; const h = HANDROOT[N[p]]; return newIndex.get(h && h !== nm ? h : N[p]); });
 const worldNew = KEEP.map(([nm]) => W[N.indexOf(nm)]);
 // THE HANDS take the warrior's stance (2026-09-18, "I can see my fingernails when I need to see the palm"): Thor's hang palm-back with the fingers
 // drooping behind; the game's every hand pose is relative to the bind, so the base's hand is turned at the wrist onto the warrior's finger and

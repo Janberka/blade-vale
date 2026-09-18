@@ -20,7 +20,7 @@ const worldNew = KEEP.map(([nm]) => W[N.indexOf(nm)]);
 // palm directions (bones and vertices alike), and the hand bone takes the warrior's own axes (+x up the forearm, +y past the fingers, +z to the
 // body — the carried helm and the gear holders are placed in that frame)
 const WR = G.read('view/models/warrior'), WW = G.bindWorlds(WR), wPos = n => G.translation(WW[WR.names.indexOf(n)]), wRot = n => WW[WR.names.indexOf(n)];
-const HANDFIX = {};
+const HANDFIX = {}; let HANDR_RING = null;
 for (const [side, wHand, wTip, wThumb] of [['R', 'n41', 'n52', 'n44'], ['L', 'n17', 'n28', 'n20']]) {
   const hb = names.indexOf('hand' + side), wrist = G.translation(worldNew[hb]); const tip = G.translation(worldNew[names.indexOf('middle' + side + '3')]), th = G.translation(worldNew[names.indexOf('thumb' + side + '2')]);
   const frameOf = (o, t, u, sgn) => { const f = V3.norm(V3.sub(t, o)), q = V3.norm(V3.sub(u, o)); let n = V3.norm(V3.cross(q, f)); if (sgn < 0) n = V3.scale(n, -1); const w = V3.norm(V3.cross(n, f)); return [f, w, n]; };   // fingers, across the palm, the palm's normal
@@ -32,7 +32,7 @@ for (const [side, wHand, wTip, wThumb] of [['R', 'n41', 'n52', 'n44'], ['L', 'n1
   const chain = KEEP.map(([, nm], i) => i).filter(i => { let j = i; while (j >= 0) { if (j === hb) return true; j = parentNew[j]; } return false; });
   for (const i of chain) worldNew[i] = about(worldNew[i]);
   { const w = wRot(wHand), t = G.translation(worldNew[hb]); worldNew[hb] = [w[0], w[1], w[2], 0, w[4], w[5], w[6], 0, w[8], w[9], w[10], 0, t[0], t[1], t[2], 1]; }   // the warrior's hand axes on the base's wrist
-  HANDFIX[side] = { wrist, rot, chain: new Set(chain) }; console.log('hand', side, 'turned onto the warrior stance; fingers', Fb[0].map(x => x.toFixed(2)), '->', Fw[0].map(x => x.toFixed(2))); }
+  HANDFIX[side] = { wrist, rot, chain: new Set(chain), fing: Fw[0], across: Fw[1], palm: Fw[2] };   /* (the warrior's own hand frame, which the base's hand is turned onto: up the fingers, across the palm, the palm's normal) */ console.log('hand', side, 'turned onto the warrior stance; fingers', Fb[0].map(x => x.toFixed(2)), '->', Fw[0].map(x => x.toFixed(2))); }
 const localNew = worldNew.map((w, i) => parentNew[i] < 0 ? w : G.mul(G.invert(worldNew[parentNew[i]]), w));
 const skeleton = { names, parent: parentNew, world: worldNew, local: localNew };
 // every old bone -> a new one: the nearest kept ancestor, except that anything hanging off the wrist bones goes to the hand
@@ -58,35 +58,50 @@ let topR = near([-0.562, 1.293, 0.001]).L, wristR = near([-0.616, 1.085, 0.064])
 { const hole = near([-0.557, 1.095, 0.116], 0.05); if (hole && hole.L.ids.length < 40) { const L = hole.L; const c = L.centre.slice(); const [ji, w] = M.packW(M.weightsOf(body, L.ids[0])); let uvh = [0, 0]; for (const id of L.ids) { uvh[0] += body.uv[id*2] / L.ids.length; uvh[1] += body.uv[id*2+1] / L.ids.length; } c[0] -= 0.015;   // THE PALM'S HOLE: the file's right hand is open where the weapon's grip sat — the far wall showed through it; a fan closes it (fixOrientation winds it with the rest)
     M.cap(body, L.ids, c, uvh, ji, w, 'handR', false); console.log('palm hole capped', L.ids.length, 'verts'); /* (the fan's centre sunk 1.5 cm into the hand and on the loop's own uv: a tent with a streaked fan before) */ loops = M.openLoops(body); } }
 console.log('loops', loops.map(L => L.ids.length + '@' + L.centre.map(v => v.toFixed(2)).join(',')).join('  '));
-{ // THE WRIST: the hand comes cut on a diagonal (its edge runs from 9 cm above the wrist joint to 4 cm below it). The hand's part above the joint's
-  // plane is cut away, the wedge missing below it is filled by zipping the cut edge to a flat wrist ring at the joint, and the forearm tube ends on that
-  // ring. (Lofted straight onto the jagged edge the tube folded into flaps; a sleeve round the whole cut came out a bell cuff as wide as the palm.)
-  const wr = bonePos('handR'), fd = V3.norm(V3.sub(wr, bonePos('foreR')));
+{ // THE HAND AND THE WRIST: the file's hand is an OPEN SHELL — its whole back, from the knuckles round the thumb to the wrist, lived under Thor's
+  // gauntlet and was never modelled, and the shell ends in a thin ragged LIP that ran on up under his bracer.
+  const wr = bonePos('handR');
   const nv0 = M.nverts(body), vid = M.weldIds(body), par = Int32Array.from({ length: nv0 }, (_, i) => i); const f = x => { while (par[x] !== x) { par[x] = par[par[x]]; x = par[x]; } return x; };
   for (let t = 0; t < body.idx.length; t += 3) { const p = f(vid[body.idx[t]]), q = f(vid[body.idx[t+1]]), r = f(vid[body.idx[t+2]]); par[p] = q; par[f(q)] = f(r); }
   const comp = new Map(); for (let q = 0; q < nv0; q++) { const r = f(vid[q]); const e = comp.get(r) || { s: [0, 0, 0], n: 0 }; e.s[0] += body.pos[q*3]; e.s[1] += body.pos[q*3+1]; e.s[2] += body.pos[q*3+2]; e.n++; comp.set(r, e); }
   const handRoots = new Set([...comp.entries()].filter(([r, e]) => e.s[0] / e.n < -0.45 && e.s[1] / e.n < 1.25).map(([r]) => r)); const inHand = new Uint8Array(nv0); for (let q = 0; q < nv0; q++) if (handRoots.has(f(vid[q]))) inHand[q] = 1;
-  const hand = M.empty(), rest = M.empty(); const hmap = new Int32Array(nv0).fill(-1), rmap = new Int32Array(nv0).fill(-1);
+  let hand = M.empty(); const rest = M.empty(); const hmap = new Int32Array(nv0).fill(-1), rmap = new Int32Array(nv0).fill(-1);
   const take = (dst, map, q) => { if (map[q] < 0) map[q] = M.addVert(dst, M.vpos(body, q), [body.uv[q*2], body.uv[q*2+1]], body.ji.slice(q*4, q*4+4), body.w.slice(q*4, q*4+4), dst === hand ? 'handR' : body.part[q]); return map[q]; };   /* (the whole hand piece is HAND, whatever bone weights it — its wrist band rode the forearm bone, was classed forearm, and hid under a sleeve as a sawtooth) */
   for (let t = 0; t < body.idx.length; t += 3) { const h = inHand[body.idx[t]]; const dst = h ? hand : rest, map = h ? hmap : rmap; for (let k = 0; k < 3; k++) dst.idx.push(take(dst, map, body.idx[t + k])); }
-  const cut = M.clipPlane(hand, wr, V3.scale(fd, -1)); M.append(rest, cut.mesh); body = rest;   // the hand below the joint's plane
-  loops = M.openLoops(body); topR = near([-0.562, 1.293, 0.001]).L; hips = near([0, 1.158, 0.081]).L; const A = M.loopByAngle(body, topR, V3.sub(wr, topR.centre), 0, null, true), NR = A.pts.length, u = A.u, v = A.v;   // (every loop re-found on the new vertex list; A = the elbow cut's OWN vertices, so the tube is one piece with the arm — sampled, it was a piece of its own and could be wound inside out)
-  // its open edge now: the arc on the plane plus the jag below it — the loop nearest the wrist
-  const hl = M.openLoops(body).filter(L => V3.len(V3.sub(L.centre, wr)) < 0.12).map(L => { const als = L.ids.map(id => V3.dot(V3.sub(M.vpos(body, id), wr), fd)); return { L, on: als.filter(x => Math.abs(x) < 0.003).length, below: als.filter(x => x > 0.003).length }; }).filter(x => x.on && x.below).sort((x, y) => (y.on + y.below) - (x.on + x.below))[0].L; console.log('wrist edge', hl.ids.length, 'verts @', hl.centre.map(x => x.toFixed(3)).join(','));
-  // the flat wrist ring at the joint: the hand's outline there (the cut arc), the missing side interpolated round the ring
-  const rad = new Array(NR).fill(0); for (const id of hl.ids) { const p = M.vpos(body, id); const al = V3.dot(V3.sub(p, wr), fd); if (Math.abs(al) > 0.004) continue; const rel = V3.sub(p, V3.add(wr, V3.scale(fd, al))); const x = V3.dot(rel, u), y = V3.dot(rel, v); const j = ((Math.floor((Math.atan2(y, x) + Math.PI) / (2 * Math.PI) * NR)) % NR + NR) % NR; rad[j] = Math.max(rad[j], Math.hypot(x, y)); }
-  for (let j = 0; j < NR; j++) if (!rad[j]) { let l = j, rr = j; while (!rad[((l % NR) + NR) % NR] && l > j - NR) l--; while (!rad[rr % NR] && rr < j + NR) rr++; const a0 = rad[((l % NR) + NR) % NR] || 0, a1 = rad[rr % NR] || 0; rad[j] = (a0 && a1) ? a0 + (a1 - a0) * (j - l) / (rr - l) : (a0 || a1); }
-  { const med = rad.filter(r => r > 0).sort((x, y) => x - y)[Math.floor(rad.filter(r => r > 0).length / 2)]; for (let j = 0; j < NR; j++) rad[j] = Math.max(med * 0.75, Math.min(med * 1.35, rad[j])); }   /* (the arc's median girth, no jag outliers) */
-  const [jiW, wW] = M.blendW([[B('foreR'), 1]], 0.5, [[B('handR'), 1]], 0.5); const ring = []; for (let j = 0; j < NR; j++) { const q = A.pts[j]; ring.push(M.addVert(body, V3.add(wr, V3.add(V3.scale(u, rad[j] * Math.cos(q.ang)), V3.scale(v, rad[j] * Math.sin(q.ang)))), SKIN(j / NR, 1), jiW, wW, 'handR')); }   /* (the ring and the wedge fill are HAND: drawn with it — as forearm they hid under a sleeve and the hand's jagged edge showed as a sawtooth) */
-  const edge = hl.ids.map(id => { const [ji, w] = M.packW(M.weightsOf(body, id)); const p = M.vpos(body, id); const rel = V3.sub(p, wr); return M.addVert(body, p, SKIN(((Math.atan2(V3.dot(rel, v), V3.dot(rel, u)) + Math.PI) / (2 * Math.PI)), 0.9), ji, w, 'handR'); });
-  M.bridgeByAngle(body, edge, ring, wr, u, v);          // the wedge filled: the cut edge (copies on the patch uv) zipped to the ring
-  const Bq = { pts: ring.map(id => ({ p: M.vpos(body, id), id })), c: wr };
-  const tr = M.tube(body, A, Bq, 6, { part: 'foreR', uv: SKIN, bulge: t => 1 + 0.07 * Math.sin(Math.PI * Math.min(1, t / 0.7)) * (1 - t), weights: (t) => { const g = t < 0.7 ? 0 : (t - 0.7) / 0.3; return M.blendW([[B('foreR'), 1]], 1 - g, [[B('foreR'), 0.5], [B('handR'), 0.5]], g); } });
-  for (const ring of tr.slice(-3)) for (const id of ring) body.part[id] = 'handR';   /* (the tube's last rings draw with the HAND: under a sleeve the forearm hides, and looking into the cuff the fill's open top ring read as teeth) */
-  console.log('wrist: hand', hand.idx.length / 3, '->', cut.mesh.idx.length / 3, 'tris, ring r', Math.min(...rad).toFixed(3), '-', Math.max(...rad).toFixed(3)); }
-// THE HAND TURNS (after the wrist is built): the whole hand from 2 cm above the joint, blended 9 → 2 cm up the forearm tube — by PLACE, so the tube's rings and the hand move as one
-{ const H = HANDFIX.R; const nv = M.nverts(body); let moved = 0; const fd = V3.norm(V3.sub(H.wrist, bonePos('foreR')));
-  for (let v = 0; v < nv; v++) { const p = M.vpos(body, v); if (p[0] > -0.35) continue; const d = V3.sub(p, H.wrist), along = V3.dot(d, fd); const f = Math.max(0, Math.min(1, (along + 0.09) / 0.07)); if (f <= 0) continue; const q = V3.add(H.wrist, H.rot(d)); const r = V3.lerp(p, q, f); body.pos[v*3] = r[0]; body.pos[v*3+1] = r[1]; body.pos[v*3+2] = r[2]; moved++; } console.log('hand verts turned', moved); }
+  // THE HAND TURNS — whole, rigid, about the wrist: the file's hand hangs palm-back with the fingers drooping behind, 67° off the forearm, and every
+  // plane and ring below is measured on the turned hand. (Turned afterwards, by place and blended up the tube, the joint's plane cut the drooping hand
+  // through the knuckles and everything built on that cut was nonsense.)
+  { const HX = HANDFIX.R, n = M.nverts(hand); for (let q = 0; q < n; q++) { const p = M.vpos(hand, q); const r = V3.add(HX.wrist, HX.rot(V3.sub(p, HX.wrist))); hand.pos[q*3] = r[0]; hand.pos[q*3+1] = r[1]; hand.pos[q*3+2] = r[2]; } }
+  // The lip is cut off square across the hand's OWN axis just behind the wrist, and the opening left is SWEPT onto a wrist ring at the joint: every rim
+  // vertex keeps its bearing and falls in eased steps from its own girth to the ring's, so the fill is the back of the hand sloping into a wrist. The
+  // forearm is then lofted from the elbow's cut onto that ring. (The old build clipped the DROOPING hand at a plane square to the FOREARM — 67° off the
+  // hand, so the plane sliced it through the knuckles — and zipped the jagged edge to a ring measured on that slice: a flat plate across the palm inside
+  // a collar wider than the hand — "it looks like the hand was cut from the middle of the palm and connected to the wrist".)
+  const hax = HANDFIX.R.fing, hacross = HANDFIX.R.across, hpalm = HANDFIX.R.palm;
+  const RX = +(process.env.WRX || 0.050), RY = +(process.env.WRY || 0.039);   // the wrist: broader across the palm than through it
+  const ringR = (uu, vv) => th => { const d = V3.add(V3.scale(uu, Math.cos(th)), V3.scale(vv, Math.sin(th))); return 1 / Math.hypot(V3.dot(d, hacross) / RX, V3.dot(d, hpalm) / RY); };
+  { const cut = M.clipPlane(hand, V3.add(wr, V3.scale(hax, +(process.env.LIP || -0.015))), V3.scale(hax, -1)); hand = cut.mesh;
+    const rims = M.openLoops(hand).sort((a, b) => b.ids.length - a.ids.length), rim = rims[0];
+    const uu = V3.norm(V3.cross([0, 1, 0], hax)), vv = V3.cross(hax, uu);
+    const [jiW, wW] = M.blendW([[B('foreR'), 1]], 0.4, [[B('handR'), 1]], 0.6);
+    const sw = M.sweepFill(hand, rim, { axis: hax, origin: wr, up: [0, 1, 0], rings: 7, ringR: ringR(uu, vv), part: 'handR',
+      weights: (s, id) => s < 0.75 ? M.packW(M.weightsOf(hand, id)) : M.blendW(M.weightsOf(hand, id), (1 - s) / 0.25, [[jiW[0], wW[0]], [jiW[1], wW[1]]], 1 - (1 - s) / 0.25) });   /* (the last quarter of the fill hands over to the forearm's weights, so the wrist bends where a wrist does) */
+    for (const L of rims.slice(1)) { const [ji, w] = M.packW(M.weightsOf(hand, L.ids[0])); M.cap(hand, L.ids, L.centre, [hand.uv[L.ids[0]*2], hand.uv[L.ids[0]*2+1]], ji, w, 'handR', false); }
+    HANDR_RING = sw.ring.map(id => id + M.nverts(rest));   // (ids after the append below)
+    console.log('wrist: lip cut, the back swept onto a', (RX * 100).toFixed(1), 'x', (RY * 100).toFixed(1), 'cm ring over', rim.ids.length, 'verts', rims.length > 1 ? '(+' + (rims.length - 1) + ' small holes capped)' : ''); }
+  M.append(rest, hand); body = rest;
+  loops = M.openLoops(body); topR = near([-0.562, 1.293, 0.001]).L; hips = near([0, 1.158, 0.081]).L;
+  { const A = M.loopByAngle(body, topR, V3.sub(wr, topR.centre), 0, null, true), NR = A.pts.length;   // (A = the elbow cut's OWN vertices, so the tube is one piece with the arm — sampled, it was a piece of its own and could be wound inside out)
+    const uu = V3.norm(V3.cross([0, 1, 0], hax)), vv = V3.cross(hax, uu), rr = ringR(uu, vv);
+    const [jiW, wW] = M.blendW([[B('foreR'), 1]], 0.4, [[B('handR'), 1]], 0.6);
+    const cB = V3.add(wr, V3.scale(hax, -0.03));   // the tube stops 3 cm short of the ring and the band between them is zipped: the two rings carry different vertex counts
+    const ring = []; for (let j = 0; j < NR; j++) { const th = A.pts[j].ang, d = V3.add(V3.scale(uu, Math.cos(th)), V3.scale(vv, Math.sin(th))); ring.push(M.addVert(body, V3.add(cB, V3.scale(d, rr(th) * 1.04)), SKIN(j / NR, 1), jiW, wW, 'handR')); }
+    const Bq = { pts: ring.map(id => ({ p: M.vpos(body, id), id })), c: cB };
+    const tr = M.tube(body, A, Bq, 6, { part: 'foreR', uv: SKIN, bulge: t => 1 + 0.07 * Math.sin(Math.PI * Math.min(1, t / 0.7)) * (1 - t), weights: (t) => { const g = t < 0.55 ? 0 : (t - 0.55) / 0.45; return M.blendW([[B('foreR'), 1]], 1 - g, [[B('foreR'), 0.4], [B('handR'), 0.6]], g); } });
+    const dup = HANDR_RING.map((id, j) => { const [ji, w] = M.packW(M.weightsOf(body, id)); return M.addVert(body, M.vpos(body, id), SKIN(j / HANDR_RING.length, 0.9), ji, w, 'handR'); });   /* (copies of the ring ON THE PATCH UV: a band with one edge on the hand's paint and the other on the patch samples a streak right across the atlas — it read as rings round the wrist) */
+    M.bridgeByAngle(body, tr[tr.length - 1], dup, wr, uu, vv);
+    for (const rg of tr.slice(-3)) for (const id of rg) body.part[id] = 'handR';   /* (the tube's last rings draw with the HAND: under a sleeve the forearm hides, and looking into the cuff the fill's open top ring read as teeth) */
+    console.log('forearm lofted from the elbow cut onto the wrist ring'); } }
 // ---- the pelvis: the hip cut lofted down and closed ----
 { const A = M.loopByAngle(body, hips, [0, -1, 0], 40); const c0 = hips.centre, cB = [c0[0], c0[1] - 0.13, c0[2] - 0.01];
   const Bq = { pts: A.pts.map(q => ({ p: V3.add(cB, V3.scale(V3.sub(q.p, c0), 0.72)), id: q.id })), c: cB };

@@ -79,10 +79,27 @@ function bridgeByAngle(m, A, B, c, u, v) { const ang = id => { const p = V3.sub(
   let i = 0, j = 0; while (aa(0) - ab(j) > Math.PI) j++; while (ab(0) - aa(i) > Math.PI) i++;   // start both at about the same bearing
   const i1 = i + na, j1 = j + nb;
   while (i < i1 || j < j1) { const advA = i < i1 && (j >= j1 || aa(i + 1) <= ab(j + 1)); if (advA) { m.idx.push(sa[i % na], sa[(i + 1) % na], sb[j % nb]); i++; } else { m.idx.push(sa[i % na], sb[(j + 1) % nb], sb[j % nb]); j++; } } }
+// close a big opening by SWEEPING its rim onto a ring: every rim vertex keeps its bearing θ about `axis` and is carried in K eased steps from its own
+// (t, r) to the ring's (0, ringR(θ)), so the fill is the shell's own girth falling to the ring — the back of a hand sloping into its wrist. The rings
+// keep each rim vertex's own uv (the fill is the shell's paint drawn inward), and a Laplacian pass over the grid takes the rim's jags out of it.
+function sweepFill(m, loop, o) { const ids = loop.ids, N = ids.length, ax = V3.norm(o.axis), c0 = o.origin, K = o.rings || 6;
+  const u = V3.norm(V3.cross(o.up || (Math.abs(ax[1]) < 0.9 ? [0, 1, 0] : [0, 0, 1]), ax)), v = V3.cross(ax, u);
+  const P = ids.map(id => { const d = V3.sub(vpos(m, id), c0), t = V3.dot(d, ax), rel = V3.sub(d, V3.scale(ax, t)); return { t, r: len2(rel), th: Math.atan2(V3.dot(rel, v), V3.dot(rel, u)) }; });
+  const at = (th, t, r) => V3.add(V3.add(c0, V3.scale(ax, t)), V3.add(V3.scale(u, r * Math.cos(th)), V3.scale(v, r * Math.sin(th))));
+  const grid = [ids]; let prev = ids;
+  for (let k = 1; k <= K; k++) { const x = k / K, s = x * x * (3 - 2 * x);   /* (smoothstep: the fill leaves the rim and meets the ring flat, no crease at either end) */
+    const ring = ids.map((id, j) => { const p = P[j], rr = p.r + (o.ringR(p.th) - p.r) * s, tt = p.t * (1 - s); const [ji, w] = o.weights ? o.weights(s, id) : packW(weightsOf(m, id));
+      return addVert(m, at(p.th, tt, rr), o.uv ? o.uv(j / N, s) : [m.uv[id*2], m.uv[id*2+1]], ji, w, o.part); });
+    stitch(m, prev, ring, o.flip); grid.push(ring); prev = ring; }
+  for (let it = 0; it < (o.smooth || 4); it++) { const snap = grid.map(r => r.map(id => vpos(m, id)));
+    for (let k = 1; k < K; k++) for (let j = 0; j < N; j++) { const nb = [snap[k-1][j], snap[k+1][j], snap[k][(j+1)%N], snap[k][(j-1+N)%N]];
+      let a = [0, 0, 0]; for (const q of nb) a = V3.add(a, q); a = V3.scale(a, 1 / nb.length); const id = grid[k][j], p = V3.lerp(snap[k][j], a, 0.5); m.pos[id*3] = p[0]; m.pos[id*3+1] = p[1]; m.pos[id*3+2] = p[2]; } }
+  return { grid, ring: prev, u, v, thetas: P.map(p => p.th) }; }
+const len2 = a => Math.hypot(a[0], a[1], a[2]);
 function pack(m) { return { pos: Float32Array.from(m.pos), uv: Float32Array.from(m.uv), ji: Uint16Array.from(m.ji), w: Float32Array.from(m.w), idx: Uint32Array.from(m.idx), part: m.part }; }
 // compact + smooth normals (welded by position so uv-seam duplicates share a normal)
 function finish(m) { const nv = nverts(m), used = new Int32Array(nv).fill(-1); let n = 0; for (const i of m.idx) if (used[i] < 0) used[i] = n++; const o = empty(); const inv = new Int32Array(n); for (let v = 0; v < nv; v++) if (used[v] >= 0) inv[used[v]] = v;
   for (let k = 0; k < n; k++) { const v = inv[k]; addVert(o, vpos(m, v), [m.uv[v*2], m.uv[v*2+1]], m.ji.slice(v*4, v*4+4), m.w.slice(v*4, v*4+4), m.part[v]); } for (const i of m.idx) o.idx.push(used[i]);
   const vid = weldIds(o), acc = new Float64Array(n * 3); for (let t = 0; t < o.idx.length; t += 3) { const a = vpos(o, o.idx[t]), b = vpos(o, o.idx[t+1]), c = vpos(o, o.idx[t+2]); const nn = V3.cross(V3.sub(b, a), V3.sub(c, a)); for (const i of [o.idx[t], o.idx[t+1], o.idx[t+2]]) { const w = vid[i]; acc[w*3] += nn[0]; acc[w*3+1] += nn[1]; acc[w*3+2] += nn[2]; } }
   o.nrm = []; for (let v = 0; v < n; v++) { const w = vid[v]; const nn = V3.norm([acc[w*3], acc[w*3+1], acc[w*3+2]]); o.nrm.push(nn[0], nn[1], nn[2]); } return o; }
-module.exports = { fixOrientation, clipPlane, bridgeByAngle, V3, empty, nverts, vpos, addVert, weightsOf, blendW, packW, append, weldIds, openLoops, loopByAngle, tube, stitch, cap, ringAt, clipX, mirrorX, zipper, pack, finish };
+module.exports = { sweepFill, fixOrientation, clipPlane, bridgeByAngle, V3, empty, nverts, vpos, addVert, weightsOf, blendW, packW, append, weldIds, openLoops, loopByAngle, tube, stitch, cap, ringAt, clipX, mirrorX, zipper, pack, finish };

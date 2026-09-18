@@ -24348,12 +24348,12 @@ function afPreviewRuins(P) {
   const stone = () => afTint(seed() < 0.3 ? MOSS : OLD, 0.12, seed());
   const rock = (x, z, yaw, sc) => { if (pack) S.add(afPackGeo('Rock' + (1 + ((seed() * 4) | 0))), x, -0.15 * sc, z, yaw, null, sc, sc, sc, 0, 0, DUSK); else { const sz = sc * 0.6; S.add(cachedGeo('af-rock', () => new THREE.IcosahedronGeometry(1, 0)), x, sz * 0.3, z, yaw, OLD_D, sz * 1.3, sz * 0.7, sz); } };
   if (pack) { S.add(afPackGeo('Shell'), -20, -0.25, -42, 0.55, null, KS, KS, KS, 0, 0, DUSK); S.add(afPackGeo('Sword'), 24, -0.3, -46, -0.4, null, KS, KS, KS, 0.06, 0.04, DUSK); }   // the broken shell of a house far behind his left shoulder, the Vale's runic sword far back on his right
-  const col = (x, z, h, yaw) => { const c = stone(); S.box(2.6, 0.8, 2.6, x, 0.05, z, yaw, OLD_D); S.cyl(0.9, 1.0, h, 8, x, 0.45 + h / 2, z, yaw, c); if (h > 10) S.box(2.5, 0.8, 2.5, x, 0.45 + h + 0.4, z, yaw, c); };
-  col(-27, -20, 11.5, 0.2); col(-21, -27, 4.2, 0.4); col(-14, -34, 7.4, 0.1);   // a colonnade's last three columns march off behind his left, one still whole
-  S.cyl(0.9, 0.9, 5.8, 8, -22, 0.7, -15, 0.9, stone(), Math.PI / 2);          // a fallen drum before them
-  { const c = stone(), h = 4.6, ry = -0.85; S.box(5.5, h, 1.8, 16, h / 2, -36, ry, c); S.box(3.1, 1.6, 1.8, 16.5, h + 0.8, -36.8, ry, c); S.box(1.4, 1.4, 1.8, 17, h + 2.3, -37.4, ry, afTint(c, 0.1, seed()));   // a wall's two stubs with ragged tops behind his right, turned to catch the low sun, the gap between them fallen
-    S.box(4, 2.5, 1.8, 20.5, 1.25, -41.5, ry, c); S.box(2, 1.25, 1.8, 21, 3.1, -42, ry, afTint(c, 0.1, seed())); }
-  for (const [x, z, sc] of [[-9, -16, 1.5], [11, -19, 1.3], [-32, -34, 3.0], [32, -26, 2.2], [6, -28, 1.2], [-16, -52, 4.0], [38, -40, 3.6], [-38, -12, 2.4], [0, -50, 3.0]]) rock(x, z, seed() * TAU, sc);   // rubble round the lot, bigger the farther back
+  const col = (x, z, h, yaw) => { const c = stone(); S.box(2.2, 0.7, 2.2, x, 0.05, z, yaw, OLD_D); S.cyl(0.75, 0.84, h, 8, x, 0.4 + h / 2, z, yaw, c); if (h > 9) S.box(2.1, 0.7, 2.1, x, 0.4 + h + 0.35, z, yaw, c); };
+  col(-16, -11, 9.8, 0.2); col(-13, -15.5, 3.6, 0.4); col(-9.5, -20, 6.3, 0.1);   // (the sides stand nearer than the shell and the sword: they frame him)   // a colonnade's last three columns march off behind his left, one still whole
+  S.cyl(0.75, 0.75, 4.8, 8, -13, 0.6, -8, 0.9, stone(), Math.PI / 2);          // a fallen drum before them
+  { const c = stone(), h = 3.9, ry = -0.85; S.box(4.6, h, 1.5, 9, h / 2, -19, ry, c); S.box(2.6, 1.35, 1.5, 9.4, h + 0.67, -19.7, ry, c); S.box(1.2, 1.2, 1.5, 9.8, h + 1.95, -20.2, ry, afTint(c, 0.1, seed()));   // a wall's two stubs with ragged tops off his right, turned to catch the low sun, the gap between them fallen
+    S.box(3.3, 2.1, 1.5, 12.6, 1.05, -23.5, ry, c); S.box(1.65, 1.05, 1.5, 13, 2.6, -24, ry, afTint(c, 0.1, seed())); }
+  for (const [x, z, sc] of [[-7, -10, 1.2], [8, -12, 1.0], [-22, -24, 2.4], [20, -15, 1.6], [5, -26, 1.2], [-16, -52, 4.0], [34, -36, 3.4], [-21, -7, 1.9], [0, -50, 3.0]]) rock(x, z, seed() * TAU, sc);   // rubble round the lot, bigger the farther back
   const m = S.build({ cast: false, receive: false }); m.name = 'ruins'; P.scene.add(m); P.ruins = m; P.ruinsPack = !!pack;
 }
 function afShellBack() {

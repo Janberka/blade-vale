@@ -23834,7 +23834,7 @@ function afPreviewEl() {
   const cv = document.createElement('canvas'); cv.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;background:radial-gradient(ellipse at 50% 60%,rgba(255,211,77,.12),rgba(0,0,0,.2));cursor:grab;touch-action:none;display:block';
   wrap.appendChild(cv);
   const side = document.createElement('div'); side.id = 'af-preview-side'; side.style.cssText = 'position:absolute;left:0;right:0;bottom:0;padding:8px 10px;font-size:12px;line-height:1.45;background:linear-gradient(to top,rgba(8,6,14,.96),rgba(8,6,14,.8) 70%,rgba(8,6,14,0));pointer-events:none'; wrap.appendChild(side);
-  const P = AF.preview = { wrap, cv, W: 0, H: 0, renderer: null, scene: new THREE.Scene(), camera: new THREE.PerspectiveCamera(30, 1, 0.1, 60), rig: null, yaw: -0.3, mounted: false, drag: null, crouch: 0 };
+  const P = AF.preview = { wrap, cv, W: 0, H: 0, renderer: null, scene: new THREE.Scene(), camera: new THREE.PerspectiveCamera(30, 1, 0.1, 120), rig: null, yaw: -0.3, mounted: false, drag: null, crouch: 0 };
   try { P.renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: true }); P.renderer.setPixelRatio(resRatio(Math.min(window.devicePixelRatio || 1, qualityTier === 'low' ? 1.5 : 2))); P.renderer.toneMapping = THREE.ACESFilmicToneMapping; P.renderer.localClippingEnabled = true; } catch (e) { P.renderer = null; }   // (clipping: the planted sword's buried tip is cut at the sand)
   const hemi = new THREE.HemisphereLight(0xbfd8ff, 0x6a5a44, 0.9), sun = new THREE.DirectionalLight(0xfff0d0, 1.1); sun.position.set(3, 6, 4);   // the day's light: the sky and one sun (afPreviewStage re-sets them per page — the barber's chair stands at dusk)
   const fill = new THREE.DirectionalLight(0x6a80ff, 0), rim = new THREE.DirectionalLight(0xffc080, 0), front = new THREE.DirectionalLight(0xffe0c0, 0); fill.position.set(6, 3, 2); rim.position.set(2, 4, -6); front.position.set(0, 2, 7);
@@ -24337,23 +24337,23 @@ function afPreviewStage() {
   L.hemi.color.setHex(dusk ? 0x5a4a90 : 0xbfd8ff); L.hemi.groundColor.setHex(dusk ? 0x2a1c18 : 0x6a5a44); L.hemi.intensity = dusk ? 0.4 : 0.9;
   L.sun.color.setHex(dusk ? 0xffa060 : 0xfff0d0); L.sun.intensity = dusk ? 1.1 : 1.1; L.sun.position.set(dusk ? -6 : 3, dusk ? 2.2 : 6, dusk ? 3 : 4);   // (dusk: the sun is low, from the left)
   L.fill.intensity = dusk ? 0.4 : 0; L.rim.intensity = dusk ? 0.7 : 0; L.front.intensity = dusk ? 0.25 : 0;
-  if (P.disc) { P.disc.material.color.setHex(dusk ? 0x3e2e26 : 0xc9b79a); P.disc.scale.setScalar(dusk ? 16 : 1); }   // (at dusk the ground runs to the horizon)
-  P.scene.fog = dusk ? (P.duskFog || (P.duskFog = new THREE.Fog(0x7a3a34, 22, 60))) : null;   // (the far ruins fade into the last of the light; he stands well inside it)
+  if (P.disc) { P.disc.material.color.setHex(dusk ? 0x3e2e26 : 0xc9b79a); P.disc.scale.setScalar(dusk ? 30 : 1); }   // (at dusk the ground runs to the horizon)
+  P.scene.fog = dusk ? (P.duskFog || (P.duskFog = new THREE.Fog(0x7a3a34, 30, 95))) : null;   // (the far ruins fade into the last of the light; he stands well inside it)
   if (dusk && (!P.ruins || (!P.ruinsPack && AF_RUINPACK))) afPreviewRuins(P);
   if (P.ruins) P.ruins.visible = dusk;
 }
 function afPreviewRuins(P) {
   if (P.ruins) { P.scene.remove(P.ruins); try { P.ruins.geometry.dispose(); P.ruins.material.dispose(); } catch (e) {} P.ruins = null; }
-  const S = afMesher(), seed = _mulberry32(0x5eed), pack = AF_RUINPACK, KS = 2.3, OLD = 0x6e6256, OLD_D = 0x574d42, MOSS = 0x5c604a, DUSK = new THREE.Color(0.6, 0.48, 0.45);   // KS: the pack is human-scale; the preview's man stands ~3.3 tall (afPreviewFloor's S). DUSK: the pack's pale stone, darkened for the hour
+  const S = afMesher(), seed = _mulberry32(0x5eed), pack = AF_RUINPACK, KS = 2.8, OLD = 0x6e6256, OLD_D = 0x574d42, MOSS = 0x5c604a, DUSK = new THREE.Color(0.6, 0.48, 0.45);   // KS: the pack is human-scale; the preview's man stands ~3.3 tall (afPreviewFloor's S). DUSK: the pack's pale stone, darkened for the hour
   const stone = () => afTint(seed() < 0.3 ? MOSS : OLD, 0.12, seed());
   const rock = (x, z, yaw, sc) => { if (pack) S.add(afPackGeo('Rock' + (1 + ((seed() * 4) | 0))), x, -0.15 * sc, z, yaw, null, sc, sc, sc, 0, 0, DUSK); else { const sz = sc * 0.6; S.add(cachedGeo('af-rock', () => new THREE.IcosahedronGeometry(1, 0)), x, sz * 0.3, z, yaw, OLD_D, sz * 1.3, sz * 0.7, sz); } };
-  if (pack) { S.add(afPackGeo('Shell'), -12, -0.25, -24, 0.55, null, KS, KS, KS, 0, 0, DUSK); S.add(afPackGeo('Sword'), 15, -0.3, -27, -0.4, null, KS, KS, KS, 0.06, 0.04, DUSK); }   // the broken shell of a house far behind his left shoulder, the Vale's runic sword far back on his right
-  const col = (x, z, h, yaw) => { const c = stone(); S.box(2.2, 0.7, 2.2, x, 0.05, z, yaw, OLD_D); S.cyl(0.75, 0.84, h, 8, x, 0.4 + h / 2, z, yaw, c); if (h > 9) S.box(2.1, 0.7, 2.1, x, 0.4 + h + 0.35, z, yaw, c); };
-  col(-17, -10, 9.8, 0.2); col(-13, -14.5, 3.6, 0.4); col(-8.5, -19, 6.3, 0.1);   // a colonnade's last three columns march off behind his left, one still whole
-  S.cyl(0.75, 0.75, 4.8, 8, -14, 0.6, -7, 0.9, stone(), Math.PI / 2);          // a fallen drum before them
-  { const c = stone(), h = 3.9, ry = -0.85; S.box(4.6, h, 1.5, 10, h / 2, -20, ry, c); S.box(2.6, 1.35, 1.5, 10.4, h + 0.67, -20.7, ry, c); S.box(1.2, 1.2, 1.5, 10.8, h + 1.95, -21.2, ry, afTint(c, 0.1, seed()));   // a wall's two stubs with ragged tops behind his right, turned to catch the low sun, the gap between them fallen
-    S.box(3.3, 2.1, 1.5, 13.6, 1.05, -24.5, ry, c); S.box(1.65, 1.05, 1.5, 14, 2.6, -25, ry, afTint(c, 0.1, seed())); }
-  for (const [x, z, sc] of [[-6, -9, 1.2], [7, -11, 1.0], [-20, -20, 2.4], [20, -14, 1.6], [4, -16, 0.9], [-10, -32, 3.2], [24, -24, 2.9], [-24, -5, 1.9], [0, -30, 2.2]]) rock(x, z, seed() * TAU, sc);   // rubble round the lot, bigger the farther back
+  if (pack) { S.add(afPackGeo('Shell'), -20, -0.25, -42, 0.55, null, KS, KS, KS, 0, 0, DUSK); S.add(afPackGeo('Sword'), 24, -0.3, -46, -0.4, null, KS, KS, KS, 0.06, 0.04, DUSK); }   // the broken shell of a house far behind his left shoulder, the Vale's runic sword far back on his right
+  const col = (x, z, h, yaw) => { const c = stone(); S.box(2.6, 0.8, 2.6, x, 0.05, z, yaw, OLD_D); S.cyl(0.9, 1.0, h, 8, x, 0.45 + h / 2, z, yaw, c); if (h > 10) S.box(2.5, 0.8, 2.5, x, 0.45 + h + 0.4, z, yaw, c); };
+  col(-27, -20, 11.5, 0.2); col(-21, -27, 4.2, 0.4); col(-14, -34, 7.4, 0.1);   // a colonnade's last three columns march off behind his left, one still whole
+  S.cyl(0.9, 0.9, 5.8, 8, -22, 0.7, -15, 0.9, stone(), Math.PI / 2);          // a fallen drum before them
+  { const c = stone(), h = 4.6, ry = -0.85; S.box(5.5, h, 1.8, 16, h / 2, -36, ry, c); S.box(3.1, 1.6, 1.8, 16.5, h + 0.8, -36.8, ry, c); S.box(1.4, 1.4, 1.8, 17, h + 2.3, -37.4, ry, afTint(c, 0.1, seed()));   // a wall's two stubs with ragged tops behind his right, turned to catch the low sun, the gap between them fallen
+    S.box(4, 2.5, 1.8, 20.5, 1.25, -41.5, ry, c); S.box(2, 1.25, 1.8, 21, 3.1, -42, ry, afTint(c, 0.1, seed())); }
+  for (const [x, z, sc] of [[-9, -16, 1.5], [11, -19, 1.3], [-32, -34, 3.0], [32, -26, 2.2], [6, -28, 1.2], [-16, -52, 4.0], [38, -40, 3.6], [-38, -12, 2.4], [0, -50, 3.0]]) rock(x, z, seed() * TAU, sc);   // rubble round the lot, bigger the farther back
   const m = S.build({ cast: false, receive: false }); m.name = 'ruins'; P.scene.add(m); P.ruins = m; P.ruinsPack = !!pack;
 }
 function afShellBack() {

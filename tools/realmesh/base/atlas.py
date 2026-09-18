@@ -49,6 +49,6 @@ hp = Image.open(src + 'MI_1039506_Hair_01_baseColor.png').convert('RGBA'); hpx =
 lums = [0.299 * hpx[x, y][0] + 0.587 * hpx[x, y][1] + 0.114 * hpx[x, y][2] for y in range(0, H2, 4) for x in range(0, W2, 4) if hpx[x, y][3] > 128]; ml = sum(lums) / len(lums); k = 205 / ml
 for y in range(H2):
     for x in range(W2):
-        r, g, b, al = hpx[x, y]; l = min(255, int((0.299 * r + 0.587 * g + 0.114 * b) * k)); hpx[x, y] = (l, l, l, al)
+        r, g, b, al = hpx[x, y]; l = 0.299 * r + 0.587 * g + 0.114 * b; l = max(0, min(255, int(205 + (l - ml) * 0.35))); hpx[x, y] = (l, l, l, al)   # (contrast flattened: the scalp cards were painted darker than the strands and read as a grey cap under white hair)
 hp.save(out + 'hair.png'); print('hair card texture: mean lum', round(ml), '-> 205')
 print('atlas written')

@@ -1840,7 +1840,7 @@ function modelHelmPlace(L) {                                 // every render whi
   m.matrix.compose(_hm.pa, _hm.qa, _hm.sa).premultiply(_hm.A.copy(root.matrixWorld).invert()); m.matrixWorldNeedsUpdate = true;
 }
 // the pieces he goes without leave the body's own index (no draw call for them, no seam) — the only part of the look a helm toggle has to redo
-const LOOK_UNDER = { torso: 'cuirass', armL: 'sleeve', armR: 'sleeve', foreL: 'vambrace', foreR: 'vambrace', thighL: 'skirt', thighR: 'skirt', shinL: 'greaves', shinR: 'greaves', footL: 'boot', footR: 'boot' };   // a base body part → the kit piece that covers it (lookDraw)
+const LOOK_UNDER = { torso: 'cuirass', armL: 'sleeve', armR: 'sleeve', foreL: 'sleeve', foreR: 'sleeve', thighL: 'skirt', thighR: 'skirt', shinL: 'greaves', shinR: 'greaves', footL: 'boot', footR: 'boot' };   // a base body part → the kit piece that covers it (lookDraw)
 function lookDraw(L, look) {
   const R = MODEL_RIGS.get(L.g.userData.model), H = look.helmet && look.helmModel && R && R.helms ? R.helms[look.helmModel] : null;
   const hide = new Set(look.hide); if (look.helmet && !H) hide.add('hair');   // (under the sallet the scalp is not drawn: it lies inside the shell, and the tessellated crown would show through it; a helm of its own says what it covers — helmCoverMask)

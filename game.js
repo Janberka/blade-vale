@@ -1379,6 +1379,39 @@ function modelBodyBuild(R) {
   return (R.body = { geo, pieces });
 }
 // build a fresh skeleton + skinned meshes for one body
+// THE BELT OF A WHOLE MAN (2026-09-18, "idk what we have here on our belly but it doesn't cover it well, it also don't go behind us"):
+// the base is a whole body, so no torso is lathed for it (modelBodyBuild) — and with it went the belt the warrior's bare looks kept.
+// Bare, the base showed the kit's front-only straps and the sash's ragged top edge over his belly, and nothing at all round the back.
+// This band is lathed round the waist from the body's own measure — the widest of his skin, the sash and the straps in each bearing,
+// a finger outside it — sitting on the sash's dark hem, all the way round; bound to the body's bones by its nearest skin, so it
+// follows him in every pose. Leather, painted by the look (look.leather); shown with the bare body (lookApply, look.naked).
+function modelBeltBuild(R) {
+  if (R.belt !== undefined) return R.belt; if (!R.spec.fullBody) return (R.belt = null);
+  const bm = R.meshes.find(x => x.short === 'body'), am = R.meshes.find(x => x.short === 'armor'), bj = bm && bm.pieces, aj = am && am.pieces; if (!bj || !aj) return (R.belt = null);
+  const bp = bm.geo.getAttribute('position'), ap = am.geo.getAttribute('position'), si0 = bm.geo.getAttribute('skinIndex'), sw0 = bm.geo.getAttribute('skinWeight'); if (!si0 || !sw0) return (R.belt = null);
+  const bc = new Set(['torso', 'thighL', 'thighR'].map(c => bj.classes.indexOf(c))), ac = new Set(['skirt', 'skirtTop', 'straps'].map(c => aj.classes.indexOf(c))), dk = aj.mats.indexOf('dark'), skI = aj.classes.indexOf('skirt');
+  let hem = -1e9; for (let v = 0; v < ap.count; v++) if (aj.vclass[v] === skI && aj.vmat[v] === dk && Math.abs(ap.getX(v)) < 0.3) hem = Math.max(hem, ap.getY(v));   // the sash's dark hem: its top edge is where the belt sits
+  if (hem < -1e8) hem = R.spec.hipY + 0.15;
+  const yHi = hem + 0.012, yLo = yHi - 0.12, SEG = 32, r = new Array(SEG).fill(0), n = new Array(SEG).fill(0);
+  let cx = 0, cz = 0, cn = 0; for (let v = 0; v < bp.count; v++) if (bc.has(bj.vclass[v]) && bp.getY(v) > yLo && bp.getY(v) < yHi) { cx += bp.getX(v); cz += bp.getZ(v); cn++; } if (cn < 8) return (R.belt = null); cx /= cn; cz /= cn;
+  const take = (x, y, z) => { if (y < yLo - 0.02 || y > yHi + 0.02 || Math.abs(x) > 0.5) return; const k = ((Math.atan2(z - cz, x - cx) / (Math.PI * 2) + 1) * SEG + 0.5 | 0) % SEG, d = Math.hypot(x - cx, z - cz); r[k] = Math.max(r[k], d); n[k]++; };
+  for (let v = 0; v < bp.count; v++) if (bc.has(bj.vclass[v])) take(bp.getX(v), bp.getY(v), bp.getZ(v));
+  for (let v = 0; v < ap.count; v++) if (ac.has(aj.vclass[v])) take(ap.getX(v), ap.getY(v), ap.getZ(v));
+  for (let k = 0; k < SEG; k++) if (!n[k]) { let a = k, b = k; while (!n[(a + SEG - 1) % SEG] && a !== k + 1) a = (a + SEG - 1) % SEG; while (!n[(b + 1) % SEG] && b !== k - 1) b = (b + 1) % SEG; r[k] = (r[(a + SEG - 1) % SEG] + r[(b + 1) % SEG]) / 2; }   // (an empty bearing takes its neighbours' mean)
+  const rs = r.map((_, k) => (r[(k + SEG - 1) % SEG] + 2 * r[k] + r[(k + 1) % SEG]) / 4);   // (smoothed a little: a belt, not the sash's every fold)
+  const P = [], UV = [], IUV = [], SI = [], SW = [], IDX = [], rings = [];
+  const nearest = (x, y, z) => { let best = -1, bd = 1e9; for (let v = 0; v < bp.count; v++) { if (!bc.has(bj.vclass[v])) continue; const d = (bp.getX(v) - x) ** 2 + (bp.getY(v) - y) ** 2 * 4 + (bp.getZ(v) - z) ** 2; if (d < bd) { bd = d; best = v; } } return best; };
+  const ring = (y, scale, pad) => { const base = P.length / 3; for (let k = 0; k < SEG; k++) { const a = k / SEG * Math.PI * 2, d = rs[k] * scale + pad, x = cx + Math.cos(a) * d, z = cz + Math.sin(a) * d; P.push(x, y, z); UV.push(LOOK_WHITE_UV[0], LOOK_WHITE_UV[1]); IUV.push(0, 0);
+      const v = nearest(cx + Math.cos(a) * rs[k], y, cz + Math.sin(a) * rs[k]); SI.push(si0.getX(v), si0.getY(v), si0.getZ(v), si0.getW(v)); SW.push(sw0.getX(v), sw0.getY(v), sw0.getZ(v), sw0.getW(v)); } rings.push(base); return base; };
+  const stitch = (a, b) => { for (let i = 0; i < SEG; i++) { const j = (i + 1) % SEG; IDX.push(a + i, b + i, b + j, a + i, b + j, a + j); } };   // (winds a→b outward, as the warrior's belt: inner→outer faces down, outer up the face, outer→inner faces up)
+  const iL = ring(yLo, 0.96, 0), oL = ring(yLo, 1.03, 0.01), oH = ring(yHi, 1.03, 0.01), iH = ring(yHi, 0.96, 0);   // the underside, the face, the top: a closed band a finger thick (the inner rings sit inside him)
+  stitch(iL, oL); stitch(oL, oH); stitch(oH, iH);
+  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); geo.setAttribute('uv', new THREE.Float32BufferAttribute(UV, 2)); geo.setAttribute('inkUv', new THREE.Float32BufferAttribute(IUV, 2));
+  geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(SI, 4)); geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(SW, 4)); geo.setIndex(IDX); geo.computeVertexNormals();
+  geo.setAttribute('kind', new THREE.BufferAttribute(new Float32Array(P.length / 3).fill(MODEL_KIND.leather), 1));
+  const nv = P.length / 3, pieces = { classes: ['belt'], mats: ['leather'], tri: new Array(IDX.length / 3).fill(0), vclass: new Array(nv).fill(0), vmat: new Array(nv).fill(0) };
+  return (R.belt = { geo, pieces });
+}
 function instanceModelRig(R, ctx = 'main') {
   const g = R.g, nodes = g.nodes.map(n => { const b = new THREE.Bone(); b.name = n.name; if (n.matrix) { const m = new THREE.Matrix4().fromArray(n.matrix); m.decompose(b.position, b.quaternion, b.scale); } return b; });
   const parent = new Array(nodes.length).fill(-1);
@@ -1401,6 +1434,11 @@ function instanceModelRig(R, ctx = 'main') {
     const i0 = NB.geo.index.array; geo.setIndex(new THREE.BufferAttribute(new i0.constructor(i0), 1)); geo.setAttribute('color', new THREE.BufferAttribute(new Uint8Array(NB.geo.getAttribute('position').count * 3).fill(255), 3, true));
     const sm = new THREE.SkinnedMesh(geo, matVC); sm.name = 'naked'; sm.frustumCulled = false; sm.castShadow = true; sm.visible = false; root.add(sm); sm.userData.pieces = NB.pieces; sm.userData.geo0 = NB.geo; sm.userData.mm = { ctx, skinning: true, vc: true }; sm.userData.mmR = R.name;
     sm.bind(skinned[am.name].skeleton, new THREE.Matrix4()); skinned.naked = sm; }
+  const BT = modelBeltBuild(R), bm = R.meshes.find(x => x.short === 'body');   // THE BELT of a whole man (modelBeltBuild): his own copy, bound to the body's skeleton, shown with the bare body
+  if (BT && bm && skinned[bm.name]) { const geo = new THREE.BufferGeometry(); for (const k of ['position', 'normal', 'uv', 'skinIndex', 'skinWeight', 'kind', 'inkUv']) geo.setAttribute(k, BT.geo.getAttribute(k));
+    const i0 = BT.geo.index.array; geo.setIndex(new THREE.BufferAttribute(new i0.constructor(i0), 1)); geo.setAttribute('color', new THREE.BufferAttribute(new Uint8Array(BT.geo.getAttribute('position').count * 3).fill(255), 3, true));
+    const sm = new THREE.SkinnedMesh(geo, matVC); sm.name = 'belt'; sm.frustumCulled = false; sm.castShadow = true; sm.visible = false; root.add(sm); sm.userData.pieces = BT.pieces; sm.userData.geo0 = BT.geo; sm.userData.mm = { ctx, skinning: true, vc: true }; sm.userData.mmR = R.name;
+    sm.bind(skinned[bm.name].skeleton, new THREE.Matrix4()); skinned.belt = sm; }
   const order = []; const dfs = i => { order.push(i); (g.nodes[i].children || []).forEach(dfs); }; g.nodes.forEach((n, i) => { if (parent[i] < 0) dfs(i); });   // parents before children (the file's root sits last)
   // the REST pose is the bind pose (inverse of the inverse-bind matrices), not the file's node transforms — those hold the
   // model's idle stance (knees bent, sword up), and the plastic pivots at zero must mean "standing straight"
@@ -1777,7 +1815,7 @@ function lookApply(L, look) {
       else if (sm.userData.ownKind) { sm.geometry.setAttribute('kind', kd0); sm.userData.ownKind = false; } }
   }
   lookDraw(L, look); if (lookHelmBuild(L)) lookHelmPaint(L);
-  if (L.inst.skinned.naked) L.inst.skinned.naked.visible = !!look.naked;
+  if (L.inst.skinned.naked) L.inst.skinned.naked.visible = !!look.naked; if (L.inst.skinned.belt) L.inst.skinned.belt.visible = !!look.naked;   // (the whole man's belt: on with the bare body)
   const cloak = L.inst.skinned[M.cloak]; if (cloak) { cloak.visible = !!look.cloak; if (cloak.material && cloak.material.color && !cloak.material.map) cloak.material.color.setHex(look.cloakC); }
   if (L.plume) L.plume.visible = !!(look.helmet && look.plume && !look.helmModel);   // (a helm with a crest of its own carries no feather: the crest takes the plume's dye)
   lookHairApply(L, look);                                                // the cut: a cap on the skull when he stands bareheaded

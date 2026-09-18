@@ -108,7 +108,7 @@ for (const m of SRC.meshes) { const short = m.name.replace('FantasyWarrior_', ''
   if (short === 'sword') r = carry(m, same(sPos('n41')), same(tPos('handR')), 'handR');
   else if (short === 'shield') r = carry(m, same(sPos('n16')), same(tPos('foreL')), 'foreL');
     else if (short === 'cloak') r = retargetSkinned(m, { margin: 0.05 });   // (a cape hangs off the back, not on it)
-  else if (short === 'armor') { const pj = JSON.parse(fs.readFileSync('view/models/warrior/pieces.json')).armor, cu = pj.classes.indexOf('cuirass'); r = retargetSkinned(m, { liftOf: (v, S) => S.name === 'torso' && pj.vclass[v] === cu ? 0.09 : 0 }); }   // (the cuirass' collar: 9 cm higher at the back over the traps)
+  else if (short === 'armor') { const pj = JSON.parse(fs.readFileSync('view/models/warrior/pieces.json')).armor, cu = pj.classes.indexOf('cuirass'); r = retargetSkinned(m, { liftOf: (v, S) => S.name === 'torso' && pj.vclass[v] !== pj.classes.indexOf('pauldron') ? 0.09 : 0 }); }   // (the collar: 9 cm higher at the back over the traps — every piece there rises together, or the layers tear apart; the pauldrons ride the arms)
   else r = retargetSkinned(m);
   // normals: rotate the old ones by the same warp (cheap: recompute from the warped geometry instead)
   out.push({ name: m.name, pos: r.pos, uv: m.uv, ji: r.ji, w: r.w, idx: m.idx, material: 1 }); console.log('retargeted', short, m.pos.length / 3, 'verts'); }

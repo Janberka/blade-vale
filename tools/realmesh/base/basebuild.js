@@ -56,6 +56,8 @@ const SKIN = (s, t) => [0.125 + 0.125 * (1 - Math.abs(2 * s - 1)), 0.5 + 0.125 *
 // ---- the right forearm: a loft from the upper arm's cut to the wrist ----
 let loops = M.openLoops(body); const near = (c, r = 0.15) => loops.reduce((best, L) => { const d = V3.len(V3.sub(L.centre, c)); return d < r && (!best || d < best.d) ? { L, d } : best; }, null);
 const topR = near([-0.562, 1.293, 0.001]).L, wristR = near([-0.616, 1.085, 0.064]).L, hips = near([0, 1.158, 0.081]).L;
+{ const hole = near([-0.557, 1.095, 0.116], 0.05); if (hole && hole.L.ids.length < 40) { const L = hole.L; const c = L.centre.slice(); const [ji, w] = M.packW(M.weightsOf(body, L.ids[0]));   // THE PALM'S HOLE: the file's right hand is open where the weapon's grip sat — the far wall showed through it; a fan closes it (fixOrientation winds it with the rest)
+    M.cap(body, L.ids, c, SKIN(0.5, 0.5), ji, w, 'handR', false); console.log('palm hole capped', L.ids.length, 'verts'); loops = M.openLoops(body); } }
 console.log('loops', loops.map(L => L.ids.length + '@' + L.centre.map(v => v.toFixed(2)).join(',')).join('  '));
 { const d = V3.sub(wristR.centre, topR.centre); const A = M.loopByAngle(body, topR, d, 28), Bq = M.loopByAngle(body, wristR, d, 28);
   M.tube(body, A, Bq, 7, { part: 'foreR', uv: SKIN, bulge: t => 1 + 0.07 * Math.sin(Math.PI * Math.min(1, t / 0.7)) * (1 - t), weights: (t, j, wa, wb) => { const f = t < 0.7 ? 0 : (t - 0.7) / 0.3; return M.blendW([[B('foreR'), 1]], 1 - f, [[B('foreR'), 0.5], [B('handR'), 0.5]], f); } }); }
@@ -105,7 +107,7 @@ console.log('orientation', JSON.stringify(M.fixOrientation(body)));
 (async () => {
 const TRIS = +(process.env.TRIS || 8000);
 if (TRIS > 0) { const { MeshoptSimplifier } = require('/Users/vic/Documents/GitHub/node_modules/meshoptimizer'); await MeshoptSimplifier.ready;
-  const idx = Uint32Array.from(body.idx), pos = Float32Array.from(body.pos); const [simp, err] = MeshoptSimplifier.simplify(idx, pos, 3, Math.min(idx.length, TRIS * 3), +(process.env.ERR || 0.03), []);
+  const idx = Uint32Array.from(body.idx), pos = Float32Array.from(body.pos); const [simp, err] = MeshoptSimplifier.simplify(idx, pos, 3, Math.min(idx.length, TRIS * 3), +(process.env.ERR || 0.03), ['LockBorder']);   // (LockBorder: the seams where a lofted tube meets a cut, and the mirror's zipper, are coincident duplicates — moved apart by a collapse they opened hairline cracks)
   console.log('decimated', idx.length / 3, '->', simp.length / 3, 'tris, error', err.toFixed(4)); body.idx = Array.from(simp); }
 const fin = M.finish(body); console.log('base body verts', M.nverts(fin), 'tris', fin.idx.length / 3);
 const cards = (() => { const src = R.meshes.find(x => x.short === 'Hair_01'); const m = M.empty(), nv = src.pos.length / 3; const hb = B('head');

@@ -611,11 +611,15 @@ a 30-pace circle at the gallop, and nobody answered for the bows. Now (`afPlanTe
   where the fight is GOING, not by who is in range of it now (`afPerchOk`) — within `bowShot` of the
   contact, halfway between our foot's centre and theirs, on our side of that line and never in the
   enemy's lap. Judged the other way, at the bell no crest is in range of anything and the bows are
-  still on the flat when the melee arrives. He climbs it between shots and then **holds** it — he will not walk back down to
+  still on the flat when the melee arrives. KEEPING a stand is more forgiving than choosing one: the
+  contact walks toward whoever is advancing, and a bowman halfway up a hill should not turn back
+  because of it. He climbs it between shots and then **holds** it — he will not walk back down to
   close, and the engage rule no longer drags him to the enemy's mass while his mark is in range. A
   bowman holding his place in a line has his formation SLOT moved onto the crest instead
   (`afFormationSlot`, up to `perchOff` off his place, never out in front of his own swords), so a
-  side that means to stand and let its bows work puts them on the hill. Everyone's steering now
+  side that means to stand and let its bows work puts them on the hill. That reach is what decides
+  it in practice — a team is under orders for most of a fight, so a bowman walks to his SLOT, and a
+  crest further off than `perchOff` is a claim that sits idle while he stands in the line. Everyone's steering now
   reads the ground as well as the stones (`afSteerGround` inside `afSteerRocks`): a heading that
   would claw up a cliff face, or walk off a lip, is turned ALONG it — so a bowman sent to a bluff's
   shelf walks round to the back slope instead of grinding at the cliff, and nobody strolls off the

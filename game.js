@@ -21917,7 +21917,7 @@ const AF_TACT = { formSecs: 1.6, walk: 0.62, contact: 10, regroupAfter: 8, rally
   guardR: 10, guardReach: 26, detailSecs: 5,   // the BODYGUARD: a foe this close to one of our bowmen, no swordsman beside him → the nearest free swordsman (within guardReach) is sent for him
   flankOff: 7, huntOff: 8, screenOff: 5, flankMax: 24,   // the squadron's marks: off the END of the enemy line / beside the enemy's BOWS / beside our own bows — scaled to the line's width, never a fixed trip across the pit
   screenR: 18,                         // a screening squadron goes when an enemy rider comes this close to the bows
-  perchOff: 16,                        // THE HIGH GROUND: how far off his place in the line a bowman will go for a crest to shoot from (afPerches / afFormationSlot)
+  perchOff: 22,                        // THE HIGH GROUND: how far off his place in the line a bowman will go for a crest to shoot from (afPerches / afFormationSlot) — at 16 a claimed crest was usually out of reach of the line and the claim sat idle
   stallSecs: 26,                       // a fight with no blood for this long is pressed, not re-formed
   bowVolley: 40 };                     // the approach volley: a bowman walking in with the line looses from farther out (a longer draw)
   // archers: the gap behind the swords at muster; give ground inside bowNear, close beyond bowFar, loose out to bowShot, and keep bowRoom of clear sand from their own swordsmen
@@ -22320,23 +22320,23 @@ function afPerches() {
   }
   return (T.perches = L);
 }
-function afPerchOk(P, t, T) {                                // worth standing on: clear of the mark, in range of where the lines will MEET, and on our side of it
+function afPerchOk(P, t, T, keep) {                          // worth standing on: clear of the mark, in range of where the lines will MEET, and on our side of it
   if (Math.hypot(P.x - t.x, P.z - t.z) < AF_TACT.bowNear + 4) return false;   // never a stand in the enemy's lap
   const C = T && (T.footCenter || T.center), E = T && T.enemyCenter;
   if (!C || !E) return Math.hypot(P.x - t.x, P.z - t.z) < AF_TACT.bowShot - 3;
   const mx = (C.x + E.x) / 2, mz = (C.z + E.z) / 2;          // the contact: halfway between our foot and theirs
-  if (Math.hypot(P.x - mx, P.z - mz) > AF_TACT.bowShot) return false;         // too far off the fight to shoot into it
-  return Math.hypot(P.x - E.x, P.z - E.z) > Math.hypot(P.x - C.x, P.z - C.z) - 4;   // a crest behind THEIR line is not ours to take
+  if (Math.hypot(P.x - mx, P.z - mz) > AF_TACT.bowShot + (keep ? 10 : 0)) return false;   // too far off the fight to shoot into it
+  return Math.hypot(P.x - E.x, P.z - E.z) > Math.hypot(P.x - C.x, P.z - C.z) - (keep ? 14 : 4);   // a crest behind THEIR line is not ours to take — but a man already climbing one keeps at it (the contact walks toward whoever is advancing)
 }
 function afTakePerch(b, t, dt, T) {
   if (!AF.terr.hills.length) return (b.perch = null);
-  if (b.perch) { if (afPerchOk(b.perch, t, T)) return b.perch; b.perch = null; }   // (while his stand still sees the fight he stays on it — and costs nothing to think about)
+  if (b.perch) { if (afPerchOk(b.perch, t, T, true)) return b.perch; b.perch = null; }   // (while his stand still sees the fight he stays on it — and costs nothing to think about)
   b.perchT = (b.perchT || 0) - dt; if (b.perchT > 0) return null;              // (a breath between looks: he doesn't shop about every tick)
   b.perchT = 1.5 + Math.random() * 2;
   const hereY = afY(b.x, b.z); let best = null, bs = 0;
   for (const P of afPerches()) {
     if (P.y - hereY < 0.8 || !afPerchOk(P, t, T)) continue;  // no better than the ground he stands on, or no good to shoot from
-    const px = P.x - b.x, pz = P.z - b.z, walk = Math.hypot(px, pz); if (walk > 28 || walk < 1e-3) continue;
+    const px = P.x - b.x, pz = P.z - b.z, walk = Math.hypot(px, pz); if (walk > 34 || walk < 1e-3) continue;   // (a longer walk than this is the whole bout; nearer ones win anyway, by the score below)
     const k = clamp(((t.x - b.x) * px + (t.z - b.z) * pz) / (walk * walk), 0, 1);   // the way up must not run through the man he is shooting at
     if (Math.hypot(t.x - (b.x + px * k), t.z - (b.z + pz * k)) < 7) continue;
     let taken = 0; for (const o of AF.bodies) if (o.perch === P && !o.dead && o !== b) taken++;

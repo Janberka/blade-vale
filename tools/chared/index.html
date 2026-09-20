@@ -35,6 +35,14 @@
   <div class=row><button id=p_bind class=on>bind</button><button id=p_a>A</button><button id=p_t>T</button></div>
   <label class=sm><span id=l_arm>arms down</span> <span id=v_arm>0°</span></label><input type=range id=s_arm min=-90 max=90 value=0>
   <label class=sm>legs apart <span id=v_leg>0°</span></label><input type=range id=s_leg min=-20 max=30 value=0>
+  <div class=row style="margin-top:6px;align-items:center"><span class=sm style=width:34px>hand</span><button id=h_R>right</button><button id=h_L>left</button><button id=h_B>both</button><button id=h_0 title="put the picked hand back as the clip has it">reset</button></div>
+  <div id=handbox style=display:none>
+    <label class=sm title="about the knuckle line: toward the palm ↔ toward the back of the hand">x · bend <span id=v_hx>0°</span></label><input type=range id=s_hx min=-70 max=70 value=0>
+    <label class=sm title="about the palm's normal: toward the thumb ↔ toward the little finger — the way a sword is pointed">y · tilt <span id=v_hy>0°</span></label><input type=range id=s_hy min=-70 max=70 value=0>
+    <label class=sm title="about wrist → knuckles">z · roll <span id=v_hz>0°</span></label><input type=range id=s_hz min=-90 max=90 value=0>
+    <div class=sm id=hand_say></div>
+  </div>
+  <div class=sm id=hand_hint>click a hand in the view, or pick one here</div>
   <h4>show</h4>
   <div id=meshlist></div>
   <h4>items</h4>
@@ -188,6 +196,7 @@ const NAMES = ['base'], MODELS = [];   // the editor shows ONE character: the ba
   await seatSword(M);
   BODY = M.meshes.find(m => m.name === 'base_body' || /_body$/.test(m.name));
   M.nodes.forEach(n => { BONE[n.name] = n; REST.set(n.name, { p: n.position.clone(), q: n.quaternion.clone() }); });
+  M.root.updateMatrixWorld(true); handAxes(); handUI();
 
   // keep the original material of each mesh, plus the swap materials
   for (const m of ALL()) {
@@ -228,8 +237,8 @@ async function seatSword(mm) {
   let j; try { j = await (await fetch('items/sword_grip.json?' + Date.now())).json(); } catch (e) { return; }
   const m = mm.meshes.find(x => x.name === j.mesh); if (!m || m.userData.seated) return;
   const S = new THREE.Matrix4().fromArray(j.matrix), N = new THREE.Matrix3().getNormalMatrix(S), g = m.geometry;
-  g.getAttribute('position').applyMatrix4(S); if (g.getAttribute('normal')) g.getAttribute('normal').applyNormalMatrix(N);
-  g.computeBoundingBox(); g.computeBoundingSphere(); m.userData.seated = j;
+  g.getAttribute('position').applyMatrix4(S); g.getAttribute('position').needsUpdate = true; if (g.getAttribute('normal')) { g.getAttribute('normal').applyNormalMatrix(N); g.getAttribute('normal').needsUpdate = true; }
+  g.computeBoundingBox(); g.computeBoundingSphere(); m.userData.seated = j;   // needsUpdate: with the pane in view a frame is drawn while this fetch is out, the raw sword is on the GPU by then and BufferAttribute.applyMatrix4 does not flag it — the sword stayed where the rig has it, across the wrist
 }
 
 // ---- the helm: helm_corinthian.json + .bin (positions, normals, uvs, u16 indices, already fitted to the base head in
@@ -550,6 +559,7 @@ function setPose(arm, leg) {
   const X = new THREE.Vector3(1, 0, 0), Z = new THREE.Vector3(0, 0, 1);
   put('armL', Z, -arm); put('armR', Z, arm);
   put('thighL', Z, leg); put('thighR', Z, -leg);
+  for (const sd of ['L', 'R']) { const b = BONE['hand' + sd]; if (b) b.quaternion.copy(REST.get('hand' + sd).q); } handOver();
   M.root.updateMatrixWorld(true);
 }
 // …and OVER a clip: the same two turns laid on top of whatever frame is playing, so the carriage of the arms (and the width
@@ -583,6 +593,29 @@ el$('p_bind').onclick = () => preset(0, 0, 'p_bind');
 el$('p_a').onclick = () => preset(-30, 8, 'p_a');
 el$('p_t').onclick = () => preset(-65, 0, 'p_t');
 
+// ---- A HAND'S OWN TURN. Pick a hand (click it in the view, or the buttons) and turn it on its own three lines, over the clip
+// or over the pose: x BEND about the knuckle line (palm ↔ back of the hand), y TILT about the palm's normal (thumb side ↔
+// little-finger side — the way a sword is pointed), z ROLL about wrist→knuckles. The lines are read off the hand's own
+// joints at rest (the real fingers: the rig calls the index "pinky", the little finger "middle"), in the hand's frame, and
+// the turns ride the hand (post-multiplied). The left hand is the right's mirror: bend and roll change sign, tilt does not
+// (n = t × d already flips with the hand), so "both" gives one carriage. Remembered per browser; the numbers are what gets
+// baked: node tools/realmesh/base/motion.js … --handR x,y,z --handL x,y,z
+const HT = { pick: '', R: [0, 0, 0], L: [0, 0, 0], ax: {} }, htQ = new THREE.Quaternion();
+try { const v = JSON.parse(localStorage.getItem('chared-hands') || 'null'); if (v && v.R && v.L) { HT.R = v.R.map(Number); HT.L = v.L.map(Number); } } catch (e) {}
+function handAxes() { for (const sd of ['L', 'R']) { const h = BONE['hand' + sd], P = n => BONE[n].getWorldPosition(new THREE.Vector3()), inv = h.getWorldQuaternion(new THREE.Quaternion()).invert();
+    const t = P('pinky' + sd + '0').sub(P('middle' + sd + '1')).normalize(), d = P('ring' + sd + '1').sub(h.getWorldPosition(new THREE.Vector3())); d.addScaledVector(t, -d.dot(t)).normalize();
+    HT.ax[sd] = { t: t.clone().applyQuaternion(inv), d: d.clone().applyQuaternion(inv), n: t.clone().cross(d).normalize().applyQuaternion(inv) }; } }   // called once, on the bind pose
+function handOver() { const D = Math.PI / 180; for (const sd of ['L', 'R']) { const v = HT[sd], a = HT.ax[sd], b = BONE['hand' + sd]; if (!a || !b || !(v[0] || v[1] || v[2])) continue; const m = sd === 'L' ? -1 : 1;
+    b.quaternion.multiply(htQ.setFromAxisAngle(a.d, v[2] * D * m)).multiply(htQ.setFromAxisAngle(a.n, v[1] * D)).multiply(htQ.setFromAxisAngle(a.t, v[0] * D * m)); } }
+function handUI() { const p = HT.pick, on = p === 'R' || p === 'L' || p === 'B', v = HT[p === 'L' ? 'L' : 'R']; ['R', 'L', 'B'].forEach(k => el$('h_' + k).classList.toggle('on', p === k)); el$('handbox').style.display = on ? '' : 'none'; el$('hand_hint').style.display = on ? 'none' : '';
+  ['x', 'y', 'z'].forEach((k, i) => { el$('s_h' + k).value = v[i]; el$('v_h' + k).textContent = (v[i] > 0 ? '+' : '') + v[i] + '°'; });
+  el$('hand_say').textContent = 'right ' + HT.R.join(', ') + '  ·  left ' + HT.L.join(', '); }
+function handPick(p) { HT.pick = HT.pick === p ? '' : p; handUI(); }
+function handSet(i, val) { const who = HT.pick === 'B' ? ['R', 'L'] : [HT.pick]; for (const sd of who) HT[sd][i] = val; try { localStorage.setItem('chared-hands', JSON.stringify({ R: HT.R, L: HT.L })); } catch (e) {} handUI(); pose(); }
+['R', 'L', 'B'].forEach(k => { el$('h_' + k).onclick = () => handPick(k); });
+el$('h_0').onclick = () => { if (!HT.pick) return; [0, 1, 2].forEach(i => handSet(i, 0)); };
+['x', 'y', 'z'].forEach((k, i) => { el$('s_h' + k).oninput = e => handSet(i, +e.target.value); });
+
 // ---- motion: clips retargeted onto THIS rig by tools/realmesh/base/motion.js — motions/index.json lists them, one file a
 // clip: a local quaternion per moving bone per frame and the pelvis' place. A clip owns the skeleton while it is picked and
 // the pose sliders turn into an OFFSET over it (poseOver: the arms' becomes the CARRIAGE knob, the legs' is zeroed when a
@@ -604,7 +637,7 @@ async function setMotion(id) {
 function applyMotion(tf) {                          // tf in frames, fractional: slerp between the two around it
   const c = MO.clip, n = c.frames, f = c.loop ? ((tf % n) + n) % n : Math.min(Math.max(tf, 0), n - 1), i0 = Math.floor(f), a = f - i0, i1 = c.loop ? (i0 + 1) % n : Math.min(i0 + 1, n - 1);
   c.bones.forEach((nm, k) => { const b = BONE[nm]; if (!b) return; moQa.fromArray(c.q[k], i0 * 4); moQb.fromArray(c.q[k], i1 * 4); b.quaternion.copy(moQa).slerp(moQb, a); });
-  poseOver(carryDeg(carry) * Math.PI / 180, legA * Math.PI / 180);
+  poseOver(carryDeg(carry) * Math.PI / 180, legA * Math.PI / 180); handOver();
   const rb = BONE[c.root]; if (rb) rb.position.set(c.pos[i0 * 3] + (c.pos[i1 * 3] - c.pos[i0 * 3]) * a, c.pos[i0 * 3 + 1] + (c.pos[i1 * 3 + 1] - c.pos[i0 * 3 + 1]) * a, c.pos[i0 * 3 + 2] + (c.pos[i1 * 3 + 2] - c.pos[i0 * 3 + 2]) * a);
   el$('v_mof').textContent = f.toFixed(1) + ' / ' + (n - 1); el$('s_mof').value = i0;
 }
@@ -685,8 +718,11 @@ el$('s_exp').oninput = e => { const x = +e.target.value / 100; r.toneMappingExpo
 
 // ---- controls
 let drag = null;
-r.domElement.addEventListener('pointerdown', e => { r.domElement.setPointerCapture(e.pointerId); drag = { x: e.clientX, y: e.clientY, pan: e.button === 2 || e.button === 1 || e.shiftKey }; });
-r.domElement.addEventListener('pointerup', e => { drag = null; });
+r.domElement.addEventListener('pointerdown', e => { r.domElement.setPointerCapture(e.pointerId); drag = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, pan: e.button === 2 || e.button === 1 || e.shiftKey }; });
+r.domElement.addEventListener('pointerup', e => { const d0 = drag; drag = null; if (!d0 || d0.pan || Math.hypot(e.clientX - d0.x0, e.clientY - d0.y0) > 4) return;
+  let best = '', bd = 60; for (const sd of ['L', 'R']) { const h = BONE['hand' + sd], k = BONE['ring' + sd + '1']; if (!h || !k) continue; const p = h.getWorldPosition(new THREE.Vector3()).lerp(k.getWorldPosition(new THREE.Vector3()), 0.6).project(c);
+    const dpx = Math.hypot((p.x * 0.5 + 0.5) * innerWidth - e.clientX, (-p.y * 0.5 + 0.5) * innerHeight - e.clientY); if (p.z < 1 && dpx < bd) { bd = dpx; best = sd; } }
+  if (best && HT.pick !== best) handPick(best); });
 r.domElement.addEventListener('pointercancel', () => drag = null);
 r.domElement.addEventListener('contextmenu', e => e.preventDefault());
 r.domElement.addEventListener('pointermove', e => {

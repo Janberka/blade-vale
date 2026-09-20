@@ -69,12 +69,21 @@ looks best, so the knob rests at **+8 (−10.5°)**. `CARRY` in `index.html`; th
 clip is first seen with the same carriage. It is a live offset (`poseOver`, in the clavicle's frame) — when clips go into
 the game this is the turn to bake into them.
 
+**A hand's own turn.** POSE → *hand*: pick right / left / both (or click the hand in the view) and turn it on its own three
+lines — **x bend** about the knuckle line (palm ↔ back of the hand), **y tilt** about the palm's normal (thumb ↔ little
+finger: the way a sword is pointed), **z roll** about wrist→knuckles. It rides on top of the clip (or the pose), the left
+hand is the right's mirror, the numbers under the sliders are remembered per browser — and they are what gets baked, turn
+for turn (checked: 0.00° between the sliders and the bake): `motion.js … --handR x,y,z --handL x,y,z` (or `--hands`).
+
 **The sword in his fist.** The rig's sword is bound to `handR` but still stands where the OLD warrior's hand held it —
 upright, 10 cm off the wrist. `node tools/realmesh/base/grip.js` seats it from the geometry: the fist is read off a clip
 that closes it (each finger makes a loop — knuckle, two joints, fingertip — whose centre is a point on the handle's line),
 the sword's own axis, guard and flat come from its mesh, and the grip is laid through the fist: blade out of the thumb
 side, guard 1 cm clear of the index finger, an edge leading the way the knuckles point. It writes
 `items/sword_grip.json` (a bind-space matrix) and the editor lays it on at load (`?rawsword=1` shows the rig's own).
+(GOTCHA: `BufferAttribute.applyMatrix4` does not flag the attribute — with the pane in view a frame is drawn while the
+seat's fetch is out, the raw sword is on the GPU by then, and without `needsUpdate` it stayed across the wrist while every
+number read off the bones said it was in the fist. A render that disagrees with the bone data: suspect a stale buffer.)
 Knobs for the eye: `--tilt` (blade toward the knuckles), `--turn` (about the handle), `--push` (along it), `--gap`.
 NOT YET IN THE GAME: baking it into `assets/rigs/base` also moves the sheathed sword at the hip (`modelPropGeo` reads the
 same mesh), so `MODEL_HIP` has to take the inverse — a step of its own, after the grip is signed off here.

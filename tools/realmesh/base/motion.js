@@ -1,6 +1,6 @@
 // A MOTION for the base: a clip on somebody else's skeleton (usdanim.swift's JSON) retargeted onto assets/rigs/base, for the
 // char editor's MOTION panel.
-//   node tools/realmesh/base/motion.js <anim.json> <id> "<Name>" [--clip 0] [--profile cc_sketchfab] [--credit "…"] [--noloop] [--air] [--theirhands]
+//   node tools/realmesh/base/motion.js <anim.json> <id> "<Name>" [--clip 0] [--profile cc_sketchfab] [--credit "…"] [--noloop] [--air] [--theirhands] [--handR x,y,z] [--handL x,y,z] [--hands x,y,z]
 //   → tools/chared/motions/<id>.json, listed in tools/chared/motions/index.json
 //
 // HOW: in WORLD space, bone by bone. A source bone's turn away from its own reference pose, D(t) = Qs(t)·Qs_ref⁻¹, is laid
@@ -22,6 +22,9 @@
 // nothing to roll to, and the rule fades out). Half the roll goes into the forearm bone, half into the wrist — all of it at
 // the wrist wrings the wrist like a rag. The fingers ride the hand. --theirhands keeps the clip's own roll (a cut, a parry:
 // where the turn of the wrist IS the move).
+// …AND THE TURN THE USER GIVES IT. On top of that a hand takes a turn of its own, set by eye in the char editor (POSE → hand:
+// x bend about the knuckle line, y tilt about the palm's normal — the way a sword is pointed — z roll about wrist→knuckles,
+// in the hand's own frame, the left hand the right's mirror) and baked here with --handR / --handL / --hands x,y,z (deg).
 // The hip's travel comes from the clip's `world` (the skeleton prim's matrix per key), scaled by our hip height over theirs.
 const fs = require('fs'), path = require('path');
 const THREE = require('../../../vendor/three.min.js');
@@ -57,6 +60,7 @@ const ALIGN = {}; for (const s of ['L', 'R']) {
 
 const args = process.argv.slice(2), flag = (k, d) => { const i = args.indexOf('--' + k); if (i < 0) return d; const v = args[i + 1]; args.splice(i, 2); return v; };
 const sw = k => { const i = args.indexOf('--' + k); if (i < 0) return false; args.splice(i, 1); return true; }, noloop = sw('noloop'), air = sw('air'), theirHands = sw('theirhands');
+const turn3 = v => String(v).split(',').map(x => (+x || 0) * Math.PI / 180).concat(0, 0, 0).slice(0, 3), both = flag('hands', '0,0,0'), HAND_TURN = { R: turn3(flag('handR', both)), L: turn3(flag('handL', both)) };
 const clipNo = +flag('clip', 0), prof = PROFILES[flag('profile', 'cc_sketchfab')], credit = flag('credit', ''), FPS = +flag('fps', 60);
 const [srcFile, id, title] = args; if (!srcFile || !id) { console.log('usage: motion.js <anim.json> <id> "<Name>" [--clip n] [--profile p] [--credit "…"] [--noloop] [--air] [--theirhands]'); process.exit(1); }
 
@@ -109,9 +113,13 @@ for (const k of order) { const nm = T[k].name, src = prof.map[nm]; if (!src) con
 // the finger names against the geometry: from the thumb's tip outwards the knuckles must come in PHYS's order
 for (const sd of ['L', 'R']) { const tip = T[tIx['thumb' + sd + '2']].Pw, kn = f => T[tIx[PHYS[f][0] + sd + (PHYS[f][1] === 0 ? 0 : 1)]].Pw.distanceTo(tip), d = ['index', 'mid', 'ring', 'pinky'].map(kn);
   if (!(d[0] < d[1] && d[1] < d[2] && d[2] < d[3])) { console.log('the finger chains are not where PHYS says (' + sd + '): ' + d.map(x => (x * 100).toFixed(1)).join(' < ') + ' — was the rig rebuilt with its fingers renamed? fix PHYS'); process.exit(1); } }
+const rigSpec = JSON.parse(fs.readFileSync(path.join(RIG, 'rig.json')));
 const SIDE = new V3(1, 0, 0), WRIST_SHARE = 0.5, HANDS = ['L', 'R'].map(sd => { const h = tIx['hand' + sd], fo = tIx['fore' + sd], a = T[h].Pw.clone().sub(T[fo].Pw).normalize(), u = SIDE.clone().addScaledVector(a, -SIDE.dot(a)).normalize();
   const kids = []; (function down(p) { T.forEach((b, k) => { if (b.parent === p) { kids.push(k); down(k); } }); })(h);
-  return { h, fo, kids, u: u.applyQuaternion(T[h].Qw.clone().invert()) }; });                            // u: the body's left-right, square to the forearm, in the hand's own frame — at REST
+  const t = T[tIx[PHYS.index[0] + sd + PHYS.index[1]]].Pw.clone().sub(T[tIx[PHYS.pinky[0] + sd + PHYS.pinky[1]]].Pw).normalize();   // the thumb's line: little knuckle → index knuckle, the way a blade leaves the fist
+  const d = T[tIx[KNUCKLE + sd + '1']].Pw.clone().sub(T[h].Pw); d.addScaledVector(t, -d.dot(t)).normalize(); const inv = T[h].Qw.clone().invert(), m = sd === 'L' ? -1 : 1, v = HAND_TURN[sd];
+  const own = new Q4().setFromAxisAngle(d.clone().applyQuaternion(inv), v[2] * m).multiply(new Q4().setFromAxisAngle(t.clone().cross(d).normalize().applyQuaternion(inv), v[1])).multiply(new Q4().setFromAxisAngle(t.clone().applyQuaternion(inv), v[0] * m));   // the editor's handOver, turn for turn
+  return { sd, h, fo, kids, own, u: u.applyQuaternion(inv), t: t.applyQuaternion(inv), fwd: [], inw: [] }; });   // u: the body's left-right, square to the forearm, in the hand's own frame — at REST
 const chestK = tIx.chest, smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 let rollMax = 0;
 
@@ -133,7 +141,10 @@ for (let f = 0; f < frames; f++) {
       const fade = smooth(0.15, 0.45, Math.min(want.length(), have.length())); if (!fade) continue; want.normalize(); have.normalize();
       const roll = Math.atan2(a.dot(have.clone().cross(want)), have.dot(want)) * fade; rollMax = Math.max(rollMax, Math.abs(roll));
       const all = new Q4().setFromAxisAngle(a, roll), part = new Q4().setFromAxisAngle(a, roll * WRIST_SHARE);
-      Qw[H.fo].premultiply(part); Qw[H.h].premultiply(all); for (const k of H.kids) Qw[k].premultiply(all); } }   // a roll about the forearm's own axis moves no joint: Pw stands
+      Qw[H.fo].premultiply(part); Qw[H.h].premultiply(all); for (const k of H.kids) Qw[k].premultiply(all);                               // a roll about the forearm's own axis moves no joint: Pw stands
+      const was = Qw[H.h].clone(); Qw[H.h].multiply(H.own); const dW = Qw[H.h].clone().multiply(was.invert()); for (const k of H.kids) Qw[k].premultiply(dW);   // …and the turn of its own
+      const yaw = new THREE.Euler().setFromQuaternion(Qw[tIx.pelvis].clone().multiply(T[tIx.pelvis].Qw.clone().invert()), 'YXZ').y, t = H.t.clone().applyQuaternion(Qw[H.h]).applyAxisAngle(new V3(0, 1, 0), -yaw);
+      H.fwd.push(Math.atan2(t.z, t.y) * 180 / Math.PI); H.inw.push(Math.asin(Math.max(-1, Math.min(1, t.x * (H.sd === 'R' ? 1 : -1)))) * 180 / Math.PI); } }   /* out of the fore-and-aft plane, toward his middle */
   for (const k of order) { const b = T[k], par = b.parent, ql = par < 0 ? Qw[k].clone() : Qw[par].clone().invert().multiply(Qw[k]); ql.normalize();
     const prev = last[b.name]; if (prev && prev.dot(ql) < 0) ql.set(-ql.x, -ql.y, -ql.z, -ql.w); last[b.name] = ql; tracks[b.name].push(ql); }
   pos.push(Pw[tIx.pelvis]);
@@ -159,7 +170,8 @@ const entry = { id, name: out.name, frames, fps: FPS, loop: closes, credit }, at
 fs.writeFileSync(ixFile, JSON.stringify(list, null, 1));
 const cm = x => (x * 100).toFixed(1);
 console.log(`${out.name}: ${frames} frames @ ${FPS} (${out.duration}s) ${closes ? 'LOOP' : 'once'} · ${moving.length}/${names.length} bones move · his hip ${(T[tIx.pelvis].Pw.y).toFixed(3)} over theirs ${hipY.toFixed(1)} → travel ×${K.toFixed(4)}`);
-if (!theirHands) console.log(`  hands: thumbs to the front — rolled up to ${(rollMax * 180 / Math.PI).toFixed(0)}° about the forearm, ${WRIST_SHARE * 100}% of it in the forearm bone`);
+if (!theirHands) { const H = HANDS.find(h => 'hand' + h.sd === (rigSpec.swordHand || 'handR')), rg = a => Math.round(Math.min(...a)) + '…' + Math.round(Math.max(...a)) + '°';
+  console.log(`  hands: thumbs to the front — rolled up to ${(rollMax * 180 / Math.PI).toFixed(0)}° about the forearm (${WRIST_SHARE * 100}% in the forearm bone), own turn R ${HAND_TURN.R.map(x => Math.round(x * 180 / Math.PI)).join(',')} L ${HAND_TURN.L.map(x => Math.round(x * 180 / Math.PI)).join(',')} · the blade's line: ${rg(H.fwd)} forward of upright, ${rg(H.inw)} toward his middle`); }
 console.log(`  pelvis y ${cm(Math.min(...pos.map(p => p.y)))}…${cm(Math.max(...pos.map(p => p.y)))} cm (rest ${cm(T[tIx.pelvis].Pw.y)}) · x ${cm(Math.min(...pos.map(p => p.x)))}…${cm(Math.max(...pos.map(p => p.x)))} · z ${cm(Math.min(...pos.map(p => p.z)))}…${cm(Math.max(...pos.map(p => p.z)))}`);
 console.log(`  lowest sole point over the clip: before the lift ${cm(Math.min(...low0))}…${cm(Math.max(...low0))}, after ${cm(Math.min(...low))}…${cm(Math.max(...low))} cm (0 = on the ground) · L ${cm(Math.min(...lowL))}…${cm(Math.max(...lowL))} · R ${cm(Math.min(...lowR))}…${cm(Math.max(...lowR))}`);
 console.log(`  → ${path.relative(ROOT, path.join(OUT, id + '.json'))} (${(fs.statSync(path.join(OUT, id + '.json')).size / 1024).toFixed(0)} KB)`);

@@ -69,11 +69,17 @@ looks best, so the knob rests at **+8 (−10.5°)**. `CARRY` in `index.html`; th
 clip is first seen with the same carriage. It is a live offset (`poseOver`, in the clavicle's frame) — when clips go into
 the game this is the turn to bake into them.
 
+**The sword hand's zero.** Every clip is baked with the fist turned as it HOLDS A SWORD — **right −30 bend, +51 tilt, +40
+roll** (`HAND_ZERO` in `motion.js`, the user's own numbers, 2026-09-20). So a fighter carries his blade the same way in
+every motion, and the editor's hand sliders start from it at **0**. A clip where that hand is empty or doing something of
+its own (an open palm, a fist to the face) is baked with `--handR 0,0,0`.
+
 **A hand's own turn.** POSE → *hand*: pick right / left / both (or click the hand in the view) and turn it on its own three
 lines — **x bend** about the knuckle line (palm ↔ back of the hand), **y tilt** about the palm's normal (thumb ↔ little
 finger: the way a sword is pointed), **z roll** about wrist→knuckles. It rides on top of the clip (or the pose), the left
 hand is the right's mirror, the numbers under the sliders are remembered per browser — and they are what gets baked, turn
-for turn (checked: 0.00° between the sliders and the bake): `motion.js … --handR x,y,z --handL x,y,z` (or `--hands`).
+for turn (checked: 0.00° between the sliders and the bake, fingertips included): `motion.js … --handR x,y,z --handL x,y,z`
+(or `--hands`). Settle a carriage on the sliders, read the numbers off, bake them, and the sliders go back to 0.
 
 **The sword in his fist.** The rig's sword is bound to `handR` but still stands where the OLD warrior's hand held it —
 upright, 10 cm off the wrist. `node tools/realmesh/base/grip.js` seats it from the geometry: the fist is read off a clip

@@ -22,9 +22,10 @@
 // nothing to roll to, and the rule fades out). Half the roll goes into the forearm bone, half into the wrist — all of it at
 // the wrist wrings the wrist like a rag. The fingers ride the hand. --theirhands keeps the clip's own roll (a cut, a parry:
 // where the turn of the wrist IS the move).
-// …AND THE TURN THE USER GIVES IT. On top of that a hand takes a turn of its own, set by eye in the char editor (POSE → hand:
-// x bend about the knuckle line, y tilt about the palm's normal — the way a sword is pointed — z roll about wrist→knuckles,
-// in the hand's own frame, the left hand the right's mirror) and baked here with --handR / --handL / --hands x,y,z (deg).
+// …AND THE TURN THE HAND ITSELF IS GIVEN. On top of that each hand takes a turn of its own — x bend about the knuckle line,
+// y tilt about the palm's normal (the way a sword is pointed), z roll about wrist→knuckles, in the hand's own frame, the
+// left hand the right's mirror. It is set by eye in the char editor (POSE → hand) and baked here: the sword hand's default
+// is HAND_ZERO below, and --handR / --handL / --hands x,y,z (deg) override it.
 // The hip's travel comes from the clip's `world` (the skeleton prim's matrix per key), scaled by our hip height over theirs.
 const fs = require('fs'), path = require('path');
 const THREE = require('../../../vendor/three.min.js');
@@ -60,7 +61,13 @@ const ALIGN = {}; for (const s of ['L', 'R']) {
 
 const args = process.argv.slice(2), flag = (k, d) => { const i = args.indexOf('--' + k); if (i < 0) return d; const v = args[i + 1]; args.splice(i, 2); return v; };
 const sw = k => { const i = args.indexOf('--' + k); if (i < 0) return false; args.splice(i, 1); return true; }, noloop = sw('noloop'), air = sw('air'), theirHands = sw('theirhands');
-const turn3 = v => String(v).split(',').map(x => (+x || 0) * Math.PI / 180).concat(0, 0, 0).slice(0, 3), both = flag('hands', '0,0,0'), HAND_TURN = { R: turn3(flag('handR', both)), L: turn3(flag('handL', both)) };
+// THE SWORD HAND'S ZERO — the user's own numbers (2026-09-20), set by eye in the char editor: the fist as it HOLDS A SWORD,
+// bend −30° / tilt +51° / roll +40° on the hand's own lines. Every clip is baked with it, so a fighter carries his blade
+// the same way in all of them and the editor's hand sliders start from it at 0. A clip where that hand is empty or does
+// something else of its own (an open palm, a fist to the face) passes --handR 0,0,0.
+const HAND_ZERO = { R: [-30, 51, 40], L: [0, 0, 0] };
+const turn3 = v => String(v).split(',').map(x => (+x || 0) * Math.PI / 180).concat(0, 0, 0).slice(0, 3), both = flag('hands', null);
+const HAND_TURN = { R: turn3(flag('handR', both != null ? both : HAND_ZERO.R.join(','))), L: turn3(flag('handL', both != null ? both : HAND_ZERO.L.join(','))) };
 const clipNo = +flag('clip', 0), prof = PROFILES[flag('profile', 'cc_sketchfab')], credit = flag('credit', ''), FPS = +flag('fps', 60);
 const [srcFile, id, title] = args; if (!srcFile || !id) { console.log('usage: motion.js <anim.json> <id> "<Name>" [--clip n] [--profile p] [--credit "…"] [--noloop] [--air] [--theirhands]'); process.exit(1); }
 

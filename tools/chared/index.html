@@ -593,7 +593,9 @@ el$('p_bind').onclick = () => preset(0, 0, 'p_bind');
 el$('p_a').onclick = () => preset(-30, 8, 'p_a');
 el$('p_t').onclick = () => preset(-65, 0, 'p_t');
 
-// ---- A HAND'S OWN TURN. Pick a hand (click it in the view, or the buttons) and turn it on its own three lines, over the clip
+// ---- A HAND'S OWN TURN, ON TOP OF THE CLIP'S. A clip is baked with the sword hand's zero (motion.js HAND_ZERO — the fist as
+// it holds a sword), so 0 here IS that carriage and these sliders are what you would ADD to it.
+// Pick a hand (click it in the view, or the buttons) and turn it on its own three lines, over the clip
 // or over the pose: x BEND about the knuckle line (palm ↔ back of the hand), y TILT about the palm's normal (thumb side ↔
 // little-finger side — the way a sword is pointed), z ROLL about wrist→knuckles. The lines are read off the hand's own
 // joints at rest (the real fingers: the rig calls the index "pinky", the little finger "middle"), in the hand's frame, and
@@ -601,7 +603,7 @@ el$('p_t').onclick = () => preset(-65, 0, 'p_t');
 // (n = t × d already flips with the hand), so "both" gives one carriage. Remembered per browser; the numbers are what gets
 // baked: node tools/realmesh/base/motion.js … --handR x,y,z --handL x,y,z
 const HT = { pick: '', R: [0, 0, 0], L: [0, 0, 0], ax: {} }, htQ = new THREE.Quaternion();
-try { const v = JSON.parse(localStorage.getItem('chared-hands') || 'null'); if (v && v.R && v.L) { HT.R = v.R.map(Number); HT.L = v.L.map(Number); } } catch (e) {}
+try { const v = JSON.parse(localStorage.getItem('chared-hands2') || 'null'); if (v && v.R && v.L) { HT.R = v.R.map(Number); HT.L = v.L.map(Number); } } catch (e) {}
 function handAxes() { for (const sd of ['L', 'R']) { const h = BONE['hand' + sd], P = n => BONE[n].getWorldPosition(new THREE.Vector3()), inv = h.getWorldQuaternion(new THREE.Quaternion()).invert();
     const t = P('pinky' + sd + '0').sub(P('middle' + sd + '1')).normalize(), d = P('ring' + sd + '1').sub(h.getWorldPosition(new THREE.Vector3())); d.addScaledVector(t, -d.dot(t)).normalize();
     HT.ax[sd] = { t: t.clone().applyQuaternion(inv), d: d.clone().applyQuaternion(inv), n: t.clone().cross(d).normalize().applyQuaternion(inv) }; } }   // called once, on the bind pose
@@ -609,9 +611,9 @@ function handOver() { const D = Math.PI / 180; for (const sd of ['L', 'R']) { co
     b.quaternion.multiply(htQ.setFromAxisAngle(a.d, v[2] * D * m)).multiply(htQ.setFromAxisAngle(a.n, v[1] * D)).multiply(htQ.setFromAxisAngle(a.t, v[0] * D * m)); } }
 function handUI() { const p = HT.pick, on = p === 'R' || p === 'L' || p === 'B', v = HT[p === 'L' ? 'L' : 'R']; ['R', 'L', 'B'].forEach(k => el$('h_' + k).classList.toggle('on', p === k)); el$('handbox').style.display = on ? '' : 'none'; el$('hand_hint').style.display = on ? 'none' : '';
   ['x', 'y', 'z'].forEach((k, i) => { el$('s_h' + k).value = v[i]; el$('v_h' + k).textContent = (v[i] > 0 ? '+' : '') + v[i] + '°'; });
-  el$('hand_say').textContent = 'right ' + HT.R.join(', ') + '  ·  left ' + HT.L.join(', '); }
+  el$('hand_say').textContent = 'right ' + HT.R.join(', ') + '  ·  left ' + HT.L.join(', ') + (HT.R.some(Boolean) || HT.L.some(Boolean) ? '  — on top of the clip\'s own' : '  = the clip as baked'); }
 function handPick(p) { HT.pick = HT.pick === p ? '' : p; handUI(); }
-function handSet(i, val) { const who = HT.pick === 'B' ? ['R', 'L'] : [HT.pick]; for (const sd of who) HT[sd][i] = val; try { localStorage.setItem('chared-hands', JSON.stringify({ R: HT.R, L: HT.L })); } catch (e) {} handUI(); pose(); }
+function handSet(i, val) { const who = HT.pick === 'B' ? ['R', 'L'] : [HT.pick]; for (const sd of who) HT[sd][i] = val; try { localStorage.setItem('chared-hands2', JSON.stringify({ R: HT.R, L: HT.L })); } catch (e) {} handUI(); pose(); }
 ['R', 'L', 'B'].forEach(k => { el$('h_' + k).onclick = () => handPick(k); });
 el$('h_0').onclick = () => { if (!HT.pick) return; [0, 1, 2].forEach(i => handSet(i, 0)); };
 ['x', 'y', 'z'].forEach((k, i) => { el$('s_h' + k).oninput = e => handSet(i, +e.target.value); });

@@ -23,7 +23,7 @@ What the game does with it (game.js): `loadModelRig` reads one texture per mater
 (`rig.json` skull / hairline / face override LOOK_SKULL / LOOK_HAIRLINE / LOOK_FACE), skips the head sculpting passes for a
 `sculpted` body, `modelBodyBuild` is off for a `fullBody` rig (the base IS the body under the armour), and `lookDraw` hides
 each body part under the kit piece that covers it (`LOOK_UNDER`: torso under the cuirass, upper arms under sleeves, forearms
-under vambraces, thighs under the skirt, shins under greaves, feet in boots — the traps are torso, so they go under the cuirass) so a stride never pushes skin through cloth; `lookHairApply` shows the rig's own `hair_long` for the long cut and `beard_cards` for a full beard in the look's colours; `rig.json roundX` sets where the round shield sits on the forearm; the breeches' waistband (skirtTop) stays on a fullBody rig;
+under vambraces, thighs under the skirt, shins under greaves, feet in boots — the traps are torso, so they go under the cuirass) so a stride never pushes skin through cloth; `lookHairApply` shows the rig's own `hair_long` on every bare head (the one cut since 2026-09-20) and `beard_cards` for a full beard in the look's colours; `rig.json roundX` sets where the round shield sits on the forearm; the breeches' waistband (skirtTop) stays on a fullBody rig;
 a naked look (pelt, berserker) drops cuirass and sleeves and the chest and arms show — inked, if he bought ink.
 
 Open: the fit's knobs are MARGIN, the cast neighbourhood and the relief cap in retarget.js (an earlier per-band additive push made a barrel of the shirt and a gaping collar — the casts replaced it);

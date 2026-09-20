@@ -160,6 +160,13 @@ travels with the loadout, so guests and profile pages paint the same face; the s
 styles are regions of the baked beard class cut by position in `lookFaceColour` (the chin for a goatee, the upper lip for
 a moustache). The vale's men roll their own.
 
+### One cut (2026-09-20, "the hair of the char doesn't look like what we had in the editor … I just want the same hair style")
+The roll gave every man one of five cuts (shaved, crop, crown, long, mohawk) and only the long cut showed the base's own
+hair cards — the mane the editor shows. Now every bare head wears the mane (`LOOK_HAIR_STYLE`, `lookHairApply` shows
+`hair_long` whenever there is hair and no helm; a rig without cards falls back to the long cap), the barber's Hair menu is
+the colour alone (`gear.look.c`; `h` left `ARENA_LOOK`, so a saved cut is dropped by `cleanLook`), and the bald roll and
+the style roll are still drawn so no name's face, beard or scar re-rolls.
+
 ### Look closer (2026-09-16, "let me click the head and focus and zoom in")
 Wherever the figure stands — the home (a tap that lands on nothing on the floor), the market, the barber's chair, a fighter's page — a tap on him looks closer: the head (framed with the upper body), a hand, the chest, the
 legs — and a tap on the same part, or on nothing, steps back (`afPreviewFocus`, `AF_PREVIEW_PARTS`; the lens eases there in

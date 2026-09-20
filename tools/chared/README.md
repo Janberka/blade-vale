@@ -47,6 +47,8 @@ A motion is ONE json in `motions/` (a local quaternion per moving bone per frame
 `motions/index.json`. They are made by retargeting — added ONE AT A TIME and judged here before the next:
 
 ```bash
+node tools/realmesh/base/gltfanim.js <scene.gltf | model.glb> /tmp/anim.json   # glTF: EVERY clip, by name (run it without the out file to list them)
+#   …or, from a .usdz (which can only ever hold ONE clip):
 swiftc -O tools/realmesh/base/usdanim.swift -o /tmp/usdanim
 /tmp/usdanim <model.usdz> /tmp/anim.json                                  # the skeleton, its clip, the hip's travel
 node tools/realmesh/base/motion.js /tmp/anim.json <id> "<Name>" --credit "<author, licence>"   # → motions/<id>.json
@@ -93,6 +95,18 @@ number read off the bones said it was in the fist. A render that disagrees with 
 Knobs for the eye: `--tilt` (blade toward the knuckles), `--turn` (about the handle), `--push` (along it), `--gap`.
 NOT YET IN THE GAME: baking it into `assets/rigs/base` also moves the sheathed sword at the hip (`modelPropGeo` reads the
 same mesh), so `MODEL_HIP` has to take the inverse — a step of its own, after the grip is signed off here.
+
+`--profile` says whose skeleton it is: `cc_sketchfab` (the usdz: anonymised joints, hip outside the skeleton), `cc_gltf`
+(the same Character Creator man from Sketchfab's glTF — real names, numbered: `CC_Base_L_Thigh_04`; a joint is found by its
+stem), `mixamo` (`mixamorig:*`; proved on a T-pose clip: he stands in a clean T). `--clip N` picks the clip. A clip that
+CARRIES him (WalkForward02 crosses the floor and snaps back) is baked with its `travel` and `speed`; the MOTION panel
+then shows **in place**, which takes the travel back out evenly — the speed is what the game will need to keep his feet
+from skating.
+
+**The source has 11 clips** (Sketchfab's own count): `01_Angry Walk` ✓, `WalkForward02`, `WalkBackward02`, `Atk_Jump`,
+`Atk_Kick`, `Atk_ShieldCharge`, `Atk_ShieldSwipe02`, `Atk_SlashDown`, `Atk_SlashUp`, `Atk_Spin`, `Atk_Stab`. The `.usdz`
+we were given holds only the first; the rest need the model's **glTF** download (Download 3D Model → glTF, a Sketchfab
+login), dropped next to it.
 
 | clip | from | |
 | --- | --- | --- |

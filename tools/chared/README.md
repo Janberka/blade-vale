@@ -14,7 +14,7 @@ the game's tints (`headbake.py`) and the game paints the tone back on, which the
 
 | panel | what |
 | --- | --- |
-| MOTION | the clips in `motions/` played on him: pick one, pause, step a frame, scrub, slow it down. A clip owns the skeleton while it is picked, and the POSE sliders become an OFFSET over it — drag "arms down" while he walks to try a wider or a closer carriage of the arms (the label reads "+15° over the clip"; picking a clip zeroes them); "none" hands him back to the sliders |
+| MOTION | the clips in `motions/` played on him: pick one, pause, step a frame, scrub, slow it down. A clip owns the skeleton while it is picked, and the POSE sliders become an OFFSET over it: the arms' turns into the **ARM CARRIAGE** knob, −10…+10 (below), the legs' is zeroed; "none" hands him back to the sliders |
 | SHOW | every mesh in the file, its triangle count, on/off |
 | ITEMS | what he WEARS, by the game's rules: the leather wrist bands always (there are no bare wrists), a steel arm either side, a leather pauldron either side, the helm. A steel arm takes that side's band and pauldron off; the helm takes the hair — the same table the game reads from `rig.json.wear` |
 | SHADING | textured / clay (judge the form, no paint) / normals / vertex class / silhouette; wireframe, smooth normals, double-sided (finds flipped faces), skeleton, grid + ruler |
@@ -58,6 +58,13 @@ the chain, feet about the vertical only, the collar bones by their LIFT only, th
 height, and the clip is then lifted frame by frame so his lowest sole point is ON the ground (`--air` for a jump or a
 fall, `--noloop` for a clip that must not be closed). A new SOURCE skeleton is a new entry in its `PROFILES` (which of
 their joints drives which of our bones).
+
+**The arm carriage.** A clip made on a slighter man carries the arms too close for this build, so over a clip the arm
+slider is a knob across the only turns that make sense on him (the user's call, 2026-09-20, on the angry walk): **−10 =
+−33° over the clip = his arms 45° open, +10 = −8° = as close as they go**; past −6° the arms are in his lats; −12…−8°
+looks best, so the knob rests at **+8 (−10.5°)**. `CARRY` in `index.html`; the knob is remembered per browser so the next
+clip is first seen with the same carriage. It is a live offset (`poseOver`, in the clavicle's frame) — when clips go into
+the game this is the turn to bake into them.
 
 | clip | from | |
 | --- | --- | --- |

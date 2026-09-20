@@ -31,6 +31,10 @@
   <label class=sm>frame <span id=v_mof>–</span></label><input type=range id=s_mof min=0 max=0 value=0>
   <label class=sm>speed <span id=v_mos>1.00×</span></label><input type=range id=s_mos min=5 max=150 value=100>
   <div class=sm id=mo_info></div>
+  <h4>pose</h4>
+  <div class=row><button id=p_bind class=on>bind</button><button id=p_a>A</button><button id=p_t>T</button></div>
+  <label class=sm><span id=l_arm>arms down</span> <span id=v_arm>0°</span></label><input type=range id=s_arm min=-90 max=90 value=0>
+  <label class=sm>legs apart <span id=v_leg>0°</span></label><input type=range id=s_leg min=-20 max=30 value=0>
   <h4>show</h4>
   <div id=meshlist></div>
   <h4>items</h4>
@@ -53,10 +57,6 @@
   <label><input type=checkbox id=t_grid checked> grid + ruler</label>
   <h4>isolate</h4>
   <select id=iso><option value="">— whole body —</option></select>
-  <h4>pose</h4>
-  <div class=row><button id=p_bind class=on>bind</button><button id=p_a>A</button><button id=p_t>T</button></div>
-  <label class=sm>arms down <span id=v_arm>0°</span></label><input type=range id=s_arm min=-90 max=90 value=0>
-  <label class=sm>legs apart <span id=v_leg>0°</span></label><input type=range id=s_leg min=-20 max=30 value=0>
   <h4>camera</h4>
   <div class=row>
     <button data-v="0">front</button><button data-v="180">back</button>
@@ -547,9 +547,22 @@ function poseOver(arm, leg) {
   const over = (name, ang) => { const b = BONE[name]; if (!b || !ang) return; poseAx.set(0, 0, 1).applyQuaternion(REST.get(name).q); b.quaternion.premultiply(poseQ.setFromAxisAngle(poseAx, ang)); };
   over('armL', -arm); over('armR', arm); over('thighL', leg); over('thighR', -leg);
 }
-let armA = 0, legA = 0;
-function pose() { if (MO.clip) applyMotion(MO.t * MO.clip.fps); else setPose(armA * Math.PI / 180, legA * Math.PI / 180); const d = MO.clip ? ' over the clip' : ''; el$('v_arm').textContent = (MO.clip && armA > 0 ? '+' : '') + armA.toFixed(0) + '°' + d; el$('v_leg').textContent = (MO.clip && legA > 0 ? '+' : '') + legA.toFixed(0) + '°' + d; }
-el$('s_arm').oninput = e => { armA = +e.target.value; el$('s_arm').value = armA; pose(); };
+// THE ARM CARRIAGE. Over a clip the arm slider is a knob, −10…+10, across the only turns that make sense on HIM (the user,
+// 2026-09-20, on the angry walk): −33° over the clip = his arms 45° open, −8° = as close as they go — past −6° the arms are
+// in his lats and "make no sense at all"; −12…−8 looks best, so the knob rests at +8 (−10.5°). A clip retargeted from a
+// slighter man always carries the arms too close for this build: that is what the knob is for. The knob is remembered
+// (this browser) so the next clip is first seen with the same carriage.
+const CARRY = { open: -33, close: -8, def: 8 }, carryDeg = k => CARRY.open + (k + 10) / 20 * (CARRY.close - CARRY.open);
+let armA = 0, legA = 0, carry = CARRY.def; try { const v = parseFloat(localStorage.getItem('chared-carry')); if (v >= -10 && v <= 10) carry = v; } catch (e) {}
+function armSlider() {                              // one slider, two jobs: degrees on the bind pose, the carriage knob over a clip
+  const sl = el$('s_arm'), on = !!MO.clip; sl.min = on ? -10 : -90; sl.max = on ? 10 : 90; sl.step = on ? 0.5 : 1; sl.value = on ? carry : armA;
+  el$('l_arm').textContent = on ? 'arm carriage' : 'arms down'; ['p_bind', 'p_a', 'p_t'].forEach(i => { el$(i).disabled = on; el$(i).style.opacity = on ? 0.4 : ''; });
+}
+function pose() {
+  if (MO.clip) { applyMotion(MO.t * MO.clip.fps); el$('v_arm').textContent = (carry > 0 ? '+' : '') + carry.toFixed(1) + ' (' + carryDeg(carry).toFixed(1) + '°)'; el$('v_arm').title = carryDeg(carry).toFixed(1) + '° over the clip'; el$('v_leg').textContent = (legA > 0 ? '+' : '') + legA.toFixed(0) + '° over the clip'; }
+  else { setPose(armA * Math.PI / 180, legA * Math.PI / 180); el$('v_arm').textContent = armA.toFixed(0) + '°'; el$('v_leg').textContent = legA.toFixed(0) + '°'; }
+}
+el$('s_arm').oninput = e => { if (MO.clip) { carry = +e.target.value; try { localStorage.setItem('chared-carry', carry); } catch (er) {} } else armA = +e.target.value; pose(); };
 el$('s_leg').oninput = e => { legA = +e.target.value; pose(); };
 function preset(a, l, btn) { armA = a; legA = l; el$('s_arm').value = a; el$('s_leg').value = l; pose(); ['p_bind', 'p_a', 'p_t'].forEach(i => el$(i).classList.toggle('on', i === btn)); }
 el$('p_bind').onclick = () => preset(0, 0, 'p_bind');
@@ -558,7 +571,8 @@ el$('p_t').onclick = () => preset(-65, 0, 'p_t');
 
 // ---- motion: clips retargeted onto THIS rig by tools/realmesh/base/motion.js — motions/index.json lists them, one file a
 // clip: a local quaternion per moving bone per frame and the pelvis' place. A clip owns the skeleton while it is picked and
-// the pose sliders turn into an OFFSET over it (poseOver; zeroed when a clip is picked); on "none" they pose him again.
+// the pose sliders turn into an OFFSET over it (poseOver: the arms' becomes the CARRIAGE knob, the legs' is zeroed when a
+// clip is picked); on "none" they pose him again.
 const MO = { list: [], clip: null, t: 0, play: true, speed: 1, last: 0 }, moQa = new THREE.Quaternion(), moQb = new THREE.Quaternion();
 async function loadMotions() {
   try { MO.list = await (await fetch('motions/index.json?' + Date.now())).json(); } catch (e) { MO.list = []; }
@@ -571,12 +585,12 @@ async function setMotion(id) {
   if (id) { const c = await (await fetch('motions/' + id + '.json?' + Date.now())).json(); c.q = c.q.map(a => new Float32Array(a)); c.pos = new Float32Array(c.pos); MO.clip = c; MO.t = 0; MO.play = true; }
   const c = MO.clip; el$('s_mof').max = c ? c.frames - 1 : 0; el$('mo_play').textContent = 'pause';
   el$('mo_info').textContent = c ? c.bones.length + ' bones · ' + c.frames + ' frames @ ' + c.fps + (c.credit ? ' · ' + c.credit : '') : '';
-  if (!c) { el$('v_mof').textContent = '–'; el$('s_mof').value = 0; } pose();
+  if (!c) { el$('v_mof').textContent = '–'; el$('s_mof').value = 0; } armSlider(); pose();
 }
 function applyMotion(tf) {                          // tf in frames, fractional: slerp between the two around it
   const c = MO.clip, n = c.frames, f = c.loop ? ((tf % n) + n) % n : Math.min(Math.max(tf, 0), n - 1), i0 = Math.floor(f), a = f - i0, i1 = c.loop ? (i0 + 1) % n : Math.min(i0 + 1, n - 1);
   c.bones.forEach((nm, k) => { const b = BONE[nm]; if (!b) return; moQa.fromArray(c.q[k], i0 * 4); moQb.fromArray(c.q[k], i1 * 4); b.quaternion.copy(moQa).slerp(moQb, a); });
-  poseOver(armA * Math.PI / 180, legA * Math.PI / 180);
+  poseOver(carryDeg(carry) * Math.PI / 180, legA * Math.PI / 180);
   const rb = BONE[c.root]; if (rb) rb.position.set(c.pos[i0 * 3] + (c.pos[i1 * 3] - c.pos[i0 * 3]) * a, c.pos[i0 * 3 + 1] + (c.pos[i1 * 3 + 1] - c.pos[i0 * 3 + 1]) * a, c.pos[i0 * 3 + 2] + (c.pos[i1 * 3 + 2] - c.pos[i0 * 3 + 2]) * a);
   el$('v_mof').textContent = f.toFixed(1) + ' / ' + (n - 1); el$('s_mof').value = i0;
 }

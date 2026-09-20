@@ -22320,17 +22320,22 @@ function afPerches() {
   }
   return (T.perches = L);
 }
-function afPerchOk(P, t) {                                  // worth standing on while the mark is in range of it and not on top of it
-  const d = Math.hypot(P.x - t.x, P.z - t.z); return d > AF_TACT.bowNear + 4 && d < AF_TACT.bowShot - 3;
+function afPerchOk(P, t, T) {                                // worth standing on: clear of the mark, in range of where the lines will MEET, and on our side of it
+  if (Math.hypot(P.x - t.x, P.z - t.z) < AF_TACT.bowNear + 4) return false;   // never a stand in the enemy's lap
+  const C = T && (T.footCenter || T.center), E = T && T.enemyCenter;
+  if (!C || !E) return Math.hypot(P.x - t.x, P.z - t.z) < AF_TACT.bowShot - 3;
+  const mx = (C.x + E.x) / 2, mz = (C.z + E.z) / 2;          // the contact: halfway between our foot and theirs
+  if (Math.hypot(P.x - mx, P.z - mz) > AF_TACT.bowShot) return false;         // too far off the fight to shoot into it
+  return Math.hypot(P.x - E.x, P.z - E.z) > Math.hypot(P.x - C.x, P.z - C.z) - 4;   // a crest behind THEIR line is not ours to take
 }
-function afTakePerch(b, t, dt) {
+function afTakePerch(b, t, dt, T) {
   if (!AF.terr.hills.length) return (b.perch = null);
-  if (b.perch) { if (afPerchOk(b.perch, t)) return b.perch; b.perch = null; }   // (while his stand still sees the fight he stays on it — and costs nothing to think about)
+  if (b.perch) { if (afPerchOk(b.perch, t, T)) return b.perch; b.perch = null; }   // (while his stand still sees the fight he stays on it — and costs nothing to think about)
   b.perchT = (b.perchT || 0) - dt; if (b.perchT > 0) return null;              // (a breath between looks: he doesn't shop about every tick)
   b.perchT = 1.5 + Math.random() * 2;
   const hereY = afY(b.x, b.z); let best = null, bs = 0;
   for (const P of afPerches()) {
-    if (P.y - hereY < 0.8 || !afPerchOk(P, t)) continue;     // no better than the ground he stands on, or no good to shoot from
+    if (P.y - hereY < 0.8 || !afPerchOk(P, t, T)) continue;  // no better than the ground he stands on, or no good to shoot from
     const px = P.x - b.x, pz = P.z - b.z, walk = Math.hypot(px, pz); if (walk > 28 || walk < 1e-3) continue;
     const k = clamp(((t.x - b.x) * px + (t.z - b.z) * pz) / (walk * walk), 0, 1);   // the way up must not run through the man he is shooting at
     if (Math.hypot(t.x - (b.x + px * k), t.z - (b.z + pz * k)) < 7) continue;
@@ -22398,8 +22403,7 @@ function afThink(b, dt) {
   const T = AF.teams && AF.teams[b.team];
   const ord = T ? (b.mounted ? T.riderOrder : T.order) : 'charge';
   const bow = b.weapon === 'bow' && !b.mounted, horseBow = b.mounted && b.weapon === 'bow';
-  if (b.prefBow && !b.mounted) afTakePerch(b, t, dt); else if (b.perch) b.perch = null;   // THE HIGH GROUND: a bowman keeps an eye out for a crest to shoot from (his claim holds while he has steel in hand, too)
-  const onPerch = !!(b.perch && Math.hypot(b.perch.x - b.x, b.perch.z - b.z) < 2);
+  if (b.prefBow && !b.mounted) afTakePerch(b, t, dt, T); else if (b.perch) b.perch = null;   // THE HIGH GROUND: a bowman keeps an eye out for a crest to shoot from (his claim holds while he has steel in hand, too)
   const detail = b.detail && !b.detail.dead && !b.mounted && !bow ? b.detail : null;   // THE BODYGUARD (afGuardTheBows): his man is his mark whatever the line is doing
   if (detail && !busy && detail.mounted && b.ward && !b.ward.dead && Math.hypot(detail.x - b.x, detail.z - b.z) > 6) {   // a horse he can't catch he meets at the bowman's side, between them
     const W = b.ward, wx = detail.x - W.x, wz = detail.z - W.z, wd = Math.hypot(wx, wz) || 1, px = W.x + wx / wd * 2.5, pz = W.z + wz / wd * 2.5, gx = px - b.x, gz = pz - b.z, gd = Math.hypot(gx, gz);
@@ -22433,7 +22437,7 @@ function afThink(b, dt) {
       }
     }
   }
-  if (T && T.enemyCenter && ord === 'charge' && !busy && !(bow && onPerch && d < AF_TACT.bowShot)) {   // no foe near me: the fight is at the enemy's mass — go THERE (walking to our own centre made a pile); a bowman on his crest with the mark in range stays on it and shoots
+  if (T && T.enemyCenter && ord === 'charge' && !busy && !(bow && b.perch)) {   // no foe near me: the fight is at the enemy's mass — go THERE (walking to our own centre made a pile); a bowman with a crest to shoot from goes UP instead, and holds it (afTakePerch made sure it overlooks the fight)
     const cap = T.engageR * (b.mounted ? AF_TACT.riderEngageMul : 1);
     if (d > cap) {
       const G = b.mounted && T.riderRole === 'hunt' && T.enemyBows ? T.enemyBows : b.mounted && T.riderRole === 'trample' && T.enemyFoot ? T.enemyFoot : T.enemyCenter;   // (a rider on the hunt: the bows; riding down: the foot)

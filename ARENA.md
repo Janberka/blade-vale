@@ -607,8 +607,11 @@ a 30-pace circle at the gallop, and nobody answered for the bows. Now (`afPlanTe
   pace back from the lip, moved off any crown of rock so the stone is cover beside him rather than
   in his way (`afPerches`), each with room for one to five bowmen by how broad it is. Every foot
   bowman looks for the best one going (`afTakePerch`): higher than the ground he is on, near, not
-  already full, the fight still in range from up there, and the way up not straight through the man
-  he is shooting at. He climbs it between shots and then **holds** it — he will not walk back down to
+  already full, and the way up not straight through the man he is shooting at. A stand is judged by
+  where the fight is GOING, not by who is in range of it now (`afPerchOk`) — within `bowShot` of the
+  contact, halfway between our foot's centre and theirs, on our side of that line and never in the
+  enemy's lap. Judged the other way, at the bell no crest is in range of anything and the bows are
+  still on the flat when the melee arrives. He climbs it between shots and then **holds** it — he will not walk back down to
   close, and the engage rule no longer drags him to the enemy's mass while his mark is in range. A
   bowman holding his place in a line has his formation SLOT moved onto the crest instead
   (`afFormationSlot`, up to `perchOff` off his place, never out in front of his own swords), so a

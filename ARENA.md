@@ -607,7 +607,10 @@ a 30-pace circle at the gallop, and nobody answered for the bows. Now (`afPlanTe
   pace back from the lip, moved off any crown of rock so the stone is cover beside him rather than
   in his way (`afPerches`), each with room for one to five bowmen by how broad it is. Every foot
   bowman looks for the best one going (`afTakePerch`): higher than the ground he is on, near, not
-  already full, and the way up not straight through the man he is shooting at. A stand is judged by
+  already full, the way up not straight through the man he is shooting at, and — while his side is
+  under orders — one his own line will actually walk him to (`afPerchInReach`, the same rule the
+  slot below uses; a claim the line cannot reach used to sit on a man for a whole bout while he
+  stood in the rank, and took up the stand's room so nobody else could have it). A stand is judged by
   where the fight is GOING, not by who is in range of it now (`afPerchOk`) — within `bowShot` of the
   contact, halfway between our foot's centre and theirs, on our side of that line and never in the
   enemy's lap. Judged the other way, at the bell no crest is in range of anything and the bows are

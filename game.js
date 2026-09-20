@@ -22067,15 +22067,20 @@ function afGuardTheBows(T, mine, foes) {
     if (pick) { pick.detail = threat; pick.ward = a; pick.detailT = AF_TACT.detailSecs; }
   }
 }
+function afRawSlot(T, b) {                                  // his place in the line as the line lays it (no crest, no stone)
+  const fwx = Math.sin(T.face), fwz = Math.cos(T.face), rgx = -Math.cos(T.face), rgz = Math.sin(T.face), sl = b.slot || { right: 0, back: 0 };
+  return { x: T.anchor.x + rgx * sl.right - fwx * sl.back, z: T.anchor.z + rgz * sl.right - fwz * sl.back, fwx, fwz };
+}
+function afPerchInReach(P, T, b) {                          // …and whether the line will walk him to this crest at all
+  if (!T || !T.anchor || T.order === 'charge') return true;   // (a charge is every man for the mark: he goes where he likes)
+  const S = afRawSlot(T, b), fwd = (P.x - S.x) * S.fwx + (P.z - S.z) * S.fwz;
+  const scarped = P.cliff && P.cx * S.fwx + P.cz * S.fwz > 0.3;   // a cliff turned on the enemy: they cannot come up it, so he may stand forward of the line
+  return Math.hypot(P.x - S.x, P.z - S.z) < AF_TACT.perchOff && fwd < (scarped ? AF_TACT.perchFwd : AF_TACT.bowGap);
+}
 function afFormationSlot(T, b) {
   const fwx = Math.sin(T.face), fwz = Math.cos(T.face), rgx = -Math.cos(T.face), rgz = Math.sin(T.face), sl = b.slot || { right: 0, back: 0 };
   const x = T.anchor.x + rgx * sl.right - fwx * sl.back, z = T.anchor.z + rgz * sl.right - fwz * sl.back;
-  const P = b.perch;
-  if (P && b.weapon === 'bow' && !b.mounted && Math.hypot(P.x - x, P.z - z) < AF_TACT.perchOff) {
-    const fwd = (P.x - x) * fwx + (P.z - z) * fwz;           // how far out in front of his place the crest lies
-    const scarped = P.cliff && P.cx * fwx + P.cz * fwz > 0.3;   // …and its cliff is turned ON THE ENEMY: they cannot come up it, so he may stand forward of the line on it
-    if (fwd < (scarped ? AF_TACT.perchFwd : AF_TACT.bowGap)) return { x: P.x, z: P.z };   // (otherwise: up to level with his own swords, bowGap ahead of him, never out past them)
-  }
+  if (b.perch && b.weapon === 'bow' && !b.mounted && afPerchInReach(b.perch, T, b)) return { x: b.perch.x, z: b.perch.z };   // a bowman whose line can take him to his crest stands on the CREST instead of in the rank
   return AF.terr.rocks.length ? afFreePoint(x, z, 0.9) : { x, z };   // a place in the line that falls on a stone is taken beside it
 }
 const AF_ORDER_TEXT = { form: 'forms a line', advance: 'advances', charge: 'charges!', flank: 'sends the riders wide', regroup: 'regroups', fallback: 'falls back to re-form', pursue: 'presses the rout',
@@ -22339,7 +22344,7 @@ function afTakePerch(b, t, dt, T) {
   b.perchT = 1.5 + Math.random() * 2;
   const hereY = afY(b.x, b.z); let best = null, bs = 0;
   for (const P of afPerches()) {
-    if (P.y - hereY < 0.8 || !afPerchOk(P, t, T)) continue;  // no better than the ground he stands on, or no good to shoot from
+    if (P.y - hereY < 0.8 || !afPerchOk(P, t, T) || !afPerchInReach(P, T, b)) continue;   // no better than the ground he stands on, no good to shoot from, or one his own line will never walk him to
     const px = P.x - b.x, pz = P.z - b.z, walk = Math.hypot(px, pz); if (walk > 34 || walk < 1e-3) continue;   // (a longer walk than this is the whole bout; nearer ones win anyway, by the score below)
     const k = clamp(((t.x - b.x) * px + (t.z - b.z) * pz) / (walk * walk), 0, 1);   // the way up must not run through the man he is shooting at
     if (Math.hypot(t.x - (b.x + px * k), t.z - (b.z + pz * k)) < 7) continue;

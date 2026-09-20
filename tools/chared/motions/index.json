@@ -14,5 +14,13 @@
   "fps": 60,
   "loop": true,
   "credit": "Gladiator 1+motions by Kapi777 (Sketchfab), CC-BY-4.0"
+ },
+ {
+  "id": "walk_backward",
+  "name": "Walk Backward",
+  "frames": 299,
+  "fps": 60,
+  "loop": true,
+  "credit": "Gladiator 1+motions by Kapi777 (Sketchfab), CC-BY-4.0"
  }
 ]

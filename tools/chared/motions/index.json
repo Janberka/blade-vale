@@ -22,5 +22,13 @@
   "fps": 60,
   "loop": true,
   "credit": "Gladiator 1+motions by Kapi777 (Sketchfab), CC-BY-4.0"
+ },
+ {
+  "id": "atk_jump",
+  "name": "Jump Attack",
+  "frames": 195,
+  "fps": 60,
+  "loop": false,
+  "credit": "Gladiator 1+motions by Kapi777 (Sketchfab), CC-BY-4.0"
  }
 ]

@@ -182,10 +182,12 @@ for (let f = 0; f < frames; f++) {
 // ---- his feet on HIS ground. The hip rides at their height scaled by the hips, but his legs are not theirs scaled (longer
 // shins, a boot's ankle 18 cm up, the rest pose's soft knee taken out) so the soles end up a few cm under the floor. A clip
 // that keeps a foot down the whole way (a walk, a guard, a blow) is lifted frame by frame until its lowest sole point is ON
-// the ground, the lift smoothed (σ 2 frames, round the loop) so the change of foot is not a kink. --air leaves a clip alone
-// (a jump, a fall: there the lowest sole point is rightly off the ground).
+// the ground, the lift smoothed (σ 2 frames, round the loop) so the change of foot is not a kink. --air is for a clip that
+// LEAVES the ground (a leap, a fall): there the lowest sole point is rightly in the air, so he is only ever lifted, never
+// lowered — out of the floor on the run-up and the landing (his longer legs sank 10 cm into it), untouched in flight.
 const low0 = soles.map(a => Math.min(...a));
-if (!air) { const n = frames, sig = 2, lift = low0.map((_, f) => { let a = 0, w = 0; for (let d = -6; d <= 6; d++) { let j = f + d; if (closes) j = ((j % n) + n) % n; else j = Math.min(n - 1, Math.max(0, j)); const g = Math.exp(-d * d / (2 * sig * sig)); a += g * -low0[j]; w += g; } return a / w; });
+{ const n = frames, sig = 2, need = low0.map(v => air ? Math.max(0, -v) : -v);   // --air (a leap, a fall): only ever UP — his soles are kept out of the floor on the run-up and the landing, and nothing drags him down out of the air
+  const lift = need.map((_, f) => { let a = 0, w = 0; for (let d = -6; d <= 6; d++) { let j = f + d; if (closes) j = ((j % n) + n) % n; else j = Math.min(n - 1, Math.max(0, j)); const g = Math.exp(-d * d / (2 * sig * sig)); a += g * need[j]; w += g; } return a / w; });
   pos.forEach((p, f) => { p.y += lift[f]; }); soles.forEach((a, f) => a.forEach((_, k) => { a[k] += lift[f]; })); }
 const low = soles.map(a => Math.min(...a)), lowL = soles.map(a => Math.min(a[0], a[1], a[2])), lowR = soles.map(a => Math.min(a[3], a[4], a[5]));
 const r4 = x => +x.toFixed(4), still = nm => tracks[nm].every(q => q.angleTo(T[tIx[nm]].q) < 1e-3);

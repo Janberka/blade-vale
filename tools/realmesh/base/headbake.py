@@ -127,6 +127,21 @@ for t in range(0, len(idx), 3):
     if allHair(t) or classes[tri[t // 3]] == 'beard': continue
     dro.polygon([(uv[idx[t + k] * 2] * W, uv[idx[t + k] * 2 + 1] * H) for k in range(3)], fill=255)
 other = other.filter(ImageFilter.MinFilter(3)); opx = other.load()   # (a texel right on the seam is shared: leave it)
+# THE BACK OF THE SKULL. The sculpt's paint carries marks there that are nobody's hair and nobody's feature — two dark
+# hooks under the hairline, mirrored left and right, that read on the model as something stuck to the neck (2026-09-20,
+# the user, twice: "a weird brown piece on the neck", "i can still see this shit here"). Anything darker than the skin
+# around it is taken out THERE, where there is no feature to lose. The face is not in this mask: its dark paint is the
+# eyes, the nostrils, the mouth, and it must stay.
+back = Image.new('L', (W, H), 0); drb = ImageDraw.Draw(back)
+for t in range(0, len(idx), 3):
+    if allHair(t): continue
+    if not all(pos[idx[t + k] * 3 + 2] < -0.01 and pos[idx[t + k] * 3 + 1] > 1.75 for k in range(3)): continue
+    drb.polygon([(uv[idx[t + k] * 2] * W, uv[idx[t + k] * 2 + 1] * H) for k in range(3)], fill=255)
+kpx = back.load()
+covered = Image.new('L', (W, H), 0); drc = ImageDraw.Draw(covered)   # every texel a triangle of the head actually owns (the rest is gutter)
+for t in range(0, len(idx), 3):
+    drc.polygon([(uv[idx[t + k] * 2] * W, uv[idx[t + k] * 2 + 1] * H) for k in range(3)], fill=255)
+cpx = covered.load()
 mask = mask.filter(ImageFilter.MaxFilter(5))
 N = A.copy(); npx = N.load(); mpx = mask.load(); spill = []
 for y in range(H):
@@ -157,12 +172,15 @@ _bc = _a.filter(ImageFilter.GaussianBlur(25)).load(); _bw = _v.filter(ImageFilte
 local = {}
 for y in range(H):
     for x in range(W):
-        if y >= 1024 or not bpx[x, y] or not opx[x, y] or npx_near[x, y]: continue
+        if y >= 1024: continue
+        if kpx[x, y]: cut = 0.96                             # the back of the skull: no hairline to spare there — the marks sit right against the crop's own texels, and sparing them is what left them behind. Anything below the skin around it goes.
+        elif bpx[x, y] and opx[x, y] and not npx_near[x, y]: cut = 0.90
+        else: continue
         w = _bw[x, y] / 255
         if w < 0.05: continue
         c0 = npx[x, y]; c1 = tuple(_bc[x, y][k] / w for k in range(3))
         l0 = 0.299 * c0[0] + 0.587 * c0[1] + 0.114 * c0[2]; l1 = 0.299 * c1[0] + 0.587 * c1[1] + 0.114 * c1[2]
-        if l0 < l1 * 0.90: spill.append((x, y))
+        if l0 < l1 * cut: spill.append((x, y))
 # INPAINT the spill from the skin around it. Painting it a flat tone — the palette cell, or even the mean gained skin —
 # left a bright slash: these texels sit among dark sideburn paint, and any fixed colour is wrong for its neighbourhood.
 # So each spilt texel takes a weighted average of the SOUND pixels near it (a normalised convolution: blur the image
@@ -178,6 +196,23 @@ if spill:
             w = blurW[x, y] / 255
             if w > 0.02: npx[x, y] = tuple(min(255, int(blurC[x, y][k] / w)) for k in range(3))
     print('hair spill inpainted:', len(spill), 'texels')
+    # AND PAD IT INTO THE GUTTER. The strip between two uv islands belongs to no triangle, so the repair never reached
+    # it — but bilinear sampling at the island's edge does, and the old dark paint waiting there drew a thin line along
+    # the hairline. The mended skin is spread a few texels outwards over that no-man's-land.
+    edge = back.filter(ImageFilter.MaxFilter(15)); epx = edge.load()
+    gut = [(x, y) for y in range(1024) for x in range(W) if epx[x, y] and not cpx[x, y]]
+    if gut:
+        v2 = Image.new('L', (W, H), 0); d2 = ImageDraw.Draw(v2)
+        A3 = N.copy(); a3 = A3.load()
+        for y in range(1024):
+            for x in range(W):
+                if cpx[x, y]: d2.point((x, y), fill=255)
+                else: a3[x, y] = (0, 0, 0)
+        bc = A3.filter(ImageFilter.GaussianBlur(7)).load(); bw = v2.filter(ImageFilter.GaussianBlur(7)).load()
+        for x, y in gut:
+            w = bw[x, y] / 255
+            if w > 0.02: npx[x, y] = tuple(min(255, int(bc[x, y][k] / w)) for k in range(3))
+        print('gutter padded:', len(gut), 'texels')
 N.save(out + 'atlas.jpg', quality=88); mask.save(out + 'hair_mask.png')
 hairPx = [npx[x, y] for y in range(0, H, 2) for x in range(0, W, 2) if mpx[x, y]]
 if hairPx:

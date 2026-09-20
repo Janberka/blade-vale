@@ -21917,7 +21917,7 @@ const AF_TACT = { formSecs: 1.6, walk: 0.62, contact: 10, regroupAfter: 8, rally
   guardR: 10, guardReach: 26, detailSecs: 5,   // the BODYGUARD: a foe this close to one of our bowmen, no swordsman beside him → the nearest free swordsman (within guardReach) is sent for him
   flankOff: 7, huntOff: 8, screenOff: 5, flankMax: 24,   // the squadron's marks: off the END of the enemy line / beside the enemy's BOWS / beside our own bows — scaled to the line's width, never a fixed trip across the pit
   screenR: 18,                         // a screening squadron goes when an enemy rider comes this close to the bows
-  perchOff: 28,                        // THE HIGH GROUND: how far off his place in the line a bowman will go for a crest to shoot from (afPerches / afFormationSlot) — at 16 a claimed crest was usually out of reach of the line and the claim sat idle
+  perchOff: 28, perchFwd: 14,                        // THE HIGH GROUND: how far off his place in the line a bowman will go for a crest to shoot from (afPerches / afFormationSlot) — at 16 a claimed crest was usually out of reach of the line and the claim sat idle
   stallSecs: 26,                       // a fight with no blood for this long is pressed, not re-formed
   bowVolley: 40 };                     // the approach volley: a bowman walking in with the line looses from farther out (a longer draw)
   // archers: the gap behind the swords at muster; give ground inside bowNear, close beyond bowFar, loose out to bowShot, and keep bowRoom of clear sand from their own swordsmen
@@ -22070,8 +22070,12 @@ function afGuardTheBows(T, mine, foes) {
 function afFormationSlot(T, b) {
   const fwx = Math.sin(T.face), fwz = Math.cos(T.face), rgx = -Math.cos(T.face), rgz = Math.sin(T.face), sl = b.slot || { right: 0, back: 0 };
   const x = T.anchor.x + rgx * sl.right - fwx * sl.back, z = T.anchor.z + rgz * sl.right - fwz * sl.back;
-  if (b.perch && b.weapon === 'bow' && !b.mounted && Math.hypot(b.perch.x - x, b.perch.z - z) < AF_TACT.perchOff
-      && (b.perch.x - x) * fwx + (b.perch.z - z) * fwz < AF_TACT.bowGap) return { x: b.perch.x, z: b.perch.z };   // a bowman with a crest near his place in the line takes the CREST — up to level with his own swords (bowGap ahead of him), never out past them (afTakePerch)
+  const P = b.perch;
+  if (P && b.weapon === 'bow' && !b.mounted && Math.hypot(P.x - x, P.z - z) < AF_TACT.perchOff) {
+    const fwd = (P.x - x) * fwx + (P.z - z) * fwz;           // how far out in front of his place the crest lies
+    const scarped = P.cliff && P.cx * fwx + P.cz * fwz > 0.3;   // …and its cliff is turned ON THE ENEMY: they cannot come up it, so he may stand forward of the line on it
+    if (fwd < (scarped ? AF_TACT.perchFwd : AF_TACT.bowGap)) return { x: P.x, z: P.z };   // (otherwise: up to level with his own swords, bowGap ahead of him, never out past them)
+  }
   return AF.terr.rocks.length ? afFreePoint(x, z, 0.9) : { x, z };   // a place in the line that falls on a stone is taken beside it
 }
 const AF_ORDER_TEXT = { form: 'forms a line', advance: 'advances', charge: 'charges!', flank: 'sends the riders wide', regroup: 'regroups', fallback: 'falls back to re-form', pursue: 'presses the rout',
@@ -22316,7 +22320,7 @@ function afPerches() {
     if (H.h < 1.2) continue;                                 // a swell in the sand is not a position
     let x = H.cw ? H.x - H.cx * 1.6 : H.x, z = H.cw ? H.z - H.cz * 1.6 : H.z;   // (a bluff: back off the lip, on the flat of the shelf)
     if (T.rocks.length) { const q = afFreePoint(x, z, 1.0); x = q.x; z = q.z; }   // (a tor wears its crown of rock on the very top: he stands BESIDE the stone, which is cover as well)
-    L.push({ x, z, y: afY(x, z), cliff: !!H.cw, room: clamp(1 + Math.round(Math.min(H.rx, H.rz) / 3.5), 1, 5) });
+    L.push({ x, z, y: afY(x, z), cliff: !!H.cw, cx: H.cx || 0, cz: H.cz || 0, room: clamp(1 + Math.round(Math.min(H.rx, H.rz) / 3.5), 1, 5) });   // (cx,cz: which way the cliff looks — a stand whose face is turned on the enemy is one they cannot come up)
   }
   return (T.perches = L);
 }

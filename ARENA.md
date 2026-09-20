@@ -616,7 +616,11 @@ a 30-pace circle at the gallop, and nobody answered for the bows. Now (`afPlanTe
   because of it. He climbs it between shots and then **holds** it — he will not walk back down to
   close, and the engage rule no longer drags him to the enemy's mass while his mark is in range. A
   bowman holding his place in a line has his formation SLOT moved onto the crest instead
-  (`afFormationSlot`, up to `perchOff` off his place, never out in front of his own swords), so a
+  (`afFormationSlot`, up to `perchOff` off his place, and — save for one case — never out in front of
+  his own swords: a bowman there is a dead bowman. The case is a BLUFF whose cliff is turned on the
+  enemy, which they cannot come up: on one of those he may stand `perchFwd` forward of the line, and
+  the climb is their problem. Watching four bouts, every archer who stalled short of a crest was
+  under a *hold* order, standing in the line while the hill sat out in front of it), so a
   side that means to stand and let its bows work puts them on the hill. That reach is what decides
   it in practice — a team is under orders for most of a fight, so a bowman walks to his SLOT, and a
   crest further off than `perchOff` is a claim that sits idle while he stands in the line. Everyone's steering now

@@ -1722,10 +1722,11 @@ const LOOK_HAIR_ONE = 1;                                    // the short crop th
 const LOOK_HAIR_STYLES = ['shaved', 'short crop', 'crown', 'long', 'mohawk'];
 const LOOK_INK = [null, 'wolf', 'serpent', 'tide', 'sun', 'thorn'], LOOK_INK_NAMES = ['none', 'wolf', 'serpent', 'tide', 'sun', 'thorn'];   // the ink's DESIGN (gear.look.i): free, the barber's — it shows on whatever skin the kit leaves bare; bands of the ink atlas, in this order
 const LOOK_INK_COLOURS = [0x12192a, 0x101010, 0x6b1410, 0xe8dcc8, 0x2f5a2a, 0xb8752a, 0x4a2a6a, 0x1f6b6b], LOOK_INK_COLOUR_NAMES = ['blue-black', 'black', 'blood', 'bone', 'moss', 'ochre', 'violet', 'teal'];   // the ink's COLOUR (gear.look.k)
-// ONE BEARD as well (2026-09-20, the user: "remove beard styles, we will come back to that later") — the beard the
-// sculpt is painted with, on every man, in his hair's colour. The cuts below are no longer picked: they are position
-// cuts of the painted region (the chin for a goatee, the lip for a moustache) and they wait for the day beards return.
-const LOOK_BEARD_ONE = 2;                                   // the full painted beard
+// NO BEARD OF OURS (2026-09-20, the user: "is that a beard or smth? just remove that too — we don't need any beard
+// except the one baked in model"). The look paints NOTHING on the beard class: the dyed region was a hard-edged brown
+// patch across the cheek, and the man already has a beard — the one the sculpt is painted with, which simply shows.
+// The cuts below are position cuts of that painted region and wait for the day beards come back as a piece of their own.
+const LOOK_BEARD_ONE = 0;                                   // 0 = the look leaves the beard alone
 const LOOK_BEARD_STYLES = ['clean', 'stubble', 'full beard', 'goatee', 'moustache'];   // (a sixth, 'braided' — a plait hung from the chin — came and went the same day: "let's just remove this braids"; a saved b 5 fails cleanLook's range and falls back to the roll)
 const LOOK_SKIN_NAMES = ['fair', 'light', 'tan', 'olive', 'brown', 'dark', 'deep', 'umber', 'ebony', 'onyx'];
 // THE FACE'S BONES (gear.look.f): six casts of the same head — a displacement of the head's vertices in the bind pose on
@@ -1777,7 +1778,7 @@ function lookRoll(name, arch, gear, pal, o = {}) {
   const beardOn = r() < 0.75, fullBeard = r() < 0.65, styleRoll = r(), beardKind = r();   // (all four are drawn and dropped, so a man's scar and his kit are the same as before the cut and the beard were fixed)
   look.hairStyle = LOOK_HAIR_ONE;                            // the one cut — his colour is the choice (LOOK_HAIR_ONE)
   look.beardStyle = LOOK_BEARD_ONE;                          // the one beard — his hair's colour is the only choice (LOOK_BEARD_ONE)
-  look.hair = hairC; look.beard = look.beardStyle ? c.setHex(hairC).lerp(skinC, 0.08).getHex() : null; look.stubble = c.setHex(hairC).lerp(skinC, 0.45).getHex();
+  look.hair = hairC; look.beard = null; /* (the sculpt's own beard, undyed — LOOK_BEARD_ONE) */ look.stubble = c.setHex(hairC).lerp(skinC, 0.45).getHex();
   look.brow = c.setHex(hairC).lerp(skinC, 0.3).getHex(); look.socket = c.copy(skinC).multiplyScalar(0.91).getHex(); look.lip = c.copy(skinC).multiplyScalar(0.88).getHex();   // dark brows, a light shadow round the eyes (0.78 sank them into a skull), a hard mouth
   look.faceShape = has('f') ? LK.f : Math.floor(lookRng(lookSeed(name) ^ 0x2545f491)() * LOOK_FACE_SHAPES.length);   // (its own stream: the bones came later, nobody's hair or kit re-rolls for them)
   const scar = r(); look.scar = scar < 0.18 ? 'scarL' : scar < 0.36 ? 'scarR' : null; look.scarC = c.copy(skinC).lerp(new THREE.Color(0xe8a0a0), 0.45).multiplyScalar(1.05).getHex();
@@ -1884,7 +1885,7 @@ function lookApply(L, look) {
         if (!hk) { hk = new THREE.BufferAttribute(new Float32Array(nv), 1); sm.geometry.setAttribute('hairK', hk); }
         const hairish = new Set(['hair', 'beard']);
         for (let v = 0; v < nv; v++) { const cl = pj.classes[pj.vclass[v]];
-          hk.array[v] = hairish.has(cl) ? (cl === 'beard' ? (look.beard != null ? 1 : 0) : (scalp ? scalp[v] / 255 : 0)) : 0; }
+          hk.array[v] = hairish.has(cl) ? (cl === 'beard' ? 1 : (scalp ? scalp[v] / 255 : 0)) : 0; }   // (the painted beard is matte too, dyed or not)
         hk.needsUpdate = true; } }
   }
   lookDraw(L, look); if (lookHelmBuild(L)) lookHelmPaint(L);

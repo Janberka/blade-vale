@@ -158,9 +158,11 @@ which touches the bind pose (skinning is unchanged), then bump `game.js?v=`:
 a tree in `tools/build-site.js`, so it deploys. game.js loads one on demand (`motionClip`), and `motionPose` lays it over
 the pose the plastic rig drives, by a weight that eases in and out. Two rules keep it honest:
 
-* **only the lower body** (`MOTION_BONES` = pelvis, thighs, shins, feet, toes). The game AIMS the man — the chest turns to
-  the foe, the shield comes up, a blow swings the arms — and that is the sim's, tied to what actually lands. The stride is
-  the clip's, the fight stays the game's;
+* **the whole man while he walks, and not a moment longer**. Legs alone were faithful to the frame — 1° off the clip — and
+  still read as somebody else's walk, because a walk is the lean of the back and the swing of the arms as much as the feet;
+  under a torso the game held in a fixed guard, the right legs looked wrong. So a walking man belongs to the clip, all 52
+  bones. The moment he blocks, swings, charges, rolls, is thrown or mounts, `motionWanted` lets go and the game's own poses
+  have him back — those are the ones tied to what actually lands;
 * **on the game's own cadence**: `b.phase` is the walk cycle the sim already keeps for its procedural legs — faster as he
   speeds up, backwards when he gives ground, all of it long since tuned against the ground he covers. One procedural cycle
   (2π) is one of the clip's, and both are two steps, so they line up and there is no stride speed to guess at. (A clip's

@@ -18036,6 +18036,7 @@ const AF_F = { hp: 100, move: 5.6, reach: 2.5, cone: 0.3, radius: 34, timeLimit:
   stam: { max: 100, run: 11, draw: 7, light: 7, heavy: 16, loose: 4, dodge: 14, jump: 12, regen: 12, regenMove: 7, recover: 35, winded: { move: 0.6, dmg: 0.65 }, aiRest: 22 },
   // THE LEAP (Space / JUMP): v up, g down (a ~1.2-unit hop, 0.73 s in the air), a bent-knee landing of `land` seconds with
   // no blow in it. Come down on a man at `tackleAt` of the full run or better and he is FLOORED like a man ridden down.
+  climb: 2.3, ledge: 6,   // THE GROUND'S LIMITS: a rise of more than `climb` metres over the pace and a half ahead is a CLIFF — no man or horse walks up it, the step slides along the face (afIntegrate); ground that falls away under a runner faster than `ledge` m/s is a LIP he goes over, and he is in the air until he lands
   jump: { v: 6.6, g: 18, land: 0.22, tackleAt: 0.75, tackleR: 1.3, knot: 1.6, men: 3, diveAng: 1.15, roll: 0.5, atkBy: 0.4, strikeY: 0.5, atkReach: 0.6 },   // (diveAng / roll: a RUNNING leap is a head-first dive, arms open, and lands in a roll of `roll` seconds — then up through the crouch)   // (knot / men: come down on a man and the men within `knot` of him go too, up to three)
   // THE SHIELD CHARGE (2026-09-14, the user: "running really fast charging the enemies should be a very good animation —
   // go block mode, shield in front of the body, and hit as hard as possible; a good hit and 2 men can fall, or even a horse"):
@@ -19113,19 +19114,49 @@ function afY(x, z) {
    turned) the ground mesh rises over — men walk up it (slower), arrows fall short of it, archers on its crest shoot
    over their own line. A ROCK is a boulder nobody walks through: a collision circle the fighters, horses and arrows all
    respect, and the NPCs steer round. A TOR is a hill with a crown of rocks; a RIDGE is a long low hill; a CRAG is a
-   tall standing rock. Nothing is placed on a team's muster ground or in the corridor its column marches down. ---- */
+   tall standing rock. A BLUFF is a mound that came up DOUBLE TALL and broke off down one side: a shelf of high ground
+   with a sheer CLIFF on one flank (fallen stone at its foot) — no man or horse climbs that face, they slide along it,
+   and a man who runs off the lip goes over it. Nothing is placed on a team's muster ground or in the corridor its
+   column marches down. ---- */
 const AF_GROUNDS = { sand: { hills: 0, rocks: 0, tors: 0, clutter: 1.3 }, hills: { hills: 1, rocks: 0, tors: 0, clutter: 1.1 }, rocks: { hills: 0, rocks: 1, tors: 0, clutter: 0.8 }, broken: { hills: 0.7, rocks: 0.8, tors: 1, clutter: 0.7 } };   // clutter: how much ruin and store the pit is dressed with (a bare sand pit gets the most)
 function afHillY(x, z) {                                    // the mounds' height at (x,z): a smoothstep bell over each ellipse
   let h = 0;
   for (const H of AF.terr.hills) {
-    const dx = x - H.x, dz = z - H.z; if (Math.abs(dx) > H.rmax || Math.abs(dz) > H.rmax) continue;
+    let dx = x - H.x, dz = z - H.z; const reach = H.rmax + (H.cw || 0);
+    if (Math.abs(dx) > reach || Math.abs(dz) > reach) continue;
+    let f = 1;
+    if (H.cw) {                                              // A BLUFF (afGenTerrain's bluff): the crest runs out FLAT to the break line, then the face drops away in a pace or two
+      const w = dx * H.cx + dz * H.cz - H.cut; if (w >= H.cw) continue;
+      if (w > 0) { const s = 1 - w / H.cw; f = s * s * (3 - 2 * s); dx -= w * H.cx; dz -= w * H.cz; }   // (past the break the bell is read AT the break: a shelf, and then the drop)
+    }
     const u = (dx * H.c + dz * H.s) / H.rx, v = (-dx * H.s + dz * H.c) / H.rz, q = u * u + v * v; if (q >= 1) continue;
     const t = 1 - q, k = t * t * (3 - 2 * t);
-    h += H.h * k * (1 + 0.12 * Math.sin(dx * 0.9 + H.ph) * Math.cos(dz * 0.8 - H.ph));   // (a little roughness on the flanks)
+    h += H.h * k * f * (1 + H.rough * Math.sin(dx * 0.9 + H.ph) * Math.cos(dz * 0.8 - H.ph));   // (a little roughness on the flanks)
   }
   return h;
 }
-function afHillK(x, z) { let k = 0; for (const H of AF.terr.hills) { const dx = x - H.x, dz = z - H.z, u = (dx * H.c + dz * H.s) / H.rx, v = (-dx * H.s + dz * H.c) / H.rz, q = u * u + v * v; if (q < 1) k = Math.max(k, 1 - q); } return k; }   // 0..1: how far up a hill (for the ground's colour)
+function afHillK(x, z) {                                    // 0..1: how far up a hill (for the ground's colour) — a bluff's lip and face read as bare crest, whatever the bell says
+  let k = 0;
+  for (const H of AF.terr.hills) {
+    let dx = x - H.x, dz = z - H.z, face = false;
+    if (H.cw) { const w = dx * H.cx + dz * H.cz - H.cut; if (w >= H.cw) continue; if (w > 0) { face = true; dx -= w * H.cx; dz -= w * H.cz; } }
+    const u = (dx * H.c + dz * H.s) / H.rx, v = (-dx * H.s + dz * H.c) / H.rz, q = u * u + v * v;
+    if (q < 1) k = Math.max(k, face ? Math.max(1 - q, 0.9) : 1 - q);
+  }
+  return k;
+}
+function afCliffK(x, z) {                                   // 0..1: how much of a BLUFF's bare face a point is on (the ground mesh paints it rock; afBuildGround only)
+  let k = 0;
+  for (const H of AF.terr.hills) {
+    if (!H.cw) continue;
+    let dx = x - H.x, dz = z - H.z; const w = dx * H.cx + dz * H.cz - H.cut;
+    if (w <= -0.7 || w >= H.cw + 0.5) continue;
+    if (w > 0) { dx -= w * H.cx; dz -= w * H.cz; }
+    const u = (dx * H.c + dz * H.s) / H.rx, v = (-dx * H.s + dz * H.c) / H.rz, q = u * u + v * v;
+    if (q < 1) k = Math.max(k, clamp((1 - q) * 3, 0, 1));    // (the face fades where it runs out into the flanks)
+  }
+  return k;
+}
 function afMusterZones() {                                  // where nothing may stand: each team's muster block (as afPlanTeams and the intro lay it) and its gate corridor
   const per = AF.cfg.per, files = clamp(Math.round(Math.sqrt(per * 2.3)), 4, 26), halfW = (Math.min(files, per) - 1) / 2 * 2.3 + 3.5 + 4, depth = Math.ceil(per / files) * 2.6 + AF_TACT.bowGap + 10;   // (+ the archers' block behind the swords)
   const zones = [];
@@ -19144,8 +19175,16 @@ function afGenTerrain(r) {                                  // deal the pit's fe
   const T = AF.terr, G = AF_GROUNDS[AF.cfg.ground] || AF_GROUNDS.sand, R = AF_F.radius, kA = (R / 34) * (R / 34), zones = afMusterZones();
   T.hills = []; T.rocks = [];
   if (AF.cfg.venue === 'pit') { T.deco = []; return; }       // (bare sand: nothing to hide behind in the pits)
-  const pick = (margin, pad, tries) => { for (let i = 0; i < tries; i++) { const a = r() * TAU, d = Math.sqrt(r()) * (R - margin), x = Math.cos(a) * d, z = Math.sin(a) * d; if (!afInMuster(x, z, zones, pad)) return { x, z }; } return null; };
-  const hill = (x, z, rx, rz, h, yaw) => { const H = { x, z, rx, rz, h, yaw, c: Math.cos(yaw), s: Math.sin(yaw), rmax: Math.max(rx, rz), ph: r() * TAU }; T.hills.push(H); return H; };
+  const pick = (margin, pad, tries, hillPad) => {           // (hillPad: keep clear of the mounds already dealt — a bluff wants ground of its own, or the next mound fills its cliff in)
+    for (let i = 0; i < tries; i++) {
+      const a = r() * TAU, d = Math.sqrt(r()) * (R - margin), x = Math.cos(a) * d, z = Math.sin(a) * d;
+      if (afInMuster(x, z, zones, pad)) continue;
+      if (hillPad != null && T.hills.some(H => Math.hypot(H.x - x, H.z - z) < H.rmax + hillPad)) continue;
+      return { x, z };
+    }
+    return null;
+  };
+  const hill = (x, z, rx, rz, h, yaw) => { const H = { x, z, rx, rz, h, yaw, c: Math.cos(yaw), s: Math.sin(yaw), rmax: Math.max(rx, rz), ph: r() * TAU, rough: 0.12 }; T.hills.push(H); return H; };
   const rock = (x, z, rr, h, kind) => { const K = { x, z, r: rr, h, yaw: r() * TAU, kind: kind || 'boulder', tilt: (r() - 0.5) * 0.35, sx: 0.85 + r() * 0.4, sz: 0.8 + r() * 0.35, tone: r() }; T.rocks.push(K); return K; };
   const clear = (x, z, rr) => { for (const K of T.rocks) if (Math.hypot(K.x - x, K.z - z) < K.r + rr + 1.2) return false; return true; };
   const boulders = (cx, cz, n, big) => {                    // an outcrop: one big stone and a few fallen about it
@@ -19153,18 +19192,40 @@ function afGenTerrain(r) {                                  // deal the pit's fe
     for (let i = 0; i < n; i++) { const a = r() * TAU, d = big + 0.6 + r() * 2.2, x = cx + Math.cos(a) * d, z = cz + Math.sin(a) * d, rr = 0.45 + r() * 0.9; if (Math.hypot(x, z) < R - 4 && clear(x, z, rr) && !afInMuster(x, z, zones, 0.5)) rock(x, z, rr, rr * (0.8 + r() * 0.5)); }
     return main;
   };
+  // A BLUFF: a mound that comes up DOUBLE TALL and breaks off in a CLIFF down one side — the crest runs flat out to
+  // the break line, the face falls away in a pace or two of sheer rock, and a scree of fallen stone lies at its foot.
+  // bSize deals it BROAD and ROUND for its height BEFORE the ground is picked (so the spot found has room for the
+  // whole footprint, and so the back slope stays a slope a man can run up: the face is the one side nobody takes —
+  // afHillY cuts the shelf, afIntegrate slides a run along the face instead of up it).
+  const bSize = (rx, h) => { const Rx = rx * 1.3, Rz = Rx * (0.8 + r() * 0.35), H2 = h * (1.85 + r() * 0.45); return { rx: Rx, rz: Rz, h: Math.min(H2, Math.min(Rx, Rz) * 0.8) }; };
+  const bluff = (H) => {
+    H.rough = 0.05;                                         // bare rock: the flanks are nothing like as lumpy as a grassy mound's
+    const a = r() * TAU, cx = Math.cos(a), cz = Math.sin(a);   // the face looks this way
+    const p = cx * H.c + cz * H.s, q = -cx * H.s + cz * H.c, rd = Math.hypot(H.rx * p, H.rz * q);   // how far the mound reaches that way (the ellipse's support)
+    H.cx = cx; H.cz = cz; H.cut = rd * (-0.1 + r() * 0.4); H.cw = clamp(H.h * (0.28 + r() * 0.17), 0.9, 2.8);   // where it breaks off, and how deep the face is — cut to the height, so a low bluff is as sheer as a high one
+    for (let i = 0; i < 3; i++) {                           // fallen stone at the foot of the face
+      const off = H.cut + H.cw + 0.7 + r() * 1.8, sd = (r() - 0.5) * 1.5 * rd, fx = H.x + cx * off - cz * sd, fz = H.z + cz * off + cx * sd, rr = 0.5 + r() * 0.8;
+      if (Math.hypot(fx, fz) < R - 3 && clear(fx, fz, rr) && !afInMuster(fx, fz, zones, 0.6)) rock(fx, fz, rr, rr * (0.9 + r() * 0.7));
+    }
+    return H;
+  };
   const nH = Math.round(G.hills * (2 + r() * 2) * Math.min(kA, 3.5)), nR = Math.round(G.rocks * (4 + r() * 3) * Math.min(kA, 4)), nT = Math.round(G.tors * (1 + (r() < 0.5 ? 1 : 0)) * Math.min(kA, 2.5));
   for (let i = 0; i < nT; i++) {                            // TORS first — they take the most room; a long ridge every other time
-    const ridge = r() < 0.45, rx = ridge ? 9 + r() * 6 : 6 + r() * 4, rz = ridge ? 3.5 + r() * 1.5 : rx * (0.8 + r() * 0.3), h = ridge ? 1.4 + r() * 0.8 : 2.0 + r() * 1.2;
-    const p = pick(Math.max(rx, rz) + 3, 2, 40); if (!p) continue;
+    const ridge = r() < 0.45, tall = !ridge && r() < 0.35;   // (a ridge stays long and low; a knoll may rear up as a bluff)
+    let rx = ridge ? 9 + r() * 6 : 6 + r() * 4, rz = ridge ? 3.5 + r() * 1.5 : rx * (0.8 + r() * 0.3), h = ridge ? 1.4 + r() * 0.8 : 2.0 + r() * 1.2;
+    if (tall) { const B = bSize(rx, h); rx = B.rx; rz = B.rz; h = B.h; }
+    const m = Math.max(rx, rz), p = tall ? (pick(m + 4.5, 2, 40, m * 0.75) || pick(m + 4.5, 2, 40)) : pick(m + 3, 2, 40); if (!p) continue;
     const H = hill(p.x, p.z, rx, rz, h, r() * Math.PI);
     if (ridge) { for (let k = -1; k <= 1; k++) { const x = H.x + H.c * rx * 0.45 * k, z = H.z + H.s * rx * 0.45 * k; if (r() < 0.8) rock(x + (r() - 0.5) * 2, z + (r() - 0.5) * 2, 0.9 + r() * 0.7, 1.2 + r() * 1.2, 'crag'); } }   // a spine of stones along the crest
-    else { boulders(H.x, H.z, 3, 1.6 + r() * 0.8); }         // a crown of rock on the knoll
+    else { if (tall) bluff(H); boulders(H.x - (tall ? H.cx * 2.4 : 0), H.z - (tall ? H.cz * 2.4 : 0), 3, 1.6 + r() * 0.8); }   // a crown of rock on the knoll (on a bluff, set back from the lip)
   }
   for (let i = 0; i < nH; i++) {
-    const rx = 5.5 + r() * 6 * Math.min(R / 34, 2), rz = rx * (0.6 + r() * 0.5), h = 1.3 + r() * 1.7;
-    const p = pick(Math.max(rx, rz) + 3, 1, 40); if (!p) continue;
-    hill(p.x, p.z, rx, rz, h, r() * Math.PI);
+    const tall = r() < 0.34;                                // one mound in three comes up double tall with a cliff down one side — broader with it, and given more room about it
+    let rx = 5.5 + r() * 6 * Math.min(R / 34, 2), rz = rx * (0.6 + r() * 0.5), h = 1.3 + r() * 1.7;
+    if (tall) { const B = bSize(rx, h); rx = B.rx; rz = B.rz; h = B.h; }
+    const m = Math.max(rx, rz), p = tall ? (pick(m + 4.5, 2.5, 40, m * 0.75) || pick(m + 4.5, 2.5, 40)) : pick(m + 3, 1, 40); if (!p) continue;
+    const H = hill(p.x, p.z, rx, rz, h, r() * Math.PI);
+    if (tall) bluff(H);
   }
   for (let i = 0; i < nR; i++) {
     const p = pick(4, 1.2, 40); if (!p) continue;
@@ -19331,7 +19392,8 @@ function afBuildPitClutter(g) {
   if (S.n) g.add(S.build());
 }
 function afBuildGround() {
-  const size = Math.round(AF_F.radius * 5.2), segs = Math.round((AF.terr.hills.length ? clamp(Math.round(size / 0.85), 120, 240) : 120) * AF_Q.ground), geo = new THREE.PlaneGeometry(size, size, segs, segs); geo.rotateX(-Math.PI / 2);   // hills want a finer mesh than a flat floor (a phone: about half the quads a side)
+  const cliffs = AF.terr.hills.some(H => H.cw);             // a bluff's face is a pace or two from lip to foot: it wants the finest mesh of all, or the drop reads as a slope
+  const size = Math.round(AF_F.radius * 5.2), quad = cliffs ? 0.7 : 0.85, segs = Math.round((AF.terr.hills.length ? clamp(Math.round(size / quad), 120, cliffs ? 272 : 240) : 120) * AF_Q.ground), geo = new THREE.PlaneGeometry(size, size, segs, segs); geo.rotateX(-Math.PI / 2);   // hills want a finer mesh than a flat floor (a phone: about half the quads a side)
   const p = geo.attributes.position, col = new Float32Array(p.count * 3), c = new THREE.Color(), pit = AF.cfg.venue === 'pit';
   const sand = new THREE.Color(0xb89a6c), sandDk = new THREE.Color(0x8f7650), churn = new THREE.Color(0x745538), grass = new THREE.Color(0x4f7a2e), grassDk = new THREE.Color(0x3c5f23), stone = new THREE.Color(0x77726a), scrub = new THREE.Color(0x8e8a55), scree = new THREE.Color(0x857d70);
   const n = (x, z) => 0.5 + 0.25 * Math.sin(x * 0.37 + AF.terr.p1) * Math.cos(z * 0.41 + AF.terr.p2) + 0.25 * Math.sin((x - z) * 0.23 + AF.terr.p3); // 0..1 patches
@@ -19343,6 +19405,7 @@ function afBuildGround() {
       const ring = clamp(1 - Math.abs(d - (pit ? 3.6 : 11)) / (pit ? 5 : 13), 0, 1); c.lerp(churn, ring * (pit ? 0.85 : 0.7) * (0.5 + k * 0.7)); // the trampled middle where the fights happen
       if (((x * 12.9898 + z * 78.233) * 43758.5453) % 1 < 0.06) c.lerp(sandDk, 0.6);                     // scattered darker grains
       if (AF.terr.hills.length) { const hk = afHillK(x, z); if (hk > 0) c.lerp(scrub, clamp(hk * 1.4 - 0.15, 0, 0.75) * (0.7 + k * 0.5)).lerp(stone, clamp(hk - 0.75, 0, 0.25) * 2 * (0.4 + k * 0.6)); }   // dry scrub up the slopes, bare stone on a crest
+      if (cliffs) { const ck = afCliffK(x, z); if (ck > 0) c.lerp(stone, ck * (0.6 + k * 0.3)).lerp(scree, ck * 0.3); }   // a bluff's face is bare broken rock from lip to foot
       if (AF.terr.rocks.length) { const K = afRockAt(x, z, 2.2); if (K) c.lerp(scree, clamp(1 - (Math.hypot(x - K.x, z - K.z) - K.r) / 2.2, 0, 1) * 0.7); }   // scree and shadow-dust round each stone
       if (d > AF_F.radius - 4) c.lerp(stone, (d - (AF_F.radius - 4)) / 3 * 0.5);
     } else if (d < AF_F.radius + 2) c.copy(stone).lerp(sandDk, 0.2 * k);
@@ -21074,14 +21137,27 @@ function afIntegrate(b, dt) {                              // friction + slope +
       } else { b.landT = Math.max(b.landT || 0, b.airAtk ? J.land * 1.6 : J.land); if (b.airAtk) { b.airAtk = null; b.cd = Math.max(b.cd || 0, 0.25); b.anim.ease = null; setPose(b.anim, 'guard', 0.3); } b.vx *= 0.75; b.vz *= 0.75; }   // (a jump attack: a hard landing, a breath)
     }
   }
-  if (AF.terr.hills.length) {                                // a hill takes the legs out of a run: uphill drags, downhill gives a little
+  let gy0 = 0;
+  if (AF.terr.hills.length) {                                // a hill takes the legs out of a run: uphill drags, downhill gives a little — and a BLUFF's face is not climbed at all
+    gy0 = afY(b.x, b.z);
     const sp = Math.hypot(b.vx, b.vz);
-    if (sp > 0.5) { const rise = afHillY(b.x + b.vx / sp * 1.2, b.z + b.vz / sp * 1.2) - afHillY(b.x, b.z), g = clamp(1 - clamp(rise / 1.2, -0.2, 0.7) * 4 * dt, 0, 1.2); b.vx *= g; b.vz *= g; }
+    if (sp > 0.5 && !(b.airT > 0)) {                       // (a horse carries no airT at all: `!(>0)`, never `<= 0`)
+      const ux = b.vx / sp, uz = b.vz / sp, here = afHillY(b.x, b.z), rise = afHillY(b.x + ux * 1.2, b.z + uz * 1.2) - here;
+      if (rise > AF_F.climb) {                               // a cliff face: the step goes ALONG it (nobody claws up a scarp), so a run round the bluff still gets where it was going
+        const e = 0.7, gx = afHillY(b.x + e, b.z) - afHillY(b.x - e, b.z), gz = afHillY(b.x, b.z + e) - afHillY(b.x, b.z - e), gl = Math.hypot(gx, gz);
+        if (gl > 1e-4) { const nx = gx / gl, nz = gz / gl, into = b.vx * nx + b.vz * nz; if (into > 0) { b.vx -= nx * into; b.vz -= nz * into; } }
+      } else { const g = clamp(1 - clamp(rise / 1.2, -0.2, 0.7) * 4 * dt, 0, 1.2); b.vx *= g; b.vz *= g; }
+    }
   }
   b.x += b.vx * dt; b.z += b.vz * dt;
   if (AF.terr.rocks.length) afRockPush(b, b.mounted || b.rig ? 1.0 : 0.55);   // (b.rig: a loose horse)
   const d = Math.hypot(b.x, b.z), R = AF_F.radius - 0.9;
   if (d > R) { const nx = b.x / d, nz = b.z / d, out = b.vx * nx + b.vz * nz; if (out > 0) { b.vx -= nx * out; b.vz -= nz * out; } b.x = nx * R; b.z = nz * R; }
+  if (AF.terr.hills.length) {                                // OVER THE LIP: the ground that just went from under him
+    const fell = gy0 - afY(b.x, b.z);
+    if (b.airT > 0) b.airY += fell;                          // in the air: the ground's own fall is added, so the arc holds its height in the WORLD and he lands where the ground really is
+    else if (fell > AF_F.ledge * dt && !b.dead && !b.rig && !b.mounted && !b.intro && !(b.downT > 0)) { b.airT = 1e-4; b.vy = 0; b.airY = fell; b.dive = false; }   // ran off a bluff: he is over the edge, and gravity has him
+  }
 }
 // the SECONDARY-MOTION layer, applied on top of the pose every frame: arm counter-swing and torso lean on
 // the run, breathing, a head that looks at the foe, a directional flinch when hit, a cape that flares with
@@ -24718,7 +24794,7 @@ BV.arenaStart = () => { afStartFight(); return BV.arenaStatus(); };
 BV.arenaRematch = () => { afRematch(); return BV.arenaStatus(); };   // test: the Rematch button (also what a guest runs when the host's new 'go' lands)
 BV.ruinPreview = (scale = 1.9) => { if (!AF_RUINPACK || !AF.on) return null; const m = afMesher(), names = Object.keys(AF_RUINPACK); names.forEach((n, i) => { const x = (i - (names.length - 1) / 2) * 7; m.add(afPackGeo(n), x, afY(x, 0), 0, 0, null, scale, scale, scale); }); const mesh = m.build(); scene.add(mesh); AF.props.push(mesh); return names; };   // test: the pack's pieces in a row across the sand
 BV.renderInfo = () => { renderer.info.autoReset = false; renderer.info.reset(); if (AF.on) afFrame((AF.last || performance.now()) + 16, true); const r = { calls: renderer.info.render.calls, tris: renderer.info.render.triangles, crowd: AF.crowdN || 0 }; renderer.info.autoReset = true; return r; };   // test: one whole frame's draw calls / triangles (all passes)
-BV.arenaTerr = () => ({ rocks: AF.terr.rocks.length, kinds: AF.terr.rocks.reduce((m, K) => (m[K.kind] = (m[K.kind] || 0) + 1, m), {}), deco: (AF.terr.deco || []).length, inRock: AF.bodies.filter(b => !b.dead && afRockAt(b.x, b.z, 0.5)).map(b => b.idx) });   // test: the pit's furniture, and who stands inside a piece
+BV.arenaTerr = () => ({ rocks: AF.terr.rocks.length, hills: AF.terr.hills.map(H => ({ x: +H.x.toFixed(1), z: +H.z.toFixed(1), rx: +H.rx.toFixed(1), rz: +H.rz.toFixed(1), h: +H.h.toFixed(2), cliff: H.cw ? { face: +Math.atan2(H.cx, H.cz).toFixed(2), cut: +H.cut.toFixed(1), w: +H.cw.toFixed(1) } : null })), kinds: AF.terr.rocks.reduce((m, K) => (m[K.kind] = (m[K.kind] || 0) + 1, m), {}), deco: (AF.terr.deco || []).length, inRock: AF.bodies.filter(b => !b.dead && afRockAt(b.x, b.z, 0.5)).map(b => b.idx) });   // test: the pit's furniture, and who stands inside a piece
 BV.arenaCam = (o) => { if (!AF.on) return null; if (o && o.follow != null) { AF.spec.target = AF.bodies[o.follow]; AF.spec.mode = 'follow'; AF.spec.touched = true; if (o.yaw != null) AF.cam.yaw = o.yaw; if (o.pitch != null) AF.cam.pitch = o.pitch; if (o.dist != null) AF.cam.dist = o.dist; } else if (o) { afSpecFree(); if (o.r != null) AF.orbit.r = o.r; if (o.phi != null) AF.orbit.phi = o.phi; if (o.theta != null) AF.orbit.theta = o.theta; if (o.fx != null) AF.spec.fx = o.fx; if (o.fz != null) AF.spec.fz = o.fz; } if (o && o.snap) for (let i = 0; i < 90; i++) afCamera(1 / 30); return camera.position.toArray().map(v => +v.toFixed(1)); };   // test: place the spectator lens (orbit r/phi/theta/fx/fz, or follow a body idx with yaw/pitch/dist); snap converges the lerp
 BV.arenaFrame = (now) => { if (AF.on) afFrame(now, true); return AF.phase; };   // test: render one arena frame at this clock (no rAF) — for recording the entrance
 BV.arenaHorseHit = (id, amt) => { const h = AF.horses[id]; if (h) afDamageHorse(h, amt, AF.bodies.find(b => !b.dead && (!h.rider || b.team !== h.rider.team)) || AF.bodies[0], false); return BV.arenaHorses(); };   // test: wound a horse

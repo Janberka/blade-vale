@@ -834,6 +834,28 @@ jittered icosahedron with vertex colours (lit crown, mossy foot, scree round the
 `afBuildRocks`); the ground colours dry scrub up the slopes and bare stone on a crest, and takes a
 finer mesh when there are hills.
 
+**Bluffs** (2026-09-20, the user: *"the arena hills sometimes should go double tall and have cliff on
+one side"*): about one mound in three — and one tor knoll in three — comes up **double tall** and
+**breaks off in a cliff down one side**. The crest runs out FLAT to the break line, the face falls
+away in a pace or two of sheer rock, a scree of fallen stone lies at its foot, and the gentle back
+slope is the only way up. It is dealt broad and round for its height *before* the ground under it is
+picked (`bSize`), so the spot found has room for the whole footprint and the back slope stays a slope
+a man can run up; the face is cut to the height, so a low bluff is as sheer as a high one. In the
+height field a point past the break reads the mound's bell AT the break and is then taken down by the
+face's fall — a shelf, and then the drop (`afHillY`). It changes how the pit is fought:
+
+- **Nobody climbs the face.** A rise of more than `AF_F.climb` over the pace and a half ahead is a
+  cliff: `afIntegrate` takes the step's speed INTO the face out of it and lets the rest slide along,
+  so a charge round the bluff still gets where it was going instead of grinding against a wall.
+- **Run off the lip and you go over it.** Ground that falls away faster than `AF_F.ledge` puts a man
+  in the air (`airT`/`airY`) and gravity lands him at the foot — and while any man is airborne the
+  ground's own rise and fall is now added to his arc, so a leap over broken ground lands where the
+  ground really is, not where it was when he jumped.
+- **The high ground has one safe flank.** An archer on the shelf shoots over his own line and cannot
+  be charged up the cliff — the enemy has to come the long way round to the back slope.
+- The face is painted bare broken rock from lip to foot (`afCliffK`), and a pit with a bluff in it
+  takes the finest ground mesh of all, or a two-pace drop would read as a slope.
+
 **The crowd** (`afStepCrowd`): the spectators shuffle in their seats, leap and **roar** when someone
 falls (louder for your kills and your death — the roar is synthesised, a swell of band-passed noise,
 `afRoar`), cheer the bell, and every half-minute or so the wave goes round the stands.

@@ -1,20 +1,11 @@
 [
  {
-  "id": "walk_back_cycle",
-  "name": "Walk cycle (back)",
+  "id": "angry_walk",
+  "name": "Angry Walk",
   "frames": 56,
   "fps": 60,
   "loop": true,
-  "speed": 0.5476,
-  "credit": "Gladiator 1+motions by Kapi777 (Sketchfab), CC-BY-4.0"
- },
- {
-  "id": "walk_cycle",
-  "name": "Walk cycle (fwd)",
-  "frames": 96,
-  "fps": 60,
-  "loop": true,
-  "speed": 0.5266,
+  "speed": 1.8988,
   "credit": "Gladiator 1+motions by Kapi777 (Sketchfab), CC-BY-4.0"
  }
 ]

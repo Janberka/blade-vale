@@ -1594,7 +1594,7 @@ function motionClip(id) {
   }).catch(() => {});
   return null;
 }
-const MOTION_FOR = { walk: 'walk_cycle', back: 'walk_back_cycle' };
+const MOTION_FOR = { walk: 'angry_walk' };            // his ordinary walk. (The source's WalkForward02 is a bladed crouch — right legs for a man turned side-on behind his shield, wrong under a torso the game points straight ahead.)
 // ONLY THE LOWER BODY. A clip holds the whole man, but the game AIMS him — the upper body turns to the foe, the shield
 // comes up to block, a blow swings the arms — and all of that is the sim's, tied to what actually lands. So a walk gives
 // its legs and its hips and nothing above: the stride is the clip's, the fight is still the game's. (The hips may turn:
@@ -1602,9 +1602,8 @@ const MOTION_FOR = { walk: 'walk_cycle', back: 'walk_back_cycle' };
 const MOTION_BONES = /^(pelvis|thigh|shin|foot|toe)[LR]?$/;
 function motionWanted(b) {                                  // which clip suits the man this frame, if any
   if (!b || b.dead || b.mounted || b.atk || b.charge || b.blocking || b.rollT > 0 || b.airT > 0 || b.landT > 0 || b.rushT > 0) return null;
-  const sp = Math.hypot(b.vx || 0, b.vz || 0); if (!b.moving || sp < 0.35) return null;
-  const fwd = Math.sin(b.yaw || 0) * (b.vx || 0) + Math.cos(b.yaw || 0) * (b.vz || 0);   // (yaw 0 faces +z)
-  return { id: fwd < -0.15 ? MOTION_FOR.back : MOTION_FOR.walk, sp };
+  if (!b.moving || Math.hypot(b.vx || 0, b.vz || 0) < 0.35) return null;
+  return { id: MOTION_FOR.walk, phase: b.phase || 0 };     // ON HIS OWN CADENCE: b.phase is the walk the game already keeps
 }
 const _moQa = new THREE.Quaternion(), _moQb = new THREE.Quaternion(), _moP = new THREE.Vector3();
 function motionPose(L, dt) {                                // → a local quaternion per node index for this frame, or null
@@ -1614,7 +1613,13 @@ function motionPose(L, dt) {                                // → a local quate
   const on = !!(want && want.id === mo.id);
   mo.w = Math.max(0, Math.min(1, mo.w + (on ? dt / 0.14 : -dt / 0.12)));   // ease in, ease out — never a cut
   if (mo.w <= 0) { if (!on) mo.id = null; return null; }
-  const c = mo.c; if (on) mo.t += dt * Math.max(0.35, Math.min(2.2, want.sp / (c.speed || 1)));   // his speed, not the clip's
+  const c = mo.c;
+  // ON THE GAME'S OWN CADENCE. `b.phase` is the walk cycle the sim already keeps for its procedural legs: it runs faster as
+  // he speeds up, slower at a walk, and BACKWARDS when he gives ground — all of it already tuned against how fast he really
+  // covers ground. Riding it means the clip strides at exactly the rate the old legs did, and there is no stride speed to
+  // guess at (measuring one off the planted foot gave answers 3× apart on these clips). One procedural cycle (2π) is one
+  // of ours, and a walk cycle is TWO steps either way, so they line up.
+  if (on) mo.t = want.phase / (Math.PI * 2) * (c.frames / c.fps);
   if (!mo.map) { mo.map = c.bones.map(nm => { const n = MOTION_BONES.test(nm) && L.inst.byName[nm]; return n ? L.inst.nodes.indexOf(n) : -1; }); mo.root = c.root && L.inst.byName[c.root] ? L.inst.nodes.indexOf(L.inst.byName[c.root]) : -1; }
   const n = c.frames, f = ((mo.t * c.fps) % n + n) % n, i0 = Math.floor(f), a = f - i0, i1 = (i0 + 1) % n, out = [];
   for (let k = 0; k < mo.map.length; k++) { const i = mo.map[k]; if (i < 0) continue;

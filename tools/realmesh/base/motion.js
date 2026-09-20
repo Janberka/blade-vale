@@ -171,7 +171,7 @@ let rollMax = 0;
 
 // ---- the frames
 const names = order.map(k => T[k].name).filter(nm => prof.map[nm] || true), tracks = {}; names.forEach(nm => { tracks[nm] = []; });
-const pos = [], soles = []; let last = {};
+const pos = [], soles = [], feet = []; let last = {};
 const SOLE = []; for (const s of ['L', 'R']) { const f = T[tIx['foot' + s]], t = T[tIx['toe' + s]], fwd = t.Pw.clone().sub(f.Pw); fwd.y = 0; fwd.normalize();   // heel, ball and toe tip, on the ground in the rest pose
   SOLE.push({ bone: 'foot' + s, at: new V3(f.Pw.x, 0, f.Pw.z).addScaledVector(fwd, -0.07) }, { bone: 'toe' + s, at: new V3(t.Pw.x, 0, t.Pw.z) }, { bone: 'toe' + s, at: new V3(t.Pw.x, 0, t.Pw.z).addScaledVector(fwd, 0.1) }); }
 SOLE.forEach(o => { o.local = o.at.clone().applyMatrix4(T[tIx[o.bone]].W.clone().invert()); });
@@ -195,6 +195,7 @@ for (let f = 0; f < frames; f++) {
     const prev = last[b.name]; if (prev && prev.dot(ql) < 0) ql.set(-ql.x, -ql.y, -ql.z, -ql.w); last[b.name] = ql; tracks[b.name].push(ql); }
   pos.push(Pw[tIx.pelvis]);
   soles.push(SOLE.map(o => o.local.clone().applyQuaternion(Qw[tIx[o.bone]]).add(Pw[tIx[o.bone]]).y));
+  feet.push(['L', 'R'].map(sd => Pw[tIx['toe' + sd]].clone().sub(Pw[tIx.pelvis])));   // each toe in the HIPS' frame: how the ground runs past him, travelling clip or not
 }
 
 // ---- a cut cycle is a slice out of a performance, so its end does not quite meet its start (14° on the worst bone of the
@@ -228,7 +229,18 @@ const moving = names.filter(nm => !still(nm));
 // The path keeps it — the editor can take it out again ("in place") and the game will want the speed to keep his feet from skating.
 const hipAt = t => { const { W, w } = sample(t), d = (prof.travel ? posOf(W[sIx(prof.travel)]) : w.p.clone()).sub(hipRef); return new V3(d.x * KXZ, d.y * K, d.z * KXZ); };
 const carried = closes ? hipAt(t0 + dur - 1e-6).sub(hipAt(t0)) : pos[pos.length - 1].clone().sub(pos[0]); carried.y = 0;
-const travel = carried.length() > 0.05 ? [r4(carried.x), 0, r4(carried.z)] : [0, 0, 0], speed = r4(Math.hypot(travel[0], travel[2]) / (frames / FPS));
+const travel = carried.length() > 0.05 ? [r4(carried.x), 0, r4(carried.z)] : [0, 0, 0];
+// HIS STRIDE'S OWN SPEED — how fast the ground would run past him. A clip that TREADS ON THE SPOT still walks at a speed:
+// it is in the feet, not in the hips. While a foot is down it slides backwards through the hips' frame at exactly the pace
+// the man is covering (on a travelling clip the foot stands still and the hips move — the same number either way), so the
+// stride's speed is the mean of that, over the frames a foot is planted. The game plays a clip at (his real speed ÷ this)
+// and the feet stop skating; without it an in-place walk has no speed at all to scale against.
+// Per frame take the foot that is DOWN (the lower of the two) and how fast it slides through the hips' frame, then the
+// MEDIAN of that over the clip — a mean is wrung out of shape by the frames a foot is swinging or planting. Checked
+// against the clips whose travel says the answer: walk_cycle 51 against a true 53 cm/s.
+const slid = []; for (let f = 1; f < frames; f++) { const k = feet[f][0].y < feet[f][1].y ? 0 : 1, d = feet[f][k].clone().sub(feet[f - 1][k]); slid.push(Math.hypot(d.x, d.z) * FPS); }
+slid.sort((a, b) => a - b); const stride = slid.length ? slid[slid.length >> 1] : 0, plantedFrames = slid.length;
+const speed = r4(Math.hypot(travel[0], travel[2]) ? Math.hypot(travel[0], travel[2]) / (frames / FPS) : stride);
 const out = { id, name: title || id, travel, speed, source: path.basename(srcFile) + ' · ' + clip.name.split('/').pop(), credit, fps: FPS, frames, duration: r4(frames / FPS), loop: closes,
   bones: moving, q: moving.map(nm => [].concat(...tracks[nm].map(q => [r4(q.x), r4(q.y), r4(q.z), r4(q.w)]))), root: 'pelvis', pos: [].concat(...pos.map(p => [r4(p.x), r4(p.y), r4(p.z)])) };
 fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(path.join(OUT, id + '.json'), JSON.stringify(out));
@@ -239,6 +251,7 @@ const cm = x => (x * 100).toFixed(1);
 console.log(`${out.name}: ${frames} frames @ ${FPS} (${out.duration}s) ${closes ? 'LOOP' : 'once'} · ${moving.length}/${names.length} bones move · his hip ${(T[tIx.pelvis].Pw.y).toFixed(3)} over theirs ${hipY.toFixed(1)} → up/down ×${K.toFixed(4)}, along the floor ×${KXZ.toFixed(4)} (by the legs)`);
 if (!theirHands) { const H = HANDS.find(h => 'hand' + h.sd === (rigSpec.swordHand || 'handR')), rg = a => Math.round(Math.min(...a)) + '…' + Math.round(Math.max(...a)) + '°';
   console.log(`  hands: thumbs to the front — rolled up to ${(rollMax * 180 / Math.PI).toFixed(0)}° about the forearm (${WRIST_SHARE * 100}% in the forearm bone), own turn R ${HAND_TURN.R.map(x => Math.round(x * 180 / Math.PI)).join(',')} L ${HAND_TURN.L.map(x => Math.round(x * 180 / Math.PI)).join(',')} · the blade's line: ${rg(H.fwd)} forward of upright, ${rg(H.inw)} toward his middle`); }
+console.log(`  his stride runs the ground past him at ${(stride * 100).toFixed(0)} cm/s (median of the down foot over ${plantedFrames} frames) — what the game plays it against`);
 console.log(travel[0] || travel[2] ? `  TRAVELS ${(Math.hypot(travel[0], travel[2]) * 100).toFixed(0)} cm a ${closes ? 'loop' : 'clip'} (${(speed * 100).toFixed(0)} cm/s, heading ${(Math.atan2(travel[0], travel[2]) * 180 / Math.PI).toFixed(0)}° off straight ahead)` : '  treads on the spot');
 console.log(`  pelvis y ${cm(Math.min(...pos.map(p => p.y)))}…${cm(Math.max(...pos.map(p => p.y)))} cm (rest ${cm(T[tIx.pelvis].Pw.y)}) · x ${cm(Math.min(...pos.map(p => p.x)))}…${cm(Math.max(...pos.map(p => p.x)))} · z ${cm(Math.min(...pos.map(p => p.z)))}…${cm(Math.max(...pos.map(p => p.z)))}`);
 console.log(`  lowest sole point over the clip: before the lift ${cm(Math.min(...low0))}…${cm(Math.max(...low0))}, after ${cm(Math.min(...low))}…${cm(Math.max(...low))} cm (0 = on the ground) · L ${cm(Math.min(...lowL))}…${cm(Math.max(...lowL))} · R ${cm(Math.min(...lowR))}…${cm(Math.max(...lowR))}`);

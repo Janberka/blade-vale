@@ -1034,13 +1034,13 @@ const MODEL_RIGS = new Map(), MODEL_LIVE = [];
 // plate steel, the mail under it, cloth, leather, skin), and normals averaged across the split vertices under a crease limit so
 // the plate reads as curved metal and keeps its rims. The low tier keeps the cheap Phong (modelMaterial hands either out;
 // modelRefreshMaterials swaps them when the tier changes). BV.modelDetail({ tile, mailTile, str, ... }) tunes the uniforms live.
-const MODEL_DETAIL = { tile: 2.2, mailTile: 11.0, str: 0.8, plateTile: 3.0, plateStr: 0.3, plateR0: 0.28, plateR1: 0.30, inkTile: 1.4, skinTile: 14, skinStr: 0.35, envI: 0.9, crease: 55 };   // (inkTile 1.4: the ink's tile is 70 cm — its shapes are big, one wave crosses the face at the eyes; the engraving's knotwork has its own fixed tile in the shader)
+const MODEL_DETAIL = { tile: 2.2, mailTile: 11.0, str: 0.8, plateTile: 3.0, plateStr: 0.3, plateR0: 0.28, plateR1: 0.30, inkTile: 1.4, skinTile: 14, skinStr: 0.35, envI: 0.9, crease: 55, dullIbl: 0.45 };   // (dullIbl: how much of the sky's ambient cloth, leather and skin keep — BV.modelDetail({ dullIbl }) to tune it live)   // (inkTile 1.4: the ink's tile is 70 cm — its shapes are big, one wave crosses the face at the eyes; the engraving's knotwork has its own fixed tile in the shader)
 const MODEL_KIND = { steel: 0, mail: 1, cloth: 2, leather: 3, skin: 4, flat: 5, inkWolf: 6, inkBlood: 7, engraved: 8 };   // (8: steel with knotwork cut into it — the berserker's bracers)   // (6, 7: skin under blue-black knotwork / red war-marks — the ink wares)
 // HAIR IS A MASK, NOT A KIND (2026-09-20): a kind is one number per vertex and the fragment shader rounds it, so across
 // a triangle from hair to skin it sweeps through every kind between — and 8 is the ENGRAVED knotwork, which drew a row
 // of little crosses along the hairline like stitching. `hairK` (0..1) interpolates harmlessly and fades instead.   // (8: steel with knotwork cut into it — the berserker's bracers)   // (6, 7: skin under blue-black knotwork / red war-marks — the ink wares)
 const MODEL_DETAIL_U = {};                                   // the shared uniforms (one object across every program, so a tune lands everywhere)
-for (const k of ['tile', 'mailTile', 'str', 'plateTile', 'plateStr', 'plateR0', 'plateR1', 'inkTile', 'skinTile', 'skinStr']) MODEL_DETAIL_U['u' + k[0].toUpperCase() + k.slice(1)] = { value: MODEL_DETAIL[k] };
+for (const k of ['tile', 'mailTile', 'str', 'plateTile', 'plateStr', 'plateR0', 'plateR1', 'inkTile', 'skinTile', 'skinStr', 'dullIbl']) MODEL_DETAIL_U['u' + k[0].toUpperCase() + k.slice(1)] = { value: MODEL_DETAIL[k] };
 let MODEL_DTEX = null;
 function modelDetailOn() { return qualityTier !== 'low'; }
 function modelDetailTextures() {                             // drawn once: height fields → tangent-space normal maps (RepeatWrapping), plus a grey ring mask for the mail
@@ -1180,7 +1180,7 @@ const MODEL_DETAIL_GLSL = {
   fragHead: `#include <common>
 varying float vKind; varying float vHair; varying vec3 vTri; varying vec3 vTriN; varying mat3 vTriM; varying vec2 vInkUv; varying vec4 vInkCol;
 #define INK_N 5.0
-uniform sampler2D tPlateN, tMailN, tClothN, tSkinN, tPlateR, tMailC, tSkinR, tInk, tKnot; uniform float uTile, uMailTile, uStr, uPlateTile, uPlateStr, uPlateR0, uPlateR1, uInkTile, uSkinTile, uSkinStr;
+uniform sampler2D tPlateN, tMailN, tClothN, tSkinN, tPlateR, tMailC, tSkinR, tInk, tKnot; uniform float uTile, uMailTile, uStr, uPlateTile, uPlateStr, uPlateR0, uPlateR1, uInkTile, uSkinTile, uSkinStr, uDullIbl;
 vec3 triW(vec3 n) { vec3 w = pow(abs(n), vec3(4.0)); return w / (w.x + w.y + w.z); }
 vec3 triNormal(sampler2D t, vec3 p, vec3 wn, float s, float str) { vec3 w = triW(wn);
   vec3 nx = texture2D(t, p.zy * s).xyz * 2.0 - 1.0, ny = texture2D(t, p.xz * s).xyz * 2.0 - 1.0, nz = texture2D(t, p.xy * s).xyz * 2.0 - 1.0;
@@ -1201,7 +1201,7 @@ float triGray(sampler2D t, vec3 p, vec3 wn, float s) { vec3 w = triW(wn); return
   else if (k == 2) roughnessFactor = 0.92; else if (k == 3) roughnessFactor = 0.70; else if (k == 4 || k >= 6) roughnessFactor = 0.42 + 0.26 * triGray(tSkinR, vTri, vTriN, uTile * uSkinTile * 0.7); else roughnessFactor = 0.4;
   roughnessFactor = mix(roughnessFactor, 0.97, clamp(vHair, 0.0, 1.0)); }`,   // HAIR IS MATTE: cropped hair lit as skin shone like a wet scalp   // (skin: an oily sheen over the swells, matte in the pores)
   fragMetal: `float metalnessFactor = metalness; { int k = int(vKind + 0.5); metalnessFactor = (k == 0 || k == 8) ? 0.88 : (k == 1) ? 0.80 : 0.0; }`,
-  fragIbl: `{ if (int(vKind + 0.5) >= 2) iblIrradiance *= 0.45; }
+  fragIbl: `{ if (int(vKind + 0.5) >= 2) iblIrradiance *= uDullIbl; }
 #include <lights_fragment_end>`,   // (the sky's ambient washed the dyed cloth pink: cloth, leather and skin take less of it)
   fragHeadInk: `#include <common>
 varying float vKind; varying float vHair; varying vec3 vTri; varying vec3 vTriN; varying mat3 vTriM; varying vec2 vInkUv; varying vec4 vInkCol; uniform sampler2D tInk, tKnot; uniform float uInkTile;

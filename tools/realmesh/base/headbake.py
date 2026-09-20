@@ -96,7 +96,7 @@ pieces = json.load(open(out + 'pieces.json')) if __import__('os').path.exists(ou
 pieces['body'] = {'classes': classes, 'tri': tri, 'mats': ['skin', 'eye'], 'vmat': [1 if c == 'eye' else 0 for c in vc], 'vclass': vclass, 'sculpted': True}
 json.dump(pieces, open(out + 'pieces.json', 'w'))
 # ---- the atlas for the game: skin normalised to the palette's skin cell, hair and beard flattened to skin ----
-TARGET = (255, 220, 180)
+TARGET = (255, 220, 180); WEAR_LIFT = float(__import__('os').environ.get('WEAR_LIFT', 0.32))   # how far the wear's blacks come up (0 = as painted)
 skinCols = [col[v] for v in range(nv) if vc[v] not in ('eye', 'hair', 'beard', 'brow', 'socket')]
 mean = [sum(c[k] for c in skinCols) / len(skinCols) for k in range(3)]
 # the gain puts the BRIGHT skin (the 92nd percentile) at the palette cell, so the highlights keep their shape instead of clipping; the mean lands ~0.8 of it (game.js lifts a sculpted body's tint back)
@@ -225,6 +225,24 @@ if spill:
     for y in range(1024):
         for x in range(W):
             if ring[x, y]: npx[x, y] = soft[x, y]
+# THE WEAR IS LIFTED TOO (2026-09-20, the user: "there is an effect in the game that makes all our armor pants etc super
+# dark"). There was no effect: the SKIN is gained up here so it lands on the palette's cell, and the man's clothes — the
+# lower half of the atlas, Thor's own painted leather, cloth and steel — were left exactly as painted, at 35-70 of 255.
+# Beside lifted skin, under the arena's sun, they read as black holes with no fold in them. Their blacks are raised the
+# same way a photographer lifts a crushed shadow: the darks come up, the highlights stay, so steel is still steel.
+for y in range(1024, H):
+    for x in range(W):
+        if x < 256 and y < 1280: continue                     # (the eyes keep their paint)
+        r, gg, b = npx[x, y]
+        npx[x, y] = (int(r + (255 - r) * WEAR_LIFT), int(gg + (255 - gg) * WEAR_LIFT), int(b + (255 - b) * WEAR_LIFT))
+tilePath = out + 'leather_tile.png'
+if __import__('os').path.exists(tilePath):                    # the pauldron's tile is cut from the same paint — lift it alike
+    T = Image.open(tilePath).convert('RGB'); tp = T.load()
+    for y in range(T.size[1]):
+        for x in range(T.size[0]):
+            r, gg, b = tp[x, y]
+            tp[x, y] = (int(r + (255 - r) * WEAR_LIFT), int(gg + (255 - gg) * WEAR_LIFT), int(b + (255 - b) * WEAR_LIFT))
+    T.save(tilePath)
 N.save(out + 'atlas.jpg', quality=88); mask.save(out + 'hair_mask.png')
 hairPx = [npx[x, y] for y in range(0, H, 2) for x in range(0, W, 2) if mpx[x, y]]
 if hairPx:

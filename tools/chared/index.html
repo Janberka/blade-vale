@@ -25,6 +25,12 @@
 </style>
 <body>
 <div id=ui class=pnl>
+  <h4>motion</h4>
+  <select id=mo><option value="">— none (the pose below) —</option></select>
+  <div class=row style=margin-top:4px><button id=mo_play style=min-width:52px>pause</button><button id=mo_prev title="a frame back">◀</button><button id=mo_next title="a frame on">▶</button></div>
+  <label class=sm>frame <span id=v_mof>–</span></label><input type=range id=s_mof min=0 max=0 value=0>
+  <label class=sm>speed <span id=v_mos>1.00×</span></label><input type=range id=s_mos min=5 max=150 value=100>
+  <div class=sm id=mo_info></div>
   <h4>show</h4>
   <div id=meshlist></div>
   <h4>items</h4>
@@ -208,6 +214,7 @@ const NAMES = ['base'], MODELS = [];   // the editor shows ONE character: the ba
   for (const mm of MODELS) dressPauldrons(mm);
   buildMeshList();
   applyShade(); applyShow(); measure();
+  await loadMotions();
   window.__ready = true;
 })();
 
@@ -540,6 +547,38 @@ el$('p_bind').onclick = () => preset(0, 0, 'p_bind');
 el$('p_a').onclick = () => preset(-30, 8, 'p_a');
 el$('p_t').onclick = () => preset(-65, 0, 'p_t');
 
+// ---- motion: clips retargeted onto THIS rig by tools/realmesh/base/motion.js — motions/index.json lists them, one file a
+// clip: a local quaternion per moving bone per frame and the pelvis' place. A clip owns the skeleton while it is picked; the
+// pose sliders get it back on "none".
+const MO = { list: [], clip: null, t: 0, play: true, speed: 1, last: 0 }, moQa = new THREE.Quaternion(), moQb = new THREE.Quaternion();
+async function loadMotions() {
+  try { MO.list = await (await fetch('motions/index.json?' + Date.now())).json(); } catch (e) { MO.list = []; }
+  for (const m of MO.list) { const o = document.createElement('option'); o.value = m.id; o.textContent = m.name + '  ·  ' + (m.frames / m.fps).toFixed(2) + ' s' + (m.loop ? ' loop' : ''); el$('mo').appendChild(o); }
+  if (q.get('motion')) setMotion(q.get('motion'));
+}
+function restPose() { for (const [nm, r0] of REST) { const b = BONE[nm]; if (b && b.isBone) { b.position.copy(r0.p); b.quaternion.copy(r0.q); } } pose(); }
+async function setMotion(id) {
+  el$('mo').value = id || ''; MO.clip = null; restPose();
+  if (id) { const c = await (await fetch('motions/' + id + '.json?' + Date.now())).json(); c.q = c.q.map(a => new Float32Array(a)); c.pos = new Float32Array(c.pos); MO.clip = c; MO.t = 0; MO.play = true; }
+  const c = MO.clip; el$('s_mof').max = c ? c.frames - 1 : 0; el$('mo_play').textContent = 'pause';
+  el$('mo_info').textContent = c ? c.bones.length + ' bones · ' + c.frames + ' frames @ ' + c.fps + (c.credit ? ' · ' + c.credit : '') : '';
+  if (c) applyMotion(0); else { el$('v_mof').textContent = '–'; el$('s_mof').value = 0; }
+}
+function applyMotion(tf) {                          // tf in frames, fractional: slerp between the two around it
+  const c = MO.clip, n = c.frames, f = c.loop ? ((tf % n) + n) % n : Math.min(Math.max(tf, 0), n - 1), i0 = Math.floor(f), a = f - i0, i1 = c.loop ? (i0 + 1) % n : Math.min(i0 + 1, n - 1);
+  c.bones.forEach((nm, k) => { const b = BONE[nm]; if (!b) return; moQa.fromArray(c.q[k], i0 * 4); moQb.fromArray(c.q[k], i1 * 4); b.quaternion.copy(moQa).slerp(moQb, a); });
+  const rb = BONE[c.root]; if (rb) rb.position.set(c.pos[i0 * 3] + (c.pos[i1 * 3] - c.pos[i0 * 3]) * a, c.pos[i0 * 3 + 1] + (c.pos[i1 * 3 + 1] - c.pos[i0 * 3 + 1]) * a, c.pos[i0 * 3 + 2] + (c.pos[i1 * 3 + 2] - c.pos[i0 * 3 + 2]) * a);
+  el$('v_mof').textContent = f.toFixed(1) + ' / ' + (n - 1); el$('s_mof').value = i0;
+}
+function stepMotion(now) { const dt = Math.min(0.1, (now - MO.last) / 1000 || 0); MO.last = now; const c = MO.clip; if (!c || !MO.play) return; MO.t += dt * MO.speed; if (!c.loop && MO.t * c.fps >= c.frames - 1) MO.t = 0; applyMotion(MO.t * c.fps); }
+function moFrame(f) { const c = MO.clip; if (!c) return; MO.play = false; el$('mo_play').textContent = 'play'; MO.t = (c.loop ? ((f % c.frames) + c.frames) % c.frames : Math.min(Math.max(f, 0), c.frames - 1)) / c.fps; applyMotion(MO.t * c.fps); }
+el$('mo').onchange = e => setMotion(e.target.value);
+el$('mo_play').onclick = () => { if (!MO.clip) return; MO.play = !MO.play; el$('mo_play').textContent = MO.play ? 'pause' : 'play'; };
+el$('mo_prev').onclick = () => MO.clip && moFrame(Math.round(MO.t * MO.clip.fps) - 1);
+el$('mo_next').onclick = () => MO.clip && moFrame(Math.round(MO.t * MO.clip.fps) + 1);
+el$('s_mof').oninput = e => moFrame(+e.target.value);
+el$('s_mos').oninput = e => { MO.speed = +e.target.value / 100; el$('v_mos').textContent = MO.speed.toFixed(2) + '×'; };
+
 // ---- measurements (bind pose, the body mesh)
 function measure() {
   if (!BODY || !PIECES.body) { el$('stat').textContent = 'base  ' + (ALL().filter(m => m.visible).reduce((a, m) => a + m.geometry.index.count / 3, 0) | 0) + ' tris shown'; return; }
@@ -654,5 +693,7 @@ const c__fov = c.fov * Math.PI / 180;
 window.__set = (k, v) => { const n = el$(k); if (!n) return 'no ' + k; if (n.type === 'checkbox') { n.checked = v; n.onchange && n.onchange(); } else { n.value = v; (n.oninput || n.onchange) && (n.oninput ? n.oninput({ target: n }) : n.onchange()); } return k + '=' + v; };
 window.__save = async (name) => { r.render(s, c); const d = r.domElement.toDataURL('image/jpeg', 0.92); await fetch('/shot?' + name, { method: 'POST', body: d }); return name; };
 
-(function loop() { requestAnimationFrame(loop); if (el$('t_spin').checked) { az += 0.0045; cam(); } r.render(s, c); })();
+window.__motion = async (id, frame) => { if (!MO.clip || MO.clip.id !== id) await setMotion(id); if (frame != null) moFrame(frame); return MO.clip ? MO.clip.id + ' @ ' + (MO.t * MO.clip.fps).toFixed(1) : 'none'; };   // a clip, held on a frame (or playing when no frame is given)
+
+(function loop(now) { requestAnimationFrame(loop); if (el$('t_spin').checked) { az += 0.0045; cam(); } stepMotion(now || 0); r.render(s, c); })();
 </script>

@@ -14,6 +14,7 @@ the game's tints (`headbake.py`) and the game paints the tone back on, which the
 
 | panel | what |
 | --- | --- |
+| MOTION | the clips in `motions/` played on him: pick one, pause, step a frame, scrub, slow it down. A clip owns the skeleton while it is picked; "none" hands it back to the POSE sliders |
 | SHOW | every mesh in the file, its triangle count, on/off |
 | ITEMS | what he WEARS, by the game's rules: the leather wrist bands always (there are no bare wrists), a steel arm either side, a leather pauldron either side, the helm. A steel arm takes that side's band and pauldron off; the helm takes the hair — the same table the game reads from `rig.json.wear` |
 | SHADING | textured / clay (judge the form, no paint) / normals / vertex class / silhouette; wireframe, smooth normals, double-sided (finds flipped faces), skeleton, grid + ruler |
@@ -21,8 +22,8 @@ the game's tints (`headbake.py`) and the game paints the tone back on, which the
 | POSE | the bind pose, arms down, a T — and sliders for the arms and legs, to see a piece where it will crease |
 | the readout | height, heads tall, shoulder span, chest/waist/hips girth, limb lengths, and the ratios against a real man's |
 
-Hooks in the console: `__view(az, el, dist, cy, cx)` sets the lens, `__save(name)` writes a screenshot to
-`shots/`, `__exportArmor()` bakes the finished plates (below), `?twist=<deg>` nudges a tile's angle.
+Hooks in the console: `__view(az, el, dist, cy, cx)` sets the lens, `__motion(id, frame)` picks a clip and holds it on a
+frame (no frame = playing; `?motion=<id>` does it from the URL), `__save(name)` writes a screenshot to `shots/`, `__exportArmor()` bakes the finished plates (below), `?twist=<deg>` nudges a tile's angle.
 
 ## Armour pieces: the generator, and the LEATHER style
 
@@ -39,6 +40,36 @@ STYLES.leather   // border out 1.5 cm / up 0.8 / down 2 / tucked 1, tile 10 × 4
 **`leather` is the style the shoulder plate was signed off in (2026-09-20), and every leather piece is built the
 same way** — call `armorPart(…, { style: 'leather' })` and change nothing. An `iron` style is to be ADDED beside
 it in `STYLES`, never by editing `leather`.
+
+## Motions: somebody else's clip on our man
+
+A motion is ONE json in `motions/` (a local quaternion per moving bone per frame at 60 fps + the pelvis' place), listed in
+`motions/index.json`. They are made by retargeting — added ONE AT A TIME and judged here before the next:
+
+```bash
+swiftc -O tools/realmesh/base/usdanim.swift -o /tmp/usdanim
+/tmp/usdanim <model.usdz> /tmp/anim.json                                  # the skeleton, its clip, the hip's travel
+node tools/realmesh/base/motion.js /tmp/anim.json <id> "<Name>" --credit "<author, licence>"   # → motions/<id>.json
+```
+
+`motion.js` works in world space, bone by bone (its header has the rule): their turn away from THEIR rest pose laid on
+OUR bone, after our rest pose (Thor's A, soft knees) is brought to theirs (a T) — limbs by the shortest arc carried down
+the chain, feet about the vertical only, the trunk not at all (his posture stays his). The hip's travel is scaled by hip
+height, and the clip is then lifted frame by frame so his lowest sole point is ON the ground (`--air` for a jump or a
+fall, `--noloop` for a clip that must not be closed). A new SOURCE skeleton is a new entry in its `PROFILES` (which of
+their joints drives which of our bones).
+
+| clip | from | |
+| --- | --- | --- |
+| `angry_walk` | *Gladiator 1+motions* by Kapi777 (Sketchfab), **CC-BY-4.0** — credit him wherever it ships | 56 frames, loop, in place |
+
+GOTCHAS, all met on the first clip: a `.usdz` binds ONE animation — Sketchfab's conversion of an "N motions" model
+carries only the first (the glTF download has them all, by name); its joints come out anonymised (`n36`…), each under a
+`*_scaleCompensation` joint; the HIP is left OUTSIDE the skeleton as an animated Xform, so no joint carries the bob, the
+sway or the yaw — `usdanim.swift` samples the skeleton prim's own world matrix per key for that (`clip.world`); keys are
+not evenly spaced and the loop is padded past its closing key (`motion.js` resamples by time and stops where the first
+pose comes round). The pane does not run `requestAnimationFrame` while it is hidden: a clip that "does not play" in a
+test is a hidden pane — hold frames with `__motion(id, f)`.
 
 ## From the editor into the game
 

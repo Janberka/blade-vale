@@ -1036,6 +1036,9 @@ const MODEL_RIGS = new Map(), MODEL_LIVE = [];
 // modelRefreshMaterials swaps them when the tier changes). BV.modelDetail({ tile, mailTile, str, ... }) tunes the uniforms live.
 const MODEL_DETAIL = { tile: 2.2, mailTile: 11.0, str: 0.8, plateTile: 3.0, plateStr: 0.3, plateR0: 0.28, plateR1: 0.30, inkTile: 1.4, skinTile: 14, skinStr: 0.35, envI: 0.9, crease: 55 };   // (inkTile 1.4: the ink's tile is 70 cm — its shapes are big, one wave crosses the face at the eyes; the engraving's knotwork has its own fixed tile in the shader)
 const MODEL_KIND = { steel: 0, mail: 1, cloth: 2, leather: 3, skin: 4, flat: 5, inkWolf: 6, inkBlood: 7, engraved: 8 };   // (8: steel with knotwork cut into it — the berserker's bracers)   // (6, 7: skin under blue-black knotwork / red war-marks — the ink wares)
+// HAIR IS A MASK, NOT A KIND (2026-09-20): a kind is one number per vertex and the fragment shader rounds it, so across
+// a triangle from hair to skin it sweeps through every kind between — and 8 is the ENGRAVED knotwork, which drew a row
+// of little crosses along the hairline like stitching. `hairK` (0..1) interpolates harmlessly and fades instead.   // (8: steel with knotwork cut into it — the berserker's bracers)   // (6, 7: skin under blue-black knotwork / red war-marks — the ink wares)
 const MODEL_DETAIL_U = {};                                   // the shared uniforms (one object across every program, so a tune lands everywhere)
 for (const k of ['tile', 'mailTile', 'str', 'plateTile', 'plateStr', 'plateR0', 'plateR1', 'inkTile', 'skinTile', 'skinStr']) MODEL_DETAIL_U['u' + k[0].toUpperCase() + k.slice(1)] = { value: MODEL_DETAIL[k] };
 let MODEL_DTEX = null;
@@ -1170,12 +1173,12 @@ function modelEnvFor(ctx) {                                  // the sky the stee
   MODEL_DETAIL_LIVE = true; if (!ENV_CUR) setEnvMap(envDefault());
 }
 const MODEL_DETAIL_GLSL = {
-  vertHead: `#include <common>\nattribute float kind; attribute vec2 inkUv; attribute vec4 inkCol; varying float vKind; varying vec3 vTri; varying vec3 vTriN; varying mat3 vTriM; varying vec2 vInkUv; varying vec4 vInkCol;`,
+  vertHead: `#include <common>\nattribute float kind; attribute float hairK; attribute vec2 inkUv; attribute vec4 inkCol; varying float vKind; varying float vHair; varying vec3 vTri; varying vec3 vTriN; varying mat3 vTriM; varying vec2 vInkUv; varying vec4 vInkCol;`,
   vertBegin: `#include <beginnormal_vertex>\n vTriN = normalize(objectNormal);`,   // the BIND-pose normal (before skinning): the triplanar blend is fixed to the surface
   vertNormal: `#include <defaultnormal_vertex>\n vTriM = normalMatrix;`,
-  vertPos: `#include <worldpos_vertex>\n vTri = position; vKind = kind; vInkUv = inkUv; vInkCol = inkCol;\n#ifdef USE_SKINNING\n vTriM = normalMatrix * mat3(skinMatrix);\n#endif`,   // (2026-09-18, "the texture on the plate is not moving when the char moves": the pattern is sampled at the vertex's BIND position, so it rides the plate through every swing, and the normal it yields is turned by the bone's skin matrix into the pose — before, `transformed` (post-skinning, root space) let the arm slide through a pattern pinned to the figure's frame)
+  vertPos: `#include <worldpos_vertex>\n vTri = position; vKind = kind; vHair = hairK; vInkUv = inkUv; vInkCol = inkCol;\n#ifdef USE_SKINNING\n vTriM = normalMatrix * mat3(skinMatrix);\n#endif`,   // (2026-09-18, "the texture on the plate is not moving when the char moves": the pattern is sampled at the vertex's BIND position, so it rides the plate through every swing, and the normal it yields is turned by the bone's skin matrix into the pose — before, `transformed` (post-skinning, root space) let the arm slide through a pattern pinned to the figure's frame)
   fragHead: `#include <common>
-varying float vKind; varying vec3 vTri; varying vec3 vTriN; varying mat3 vTriM; varying vec2 vInkUv; varying vec4 vInkCol;
+varying float vKind; varying float vHair; varying vec3 vTri; varying vec3 vTriN; varying mat3 vTriM; varying vec2 vInkUv; varying vec4 vInkCol;
 #define INK_N 5.0
 uniform sampler2D tPlateN, tMailN, tClothN, tSkinN, tPlateR, tMailC, tSkinR, tInk, tKnot; uniform float uTile, uMailTile, uStr, uPlateTile, uPlateStr, uPlateR0, uPlateR1, uInkTile, uSkinTile, uSkinStr;
 vec3 triW(vec3 n) { vec3 w = pow(abs(n), vec3(4.0)); return w / (w.x + w.y + w.z); }
@@ -1189,18 +1192,19 @@ float triGray(sampler2D t, vec3 p, vec3 wn, float s) { vec3 w = triW(wn); return
   if (k == 0 || k == 8) pn = triNormal(tPlateN, vTri, wn, uTile * uPlateTile, uStr * uPlateStr);
   else if (k == 1) pn = triNormal(tMailN, vTri, wn, uMailTile, uStr);
   else if (k == 2 || k == 3) pn = triNormal(tClothN, vTri, wn, uTile * 1.6, uStr * 0.35);
-  else if (k == 4 || k == 6 || k == 7) pn = triNormal(tSkinN, vTri, wn, uTile * uSkinTile, uStr * uSkinStr);
+  else if (k == 4 || k == 6 || k == 7) pn = triNormal(tSkinN, vTri, wn, uTile * uSkinTile, uStr * uSkinStr * (1.0 - vHair));   // (hair: none of skin's pores)
   normal = normalize(vTriM * pn); }`,   // (4, 6, 7: skin, bare or inked — the pores)
   fragRough: `float roughnessFactor = roughness; { int k = int(vKind + 0.5);
   if (k == 0) roughnessFactor = uPlateR0 + uPlateR1 * triGray(tPlateR, vTri, vTriN, uTile * uPlateTile * 1.7);
   else if (k == 8) roughnessFactor = uPlateR0 + 0.1 + 0.5 * smoothstep(0.2, 0.6, triGray(tKnot, vTri, vTriN, 8.0));
   else if (k == 1) roughnessFactor = 0.45 + 0.35 * (1.0 - triGray(tMailC, vTri, vTriN, uMailTile));
-  else if (k == 2) roughnessFactor = 0.92; else if (k == 3) roughnessFactor = 0.70; else if (k == 4 || k >= 6) roughnessFactor = 0.42 + 0.26 * triGray(tSkinR, vTri, vTriN, uTile * uSkinTile * 0.7); else roughnessFactor = 0.4; }`,   // (skin: an oily sheen over the swells, matte in the pores)
+  else if (k == 2) roughnessFactor = 0.92; else if (k == 3) roughnessFactor = 0.70; else if (k == 4 || k >= 6) roughnessFactor = 0.42 + 0.26 * triGray(tSkinR, vTri, vTriN, uTile * uSkinTile * 0.7); else roughnessFactor = 0.4;
+  roughnessFactor = mix(roughnessFactor, 0.97, clamp(vHair, 0.0, 1.0)); }`,   // HAIR IS MATTE: cropped hair lit as skin shone like a wet scalp   // (skin: an oily sheen over the swells, matte in the pores)
   fragMetal: `float metalnessFactor = metalness; { int k = int(vKind + 0.5); metalnessFactor = (k == 0 || k == 8) ? 0.88 : (k == 1) ? 0.80 : 0.0; }`,
   fragIbl: `{ if (int(vKind + 0.5) >= 2) iblIrradiance *= 0.45; }
 #include <lights_fragment_end>`,   // (the sky's ambient washed the dyed cloth pink: cloth, leather and skin take less of it)
   fragHeadInk: `#include <common>
-varying float vKind; varying vec3 vTri; varying vec3 vTriN; varying mat3 vTriM; varying vec2 vInkUv; varying vec4 vInkCol; uniform sampler2D tInk, tKnot; uniform float uInkTile;
+varying float vKind; varying float vHair; varying vec3 vTri; varying vec3 vTriN; varying mat3 vTriM; varying vec2 vInkUv; varying vec4 vInkCol; uniform sampler2D tInk, tKnot; uniform float uInkTile;
 #define INK_N 5.0
 vec3 triW(vec3 n) { vec3 w = pow(abs(n), vec3(4.0)); return w / (w.x + w.y + w.z); }
 float triGray(sampler2D t, vec3 p, vec3 wn, float s) { vec3 w = triW(wn); return texture2D(t, p.zy * s).r * w.x + texture2D(t, p.xz * s).r * w.y + texture2D(t, p.xy * s).r * w.z; }`,
@@ -1718,6 +1722,10 @@ const LOOK_HAIR_ONE = 1;                                    // the short crop th
 const LOOK_HAIR_STYLES = ['shaved', 'short crop', 'crown', 'long', 'mohawk'];
 const LOOK_INK = [null, 'wolf', 'serpent', 'tide', 'sun', 'thorn'], LOOK_INK_NAMES = ['none', 'wolf', 'serpent', 'tide', 'sun', 'thorn'];   // the ink's DESIGN (gear.look.i): free, the barber's — it shows on whatever skin the kit leaves bare; bands of the ink atlas, in this order
 const LOOK_INK_COLOURS = [0x12192a, 0x101010, 0x6b1410, 0xe8dcc8, 0x2f5a2a, 0xb8752a, 0x4a2a6a, 0x1f6b6b], LOOK_INK_COLOUR_NAMES = ['blue-black', 'black', 'blood', 'bone', 'moss', 'ochre', 'violet', 'teal'];   // the ink's COLOUR (gear.look.k)
+// ONE BEARD as well (2026-09-20, the user: "remove beard styles, we will come back to that later") — the beard the
+// sculpt is painted with, on every man, in his hair's colour. The cuts below are no longer picked: they are position
+// cuts of the painted region (the chin for a goatee, the lip for a moustache) and they wait for the day beards return.
+const LOOK_BEARD_ONE = 2;                                   // the full painted beard
 const LOOK_BEARD_STYLES = ['clean', 'stubble', 'full beard', 'goatee', 'moustache'];   // (a sixth, 'braided' — a plait hung from the chin — came and went the same day: "let's just remove this braids"; a saved b 5 fails cleanLook's range and falls back to the roll)
 const LOOK_SKIN_NAMES = ['fair', 'light', 'tan', 'olive', 'brown', 'dark', 'deep', 'umber', 'ebony', 'onyx'];
 // THE FACE'S BONES (gear.look.f): six casts of the same head — a displacement of the head's vertices in the bind pose on
@@ -1766,9 +1774,9 @@ function lookRoll(name, arch, gear, pal, o = {}) {
   look.skin = c.setHex(skinBase).lerp(sunned, has('s') ? 0.15 : weather).getHex();
   look.body = look.skin;   // THE BODY under the armour: the face's tone exactly (2026-09-17 — the paler unweathered chest read as a different skin colour from the head and hands, worst on the dark tones); lookBodyColour keeps the muscle shading
   const hairRoll = pick(LOOK_HAIR), hairC = has('c') ? LOOK_HAIR_PICK[LK.c] : hairRoll, skinC = new THREE.Color(look.skin);
-  const beardOn = r() < 0.75, fullBeard = r() < 0.65, styleRoll = r(), beardKind = r();   // (styleRoll: drawn and dropped, so a man's beard and scar are the same as before the cut was fixed)
+  const beardOn = r() < 0.75, fullBeard = r() < 0.65, styleRoll = r(), beardKind = r();   // (all four are drawn and dropped, so a man's scar and his kit are the same as before the cut and the beard were fixed)
   look.hairStyle = LOOK_HAIR_ONE;                            // the one cut — his colour is the choice (LOOK_HAIR_ONE)
-  look.beardStyle = has('b') ? LK.b : !beardOn ? 0 : beardKind < 0.12 ? 3 : beardKind < 0.17 ? 4 : fullBeard ? 2 : 1;      // most wear a beard, most of those a full one
+  look.beardStyle = LOOK_BEARD_ONE;                          // the one beard — his hair's colour is the only choice (LOOK_BEARD_ONE)
   look.hair = hairC; look.beard = look.beardStyle ? c.setHex(hairC).lerp(skinC, 0.08).getHex() : null; look.stubble = c.setHex(hairC).lerp(skinC, 0.45).getHex();
   look.brow = c.setHex(hairC).lerp(skinC, 0.3).getHex(); look.socket = c.copy(skinC).multiplyScalar(0.91).getHex(); look.lip = c.copy(skinC).multiplyScalar(0.88).getHex();   // dark brows, a light shadow round the eyes (0.78 sank them into a skull), a hard mouth
   look.faceShape = has('f') ? LK.f : Math.floor(lookRng(lookSeed(name) ^ 0x2545f491)() * LOOK_FACE_SHAPES.length);   // (its own stream: the bones came later, nobody's hair or kit re-rolls for them)
@@ -1867,7 +1875,17 @@ function lookApply(L, look) {
     if (kd0 && skinTint) {                                  // THE FACE AND THE HANDS take the ink too ("shapes that go through your arms and face"): the head mesh's skin — the face, the sockets, a scar, the hands, the chin where no beard grows, the scalp when it is shaved — on its own copy of the kinds
       if (look.ink) { if (!sm.userData.ownKind) { sm.geometry.setAttribute('kind', kd0.clone()); sm.userData.ownKind = true; } const kd = sm.geometry.getAttribute('kind'), ik = lookInkKind(look, MODEL_KIND), on = new Set(['head', 'socket', 'scarL', 'scarR']); if (look.beard == null) on.add('beard'); if (!(look.hairStyle | 0)) on.add('hair'); if (pj.sculpted) for (const c of ['torso', 'armL', 'armR', 'handL', 'handR', 'thighL', 'thighR', 'shinL', 'shinR', 'footL', 'footR']) on.add(c);   // (the base: one mesh is the whole man — chest, arms, legs take the ink too)
         for (let v = 0; v < nv; v++) kd.setX(v, pj.mats[pj.vmat[v]] === 'skin' && on.has(pj.classes[pj.vclass[v]]) ? ik : kd0.getX(v)); kd.needsUpdate = true; }
-      else if (sm.userData.ownKind) { sm.geometry.setAttribute('kind', kd0); sm.userData.ownKind = false; } }
+      else if (sm.userData.ownKind) { sm.geometry.setAttribute('kind', kd0); sm.userData.ownKind = false; }
+      // HAIR IS NOT SKIN: the crop and the beard are painted ON the skin, so they were lit as skin — its pores and all
+      // the sheen of a bare scalp, which on a dark crop read as wet. `hairK` says where they are; the shader turns the
+      // pores off there and takes the roughness to 0.97 (a kind of their own could not: see MODEL_KIND).
+      if (pj.sculpted) {                                 // 1 on the crop and the beard, fading out with the tint
+        let hk = sm.geometry.getAttribute('hairK');
+        if (!hk) { hk = new THREE.BufferAttribute(new Float32Array(nv), 1); sm.geometry.setAttribute('hairK', hk); }
+        const hairish = new Set(['hair', 'beard']);
+        for (let v = 0; v < nv; v++) { const cl = pj.classes[pj.vclass[v]];
+          hk.array[v] = hairish.has(cl) ? (cl === 'beard' ? (look.beard != null ? 1 : 0) : (scalp ? scalp[v] / 255 : 0)) : 0; }
+        hk.needsUpdate = true; } }
   }
   lookDraw(L, look); if (lookHelmBuild(L)) lookHelmPaint(L);
   { const W = R && R.spec.wear; if (W) { const on = new Set(look.wear || []), off = new Set(); for (const nm of on) for (const h of (W[nm] && W[nm].hides || [])) off.add(h);   // THE WARES: what his gear puts on him; a steel arm takes that side's wrist band and pauldron off
@@ -24567,7 +24585,6 @@ function afBarberRender() {
     + sec('s', 'Skin', 'the tone', cur('s', LOOK_SKIN_NAMES), sw('s', LOOK_SKIN, LOOK_SKIN_NAMES))
     + sec('f', 'Face', 'the bones', cur('f', LOOK_FACE_SHAPES), chips('f', LOOK_FACE_SHAPES))
     + sec('c', 'Hair', 'the colour — every fighter wears the same cut', cur('c', HAIR_COLOURS), sw('c', LOOK_HAIR_PICK, HAIR_COLOURS))
-    + sec('b', 'Beard', 'the chin', cur('b', LOOK_BEARD_STYLES), chips('b', LOOK_BEARD_STYLES))
     + sec('i', 'Ink', 'on bare skin — the wolf pelt, the berserker\'s mantle', cur('i', LOOK_INK_NAMES), chips('i', LOOK_INK_NAMES))
     + sec('k', 'Ink colour', 'the dye', cur('k', LOOK_INK_COLOUR_NAMES), sw('k', LOOK_INK_COLOURS, LOOK_INK_COLOUR_NAMES))
     + '<div class="bb-foot"><button class="bb-reset" data-reset="1">Let the barber choose</button><span>(the face your name rolls)</span></div>';

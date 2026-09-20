@@ -194,7 +194,7 @@ if spill:
         blurC = A2.filter(ImageFilter.GaussianBlur(9)).load(); blurW = sp.filter(ImageFilter.GaussianBlur(9)).load()
         for x, y in spill:
             w = blurW[x, y] / 255
-            if w > 0.02: npx[x, y] = tuple(min(255, int(blurC[x, y][k] / w)) for k in range(3))
+            if w > 0.25: npx[x, y] = tuple(min(255, int(blurC[x, y][k] / w)) for k in range(3))   # (0.02 divided by almost nothing and wrote noise: a thread of dark pixels along the hairline, which read on the model as stitching)
     print('hair spill inpainted:', len(spill), 'texels')
     # AND PAD IT INTO THE GUTTER. The strip between two uv islands belongs to no triangle, so the repair never reached
     # it — but bilinear sampling at the island's edge does, and the old dark paint waiting there drew a thin line along
@@ -211,8 +211,20 @@ if spill:
         bc = A3.filter(ImageFilter.GaussianBlur(7)).load(); bw = v2.filter(ImageFilter.GaussianBlur(7)).load()
         for x, y in gut:
             w = bw[x, y] / 255
-            if w > 0.02: npx[x, y] = tuple(min(255, int(bc[x, y][k] / w)) for k in range(3))
+            if w > 0.25: npx[x, y] = tuple(min(255, int(bc[x, y][k] / w)) for k in range(3))
         print('gutter padded:', len(gut), 'texels')
+# and soften what was mended: a repair meets sound paint along a hard edge, and a one-texel step there is a thread on
+# the model. Only the mended texels and a ring around them are blurred — the paint everywhere else is untouched.
+if spill:
+    touched = Image.new('L', (W, H), 0); dt = ImageDraw.Draw(touched)
+    for x, y in spill: dt.point((x, y), fill=255)
+    if 'gut' in dir():
+        for x, y in gut: dt.point((x, y), fill=255)
+    ring = touched.filter(ImageFilter.MaxFilter(5)).load()
+    soft = N.filter(ImageFilter.GaussianBlur(1.6)).load()
+    for y in range(1024):
+        for x in range(W):
+            if ring[x, y]: npx[x, y] = soft[x, y]
 N.save(out + 'atlas.jpg', quality=88); mask.save(out + 'hair_mask.png')
 hairPx = [npx[x, y] for y in range(0, H, 2) for x in range(0, W, 2) if mpx[x, y]]
 if hairPx:

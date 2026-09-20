@@ -5,8 +5,8 @@
   'use strict';
   // rank titles by XP earned (an XP lock on the marketplace: gold alone never buys the top gear)
   var ARENA_RANKS = [['Rookie', 0], ['Fighter', 150], ['Veteran', 500], ['Champion', 1200], ['Master', 2500], ['Legend', 5000]];
-  // a fighter's six slots (sword, armor, helm, shield, bow, horse) plus two cosmetic slots that only loot fills (plume, trim).
-  // No armour = a linen shirt and wool breeches; no helm = bareheaded; no shield = the round the pit lends.
+  // a fighter's slots (sword, a steel arm and a pauldron either side, helm, shield, bow, horse) plus two cosmetic slots that only loot fills (plume, trim).
+  // Nothing on = the base man as he is: bare-chested, leather wrist bands, trousers and boots; no helm = bareheaded; no shield = the round the pit lends.
   // rank = the rank index needed; skill = [use-skill, level] also needed; stats are what the item does in the pit.
   var ARENA_ITEMS = {
     wood_sword:     { slot: 'sword', name: 'Wooden sword',      price: 0,    rank: 0, dmg: 0.8,  desc: 'the training blade every fighter starts with' },
@@ -21,16 +21,13 @@
     flamberge:      { slot: 'sword', name: 'Serpent flamberge', price: 1600, rank: 2, dmg: 1.22, desc: 'a wavy blade that bites on the draw' },
     doomsword:      { slot: 'sword', name: 'Doomsword',         price: 2400, rank: 3, dmg: 1.3,  reach: 0.3, move: -0.03, desc: 'a great blade as tall as a boy' },
     sun_blade:      { slot: 'sword', name: 'Sun-forged blade',  price: 6000, rank: 5, skill: ['sword', 5], dmg: 1.4, reach: 0.2, desc: 'it glows — the pit falls quiet when it is drawn' },
-    gambeson:       { slot: 'armor', name: 'Padded gambeson',   price: 60,   rank: 0, hp: 8,  desc: 'a quilted jack in the team cloth — the poor man\'s armour' },
-    wolf_pelt:      { slot: 'armor', name: 'Wolf pelt',         price: 220,  rank: 0, hp: 10, poise: 5, desc: 'bare-chested under a pelt, fur boots, a fur cloak — the northern look' },
-    berserker:      { slot: 'armor', name: "Berserker's mantle", price: 380,  rank: 0, hp: 12, poise: 8, desc: 'a grey wolf mantle on the shoulders, a bare chest, steel bracers, a sash and wool breeches — the raider from the north (ink shows on him)' },
-    leather:        { slot: 'armor', name: 'Leather jerkin',    price: 150,  rank: 0, hp: 15, desc: 'turns a glancing cut' },
-    mail:           { slot: 'armor', name: 'Mail hauberk',      price: 500,  rank: 1, hp: 35, poise: 5, move: -0.06, desc: 'rings over padding' },
-    plate:          { slot: 'armor', name: 'Plate harness',     price: 1500, rank: 2, hp: 60, poise: 15, move: -0.22, desc: 'heavy, and worth it — you will not be running' },
-    champion_plate: { slot: 'armor', name: "Champion's plate",  price: 3500, rank: 4, hp: 90, poise: 25, move: -0.25, desc: 'the pit has seen nothing harder, or slower' },
-    brigandine:     { slot: 'armor', name: 'Brigandine',        price: 1000, rank: 2, hp: 45, poise: 10, move: -0.03, desc: 'steel plates riveted under cloth — little weight to speak of' },
-    dragon_plate:   { slot: 'armor', name: 'Dragon plate',      price: 7000, rank: 5, skill: ['sword', 5], hp: 110, poise: 30, move: -0.3, desc: 'black steel, red trim, spiked shoulders — a walking fortress' },
-    sallet:         { slot: 'helm',  name: 'Sallet',            price: 200,  rank: 0, hp: 8,  poise: 3, desc: 'a visored steel helm — without one you fight bareheaded' },
+    // ARMOUR, PIECE BY PIECE (2026-09-20): the fighter is the base — his own skin, leather wrist bands, trousers and boots — and armour is
+    // worn a piece at a time, each side of the body its own slot. The old armour-slot wares (gambeson … dragon plate) and the kit's sallet
+    // went with the kit; the market sells what the char editor builds. Gauntlet = the whole steel arm, shoulder to fingertips.
+    gauntlet_L:     { slot: 'gauntL', name: 'Steel arm (left)',        price: 350, rank: 0, hp: 10, poise: 4, move: -0.02, desc: 'a plated steel arm, shoulder to fingertips — the left' },
+    gauntlet_R:     { slot: 'gauntR', name: 'Steel arm (right)',       price: 350, rank: 0, hp: 10, poise: 4, move: -0.02, desc: 'a plated steel arm, shoulder to fingertips — the sword arm' },
+    pauldron_L:     { slot: 'pauldL', name: 'Leather pauldron (left)', price: 120, rank: 0, hp: 5,  poise: 2, desc: 'a ribbed leather plate laced over the left shoulder' },
+    pauldron_R:     { slot: 'pauldR', name: 'Leather pauldron (right)', price: 120, rank: 0, hp: 5, poise: 2, desc: 'a ribbed leather plate laced over the right shoulder' },
     corinthian:     { slot: 'helm',  name: 'Corinthian helm',   price: 260,  rank: 0, hp: 8,  poise: 4, model: 'corinthian', desc: 'a bronze helm of the old south, cheek guards and a nasal round an open face, a crest on the crown' },   // (model: its own sculpt in place of the sallet — game.js loadHelmModel)
     round_shield:   { slot: 'shield', name: 'Round shield',     price: 0,    rank: 0, desc: 'a painted wooden round — the pit lends every fighter one' },
     heater_shield:  { slot: 'shield', name: 'Heater shield',    price: 350,  rank: 1, poise: 5, desc: 'steel-faced and team-painted' },
@@ -60,7 +57,7 @@
     wolf_ink:       { slot: 'ink',   name: 'Wolf ink',          price: 150,  rank: 0, ink: 'wolf', retired: true, desc: 'blue-black knotwork over chest and arms — now a free pick in the barber' },
     blood_ink:      { slot: 'ink',   name: 'Blood ink',         price: 150,  rank: 0, ink: 'blood', retired: true, desc: 'red war-marks over chest and arms — now a free pick in the barber' },
   };
-  var ARENA_SLOTS = ['sword', 'armor', 'helm', 'shield', 'bow', 'horse', 'plume', 'trim'];   // (the ink was a slot here once; it is the barber's now — ARENA_LOOK.i)
+  var ARENA_SLOTS = ['sword', 'gauntL', 'gauntR', 'pauldL', 'pauldR', 'helm', 'shield', 'bow', 'horse', 'plume', 'trim'];   // ('armor' was a slot until 2026-09-20: the base wears armour a piece at a time — see the wares above)   // (the ink was a slot here once; it is the barber's now — ARENA_LOOK.i)
   // YOUR LOOK (the barber): skin tone, face shape, hair style, hair colour, beard style — indexes into the client's lists;
   // the server keeps them in the career's meta and every guest paints the same face
   var ARENA_LOOK = { s: 10, f: 6, h: 5, c: 9, b: 5, i: 6, k: 8 };   // (b 5: clean, stubble, full, goatee, moustache — a braided sixth came and went 2026-09-16, a saved 5 falls out of range here and back to the roll; i: the ink's design — none, wolf, serpent, tide, sun, thorn — and k its colour, 8 dyes; free, on whatever skin the kit leaves bare)

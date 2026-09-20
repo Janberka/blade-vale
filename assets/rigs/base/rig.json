@@ -1,5 +1,5 @@
 {
- "source": "Thor_UNWORTHY_THOR.usdz (the user, 2026-09-17): body, head, eyes kept; forearms, legs and the left arm rebuilt; the warrior kit carried over by tools/realmesh/base",
+ "source": "Thor_UNWORTHY_THOR.usdz (the user, 2026-09-17): his own body, head, eyes, hands, wrist wraps, trousers and boots; the steel arm as a gauntlet either side; the leather pauldrons cut from the old kit and finished by the editor (2026-09-20). Built by tools/realmesh/base, dressed by dress.js",
  "height": 2.08,
  "hipY": 1.092277041468154,
  "map": {
@@ -19,8 +19,6 @@
  "meshes": {
   "sword": "FantasyWarrior_sword_6_characters_0",
   "shield": "FantasyWarrior_shield_6_characters_0",
-  "cloak": "FantasyWarrior_cloak_6_characters_0",
-  "armor": "FantasyWarrior_armor_6_characters_0",
   "body": "base_body"
  },
  "swordHand": "handR",
@@ -158,5 +156,53 @@
   "chinX": 0.045,
   "lipY": 1.875,
   "lipZ": 0.13
+ },
+ "wear": {
+  "band_L": {
+   "kind": "leather",
+   "always": true
+  },
+  "band_R": {
+   "kind": "leather",
+   "always": true
+  },
+  "legs": {
+   "kind": "cloth",
+   "always": true
+  },
+  "gauntlet_L": {
+   "kind": "steel",
+   "slot": "gauntL",
+   "covers": [
+    "handL",
+    "foreL"
+   ],
+   "hides": [
+    "band_L",
+    "pauldron_L"
+   ]
+  },
+  "gauntlet_R": {
+   "kind": "steel",
+   "slot": "gauntR",
+   "covers": [
+    "handR",
+    "foreR"
+   ],
+   "hides": [
+    "band_R",
+    "pauldron_R"
+   ]
+  },
+  "pauldron_L": {
+   "kind": "leather",
+   "slot": "pauldL",
+   "side": true
+  },
+  "pauldron_R": {
+   "kind": "leather",
+   "slot": "pauldR",
+   "side": true
+  }
  }
 }

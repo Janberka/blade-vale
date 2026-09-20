@@ -1159,6 +1159,7 @@ function modelKindAttr(m) {                                  // per vertex: what
   const dark = m.short === 'armor' ? K.mail : m.short === 'sword' ? K.leather : K.flat;   // the palette's dark grey: the mail under the plate, a sword's grip, the black of an eye
   for (let v = 0; v < n; v++) { let kd = K.flat;
     if (pj) { const mt = pj.mats[pj.vmat[v]]; kd = mt === 'steel' ? K.steel : mt === 'cloth' ? K.cloth : mt === 'leather' ? K.leather : mt === 'skin' ? K.skin : mt === 'dark' ? dark : K.flat; }
+    else if (m.wear) kd = K[m.wear.kind] != null ? K[m.wear.kind] : K.flat;   // (a ware of the base: rig.json says leather / cloth / steel)
     else if (uv) { const cx = Math.floor(uv.getX(v) * 16), cy = Math.floor(uv.getY(v) * 16); kd = cy === 0 && cx >= 4 && cx <= 12 ? K.steel : cx === 6 ? K.cloth : cx === 13 && cy <= 7 ? K.leather : cx === 13 ? K.skin : K.flat; }
     k[v] = kd; }
   m.geo.setAttribute('kind', new THREE.BufferAttribute(k, 1));
@@ -1213,7 +1214,7 @@ float triGray(sampler2D t, vec3 p, vec3 wn, float s) { vec3 w = triW(wn); return
 };
 function modelMaterial(R, o = {}) {                          // the figure's material for a context: Phong on the low tier / thumbnails, the surface pass otherwise; cached per rig unless it carries its own colour
   const ctx = o.ctx || 'main', det = modelDetailOn(), col = o.color != null ? o.color : 0xffffff, noMap = o.map === false;
-  const key = [det ? 'd' : 'p', o.vc ? 'vc' : '', o.skinning ? 'sk' : '', noMap ? 'nomap' : '', o.tex ? o.tex.name : '', ctx].join('|');
+  const key = [det ? 'd' : 'p', o.vc ? 'vc' : '', o.skinning ? 'sk' : '', noMap ? 'nomap' : '', o.tex ? o.tex.name : '', o.ds ? 'ds' : '', ctx].join('|');   // (ds: two-sided — the base's wraps and plates are single sheets)
   R.mats = R.mats || {}; if (o.color == null && R.mats[key]) return R.mats[key];
   let m;
   if (!det) { m = new THREE.MeshPhongMaterial(noMap ? { color: col, shininess: 4, specular: 0x050505, skinning: !!o.skinning } : { map: o.tex || R.tex, color: col, shininess: 6, specular: 0x111111, skinning: !!o.skinning, vertexColors: !!o.vc });
@@ -1228,6 +1229,7 @@ function modelMaterial(R, o = {}) {                          // the figure's mat
       sh.vertexShader = sh.vertexShader.replace('#include <common>', G.vertHead).replace('#include <beginnormal_vertex>', G.vertBegin).replace('#include <defaultnormal_vertex>', G.vertNormal).replace('#include <worldpos_vertex>', G.vertPos);
       sh.fragmentShader = sh.fragmentShader.replace('#include <common>', G.fragHead).replace('#include <normal_fragment_maps>', G.fragNormal).replace('#include <roughnessmap_fragment>', G.fragRough).replace('#include <metalnessmap_fragment>', G.fragMetal).replace('#include <map_fragment>', G.fragMap).replace('#include <lights_fragment_end>', G.fragIbl); };
     m.customProgramCacheKey = () => 'bv-surface'; }
+  if (o.ds) m.side = THREE.DoubleSide;
   m.userData.ctx = ctx; if (o.color == null) R.mats[key] = m;
   return m;
 }
@@ -1252,7 +1254,7 @@ async function loadModelRig(name) {
     if (p.attributes.TEXCOORD_0 != null) geo.setAttribute('uv', new THREE.BufferAttribute(acc(p.attributes.TEXCOORD_0), 2));
     geo.setAttribute('skinIndex', new THREE.BufferAttribute(acc(p.attributes.JOINTS_0), 4)); geo.setAttribute('skinWeight', new THREE.BufferAttribute(acc(p.attributes.WEIGHTS_0), 4));
     geo.setIndex(new THREE.BufferAttribute(acc(p.indices), 1));
-    const sk = g.skins[n.skin], gm = g.materials && g.materials[p.material || 0]; return { name: n.name, geo, joints: sk.joints, ibm: acc(sk.inverseBindMatrices), tex: texOf(p), alphaMask: !!(gm && gm.alphaMode === 'MASK') }; });
+    const sk = g.skins[n.skin], gm = g.materials && g.materials[p.material || 0]; return { name: n.name, geo, joints: sk.joints, ibm: acc(sk.inverseBindMatrices), tex: texOf(p), alphaMask: !!(gm && gm.alphaMode === 'MASK'), ds: !!(gm && gm.doubleSided), wear: spec.wear && spec.wear[n.name] || null }; });   // (ds: the file says two-sided — the wraps and the plates are single sheets; wear: rig.json's word on a ware mesh — its kind, its slot, what it covers)
   // LOOKS: pieces.json (tools/realmesh/warrior_pieces.py) names every triangle's armour piece and every vertex's stuff
   let pieces = null; try { const pr = await fetch(base + 'pieces.json'); if (pr.ok) pieces = await pr.json(); } catch (e) { pieces = null; }
   if (pieces) for (const m of meshes) { const key = Object.keys(pieces).find(k => m.name.indexOf('_' + k + '_') >= 0 || m.name.endsWith('_' + k)); const pj = key && pieces[key]; if (!pj) continue; m.pieces = pj; m.short = key;
@@ -1268,9 +1270,11 @@ async function loadModelRig(name) {
         for (let v = 0; v < ps.count; v++) if (pj.vclass[v] === sk && pj.vmat[v] === cl && ps.getY(v) > 0.99) pj.vclass[v] = st;
         for (let t = 0; t < pj.tri.length; t++) if (pj.tri[t] === sk && [0, 1, 2].every(k => pj.vclass[idx[t * 3 + k]] === st)) pj.tri[t] = st; } } }
   if (pieces) { const body = meshes.find(m => m.pieces && m.pieces.classes.indexOf('hair') >= 0); if (body && !body.pieces.sculpted && lookHelmTuck(body.geo.getAttribute('position'), body.pieces, { meshes })) body.geo.computeVertexNormals(); }   // the jaw and the temples inside the helm's shell (lookHelmTuck)
-  for (const m of meshes) { modelKindAttr(m); modelSmoothNormals(m.geo, MODEL_DETAIL.crease); if (m.pieces && m.pieces.classes.indexOf('hair') >= 0) lookFaceNormals(m.geo, m.pieces); }   // the surface pass: what each vertex is made of, and normals rounded under a crease limit (a face under none of it)
+  for (const m of meshes) { if (m.tex && m.tex.name && /leather_tile/.test((g.images[+m.tex.name.split(':')[1]] || {}).uri || '')) m.tex.wrapS = m.tex.wrapT = THREE.RepeatWrapping;   // (the pauldron's tile repeats at world scale)
+    modelKindAttr(m); modelSmoothNormals(m.geo, MODEL_DETAIL.crease); if (m.pieces && m.pieces.classes.indexOf('hair') >= 0) lookFaceNormals(m.geo, m.pieces); }   // the surface pass: what each vertex is made of, and normals rounded under a crease limit (a face under none of it)
   if (modelDetailOn()) MODEL_DETAIL_LIVE = true;           // (so the pit's hour builds the sky the steel reflects before the first man is dressed)
-  const kit = meshes.find(m => spec.meshes && m.name === spec.meshes.armor), tex = kit ? kit.tex : texs[0], entry = { name, spec, g, meshes, tex, pieces };   // (R.tex: the kit's palette — the shop's props and the old paths read it) await Promise.all(Object.keys(HELM_MODELS).map(k => loadHelmModel(entry, k)));   // the helms of their own (the Corinthian) load with him
+  const kit = meshes.find(m => spec.meshes && m.name === spec.meshes.armor) || meshes.find(m => spec.meshes && m.name === spec.meshes.sword), tex = kit ? kit.tex : texs[0], entry = { name, spec, g, meshes, tex, pieces };   /* (R.tex: the kit's palette — the shop's props and the old paths read it) */
+  await Promise.all(Object.keys(HELM_MODELS).map(k => loadHelmModel(entry, k)));   // the helms of their own (the Corinthian) load with him (2026-09-20: this await had been swallowed by a // comment — no helm loaded on the base)
   MODEL_RIGS.set(name, entry); return entry;
 }
 // THE BASE'S INK UV (2026-09-18, "inks are not working now at all"): the ink is a design in body space — the lathed body wrote its own
@@ -1472,8 +1476,8 @@ function instanceModelRig(R, ctx = 'main') {
       geo = new THREE.BufferGeometry(); for (const k of ['position', 'normal', 'uv', 'skinIndex', 'skinWeight', 'kind', 'inkUv']) if (m.geo.getAttribute(k)) geo.setAttribute(k, m.geo.getAttribute(k));
       const i0 = m.geo.index.array; geo.setIndex(new THREE.BufferAttribute(new i0.constructor(i0), 1));
       const nv = m.geo.getAttribute('position').count; geo.setAttribute('color', new THREE.BufferAttribute(new Uint8Array(nv * 3).fill(255), 3, true)); }
-    const mm = { ctx, skinning: true, vc: own, tex: m.tex !== R.tex ? m.tex : undefined };   // (the base body: its painted atlas; the kit: the palette)
-    const sm = new THREE.SkinnedMesh(geo, m.alphaMask ? new THREE.MeshPhongMaterial({ map: m.tex, alphaTest: 0.35, side: THREE.DoubleSide, skinning: true, shininess: 10, specular: 0x202020 }) : mm.tex ? modelMaterial(R, mm) : (own ? matVC : mat)); sm.name = m.name; if (m.alphaMask) { sm.visible = false; sm.castShadow = false; } else { sm.userData.mm = mm; sm.userData.mmR = R.name; } /* (cards: their own Phong with the cut-out, the look's colour on it — lookHairApply; the surface pass would refresh them away) */ sm.frustumCulled = false; sm.castShadow = true; root.add(sm); if (own) { sm.userData.pieces = m.pieces; sm.userData.geo0 = m.geo; }
+    const mm = { ctx, skinning: true, vc: own, tex: m.tex !== R.tex ? m.tex : undefined, ds: m.ds || undefined };   // (the base body: its painted atlas; the kit: the palette)
+    const sm = new THREE.SkinnedMesh(geo, m.alphaMask ? new THREE.MeshPhongMaterial({ map: m.tex, alphaTest: 0.35, side: THREE.DoubleSide, skinning: true, shininess: 10, specular: 0x202020 }) : mm.tex ? modelMaterial(R, mm) : (own ? matVC : mat)); sm.name = m.name; if (m.alphaMask) { sm.visible = false; sm.castShadow = false; } else { sm.userData.mm = mm; sm.userData.mmR = R.name; } /* (cards: their own Phong with the cut-out, the look's colour on it — lookHairApply; the surface pass would refresh them away) */ sm.frustumCulled = false; sm.castShadow = true; root.add(sm); if (own) { sm.userData.pieces = m.pieces; sm.userData.geo0 = m.geo; } if (m.wear && !m.wear.always) sm.visible = false;   // (a ware is off until the look puts it on — lookApply)
     const bones = m.joints.map(j => nodes[j]), inv = []; for (let i = 0; i < bones.length; i++) inv.push(new THREE.Matrix4().fromArray(m.ibm, i * 16));
     sm.bind(new THREE.Skeleton(bones, inv), new THREE.Matrix4()); skinned[m.name] = sm; }
   const NB = modelBodyBuild(R), am = R.meshes.find(x => x.short === 'armor');   // THE BODY UNDER THE ARMOUR: this man's own copy, bound to the armour's skeleton, shown when his look goes bare (lookApply)
@@ -1725,17 +1729,8 @@ const LOOK_HAIRLINE = {
 const LOOK_HAIR_CUT = { 1: { pad: 0.009, top: 0.004 }, 2: { pad: 0.014, top: 0.020 }, 3: { pad: 0.013, top: 0.006, drape: [[60, null], [90, 1.60], [120, 1.545], [180, 1.50]] }, 4: { pad: 0.004 } };   // pad: the cap's thickness at the hairline, top: more of it at the crown; drape: [bearing, the hem's y] (null = the hairline)
 // per armour: the odds of each loose piece and of a helm (NPCs — a player's helm is a ware), the paint of each piece's
 // STEEL (a multiplier on the palette grey — white leaves it steel; the names are the look's own colours) and of its CLOTH
-const LOOK_ARMOR = {
-  none:           { helm: 0.08, pauldron: 0,    elbow: 0,    knee: 0,    cloak: 0.12, plume: 0,    straps: 0.3, pouch: 0.5, cloth: 0.5,  base: 'shirt',   paint: { skirt: 'breeches', greaves: 'breeches', boot: 'leather', helmet: 'iron' }, clothOf: { skirt: 'breeches' } },   // a linen shirt and wool breeches
-  gambeson:       { helm: 0.15, pauldron: 0,    elbow: 0.3,  knee: 0.15, cloak: 0.25, plume: 0,    straps: 0.6, pouch: 0.5, cloth: 0.35, base: 'leather', paint: { cuirass: 'jack', skirt: 'jack', boot: 'leather', helmet: 'iron' } },
-  wolf_pelt:      { helm: 0.02, pauldron: 1,    elbow: 0,    knee: 0,    cloak: 1,    plume: 0,    straps: 0.7, pouch: 0,   cloth: 0,    base: 'fur',     bare: true, naked: true, paint: { cuirass: 'skin', vambrace: 'leather', pauldron: 'furDark', boot: 'leather', helmet: 'iron' }, clothOf: { sleeve: 'skin', skirt: 'fur' }, cloakC: 'furDark' },   // bare-chested under the pelt (naked: the body under the armour shows, cuirass and sleeves dropped)
-  berserker:      { helm: 0.02, pauldron: 1,    elbow: 0,    knee: 0,    cloak: 0.35, plume: 0,    straps: 1,   pouch: 0,   cloth: 0.1,  base: 'breeches', bare: true, naked: true, paint: { cuirass: 'skin', vambrace: 'ironEngraved', pauldron: 'furGrey', boot: 'leather', helmet: 'iron', straps: 'leather', pouch: 'leather' }, clothOf: { sleeve: 'skin', skirt: 'sash' }, cloakC: 'furGrey' },   // the northern raider (2026-09-16): a grey wolf mantle on the shoulders, a bare inked chest, steel bracers, a sash in the team dye, wool breeches
-  leather:        { helm: 0.25, pauldron: 0.2,  elbow: 0.5,  knee: 0.3,  cloak: 0.35, plume: 0,    straps: 0.6, pouch: 0.5, cloth: 0.35, base: 'leather', paint: { helmet: 'iron' } },
-  brigandine:     { helm: 0.5,  pauldron: 0.35, elbow: 0.7,  knee: 0.5,  cloak: 0.4,  plume: 0.1,  straps: 0.6, pouch: 0.5, cloth: 0.15, base: 0x606268,  paint: { cuirass: 0xa03030, skirt: 'leather' } },
-  mail:           { helm: 0.6,  pauldron: 0.4,  elbow: 0.8,  knee: 0.6,  cloak: 0.5,  plume: 0.15, straps: 0.6, pouch: 0.5, cloth: 0.1,  base: 0xa8acb4,  paint: { helmet: 0xb4b8c0 } },
-  plate:          { helm: 0.8,  pauldron: 0.85, elbow: 1,    knee: 0.9,  cloak: 0.6,  plume: 0.35, straps: 0.6, pouch: 0.5, cloth: 0,    base: 'plate' },
-  champion_plate: { helm: 0.9,  pauldron: 1,    elbow: 1,    knee: 1,    cloak: 1,    plume: 0.8,  straps: 0.6, pouch: 0.5, cloth: 0,    base: 0xf4ecd8,  paint: { helmet: 0xe8c050, pauldron: 0xe8c050, elbow: 0xe8c050, knee: 0xe8c050 } },
-  dragon_plate:   { helm: 1,    pauldron: 1,    elbow: 1,    knee: 1,    cloak: 1,    plume: 0.6,  straps: 0.6, pouch: 0.5, cloth: 0.4,  base: 0x34303c,  paint: { pauldron: 0x8a2424, elbow: 0x8a2424, knee: 0x8a2424, helmet: 0x2a2630 } },
+const LOOK_ARMOR = {   // (2026-09-20: the base wears armour a PIECE at a time — rig.json `wear`, the market's gauntL/R and pauldL/R slots, look.wear — so the one kind left here is the man as he is; the kit's gambeson … dragon plate went with the kit)
+  none:           { helm: 0.08, pauldron: 0,    elbow: 0,    knee: 0,    cloak: 0,    plume: 0,    straps: 0.3, pouch: 0.5, cloth: 0.5,  base: 'shirt',   paint: { skirt: 'breeches', greaves: 'breeches', boot: 'leather', helmet: 'iron' }, clothOf: { skirt: 'breeches' } },
 };
 // by class: a guardsman wears his helm, an archer mostly goes bareheaded, a duelist travels light
 const LOOK_CLASS = { guardsman: { helmet: 0.25, pauldron: 0.2 }, archer: { helmet: -0.35, pauldron: -0.3, cloak: -0.2 }, duelist: { helmet: -0.25, pauldron: -0.3, cloak: 0.1 }, brute: { helmet: -0.1, pauldron: 0.1 }, rider: { helmet: 0.15, cloak: 0.2 } };
@@ -1772,7 +1767,8 @@ function lookRoll(name, arch, gear, pal, o = {}) {
   // the kit
   look.helmet = !!(gear && (gear.helm || gear.plume));                                              // (a bought plume needs a helm to sit on)
   const I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}, hm = look.helmet && gear.helm ? I[gear.helm] : null; look.helmModel = hm && hm.model && HELM_MODELS[hm.model] ? hm.model : null;   // a helm with a sculpt of its own (the ware's `model` — the Corinthian): the sallet comes off the body, the model rides the head bone (lookHelmModelApply)
-  const pl = gear && gear.plume ? I[gear.plume] : null; look.plumeC = pl && pl.plume != null ? pl.plume : null;                       // (the plume ware's dye: such a helm's crest takes it)
+  const pl = gear && gear.plume ? I[gear.plume] : null; look.plumeC = pl && pl.plume != null ? pl.plume : null;
+  look.wear = []; { const W = (MODEL_RIGS.get(MODEL_NAME) || {}).spec, WT = W && W.wear; if (WT && gear) for (const nm in WT) if (WT[nm].slot && gear[WT[nm].slot] === nm) look.wear.push(nm); }   // THE WARES (2026-09-20): a ware's item id is its mesh name; rig.json `wear` says which slot carries it                       // (the plume ware's dye: such a helm's crest takes it)
   for (const k of ['pauldron', 'elbow', 'knee', 'straps', 'pouch']) if (r() >= p(k)) look.hide.push(k); if (!look.helmet || look.helmModel) look.hide.push('helmet');
   if (!(MODEL_RIGS.get(MODEL_NAME) || {}).spec || !MODEL_RIGS.get(MODEL_NAME).spec.fullBody) look.hide.push('skirtTop'); if (O.naked) { look.hide.push('cuirass', 'sleeve', 'pouch'); look.naked = true; }   // bare to the waist: the body under the armour shows (instanceModelRig's 'naked' mesh); the belt stays on, the belt pouches come off (two leather blocks that only read tucked under a back plate — a box on a bare back otherwise)
   look.cloak = o.full ? true : r() < p('cloak'); look.plume = o.full || (r() < p('plume')) || !!(gear && gear.plume);
@@ -1862,6 +1858,8 @@ function lookApply(L, look) {
       else if (sm.userData.ownKind) { sm.geometry.setAttribute('kind', kd0); sm.userData.ownKind = false; } }
   }
   lookDraw(L, look); if (lookHelmBuild(L)) lookHelmPaint(L);
+  { const W = R && R.spec.wear; if (W) { const on = new Set(look.wear || []), off = new Set(); for (const nm of on) for (const h of (W[nm] && W[nm].hides || [])) off.add(h);   // THE WARES: what his gear puts on him; a steel arm takes that side's wrist band and pauldron off
+    for (const nm in W) { const sm = L.inst.skinned[nm]; if (sm) sm.visible = !!(W[nm].always || on.has(nm)) && !off.has(nm); } } }
   if (L.inst.skinned.naked) L.inst.skinned.naked.visible = !!look.naked; if (L.inst.skinned.belt) L.inst.skinned.belt.visible = !!look.naked;   // (the whole man's belt: on with the bare body)
   const cloak = L.inst.skinned[M.cloak]; if (cloak) { cloak.visible = !!look.cloak; if (cloak.material && cloak.material.color && !cloak.material.map) cloak.material.color.setHex(look.cloakC); }
   if (L.plume) L.plume.visible = !!(look.helmet && look.plume && !look.helmModel);   // (a helm with a crest of its own carries no feather: the crest takes the plume's dye)
@@ -1880,13 +1878,15 @@ function lookHelmBuild(L) {
   const key = (L.lookBase && L.lookBase.helmModel) || 'sallet'; if (L.mHelm !== undefined && L.mHelmKey === key) return L.mHelm;
   if (L.mHelm) { if (L.mHelm.parent) L.mHelm.parent.remove(L.mHelm); L.mHelm.geometry.dispose(); } L.mHelm = null; L.mHelmKey = key;
   const R = MODEL_RIGS.get(L.g.userData.model); if (!R) return null;
-  for (const [nm, sm] of Object.entries(L.inst.skinned)) { const pj = sm.userData.pieces; if (!pj) continue; const hI = pj.classes.indexOf('helmet'); if (hI < 0) continue;
+  const H = key !== 'sallet' && R.helms && R.helms[key], headNode = R.g.nodes.findIndex(n => n.name === (R.spec.map || {}).head);
+  for (const [nm, sm] of Object.entries(L.inst.skinned)) { const pj = sm.userData.pieces; if (!pj) continue; const hI = pj.classes.indexOf('helmet'); if (hI < 0 && !(H && pj.classes.indexOf('hair') >= 0)) continue;   // (the base has no sculpted sallet: a helm of its own hangs off the body mesh's head bone)
     const g0 = sm.userData.geo0, pos0 = g0.getAttribute('position'), nrm0 = g0.getAttribute('normal'), uv0 = g0.getAttribute('uv'), si = g0.getAttribute('skinIndex'), i0 = g0.index.array, tri = pj.tri, mm = R.meshes.find(x => x.name === nm);
     const map = [], of = new Map(), idx = []; let j = -1;
     for (let t = 0; t < tri.length; t++) { if (tri[t] !== hI) continue; for (let k = 0; k < 3; k++) { const v = i0[t * 3 + k]; let o = of.get(v); if (o == null) { o = map.length; of.set(v, o); map.push(v); if (j < 0) j = si.getX(v); } idx.push(o); } }
-    if (!map.length || !mm) continue;
+    if (hI < 0) j = mm ? mm.joints.indexOf(headNode) : -1;
+    if ((!map.length && !H) || !mm || j < 0) continue;
     const M = new THREE.Matrix4().fromArray(mm.ibm, j * 16).multiply(sm.bindMatrix), N = new THREE.Matrix3().getNormalMatrix(M), n = map.length, p = new THREE.Vector3();
-    const H = key !== 'sallet' && R.helms && R.helms[key]; let m;
+    let m;
     if (H) {                                                 // a helm of its own: its geometry, rigid, taken into the head bone's space by the same matrix (it is fitted in the armour's bind space)
       const hp = H.geo.getAttribute('position'), hn = H.geo.getAttribute('normal'), hu = H.geo.getAttribute('uv'), nh = hp.count, pos = new Float32Array(nh * 3), nrm = new Float32Array(nh * 3);
       for (let o = 0; o < nh; o++) { p.fromBufferAttribute(hp, o).applyMatrix4(M); pos[o * 3] = p.x; pos[o * 3 + 1] = p.y; pos[o * 3 + 2] = p.z; p.fromBufferAttribute(hn, o).applyMatrix3(N).normalize(); nrm[o * 3] = p.x; nrm[o * 3 + 1] = p.y; nrm[o * 3 + 2] = p.z; }
@@ -1925,7 +1925,7 @@ function modelHelmPlace(L) {                                 // every render whi
   m.matrix.compose(_hm.pa, _hm.qa, _hm.sa).premultiply(_hm.A.copy(root.matrixWorld).invert()); m.matrixWorldNeedsUpdate = true;
 }
 // the pieces he goes without leave the body's own index (no draw call for them, no seam) — the only part of the look a helm toggle has to redo
-const LOOK_UNDER = { torso: 'cuirass', armL: 'sleeve', armR: 'sleeve', foreL: 'sleeve', foreR: 'sleeve', thighL: 'skirt', thighR: 'skirt', shinL: 'greaves', shinR: 'greaves', footL: 'boot', footR: 'boot' };   // a base body part → the kit piece that covers it (lookDraw)
+const LOOK_UNDER = {};   // (the kit's table — torso under the cuirass, thighs under the skirt… — is empty since 2026-09-20: the base's wares say what they cover themselves, rig.json `wear[].covers` — lookDraw)   // a base body part → the kit piece that covers it (lookDraw)
 function lookDraw(L, look) {
   const R = MODEL_RIGS.get(L.g.userData.model), H = look.helmet && look.helmModel && R && R.helms ? R.helms[look.helmModel] : null;
   const hide = new Set(look.hide); if (look.helmet && !H) hide.add('hair');   // (under the sallet the scalp is not drawn: it lies inside the shell, and the tessellated crown would show through it; a helm of its own says what it covers — helmCoverMask)
@@ -1933,6 +1933,7 @@ function lookDraw(L, look) {
   // sleeves, the forearms under vambraces, the thighs under the skirt, the shins under greaves, the feet in boots — so a stride or a swing never pushes skin
   // through the cloth (the warrior never had a body under there). A look that drops the piece (naked: cuirass and sleeves) shows what was under it.
   const hideBody = new Set(hide); for (const k in LOOK_UNDER) if (!hide.has(LOOK_UNDER[k])) hideBody.add(k);
+  { const W = R && R.spec.wear; if (W && look.wear) for (const nm of look.wear) for (const c of (W[nm] && W[nm].covers || [])) hideBody.add(c); }   // (a steel arm: the hand and forearm under it are not drawn — the fingertips poked through the steel fingers)
   for (const sm of Object.values(L.inst.skinned)) { const pj = sm.userData.pieces; if (!pj) continue; const hd = pj.sculpted ? hideBody : hide;
     const i0 = sm.userData.geo0.index.array, tri = pj.tri, idx = sm.geometry.index, cover = H && pj.classes.indexOf('hair') >= 0 ? helmCoverMask(R, H) : null; let n = 0;   // (the head under a helm of its own: what it covers is left out — helmCoverMask)
     for (let t = 0; t < tri.length; t++) { if (hd.has(pj.classes[tri[t]]) || (cover && cover[t])) continue; idx.array[n] = i0[t * 3]; idx.array[n + 1] = i0[t * 3 + 1]; idx.array[n + 2] = i0[t * 3 + 2]; n += 3; }
@@ -18150,7 +18151,7 @@ const AF = {
   phase: 'lobby',                          // 'lobby' | 'countdown' | 'fight' | 'over'
   bodies: [], arrows: [], ground: null, props: [], seed: 1, cfg: { teams: 2, per: 3 }, roster: [],
   me: null, keys: new Set(), locIn: { mx: 0, mz: 0, yaw: 0, atk: 0, heavy: 0, dodge: 0, rollDir: null, block: false, hold: false, swap: 0, jump: 0 },   // rollDir: the roll's world heading (rad), or null = the way you move (Q / E, or JUMP's double-tap on touch, set it)
-  cam: { yaw: 0, pitch: 0.3, dist: 6.5 }, orbit: { theta: 0.4, phi: 0.9, r: 62, drag: false }, spec: { mode: 'orbit', target: null, fx: 0, fz: 0, touched: false },
+  cam: { yaw: 0, pitch: 0.06, dist: 3.8 }, orbit: { theta: 0.4, phi: 0.9, r: 62, drag: false }, spec: { mode: 'orbit', target: null, fx: 0, fz: 0, touched: false },
   last: 0, t: 0, countdown: 0, over: false, winner: -1, standings: null, hudEl: null, events: [],
   inputs: new Map(), snapAcc: 0, inAcc: 0, lastSnap: 0, installed: false, log: [], torches: [], motes: null, hurt: 0, fov: CAM_BASE_FOV,
   sky: null, stars: null, rain: null, sunSpr: null, crowd: [], roar: 0, waveT: 0, waveAng: 0, nextWave: 0,
@@ -18711,7 +18712,7 @@ function vrMenuDraw() {
       if (rv) VRM.items.push(it); }
     // your kit: a chip a slot — a press opens that stall of the market
     { const gear = afGear(); T('You ride in with', 40, 486, '700 15px system-ui', '#9fb2cc');
-      ['sword', 'armor', 'bow', 'horse'].forEach((sl, i) => { const id = gear[sl], it = id && I[id]; B(it ? it.name : (sl === 'armor' ? 'no armour' : 'no ' + sl), 40 + i * 116, 508, 108, 44, 'gear:' + sl, { fs: 15, r: 10, bg: it ? undefined : 'rgba(255,255,255,.04)', col: it ? undefined : '#8a8298' }); }); }
+      ['sword', 'helm', 'bow', 'horse'].forEach((sl, i) => { const id = gear[sl], it = id && I[id]; B(it ? it.name : ('no ' + sl), 40 + i * 116, 508, 108, 44, 'gear:' + sl, { fs: 15, r: 10, bg: it ? undefined : 'rgba(255,255,255,.04)', col: it ? undefined : '#8a8298' }); }); }
     // FIGHT, and the three doors with a reason on each
     { const seen = new Set(), n = (AF.online || []).filter(pp => pp && pp.name !== u && !seen.has(pp.name) && seen.add(pp.name)).length;
       B('', 520, 150, 464, 110, 'arena', { col: '#ff6a5a', bg: 'rgba(255,106,90,.22)' }); T('⚔ Fight', 752, 166, '900 40px system-ui', '#fff1e8', 'center'); T(n ? n + (n === 1 ? ' player online' : ' players online') + ' · invite them' : 'The vale\'s men wait · enter the arena', 752, 220, '600 18px system-ui', '#ffd9cf', 'center', 440);
@@ -18809,12 +18810,12 @@ function vrMenuDraw() {
     B(VRM.leaveArmed ? 'Sure? The fight ends for everyone' : 'Leave the pit', skipOk ? 544 : 302, 262, 420, 64, 'leave-fight', { fs: VRM.leaveArmed ? 19 : 22, col: VRM.leaveArmed ? '#ff6a5a' : undefined, ...(VRM.leaveArmed ? {} : DIM) });
     T('the panel hangs under your eyes — the fight goes on above it', W / 2, 348, '500 16px system-ui', '#6b5e7a', 'center');
   } else if (page === 'market') {
-    const cr = AF.career, TABS = [['sword', 'Swords'], ['armor', 'Armor'], ['helm', 'Helms'], ['shield', 'Shields'], ['bow', 'Bows'], ['horse', 'Horses'], ['unique', 'Uniques']]; if (!AF.marketTab) AF.marketTab = 'sword'; const tab = AF.marketTab; if (VRM.mkTab !== tab) { VRM.mkTab = tab; VRM.mkPg = 0; }
+    const cr = AF.career, TABS = AF_MARKET_TABS; if (!AF.marketTab) AF.marketTab = 'sword'; const tab = AF.marketTab; if (VRM.mkTab !== tab) { VRM.mkTab = tab; VRM.mkPg = 0; }
     T('MARKETPLACE', 40, 24, '900 40px system-ui', '#ffd34d');
     T(cr ? cr.rank.name + '  ·  ' + cr.gold + ' gold  ·  🏆 ' + cr.trophies : u ? 'reaching the war-net…' : 'sign in to buy — until then the pit lends plain gear', 400, 34, '600 24px system-ui', '#ffe2a8', 'left', 580);
-    TABS.forEach(([k, l], i) => B(l, 40 + i * 136, 84, 130, 46, 'mk:tab:' + k, { fs: 18, bg: tab === k ? ON : undefined }));
+    TABS.forEach(([k, l], i) => B(l, 40 + i * 118, 84, 112, 46, 'mk:tab:' + k, { fs: 16, bg: tab === k ? ON : undefined }));
     const statOf = it => [it.dmg ? '×' + it.dmg + ' dmg' : '', it.reach ? (it.reach > 0 ? '+' : '') + it.reach + ' reach' : '', it.hp ? (it.slot === 'horse' ? it.hp + ' hp' : '+' + it.hp + ' hp') : '', it.poise ? '+' + it.poise + ' poise' : '', it.move ? Math.round(it.move * 100) + '% speed' : '', it.speed && it.speed !== 1 ? '×' + it.speed + ' pace' : ''].filter(Boolean).join(' · ');
-    const ids = Object.keys(I).filter(id => tab === 'unique' ? I[id].unique : I[id].slot === tab && !I[id].unique), PER = 6, pages = Math.max(1, Math.ceil(ids.length / PER)); VRM.mkPg = clamp(VRM.mkPg, 0, pages - 1);
+    const ids = Object.keys(I).filter(id => tab === 'unique' ? I[id].unique : afTabSlots(tab).includes(I[id].slot) && !I[id].unique), PER = 6, pages = Math.max(1, Math.ceil(ids.length / PER)); VRM.mkPg = clamp(VRM.mkPg, 0, pages - 1);
     let y = 146;
     for (const id of ids.slice(VRM.mkPg * PER, VRM.mkPg * PER + PER)) {
       const it = I[id], owned = !!(cr && cr.items.includes(id)), eq = cr ? (cr.equipped[it.slot] === id || (!cr.equipped[it.slot] && AF_GEAR_LENT[it.slot] === id)) : (!it.unique && AF_GEAR_FREE[it.slot] === id), trying = AF.tryItem === id, why = it.unique ? null : (cr ? ARENA_CAT.lockReason(id, cr) : 'sign in');
@@ -18842,7 +18843,7 @@ function vrMenuDraw() {
       T(cr.gold + ' gold  ·  🏆 ' + cr.trophies + ' trophies', 40, 236, '700 26px system-ui', '#ffe089');
       T(cr.matches + ' fights  ·  ' + cr.wins + ' won  ·  ' + cr.kills + ' kills  ·  ' + cr.deaths + ' deaths  ·  ' + cr.stars + '× star  ·  ' + Math.round(cr.damage).toLocaleString() + ' damage', 40, 280, '500 22px system-ui', '#e8def8', 'left', 940);
       T('skills:  sword ' + cr.skills.sword.level + '  ·  bow ' + cr.skills.bow.level + '  ·  riding ' + cr.skills.riding.level, 40, 316, '500 22px system-ui', '#e8def8');
-      const eq = cr.equipped || {}, worn = ['sword', 'armor', 'bow', 'horse'].filter(k => eq[k] && I[eq[k]]).map(k => I[eq[k]].name); T('rides in with:  ' + (worn.length ? worn.join(', ') : 'bare hands'), 40, 352, '500 22px system-ui', '#e8def8', 'left', 940);
+      const eq = cr.equipped || {}, worn = ['sword', 'gauntL', 'gauntR', 'pauldL', 'pauldR', 'helm', 'bow', 'horse'].filter(k => eq[k] && I[eq[k]]).map(k => I[eq[k]].name); T('rides in with:  ' + (worn.length ? worn.join(', ') : 'bare hands'), 40, 352, '500 22px system-ui', '#e8def8', 'left', 940);
       const got = ARENA_CAT.ARENA_ACHIEVEMENTS.filter(([id]) => cr.achievements.includes(id)); T('Achievements · ' + got.length + ' of ' + ARENA_CAT.ARENA_ACHIEVEMENTS.length, 40, 404, '700 22px system-ui', '#9fd6ff');
       got.slice(0, 10).forEach(([, label], i) => T('🏅 ' + label, 40 + (i % 2) * 470, 440 + Math.floor(i / 2) * 32, '500 21px system-ui', '#ffe2a8', 'left', 450));
     }
@@ -18875,7 +18876,7 @@ function vrMenuDraw() {
       const tiles = [[d.matches, 'fights'], [d.wins, 'won'], [d.losses, 'lost'], [wr + '%', 'win rate'], ['★ ' + d.stars, 'star'], [d.kills, 'kills'], [d.deaths, 'deaths'], [Math.round(d.damage).toLocaleString(), 'damage']];
       tiles.forEach(([v, l], i) => { const x = 40 + (i % 4) * 236, yy = 150 + Math.floor(i / 4) * 86; c.fillStyle = 'rgba(255,255,255,.04)'; vrRR(c, x, yy, 224, 74, 10); c.fill(); T(v, x + 112, yy + 10, '800 28px system-ui', '#f3ead8', 'center'); T(l, x + 112, yy + 46, '500 17px system-ui', '#9fb2cc', 'center'); });
       if (npc) { const A = Object.entries(d.archs || {}).sort((a, b) => b[1] - a[1]); T('Fights as:  ' + (A.length ? A.map(([k, n]) => k + ' × ' + n).join('  ·  ') : d.arch), 40, 336, '500 22px system-ui', '#e8def8', 'left', 940); }
-      else { const eq = d.equipped || {}, worn = ['sword', 'armor', 'bow', 'horse', 'plume', 'trim'].filter(k => eq[k] && I[eq[k]]).map(k => I[eq[k]].name);
+      else { const eq = d.equipped || {}, worn = ['sword', 'gauntL', 'gauntR', 'pauldL', 'pauldR', 'helm', 'bow', 'horse', 'plume', 'trim'].filter(k => eq[k] && I[eq[k]]).map(k => I[eq[k]].name);
         T('skills:  sword ' + d.skills.sword.level + '  ·  bow ' + d.skills.bow.level + '  ·  riding ' + d.skills.riding.level, 40, 336, '500 22px system-ui', '#e8def8'); T('rides in with:  ' + (worn.length ? worn.join(', ') : 'bare hands'), 40, 368, '500 22px system-ui', '#e8def8', 'left', 940); }
       if (d.recent && d.recent.length) { T('Recent fights', 40, 416, '700 22px system-ui', '#9fd6ff'); d.recent.slice(0, 5).forEach((b, i) => T((b.draw ? 'DRAW' : b.won ? 'WON' : 'LOST') + '  ·  ' + (b.venue === 'pit' ? 'the pits' : 'colosseum') + '  ·  ' + b.size + ' fighters' + (b.at ? '  ·  ' + afAgo(b.at) : ''), 40, 450 + i * 30, '500 21px system-ui', b.draw ? '#c9bfda' : b.won ? '#8fd08f' : '#ff9a8a', 'left', 940)); }
       T((d.since ? 'In the pit since ' + new Date(d.since * 1000).toLocaleDateString() : '') + (d.lastFought ? '  ·  last fought ' + afAgo(d.lastFought) : ''), 40, 640, '500 19px system-ui', '#8a8298', 'left', 940);
@@ -20288,7 +20289,7 @@ function afFightLens(b, yaw) {
 function afIntroWalkIn(I, b, dur, maxDur, onStart) {
   let P0 = null, L0 = null, F0 = CAM_BASE_FOV; const sm = q => q * q * (3 - 2 * q);
   const s = { dur, ts: 1, cap: null, walkIn: true, maxDur: maxDur || dur, until: () => !b.intro || b.intro.phase === 'done',
-    onStart: () => { AF.cam.pitch = 0.3; for (const o of AF.bodies) if (o.intro && o.intro.pauseT > 1e8) o.intro.pauseT = 0.01;   // (a star holding the middle lets go and takes his mark)
+    onStart: () => { AF.cam.pitch = AF_CAM_DEF.pitch; AF.cam.dist = AF_CAM_DEF.dist; for (const o of AF.bodies) if (o.intro && o.intro.pauseT > 1e8) o.intro.pauseT = 0.01;   // (a star holding the middle lets go and takes his mark)
       if (onStart) onStart(); },
     cam: (k) => { const e = sm(clamp(k, 0, 1)), yaw = b.intro && b.intro.phase !== 'done' ? angleLerp(b.yaw, b.home.yaw, e) : b.home.yaw, T = afFightLens(b, VR.on ? b.home.yaw : yaw);
       if (I.cut || !P0) { P0 = (I.cam || T.p).slice(); L0 = (I.look || T.l).slice(); F0 = AF.fov || CAM_BASE_FOV; }
@@ -20447,7 +20448,7 @@ function afIntroEnd() {
   for (const G of AF.gates || []) { G.want = 0; G.light.intensity = 0; }
   for (const l of AF.gateLights || []) { if (l.parent) l.parent.remove(l); } AF.gateLights = [];
   AF.phase = 'countdown'; AF.countdown = AF_F.countdown; AF.fov = smooth ? afBaseFov() : CAM_BASE_FOV;
-  if (AF.me) { AF.cam.yaw = AF.me.home ? AF.me.home.yaw : AF.me.yaw; AF.cam.pitch = 0.3; }
+  if (AF.me) { AF.cam.yaw = AF.me.home ? AF.me.home.yaw : AF.me.yaw; AF.cam.pitch = AF_CAM_DEF.pitch; AF.cam.dist = AF_CAM_DEF.dist; }
   afIntroUi(false); afHud();
   const fade = document.getElementById('af-intro-fade'); if (fade && !smooth) { fade.style.transition = 'none'; fade.style.opacity = '1'; setTimeout(() => { fade.style.transition = 'opacity .55s'; fade.style.opacity = '0'; }, 60); }
 }
@@ -20844,6 +20845,10 @@ function afHorseTags() {
    server (XP, gold, rank, loadout); without one the pit lends plain gear and pays nothing. The loadout travels in
    the roster (gear per player) so every client builds the same fighter. ---- */
 const AF_GEAR_FREE = { sword: 'iron_sword', bow: 'hunting_bow', horse: 'courser', shield: 'round_shield' };
+// THE MARKET'S TABS: [key, label, slots] — the steel arms and the pauldrons are sold a side at a time under one tab each
+const AF_MARKET_TABS = [['sword', 'Swords'], ['gaunt', 'Steel arms', ['gauntL', 'gauntR']], ['pauld', 'Pauldrons', ['pauldL', 'pauldR']], ['helm', 'Helms'], ['shield', 'Shields'], ['bow', 'Bows'], ['horse', 'Horses'], ['unique', 'Uniques']];
+const AF_SLOT_NAMES = { gauntL: 'left steel arm', gauntR: 'right steel arm', pauldL: 'left pauldron', pauldR: 'right pauldron', helm: 'helm', shield: 'shield', bow: 'bow', horse: 'horse', sword: 'sword' };
+function afTabSlots(tab) { const t = AF_MARKET_TABS.find(x => x[0] === tab); return t && t[2] ? t[2] : [tab]; }
 const AF_GEAR_LENT = { shield: 'round_shield' };                 // what a career carries in a slot it has bought nothing for
 function afCareerLoad(seed) {
   if (!afSession() || !window.net || !window.net.arenaCareer) { AF.career = null; return Promise.resolve(null); }
@@ -20862,7 +20867,7 @@ function afGearClean(g) {                                  // (a guest's word fo
 }
 function afGearStats(g) {                                  // what the loadout does in the pit
   const I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}, sw = I[g.sword] || { dmg: 1 }, ar = g.armor && I[g.armor], hm = g.helm && I[g.helm], sh = g.shield && I[g.shield], bw = g.bow && I[g.bow], hs = g.horse && I[g.horse], pl = g.plume && I[g.plume], tr = g.trim && I[g.trim];
-  const sum = k => [ar, hm, sh].reduce((a, it) => a + (it && it[k] ? it[k] : 0), 0);   // (armour, helm and shield all weigh and all protect)
+  const wear = ['gauntL', 'gauntR', 'pauldL', 'pauldR'].map(k => g[k] && I[g[k]]), sum = k => [ar, hm, sh].concat(wear).reduce((a, it) => a + (it && it[k] ? it[k] : 0), 0);   // (every piece — the steel arms, the pauldrons, a helm, the shield — weighs and protects)
   return { swordDmg: (sw.dmg || 1) * (tr && tr.dmg ? tr.dmg : 1), reach: sw.reach || 0, hp: sum('hp'), poise: sum('poise'), move: sum('move'),
     bow: !!bw, bowDmg: bw ? bw.dmg || 1 : 1, horse: !!hs, horseHp: hs ? hs.hp : AF_HORSE.hp, horseSpeed: hs ? hs.speed || 1 : 1, plume: pl ? pl.plume : null, blade: tr ? tr.blade : g.sword === 'wood_sword' ? 'wood' : null };
 }
@@ -20877,10 +20882,10 @@ function afNpcGear(entry, xp, r) {
   const pelt = A.weapon !== 'bow' && r() < 0.14, north = pelt ? (r() < 0.5 ? 'wolf_pelt' : 'berserker') : null;   // a northerner in a wolf pelt or a berserker's mantle, now and then
   if (north && xp >= 25 && r() < 0.65) g.sword = xp < 60 ? pick(['bearded_axe', 'seax']) : 'dane_axe';      // and he swings an axe
   if (north && r() < 0.6) g.look = Object.assign({}, g.look || {}, { i: 1 + Math.floor(r() * (LOOK_INK.length - 1)), k: r() < 0.5 ? 0 : Math.floor(r() * LOOK_INK_COLOURS.length) });   // most northerners are inked (the barber's pick, on his look): any design, blue-black half the time
-  if (xp < 20) g.armor = r() < 0.3 ? 'gambeson' : undefined;                                     // (nothing = a shirt and breeches)
-  else if (xp < 40) g.armor = pelt ? north : r() < 0.55 ? 'leather' : r() < 0.5 ? 'gambeson' : undefined;
-  else g.armor = xp < 60 ? (pelt ? north : 'mail') : xp < 82 ? (r() < 0.4 ? 'brigandine' : 'plate') : xp < 95 ? 'champion_plate' : (r() < 0.35 ? 'dragon_plate' : 'champion_plate');
-  { const ho = lookOdds(g.armor || 'none', entry.arch, 'helm'), hr = r(); if (hr < ho) g.helm = hr < ho * 0.35 ? 'corinthian' : 'sallet'; }   // a helm by his armour and his class (lookOdds); a third of them the Corinthian (one draw, so the same men wear one as before)
+  // ARMOUR PIECE BY PIECE (2026-09-20): a green man fights as he is; a pauldron comes first, the steel arms with the veterans
+  if (xp >= 30 && r() < 0.5) g.pauldR = 'pauldron_R'; if (xp >= 40 && r() < 0.5) g.pauldL = 'pauldron_L';
+  if (xp >= 55 && r() < 0.45) g.gauntL = 'gauntlet_L'; if (xp >= 70 && r() < 0.45) g.gauntR = 'gauntlet_R';
+  { const ho = lookOdds('none', entry.arch, 'helm') + Math.max(0, xp - 40) / 150, hr = r(); if (hr < ho) g.helm = 'corinthian'; }   // a helm by his class and his years (the Corinthian is the one helm there is)
   g.shield = xp < 45 ? 'round_shield' : r() < 0.65 ? 'heater_shield' : 'round_shield';
   if (A.weapon === 'bow') g.bow = xp < 40 ? 'hunting_bow' : xp < 70 ? 'longbow' : xp < 90 ? 'warbow' : 'recurve';
   if (A.weapon === 'horse') g.horse = xp < 35 ? 'nag' : xp < 65 ? 'courser' : xp < 85 ? 'destrier' : 'warhorse';
@@ -20892,16 +20897,7 @@ function afSendGear() { const L = AF.lobby; if (!L || L.role !== 'guest' || !win
 // blade colour and length (a unique's tint wins); bows grow and darken; horses come in sizes.
 const AF_LOOK = {
   // armor is BUILT too (afDressGear): each spec names its torso/pauldron look and the extra pieces that make it read
-  armor: { none: null,
-    gambeson:       null,                                    // (null = the padded jack the plastic rig builds)
-    wolf_pelt:      { torso: 0x5a4432, pad: 0x33241a, metal: 0, straps: true },
-    berserker:      { torso: 0xc89070, pad: 0x6e685e, metal: 0, straps: true },
-    leather:        { torso: 0x6b4a2a, pad: 0x5a3d22, metal: 0, straps: true },
-    brigandine:     { torso: 0x8a2a2a, pad: 0x3a3a44, metal: 0, rivets: true, sleeves: 0x3a3a44 },
-    mail:           { torso: 0x7a808a, pad: 0x6e747e, metal: 1, sleeves: 0x7a808a, coif: true },
-    plate:          { torso: 0xc8ccd4, pad: 0xc8ccd4, metal: 1, gorget: true, tassets: 0xc8ccd4, sleeves: 0xb8bcc4 },
-    champion_plate: { torso: 0xd6ccb0, pad: 0xd9b24a, metal: 1, gorget: true, gold: true, tassets: 0xd6ccb0, sleeves: 0xd6ccb0, rim: 0xd9b24a, crest: 0xd9b24a },
-    dragon_plate:   { torso: 0x1c1a22, pad: 0x1c1a22, metal: 1, gorget: true, tassets: 0x1c1a22, sleeves: 0x2a2630, rim: 0xa02020, spikes: 0xa02020, crest: 0xa02020, trim: 0xa02020 } },
+  armor: { none: null },                                    // (2026-09-20: the armour-slot wares are gone; null = the padded jack the plastic rig builds, hidden under the figure)
   // swords are BUILT per item (afBuildSword): style = the silhouette, len × the standard 1.35 blade, w = the flat's width
   sword: {
     wood_sword:   { style: 'straight', blade: 0x8a6a3a, metal: 0, len: 0.9, w: 0.18, grip: 0x5a3d22, guard: 0x6b4a2a, pommel: 0x6b4a2a },
@@ -23007,31 +23003,36 @@ function afCamAboveGround(clr) {                          // the lens never sink
   if (AF.terr.rocks.length) { const K = afRockAt(c.x, c.z, 0.3); if (K) floor = Math.max(floor, K.top + 0.4); }
   if (c.y < floor) c.y = floor;
 }
+// THE FOLLOW CAMERA'S DEFAULT (2026-09-20, the user: "make the default battle angle like this, more cinematic" — the char editor's
+// over-the-shoulder shot): close behind him, barely above the shoulder, the man set a little to the left of the frame so the lens
+// looks past his sword arm. pitch / dist are the rig's starting values (the wheel and a drag still change them), side the lateral offset.
+const AF_CAM_DEF = { pitch: 0.06, dist: 3.8, side: 0.55, minDist: 2.4, eye: 2.15 };   // (eye: the point on him the lens holds — his upper back; the base stands 2.9 tall, the old 1.55 was the warrior's chest and cut his head off)
 function afCamera(dt) {
   const me = AF.me, cam = AF.cam;
   if (AF.phase === 'intro' && AF.intro) afIntroCamera(dt);   // the entrance's own lens (afIntroStart's shot list)
   else if (AF.outro) afOutroCamera(dt);                      // the end-game film's (afOutroCompose)
   else if (me && !me.dead) {
-    const hy = afY(me.x, me.z) + 1.55 + (me.airY || 0) * 0.6, cp = Math.cos(cam.pitch);
+    const hy = afY(me.x, me.z) + AF_CAM_DEF.eye + (me.airY || 0) * 0.6, cp = Math.cos(cam.pitch);
     // OVER THE CROWD: if a body stands between you and the lens (the press behind you in a big fight), the camera
     // rises and comes in a little so it looks down over their helmets instead of through their chests
     const bx = -Math.sin(cam.yaw), bz = -Math.cos(cam.yaw), L = cam.dist * cp; let blocked = false;
     for (const o of AF.bodies) { if (o === me || o.dead) continue; const ox = o.x - me.x, oz = o.z - me.z, along = ox * bx + oz * bz; if (along < 0.6 || along > L + 1) continue; if (Math.abs(ox * bz - oz * bx) < 1.1) { blocked = true; break; } }
     AF.camLift = lerp(AF.camLift || 0, blocked ? 1 : 0, clamp(dt * (blocked ? 6 : 2), 0, 1));
     const dist = cam.dist * (1 - 0.2 * AF.camLift), lift = 2.1 * AF.camLift;
-    tmpV.set(me.x - Math.sin(cam.yaw) * dist * cp, hy + dist * Math.sin(cam.pitch) + 0.6 + lift, me.z - Math.cos(cam.yaw) * dist * cp);
+    const sdx = Math.cos(cam.yaw) * AF_CAM_DEF.side, sdz = -Math.sin(cam.yaw) * AF_CAM_DEF.side;   // (over his right shoulder: the offset is along his right, turned with the lens)
+    tmpV.set(me.x - Math.sin(cam.yaw) * dist * cp + sdx, hy + dist * Math.sin(cam.pitch) + 0.6 + lift, me.z - Math.cos(cam.yaw) * dist * cp + sdz);
     if (AF.phase === 'countdown' && !AF.noSweep) {           // the SWEEP: from high over the pit down onto your shoulder as the bell nears (not after a film: its walk-in has already brought the lens here)
       const k = 1 - clamp(AF.countdown / AF_F.countdown, 0, 1), e = k * k * (3 - 2 * k), a = cam.yaw + Math.PI * 0.9 * (1 - e);
       const r = lerp(AF_F.radius * 1.12, cam.dist, e), h = lerp(AF.cfg.venue === 'pit' ? AF_PIT.roofY - 2.4 : clamp(AF_F.radius * 0.55 + 6, 12, 19), tmpV.y - hy, e);   // (from over the lower rows, under the sails, down onto the shoulder)
       tmpV2.set(me.x - Math.sin(a) * r, hy + h, me.z - Math.cos(a) * r);
       camera.position.copy(tmpV2); if (AF.cfg.venue === 'pit') afCamInPit(); camera.lookAt(me.x, hy + 0.2, me.z);   // (the pits: the sweep's end lands behind a man at the wall — over the lip, not inside the blocks)
-    } else { const la = 3 * AF.camLift; camera.position.lerp(tmpV, clamp(dt * 14, 0, 1)); afCamInPit(); afCamAboveGround(0.7); camera.lookAt(me.x + Math.sin(cam.yaw) * la, hy + 0.9 * AF.camLift, me.z + Math.cos(cam.yaw) * la); } // lifted: look ahead over the fight, not down at your own helmet
+    } else { const la = 3 * AF.camLift; camera.position.lerp(tmpV, clamp(dt * 14, 0, 1)); afCamInPit(); afCamAboveGround(0.7); camera.lookAt(me.x + Math.sin(cam.yaw) * la + sdx, hy + 0.9 * AF.camLift, me.z + Math.cos(cam.yaw) * la + sdz); } // lifted: look ahead over the fight, not down at your own helmet
     const sp = Math.hypot(me.vx, me.vz); AF.fov = lerp(AF.fov, afBaseFov() + clamp(sp / AF_F.move, 0, 1.2) * 5, clamp(dt * 4, 0, 1)); // a run widens the lens
   } else {                                                  // SPECTATING: ride on any fighter's shoulder, or a free camera over the pit
     const S = AF.spec, o = AF.orbit;
     if (S.mode === 'follow' && S.target && S.target.dead) afSpecFree();   // the man you were watching fell: the free camera takes over where he stood
     if (S.mode === 'follow' && S.target) {
-      const t = S.target, hy = afY(t.x, t.z) + 1.55;
+      const t = S.target, hy = afY(t.x, t.z) + AF_CAM_DEF.eye;
       if (performance.now() - (AF.lookAt || 0) > 2500) cam.yaw = angleLerp(cam.yaw, t.yaw, clamp(dt * 1.5, 0, 1));   // settles behind him unless you're looking round
       const cp = Math.cos(cam.pitch); tmpV.set(t.x - Math.sin(cam.yaw) * cam.dist * cp, hy + cam.dist * Math.sin(cam.pitch) + 0.6, t.z - Math.cos(cam.yaw) * cam.dist * cp);
       camera.position.lerp(tmpV, clamp(dt * 10, 0, 1)); afCamInPit(); afCamAboveGround(0.7); camera.lookAt(t.x, hy + 0.2, t.z);
@@ -23260,7 +23261,7 @@ function afInstallControls() {
   window.addEventListener('blur', () => { AF.mouseDown = false; AF.mouseRight = false; });
   canvas.addEventListener('wheel', e => {
     if (!AF.on) return; e.preventDefault();
-    if (AF.me && !AF.me.dead) AF.cam.dist = clamp(AF.cam.dist * (1 + Math.sign(e.deltaY) * 0.1), 3.5, 14);
+    if (AF.me && !AF.me.dead) AF.cam.dist = clamp(AF.cam.dist * (1 + Math.sign(e.deltaY) * 0.1), AF_CAM_DEF.minDist, 14);
     else afSpecZoom(1 + Math.sign(e.deltaY) * 0.1);
   }, { passive: false });
   window.addEventListener('keydown', e => {
@@ -23301,7 +23302,7 @@ function afInstallControls() {
       if (!AF.on || !pinch) return;
       let a = null, b = null; for (const t of e.touches) { if (t.identifier === pinch.a) a = t; else if (t.identifier === pinch.b) b = t; } if (!a || !b) return;
       const d = pinchDist(a, b); if (d < 1) return; const k = pinch.d / d; pinch.d = d;   // fingers apart → closer in
-      if (AF.me && !AF.me.dead) AF.cam.dist = clamp(AF.cam.dist * k, 3.5, 14); else afSpecZoom(k);
+      if (AF.me && !AF.me.dead) AF.cam.dist = clamp(AF.cam.dist * k, AF_CAM_DEF.minDist, 14); else afSpecZoom(k);
     }, { passive: true, capture: true });
     const pinchEnd = e => { if (!pinch) return; for (const t of e.changedTouches) if (t.identifier === pinch.a || t.identifier === pinch.b) pinch = null; };
     addEventListener('touchend', pinchEnd, { capture: true }); addEventListener('touchcancel', pinchEnd, { capture: true });
@@ -23528,7 +23529,7 @@ function afBoot(spec) {
     else if (entry.kind !== 'npc') { b.ctrl = 'ai'; }        // a solo fight lists no players; a stale peer becomes an NPC
   });
   const I = AF.locIn; I.atk = I.heavy = I.dodge = 0; I.block = false; AF.keys.clear();
-  if (AF.me) { AF.cam.yaw = AF.me.yaw; AF.cam.pitch = 0.3; AF.me.seenAtk = AF.me.seenHeavy = AF.me.seenDodge = 0; }
+  if (AF.me) { AF.cam.yaw = AF.me.yaw; AF.cam.pitch = AF_CAM_DEF.pitch; AF.cam.dist = AF_CAM_DEF.dist; AF.me.seenAtk = AF.me.seenHeavy = AF.me.seenDodge = 0; }
   else if (AF.role === 'guest') { console.warn('[arena] no seat for me in the roster', window.coop && window.coop.id, spec.roster.map(e => e.name + ':' + e.kind + ':' + e.peer)); setTimeout(() => { if (AF.on && !AF.me) afBanner('NO SEAT IN THIS FIGHT', 'the lobby had no place for you — you watch this one', 4); }, 3200); }   // (never silent: a spectator should know why he is one)
   for (const b of AF.bodies) afDonReset(b);                 // every man comes in bareheaded, his sword at his hip (afDonStep sets the helm on and draws before the bell)
   AF.phase = 'countdown'; AF.countdown = AF_F.countdown; AF.t = 0; AF.over = false; AF.leaving = false; AF.reportP = null; AF.winner = -1; AF.standings = null; AF.events = []; AF._hc = 0; AF.last = 0; AF.hitstop = 0; AF.assignT = 0; afNetReset(); trauma = 0; camKick.set(0, 0, 0); fovPunch = 0;
@@ -24172,9 +24173,9 @@ function afThumb(id) {
       m.geometry.computeBoundingBox(); const cc = m.geometry.boundingBox.getCenter(new THREE.Vector3()); m.position.set(-cc.x, -cc.y, -cc.z);
       const wrap = new THREE.Group(); wrap.add(m); wrap.rotation.y = -Math.PI / 2; wrap.rotation.z = 0.35; wrap.scale.setScalar(3);   // (the face looks +x in bind space: turned to the lens, tilted a little)
       url = afThumbShot(wrap); }
-    else if (it.slot === 'armor' || it.slot === 'helm') {    // a bust of the figure wearing it (the warrior, tinted — so it waits for him); a helm over a leather jerkin
+    else if (it.slot === 'helm' || /^(gaunt|pauld)/.test(it.slot)) {   // a bust of the figure wearing it (the base — so it waits for him)
       if (MODEL_ON && !BV.modelReady) { BV.modelLoad.then(() => { if (AF.marketOpen) afMarketRender(); }); return null; }
-      const h = afThumbRig(); afDressGear(h.parts, it.slot === 'helm' ? { helm: id, armor: 'leather' } : { armor: id }, pal); h.group.rotation.y = 0.4;
+      const h = afThumbRig(); afDressGear(h.parts, { [it.slot]: id }, pal); h.group.rotation.y = 0.4;
       url = afThumbShot(h.group, new THREE.Box3(new THREE.Vector3(-0.95, 1.55, -3), new THREE.Vector3(0.95, 3.45, 3))); }   // (a bust: shoulders to crown)
   } catch (e) { console.warn('[thumb]', id, e); url = null; }
   if (url) AF.thumbs.set(id, url); return url;
@@ -24235,7 +24236,7 @@ function afProfileRender() {
   html += '<div class="prof-grid">' + tile(p.matches, 'fights') + tile(p.wins, 'won') + tile(p.losses, 'lost') + tile(wr + '%', 'win rate') + tile('★ ' + p.stars, 'star of the match') + tile(p.kills, 'kills') + tile(p.deaths, 'deaths') + tile(Math.round(p.damage).toLocaleString(), 'damage dealt') + (npc ? '' : tile('🏆 ' + p.trophies, 'trophies')) + '</div>';
   if (npc) { const A = Object.entries(p.archs || {}).sort((a, b) => b[1] - a[1]); html += '<h3>Fights as</h3><div class="prof-chips">' + (A.length ? A.map(([k, n]) => '<span class="got">' + escHtml(k) + ' × ' + n + '</span>').join('') : '<span>' + escHtml(p.arch) + '</span>') + '</div>'; }
   else {
-    const I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}, eq = p.equipped || {}, worn = ['sword', 'armor', 'bow', 'horse', 'plume', 'trim'].filter(k => eq[k] && I[eq[k]]).map(k => '<span class="got">' + escHtml(I[eq[k]].name) + '</span>');
+    const I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}, eq = p.equipped || {}, worn = ['sword', 'gauntL', 'gauntR', 'pauldL', 'pauldR', 'helm', 'bow', 'horse', 'plume', 'trim'].filter(k => eq[k] && I[eq[k]]).map(k => '<span class="got">' + escHtml(I[eq[k]].name) + '</span>');
     html += '<h3>Skills</h3><div class="prof-chips"><span class="got">sword ' + p.skills.sword.level + '</span><span class="got">bow ' + p.skills.bow.level + '</span><span class="got">riding ' + p.skills.riding.level + '</span></div>';
     html += '<h3>Rides in with</h3><div class="prof-chips">' + (worn.length ? worn.join('') : '<span>bare hands</span>') + '</div>';
     if (p.belt) html += '<div class="career-card" style="margin-top:6px">🏆 Holds the champion\'s belt — ' + (p.belt.defenses | 0) + ' defense' + (p.belt.defenses === 1 ? '' : 's') + ', since ' + new Date(p.belt.since * 1000).toLocaleDateString() + '</div>';
@@ -24513,7 +24514,7 @@ function afHomeHud() {
         el.innerHTML = '<b>' + escHtml(label.replace(/ — .*$/, '')) + '</b> — ' + left + ' more ' + unit + ' for the achievement';
         const n = 5, lit = Math.min(n - 1, Math.floor(best.k * n)); pips.innerHTML = Array.from({ length: n }, (_, i) => '<i class="' + (i < lit ? 'on' : '') + '"></i>').join(''); } } }
   // his kit: what he rides in with, a chip a slot — a tap opens that stall of the market
-  { const gear = afGear(), el = g('hm-gear'); el.innerHTML = '<span class="look" data-look="1" title="Your face: skin, hair, beard">✂ Look</span>' + ['sword', 'armor', 'helm', 'shield', 'bow', 'horse'].map(sl => gear[sl] && I[gear[sl]] ? '<span data-slot="' + sl + '">' + escHtml(I[gear[sl]].name) + '</span>' : '<span class="none" data-slot="' + sl + '" title="no ' + (sl === 'armor' ? 'armour' : sl) + ' yet — the market has one">—</span>').join('');
+  { const gear = afGear(), el = g('hm-gear'); el.innerHTML = '<span class="look" data-look="1" title="Your face: skin, hair, beard">✂ Look</span>' + ['sword', 'gauntL', 'gauntR', 'pauldL', 'pauldR', 'helm', 'shield', 'bow', 'horse'].map(sl => gear[sl] && I[gear[sl]] ? '<span data-slot="' + sl + '">' + escHtml(I[gear[sl]].name) + '</span>' : '<span class="none" data-slot="' + sl + '" title="no ' + (AF_SLOT_NAMES[sl] || sl) + ' yet — the market has one">—</span>').join('');
     const lb = el.querySelector('[data-look]'); if (lb) lb.onclick = e => { e.stopPropagation(); afBarberOpen(); }; }
 }
 // THE BARBER: your own face — skin tone, the face's bones, hair style and colour, beard. A page of the shell (the figure on the left, the
@@ -24655,12 +24656,12 @@ function afMarketRender() {
     '<div id="af-market-msg" style="display:' + (AF.marketMsg ? '' : 'none') + ';margin-bottom:6px;padding:6px 9px;border-radius:8px;background:rgba(255,211,77,.12);border:1px solid rgba(255,207,91,.5);font-size:12px;font-weight:700;color:' + (AF.marketMsg && AF.marketMsg.bad ? '#ff9a9a' : '#ffe089') + '">' + (AF.marketMsg ? AF.marketMsg.t : '') + '</div>' +
     '';
   // RIGHT: one tab at a time — a picture card per ware; the card is a TRY-ON, its button the buy
-  const TABS = [['sword', 'Swords'], ['armor', 'Armor'], ['helm', 'Helms'], ['shield', 'Shields'], ['bow', 'Bows'], ['horse', 'Horses'], ['unique', 'Uniques']]; if (!AF.marketTab) AF.marketTab = 'sword'; const tab = AF.marketTab;
+  const TABS = AF_MARKET_TABS; if (!AF.marketTab) AF.marketTab = 'sword'; const tab = AF.marketTab;
   let html = '<div class="mk-tabs">' + TABS.map(([k, l]) => '<button data-act="tab:' + k + '" class="' + (tab === k ? 'on' : '') + '">' + l + '</button>').join('') + '</div>';
   const statOf = it => [it.dmg ? '×' + it.dmg + ' dmg' : '', it.reach ? (it.reach > 0 ? '+' : '') + it.reach + ' reach' : '', it.hp ? (it.slot === 'horse' ? it.hp + ' hp' : '+' + it.hp + ' hp') : '', it.poise ? '+' + it.poise + ' poise' : '', it.move ? Math.round(it.move * 100) + '% speed' : '', it.speed && it.speed !== 1 ? '×' + it.speed + ' pace' : ''].filter(Boolean).join(' · ');
-  const ids = Object.keys(I).filter(id => tab === 'unique' ? I[id].unique : I[id].slot === tab && !I[id].unique);
-  if (tab !== 'unique') { const eq = c ? (c.equipped[tab] || AF_GEAR_LENT[tab] || null) : (AF_GEAR_FREE[tab] || null);
-    html += '<div class="mk-head">' + (eq ? 'Wearing <b>' + I[eq].name + '</b>' + (tab !== 'sword' && c && c.equipped[tab] ? ' ' + btn('unequip:' + tab, 'take off') : '') : tab === 'armor' ? 'A linen shirt and wool breeches — no armour yet' : tab === 'helm' ? 'Bareheaded — no helm yet' : 'None yet — ' + (tab === 'bow' ? 'a bow lets you ride in as an archer' : 'a horse lets you ride in')) + '</div>'; }
+  const ids = Object.keys(I).filter(id => tab === 'unique' ? I[id].unique : afTabSlots(tab).includes(I[id].slot) && !I[id].unique);
+  if (tab !== 'unique') html += '<div class="mk-head">' + afTabSlots(tab).map(sl => { const eq = c ? (c.equipped[sl] || AF_GEAR_LENT[sl] || null) : (AF_GEAR_FREE[sl] || null);
+    return eq ? 'Wearing <b>' + I[eq].name + '</b>' + (sl !== 'sword' && c && c.equipped[sl] ? ' ' + btn('unequip:' + sl, 'take off') : '') : sl === 'helm' ? 'Bareheaded — no helm yet' : /^(gaunt|pauld)/.test(sl) ? 'No ' + AF_SLOT_NAMES[sl] + ' yet' : 'None yet — ' + (sl === 'bow' ? 'a bow lets you ride in as an archer' : 'a horse lets you ride in'); }).join(' &nbsp;·&nbsp; ') + '</div>';
   else html += '<div class="mk-head">Loot only — a look, and a hair of power.</div>';
   html += '<div class="mk-grid">' + ids.map(id => {
     const it = I[id], owned = !!(c && c.items.includes(id)), eq = c ? (c.equipped[it.slot] === id || (!c.equipped[it.slot] && AF_GEAR_LENT[it.slot] === id)) : (!it.unique && AF_GEAR_FREE[it.slot] === id), trying = AF.tryItem === id, why = it.unique ? null : (c ? ARENA_CAT.lockReason(id, c) : 'sign in'), th = afThumb(id);

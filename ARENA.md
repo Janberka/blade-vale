@@ -602,6 +602,21 @@ a 30-pace circle at the gallop, and nobody answered for the bows. Now (`afPlanTe
   (`b.detail`, `detailSecs`); a horse he can't catch he meets at the bowman's side, between them,
   shield up. A pressed archer now gives ground BEHIND HIS OWN SWORDS (`afArcherRetreat` pulls to
   `bowGap` behind the foot's centre) instead of into open sand.
+- **The high ground** (2026-09-20, the user: *"archers should try to climb the hills it's a better
+  position for them"*): the pit's crests are dealt as *stands* — a mound's top, or a bluff's shelf a
+  pace back from the lip, moved off any crown of rock so the stone is cover beside him rather than
+  in his way (`afPerches`), each with room for one to five bowmen by how broad it is. Every foot
+  bowman looks for the best one going (`afTakePerch`): higher than the ground he is on, near, not
+  already full, the fight still in range from up there, and the way up not straight through the man
+  he is shooting at. He climbs it between shots and then **holds** it — he will not walk back down to
+  close, and the engage rule no longer drags him to the enemy's mass while his mark is in range. A
+  bowman holding his place in a line has his formation SLOT moved onto the crest instead
+  (`afFormationSlot`, up to `perchOff` off his place, never out in front of his own swords), so a
+  side that means to stand and let its bows work puts them on the hill. Everyone's steering now
+  reads the ground as well as the stones (`afSteerGround` inside `afSteerRocks`): a heading that
+  would claw up a cliff face, or walk off a lip, is turned ALONG it — so a bowman sent to a bluff's
+  shelf walks round to the back slope instead of grinding at the cliff, and nobody strolls off the
+  edge by accident.
 - **The claim is weighed by the job** (`afAssignTargets`): a swordsman leaves the bows to the horse
   while an enemy line stands (+6) and a galloping horse to itself (+4); a bowman shoots the rider
   bearing down (−6), a man in the open over one already in a scrum with a friend (+5), and the

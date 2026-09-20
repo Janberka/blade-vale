@@ -18036,7 +18036,7 @@ const AF_F = { hp: 100, move: 5.6, reach: 2.5, cone: 0.3, radius: 34, timeLimit:
   stam: { max: 100, run: 11, draw: 7, light: 7, heavy: 16, loose: 4, dodge: 14, jump: 12, regen: 12, regenMove: 7, recover: 35, winded: { move: 0.6, dmg: 0.65 }, aiRest: 22 },
   // THE LEAP (Space / JUMP): v up, g down (a ~1.2-unit hop, 0.73 s in the air), a bent-knee landing of `land` seconds with
   // no blow in it. Come down on a man at `tackleAt` of the full run or better and he is FLOORED like a man ridden down.
-  climb: 2.3, ledge: 6,   // THE GROUND'S LIMITS: a rise of more than `climb` metres over the pace and a half ahead is a CLIFF — no man or horse walks up it, the step slides along the face (afIntegrate); ground that falls away under a runner faster than `ledge` m/s is a LIP he goes over, and he is in the air until he lands
+  climb: 2.3, drop: 2.4, ledge: 6,   // THE GROUND'S LIMITS: a rise of more than `climb` metres over the pace and a half ahead is a CLIFF — no man or horse walks up it, the step slides along the face (afIntegrate); ground that falls away under a runner faster than `ledge` m/s is a LIP he goes over, and he is in the air until he lands; `drop` is the fall an NPC will not walk off on purpose — above the steepest natural flank (~1.7 over that pace and a half) and under a cliff face's 3 and more, so only a lip turns him (afSteerGround)
   jump: { v: 6.6, g: 18, land: 0.22, tackleAt: 0.75, tackleR: 1.3, knot: 1.6, men: 3, diveAng: 1.15, roll: 0.5, atkBy: 0.4, strikeY: 0.5, atkReach: 0.6 },   // (diveAng / roll: a RUNNING leap is a head-first dive, arms open, and lands in a roll of `roll` seconds — then up through the crouch)   // (knot / men: come down on a man and the men within `knot` of him go too, up to three)
   // THE SHIELD CHARGE (2026-09-14, the user: "running really fast charging the enemies should be a very good animation —
   // go block mode, shield in front of the body, and hit as hard as possible; a good hit and 2 men can fall, or even a horse"):
@@ -19289,9 +19289,19 @@ function afAvoidRocks(x, z, ux, uz, look, pad) {            // steer a heading (
   if (!ax && !az) return [ux, uz];
   const m = Math.hypot(ux + ax, uz + az) || 1; return [(ux + ax) / m, (uz + az) / m];
 }
-function afSteerRocks(b) {                                  // an NPC's input, bent round the stones (his mark is still the mark; the path is not straight)
-  const I = b.inp, mm = Math.hypot(I.mx, I.mz); if (mm < 1e-3 || !AF.terr.rocks.length) return;
-  const [ux, uz] = afAvoidRocks(b.x, b.z, I.mx / mm, I.mz / mm, b.mounted ? 7 : 3.5, b.mounted ? 1.3 : 0.8);
+function afSteerGround(b, ux, uz) {                          // a heading that would claw up a face or walk off a lip is turned ALONG the ground instead (round the bluff, to its back slope)
+  const here = afHillY(b.x, b.z), rise = afHillY(b.x + ux * 1.2, b.z + uz * 1.2) - here;   // (the same pace and a half afIntegrate measures a climb over)
+  if (rise <= AF_F.climb && rise >= -AF_F.drop) return [ux, uz];
+  const e = 0.8, gx = afHillY(b.x + e, b.z) - afHillY(b.x - e, b.z), gz = afHillY(b.x, b.z + e) - afHillY(b.x, b.z - e), gl = Math.hypot(gx, gz);
+  if (gl < 1e-4) return [ux, uz];
+  const tx = -gz / gl, tz = gx / gl, sd = tx * ux + tz * uz >= 0 ? 1 : -1;   // along the contour, the way round that still takes him toward his mark
+  return [tx * sd, tz * sd];
+}
+function afSteerRocks(b) {                                  // an NPC's input, bent round the stones and along the ground (his mark is still the mark; the path is not straight)
+  const I = b.inp, mm = Math.hypot(I.mx, I.mz); if (mm < 1e-3 || (!AF.terr.rocks.length && !AF.terr.hills.length)) return;
+  let ux = I.mx / mm, uz = I.mz / mm;
+  if (AF.terr.rocks.length) [ux, uz] = afAvoidRocks(b.x, b.z, ux, uz, b.mounted ? 7 : 3.5, b.mounted ? 1.3 : 0.8);
+  if (AF.terr.hills.length) [ux, uz] = afSteerGround(b, ux, uz);   // (a cliff is not walked up or off: he goes round it — the sliding in afIntegrate is the wall, this is the man seeing it)
   const bend = angleDelta(Math.atan2(I.mx / mm, I.mz / mm), Math.atan2(ux, uz));
   I.mx = ux * mm; I.mz = uz * mm;
   if (b.mounted && b.cav !== 'wheel' && bend !== 0) I.yaw += bend;   // a horse goes where its head points: the reins take the BEND round the stone on top of where the rider meant to go
@@ -20754,7 +20764,7 @@ function afMakeBody(entry, idx, r) {
     // (a PLAYER is the hero: ×1.6 poise, so four jabs break it, not three)
     vx: 0, vz: 0, poise: A.poise * (entry.kind !== 'npc' ? 1.6 : 1) + G.poise, maxPoise: A.poise * (entry.kind !== 'npc' ? 1.6 : 1) + G.poise, queued: false, cd: 0, waiting: false, slotAngle: 0, retreatT: 0, bob: 0,
     gait: null, hitT: 0, hitSide: 0, lookYaw: 0, headYaw: 0, capeX: 0.12, phase0: r() * TAU, roll: 0, lastStep: 0, flashT: 0, sway: r() * TAU, clashT: 0, clashAtk: false, clashDx: 0, clashDz: 0,
-    charge: null, chargeMove: 0, prevHold: false, releaseNow: false, aiHoldT: 0, prefBow: weapon === 'bow', canBow: !!A.bow, swapT: 0, seenSwap: 0,
+    charge: null, chargeMove: 0, prevHold: false, releaseNow: false, aiHoldT: 0, prefBow: weapon === 'bow', canBow: !!A.bow, swapT: 0, seenSwap: 0, perch: null, perchT: 0,   // (perch: the crest this bowman means to shoot from — afTakePerch)
     mounted, trampleT: 0, passT: 0, sp01: 0,
     pal: td.pal, rigOpts, footScale: mounted ? 1 : A.scale, riderGroup: h.riderGroup || null, horse: null, mountCd: 0,   // (so he can be re-dressed on foot or in a saddle)
     arch: archKey, A, moveMul: A.move * (1 + G.move), dmgMul: A.dmg * G.swordDmg * (npc ? lerp(0.92, 1.0, xp / 100) : 1), reachBonus: A.reach + G.reach,   // (the sword carries the XP damage step now)
@@ -21907,6 +21917,7 @@ const AF_TACT = { formSecs: 1.6, walk: 0.62, contact: 10, regroupAfter: 8, rally
   guardR: 10, guardReach: 26, detailSecs: 5,   // the BODYGUARD: a foe this close to one of our bowmen, no swordsman beside him → the nearest free swordsman (within guardReach) is sent for him
   flankOff: 7, huntOff: 8, screenOff: 5, flankMax: 24,   // the squadron's marks: off the END of the enemy line / beside the enemy's BOWS / beside our own bows — scaled to the line's width, never a fixed trip across the pit
   screenR: 18,                         // a screening squadron goes when an enemy rider comes this close to the bows
+  perchOff: 16,                        // THE HIGH GROUND: how far off his place in the line a bowman will go for a crest to shoot from (afPerches / afFormationSlot)
   stallSecs: 26,                       // a fight with no blood for this long is pressed, not re-formed
   bowVolley: 40 };                     // the approach volley: a bowman walking in with the line looses from farther out (a longer draw)
   // archers: the gap behind the swords at muster; give ground inside bowNear, close beyond bowFar, loose out to bowShot, and keep bowRoom of clear sand from their own swordsmen
@@ -22059,6 +22070,8 @@ function afGuardTheBows(T, mine, foes) {
 function afFormationSlot(T, b) {
   const fwx = Math.sin(T.face), fwz = Math.cos(T.face), rgx = -Math.cos(T.face), rgz = Math.sin(T.face), sl = b.slot || { right: 0, back: 0 };
   const x = T.anchor.x + rgx * sl.right - fwx * sl.back, z = T.anchor.z + rgz * sl.right - fwz * sl.back;
+  if (b.perch && b.weapon === 'bow' && !b.mounted && Math.hypot(b.perch.x - x, b.perch.z - z) < AF_TACT.perchOff
+      && (b.perch.x - x) * fwx + (b.perch.z - z) * fwz < 3) return { x: b.perch.x, z: b.perch.z };   // a bowman with a crest near his place in the line takes the CREST — never one out in front of his own swords (afTakePerch)
   return AF.terr.rocks.length ? afFreePoint(x, z, 0.9) : { x, z };   // a place in the line that falls on a stone is taken beside it
 }
 const AF_ORDER_TEXT = { form: 'forms a line', advance: 'advances', charge: 'charges!', flank: 'sends the riders wide', regroup: 'regroups', fallback: 'falls back to re-form', pursue: 'presses the rout',
@@ -22287,6 +22300,47 @@ function afArcherRoom(b) {
     for (let ox = -rad; ox <= rad; ox++) for (let oz = -rad; oz <= rad; oz++) { const arr = g.get((gx + ox) + ':' + (gz + oz)); if (arr) for (const o of arr) one(o); } }
   const m = Math.hypot(sx, sz); if (m > 1) { sx /= m; sz /= m; } return [sx, sz];
 }
+// THE HIGH GROUND (2026-09-20, the user: "archers should try to climb the hills it's a better position for them"):
+// a crest is worth a few paces to a bowman — he looses over his own line instead of into the backs of it, the arrow
+// carries for the height, and on a BLUFF the cliff covers one whole flank of his stand. afPerches lists what the pit
+// offers (a mound's top; a bluff's shelf, a pace back from the lip), each with room for a few men by how broad it is.
+// afTakePerch gives a bowman the best one going — higher than the ground he is on, near, the way up not through the
+// man he is shooting at, and the fight still in range from up there — and he KEEPS it while it still sees the fight.
+// The free archer climbs to it between shots (the bow branch of afThink) and holds it instead of closing; a bowman
+// holding his place in the line has his SLOT moved onto it (afFormationSlot), so a side that means to stand and let
+// its bows work sends them up the hill instead of lining them out on the flat.
+function afPerches() {
+  const T = AF.terr; if (T.perches) return T.perches;
+  const L = [];
+  for (const H of T.hills || []) {
+    if (H.h < 1.2) continue;                                 // a swell in the sand is not a position
+    let x = H.cw ? H.x - H.cx * 1.6 : H.x, z = H.cw ? H.z - H.cz * 1.6 : H.z;   // (a bluff: back off the lip, on the flat of the shelf)
+    if (T.rocks.length) { const q = afFreePoint(x, z, 1.0); x = q.x; z = q.z; }   // (a tor wears its crown of rock on the very top: he stands BESIDE the stone, which is cover as well)
+    L.push({ x, z, y: afY(x, z), cliff: !!H.cw, room: clamp(1 + Math.round(Math.min(H.rx, H.rz) / 3.5), 1, 5) });
+  }
+  return (T.perches = L);
+}
+function afPerchOk(P, t) {                                  // worth standing on while the mark is in range of it and not on top of it
+  const d = Math.hypot(P.x - t.x, P.z - t.z); return d > AF_TACT.bowNear + 4 && d < AF_TACT.bowShot - 3;
+}
+function afTakePerch(b, t, dt) {
+  if (!AF.terr.hills.length) return (b.perch = null);
+  if (b.perch) { if (afPerchOk(b.perch, t)) return b.perch; b.perch = null; }   // (while his stand still sees the fight he stays on it — and costs nothing to think about)
+  b.perchT = (b.perchT || 0) - dt; if (b.perchT > 0) return null;              // (a breath between looks: he doesn't shop about every tick)
+  b.perchT = 1.5 + Math.random() * 2;
+  const hereY = afY(b.x, b.z); let best = null, bs = 0;
+  for (const P of afPerches()) {
+    if (P.y - hereY < 0.8 || !afPerchOk(P, t)) continue;     // no better than the ground he stands on, or no good to shoot from
+    const px = P.x - b.x, pz = P.z - b.z, walk = Math.hypot(px, pz); if (walk > 28 || walk < 1e-3) continue;
+    const k = clamp(((t.x - b.x) * px + (t.z - b.z) * pz) / (walk * walk), 0, 1);   // the way up must not run through the man he is shooting at
+    if (Math.hypot(t.x - (b.x + px * k), t.z - (b.z + pz * k)) < 7) continue;
+    let taken = 0; for (const o of AF.bodies) if (o.perch === P && !o.dead && o !== b) taken++;
+    if (taken >= P.room) continue;                           // a knoll holds one bowman, a broad crest a few
+    const sc = (P.y - hereY) * 2 + (P.cliff ? 2.5 : 0) - walk * 0.15;   // high, one flank safe, and near
+    if (sc > bs) { bs = sc; best = P; }
+  }
+  return (b.perch = best);
+}
 // THE HORSE ARCHER (an archer who took a loose horse — no seat in the lobby fields one): he never charges home.
 // He rides a ring round his mark at a canter, `AF_TACT.hbNear`–`hbFar` out, loosing across his own line the whole
 // way round (the rider's aim twists ±115°, so a mark on the beam is an easy shot); closing on a foe that comes
@@ -22344,6 +22398,8 @@ function afThink(b, dt) {
   const T = AF.teams && AF.teams[b.team];
   const ord = T ? (b.mounted ? T.riderOrder : T.order) : 'charge';
   const bow = b.weapon === 'bow' && !b.mounted, horseBow = b.mounted && b.weapon === 'bow';
+  if (b.prefBow && !b.mounted) afTakePerch(b, t, dt); else if (b.perch) b.perch = null;   // THE HIGH GROUND: a bowman keeps an eye out for a crest to shoot from (his claim holds while he has steel in hand, too)
+  const onPerch = !!(b.perch && Math.hypot(b.perch.x - b.x, b.perch.z - b.z) < 2);
   const detail = b.detail && !b.detail.dead && !b.mounted && !bow ? b.detail : null;   // THE BODYGUARD (afGuardTheBows): his man is his mark whatever the line is doing
   if (detail && !busy && detail.mounted && b.ward && !b.ward.dead && Math.hypot(detail.x - b.x, detail.z - b.z) > 6) {   // a horse he can't catch he meets at the bowman's side, between them
     const W = b.ward, wx = detail.x - W.x, wz = detail.z - W.z, wd = Math.hypot(wx, wz) || 1, px = W.x + wx / wd * 2.5, pz = W.z + wz / wd * 2.5, gx = px - b.x, gz = pz - b.z, gd = Math.hypot(gx, gz);
@@ -22377,7 +22433,7 @@ function afThink(b, dt) {
       }
     }
   }
-  if (T && T.enemyCenter && ord === 'charge' && !busy) {   // no foe near me: the fight is at the enemy's mass — go THERE (walking to our own centre made a pile)
+  if (T && T.enemyCenter && ord === 'charge' && !busy && !(bow && onPerch && d < AF_TACT.bowShot)) {   // no foe near me: the fight is at the enemy's mass — go THERE (walking to our own centre made a pile); a bowman on his crest with the mark in range stays on it and shoots
     const cap = T.engageR * (b.mounted ? AF_TACT.riderEngageMul : 1);
     if (d > cap) {
       const G = b.mounted && T.riderRole === 'hunt' && T.enemyBows ? T.enemyBows : b.mounted && T.riderRole === 'trample' && T.enemyFoot ? T.enemyFoot : T.enemyCenter;   // (a rider on the hunt: the bows; riding down: the foot)
@@ -22428,7 +22484,10 @@ function afThink(b, dt) {
   if (b.weapon === 'bow') {                                  // archers keep their distance, loose, and drift sideways between shots
     b.shotCd -= dt;
     const canShoot = b.shotCd <= 0 && !busy, TT = AF_TACT, [wx, wz] = afArcherRoom(b);   // (room: away from his own swordsmen — a bowman in the press is neither seen nor useful)
+    const P = b.perch, pdx = P ? P.x - b.x : 0, pdz = P ? P.z - b.z : 0, pd = P ? Math.hypot(pdx, pdz) : 0;   // THE HIGH GROUND: his stand on a crest (afTakePerch)
     if (d < TT.bowNear) { const [rx, rz] = afArcherRetreat(b, T); I.mx = rx + sx * 0.5 + wx; I.mz = rz + sz * 0.5 + wz; if (canShoot && d > 3) afArcherLoose(b, t, 0.45, 1.1 + Math.random() * 0.8); } // give ground — but a swordsman who keeps coming gets shot in the face
+    else if (P && pd > 1.6) { I.mx = pdx / pd + sx * 0.5 + wx * 0.6; I.mz = pdz / pd + sz * 0.5 + wz * 0.6; if (canShoot && d < TT.bowShot) afArcherLoose(b, t, 0.7 + b.skill * 0.3, 1.7 + Math.random() * 1.2 * (1.3 - b.skill * 0.5)); }   // CLIMB it — the bow still works on the way up, and afSteerRocks turns him round any face he can't take
+    else if (P) { I.mx = tx * 0.15 + sx + wx * 0.7 + pdx * 0.5; I.mz = tz * 0.15 + sz + wz * 0.7 + pdz * 0.5; if (canShoot && d < TT.bowShot) afArcherLoose(b, t, 0.75 + b.skill * 0.25, 1.7 + Math.random() * 1.2 * (1.3 - b.skill * 0.5)); }   // HOLD it: he came up here to shoot from here, not to walk back down for a closer shot
     else if (d > TT.bowFar) { I.mx = ux * 0.8 + sx + wx; I.mz = uz * 0.8 + sz + wz; if (canShoot && d < TT.bowShot) afArcherLoose(b, t, 0.7 + b.skill * 0.3, 1.7 + Math.random() * 1.2 * (1.3 - b.skill * 0.5)); } // close to a decisive range, loosing on the way
     else { I.mx = tx * 0.25 + sx + wx; I.mz = tz * 0.25 + sz + wz; if (canShoot) afArcherLoose(b, t, 0.7 + b.skill * 0.3, 1.7 + Math.random() * 1.2 * (1.3 - b.skill * 0.5)); } // a longer draw for the better archer
     afArcherSidestep(b, ux, uz, dt, 0.9);                    // (no line on him past a stone: step across for one instead of loosing into the rock)
@@ -24794,7 +24853,7 @@ BV.arenaStart = () => { afStartFight(); return BV.arenaStatus(); };
 BV.arenaRematch = () => { afRematch(); return BV.arenaStatus(); };   // test: the Rematch button (also what a guest runs when the host's new 'go' lands)
 BV.ruinPreview = (scale = 1.9) => { if (!AF_RUINPACK || !AF.on) return null; const m = afMesher(), names = Object.keys(AF_RUINPACK); names.forEach((n, i) => { const x = (i - (names.length - 1) / 2) * 7; m.add(afPackGeo(n), x, afY(x, 0), 0, 0, null, scale, scale, scale); }); const mesh = m.build(); scene.add(mesh); AF.props.push(mesh); return names; };   // test: the pack's pieces in a row across the sand
 BV.renderInfo = () => { renderer.info.autoReset = false; renderer.info.reset(); if (AF.on) afFrame((AF.last || performance.now()) + 16, true); const r = { calls: renderer.info.render.calls, tris: renderer.info.render.triangles, crowd: AF.crowdN || 0 }; renderer.info.autoReset = true; return r; };   // test: one whole frame's draw calls / triangles (all passes)
-BV.arenaTerr = () => ({ rocks: AF.terr.rocks.length, hills: AF.terr.hills.map(H => ({ x: +H.x.toFixed(1), z: +H.z.toFixed(1), rx: +H.rx.toFixed(1), rz: +H.rz.toFixed(1), h: +H.h.toFixed(2), cliff: H.cw ? { face: +Math.atan2(H.cx, H.cz).toFixed(2), cut: +H.cut.toFixed(1), w: +H.cw.toFixed(1) } : null })), kinds: AF.terr.rocks.reduce((m, K) => (m[K.kind] = (m[K.kind] || 0) + 1, m), {}), deco: (AF.terr.deco || []).length, inRock: AF.bodies.filter(b => !b.dead && afRockAt(b.x, b.z, 0.5)).map(b => b.idx) });   // test: the pit's furniture, and who stands inside a piece
+BV.arenaTerr = () => ({ rocks: AF.terr.rocks.length, perches: (AF.terr.perches || []).map(P => ({ x: +P.x.toFixed(1), z: +P.z.toFixed(1), y: +P.y.toFixed(1), cliff: P.cliff, room: P.room, held: AF.bodies.filter(b => !b.dead && b.perch === P).map(b => b.idx), up: AF.bodies.filter(b => !b.dead && b.perch === P && Math.hypot(b.x - P.x, b.z - P.z) < 2).length })), hills: AF.terr.hills.map(H => ({ x: +H.x.toFixed(1), z: +H.z.toFixed(1), rx: +H.rx.toFixed(1), rz: +H.rz.toFixed(1), h: +H.h.toFixed(2), cliff: H.cw ? { face: +Math.atan2(H.cx, H.cz).toFixed(2), cut: +H.cut.toFixed(1), w: +H.cw.toFixed(1) } : null })), kinds: AF.terr.rocks.reduce((m, K) => (m[K.kind] = (m[K.kind] || 0) + 1, m), {}), deco: (AF.terr.deco || []).length, inRock: AF.bodies.filter(b => !b.dead && afRockAt(b.x, b.z, 0.5)).map(b => b.idx) });   // test: the pit's furniture, and who stands inside a piece
 BV.arenaCam = (o) => { if (!AF.on) return null; if (o && o.follow != null) { AF.spec.target = AF.bodies[o.follow]; AF.spec.mode = 'follow'; AF.spec.touched = true; if (o.yaw != null) AF.cam.yaw = o.yaw; if (o.pitch != null) AF.cam.pitch = o.pitch; if (o.dist != null) AF.cam.dist = o.dist; } else if (o) { afSpecFree(); if (o.r != null) AF.orbit.r = o.r; if (o.phi != null) AF.orbit.phi = o.phi; if (o.theta != null) AF.orbit.theta = o.theta; if (o.fx != null) AF.spec.fx = o.fx; if (o.fz != null) AF.spec.fz = o.fz; } if (o && o.snap) for (let i = 0; i < 90; i++) afCamera(1 / 30); return camera.position.toArray().map(v => +v.toFixed(1)); };   // test: place the spectator lens (orbit r/phi/theta/fx/fz, or follow a body idx with yaw/pitch/dist); snap converges the lerp
 BV.arenaFrame = (now) => { if (AF.on) afFrame(now, true); return AF.phase; };   // test: render one arena frame at this clock (no rAF) — for recording the entrance
 BV.arenaHorseHit = (id, amt) => { const h = AF.horses[id]; if (h) afDamageHorse(h, amt, AF.bodies.find(b => !b.dead && (!h.rider || b.team !== h.rider.team)) || AF.bodies[0], false); return BV.arenaHorses(); };   // test: wound a horse

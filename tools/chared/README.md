@@ -108,9 +108,22 @@ from skating.
 we were given holds only the first; the rest need the model's **glTF** download (Download 3D Model → glTF, a Sketchfab
 login), dropped next to it.
 
-| clip | from | |
+| clip | source clip | what it is |
 | --- | --- | --- |
-| `angry_walk` | *Gladiator 1+motions* by Kapi777 (Sketchfab), **CC-BY-4.0** — credit him wherever it ships | 56 frames, loop, in place |
+| `angry_walk` | 01_Angry Walk | 0.93 s loop, treads on the spot |
+| `walk_forward` | WalkForward02 | 5.0 s loop, a crouched advance behind the shield in BURSTS — 250 cm |
+| `walk_backward` | WalkBackward02 | 5.0 s loop, a guard retreat, shield leading — 226 cm back |
+| `atk_jump` | Atk_Jump | 3.25 s once, `--air`: crouch, 0.38 s off the ground, the cut buried on the landing — 195 cm |
+| `atk_kick` | Atk_Kick | 2.43 s loop, a front kick off the shield side — 135 cm |
+| `atk_shieldcharge` | Atk_ShieldCharge | 2.08 s loop, shoulder behind the shield, hips down to 61 cm — 167 cm at 80 cm/s |
+| `atk_shieldswipe` | Atk_ShieldSwipe02 | 2.38 s once, the shield thrown wide and up, on the spot |
+| `atk_slashdown` | Atk_SlashDown | 2.28 s loop, overhead raise and chop, on the spot |
+| `atk_slashup` | Atk_SlashUp | 2.55 s once, a rising cut from low to overhead, on the spot |
+| `atk_spin` | Atk_Spin | 2.27 s loop, a full turn with the blade out — 216 cm at 95 cm/s |
+| `atk_stab` | Atk_Stab | 4.2 s loop, thrusts, on the spot |
+
+All eleven are **"Gladiator 1+motions" by Kapi777 (Sketchfab), CC-BY-4.0** — credit him wherever they ship.
+Each opens and closes in the same guard, so they blend into one another.
 
 GOTCHAS, all met on the first clip: a `.usdz` binds ONE animation — Sketchfab's conversion of an "N motions" model
 carries only the first (the glTF download has them all, by name); its joints come out anonymised (`n36`…), each under a

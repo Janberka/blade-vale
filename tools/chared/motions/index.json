@@ -30,5 +30,61 @@
   "fps": 60,
   "loop": false,
   "credit": "Gladiator 1+motions by Kapi777 (Sketchfab), CC-BY-4.0"
+ },
+ {
+  "id": "atk_kick",
+  "name": "Kick",
+  "frames": 146,
+  "fps": 60,
+  "loop": true,
+  "credit": "Gladiator 1+motions by Kapi777 (Sketchfab), CC-BY-4.0"
+ },
+ {
+  "id": "atk_shieldcharge",
+  "name": "Shield Charge",
+  "frames": 125,
+  "fps": 60,
+  "loop": true,
+  "credit": "Gladiator 1+motions by Kapi777 (Sketchfab), CC-BY-4.0"
+ },
+ {
+  "id": "atk_shieldswipe",
+  "name": "Shield Swipe",
+  "frames": 143,
+  "fps": 60,
+  "loop": false,
+  "credit": "Gladiator 1+motions by Kapi777 (Sketchfab), CC-BY-4.0"
+ },
+ {
+  "id": "atk_slashdown",
+  "name": "Slash Down",
+  "frames": 137,
+  "fps": 60,
+  "loop": true,
+  "credit": "Gladiator 1+motions by Kapi777 (Sketchfab), CC-BY-4.0"
+ },
+ {
+  "id": "atk_slashup",
+  "name": "Slash Up",
+  "frames": 153,
+  "fps": 60,
+  "loop": false,
+  "credit": "Gladiator 1+motions by Kapi777 (Sketchfab), CC-BY-4.0"
+ },
+ {
+  "id": "atk_spin",
+  "name": "Spin",
+  "frames": 136,
+  "fps": 60,
+  "loop": true,
+  "credit": "Gladiator 1+motions by Kapi777 (Sketchfab), CC-BY-4.0"
+ },
+ {
+  "id": "atk_stab",
+  "name": "Stab",
+  "frames": 252,
+  "fps": 60,
+  "loop": true,
+  "credit": "Gladiator 1+motions by Kapi777 (Sketchfab), CC-BY-4.0"
  }
 ]

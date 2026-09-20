@@ -179,6 +179,11 @@ for (let f = 0; f < frames; f++) {
   soles.push(SOLE.map(o => o.local.clone().applyQuaternion(Qw[tIx[o.bone]]).add(Pw[tIx[o.bone]]).y));
 }
 
+// ---- a clip starts where he stands. The author laid these clips END TO END across his floor (the kick begins 2 m out, where
+// the jump came down), which is his scene, not the motion. A start more than 25 cm off is that and is taken out; less is
+// the pose's own lean over the feet and stays (so the clips already signed off do not move by a hair).
+{ const o = pos[0].clone().sub(T[tIx.pelvis].Pw); o.y = 0; if (o.length() > 0.25) { pos.forEach(p => p.sub(o)); console.log(`  (began ${(o.length() * 100).toFixed(0)} cm from where he stands — brought back to it)`); } }
+
 // ---- his feet on HIS ground. The hip rides at their height scaled by the hips, but his legs are not theirs scaled (longer
 // shins, a boot's ankle 18 cm up, the rest pose's soft knee taken out) so the soles end up a few cm under the floor. A clip
 // that keeps a foot down the whole way (a walk, a guard, a blow) is lifted frame by frame until its lowest sole point is ON

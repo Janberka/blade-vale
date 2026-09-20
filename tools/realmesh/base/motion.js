@@ -1,6 +1,6 @@
 // A MOTION for the base: a clip on somebody else's skeleton (usdanim.swift's JSON) retargeted onto assets/rigs/base, for the
 // char editor's MOTION panel.
-//   node tools/realmesh/base/motion.js <anim.json> <id> "<Name>" [--clip 0] [--profile cc_sketchfab] [--credit "…"] [--noloop] [--air] [--theirhands] [--handR x,y,z] [--handL x,y,z] [--hands x,y,z]
+//   node tools/realmesh/base/motion.js <anim.json> <id> "<Name>" [--clip 0] [--profile cc_sketchfab] [--credit "…"] [--noloop] [--air] [--theirhands] [--handR x,y,z] [--handL x,y,z] [--hands x,y,z] [--cut A:B] [--cycle]
 //   → tools/chared/motions/<id>.json, listed in tools/chared/motions/index.json
 //
 // HOW: in WORLD space, bone by bone. A source bone's turn away from its own reference pose, D(t) = Qs(t)·Qs_ref⁻¹, is laid
@@ -74,7 +74,8 @@ const ALIGN = {}; for (const s of ['L', 'R']) {
 }
 
 const args = process.argv.slice(2), flag = (k, d) => { const i = args.indexOf('--' + k); if (i < 0) return d; const v = args[i + 1]; args.splice(i, 2); return v; };
-const sw = k => { const i = args.indexOf('--' + k); if (i < 0) return false; args.splice(i, 1); return true; }, noloop = sw('noloop'), air = sw('air'), theirHands = sw('theirhands');
+const sw = k => { const i = args.indexOf('--' + k); if (i < 0) return false; args.splice(i, 1); return true; }, noloop = sw('noloop'), air = sw('air'), theirHands = sw('theirhands'), findCycle = sw('cycle');
+const CUT = String(flag('cut', '')).split(':').map(Number);   // --cut A:B  keeps source frames A..B (at 60 a second)
 // THE SWORD HAND'S ZERO — the user's own numbers (2026-09-20), set by eye in the char editor: the fist as it HOLDS A SWORD,
 // bend −30° / tilt +51° / roll +40° on the hand's own lines. Every clip is baked with it, so a fighter carries his blade
 // the same way in all of them and the editor's hand sliders start from it at 0. A clip where that hand is empty or does
@@ -116,8 +117,12 @@ const used = [...new Set(Object.values(prof.map).filter(v => v !== '@world').map
 const nk = clip.times.length, keyDist = (a, b) => { let s = 0; for (const i of used) { const o = i * 4, A = clip.r[a], B = clip.r[b]; s += 2 * Math.acos(Math.min(1, Math.abs(A[o] * B[o] + A[o + 1] * B[o + 1] + A[o + 2] * B[o + 2] + A[o + 3] * B[o + 3]))); } return s; };
 let end = nk - 1, step = 0, reach = 0; for (let f = 1; f < nk; f++) { step += keyDist(f - 1, f); reach = Math.max(reach, keyDist(f, 0)); } step /= nk - 1;
 const near = Math.max(step * 0.1, reach * 0.01);     // "the same pose again": a tenth of a frame's change — or, in a clip that HOLDS STILL for seconds (an advance in bursts: its mean frame barely moves), a hundredth of how far it ever gets from its first pose
-const closes = !noloop && keyDist(end, 0) < near; if (closes) while (end > 1 && keyDist(end - 1, 0) < near) end--;
-const t0 = clip.times[0], dur = clip.times[end] - t0, frames = closes ? Math.round(dur * FPS) : Math.round(dur * FPS) + 1;
+let closes = !noloop && keyDist(end, 0) < near; if (closes) while (end > 1 && keyDist(end - 1, 0) < near) end--;
+let t0 = clip.times[0], dur = clip.times[end] - t0, frames = closes ? Math.round(dur * FPS) : Math.round(dur * FPS) + 1;
+// ONE CYCLE out of a long take. The source clips are 5-second performances (two steps, a hold, three more); a game wants
+// the stride alone, so it can loop it at whatever speed the man is actually moving. --cut A:B keeps frames A..B; --cycle
+// finds them — the pair whose poses match closest, over a window long enough to be a stride (0.4…1.6 s) — and says so.
+if (CUT.length === 2 && CUT.every(Number.isFinite)) { t0 = t0 + CUT[0] / FPS; frames = CUT[1] - CUT[0]; dur = frames / FPS; closes = true; }
 const world = clip.world ? clip.world.map(a => { const m = new M4().fromArray(a), p = new V3(), q = new Q4(), s = new V3(); m.decompose(p, q, s); return { p: p.divideScalar(s.x), q }; }) : null;
 function sample(t) {                                 // their locals and the skeleton's own placement at time t
   let k = 0; while (k < end - 1 && clip.times[k + 1] <= t) k++; const a = Math.min(1, Math.max(0, (t - clip.times[k]) / (clip.times[k + 1] - clip.times[k])));
@@ -128,6 +133,19 @@ function sample(t) {                                 // their locals and the ske
   return { W: fkS(loc), w };
 }
 
+if (findCycle) { const poseAt = f => { const { W } = sample(clip.times[0] + f / FPS); return used.map(i => rotOf(W[i])); };
+  const P0 = []; const nf = Math.round((clip.times[end] - clip.times[0]) * FPS); for (let f = 0; f <= nf; f++) P0.push(poseAt(f));
+  const dist = (a, b) => { let s2 = 0; for (let k = 0; k < P0[a].length; k++) s2 += 2 * Math.acos(Math.min(1, Math.abs(P0[a][k].dot(P0[b][k])))); return s2 / P0[a].length * 180 / Math.PI; };
+  // A window whose ends match is not yet a cycle: the clips END on a long hold, where every frame matches every other.
+  // A stride is a window that CLOSES and TRAVELS — so take the widest swing inside it too, and ask for real movement.
+  const wins = []; let widest = 0;
+  for (let a = 0; a + 24 <= nf; a++) for (let len = 24; len <= Math.min(96, nf - a); len++) {
+    let spread = 0; for (let k = a + 1; k < a + len; k++) spread = Math.max(spread, dist(a, k));
+    widest = Math.max(widest, spread); wins.push({ a, len, d: dist(a, a + len), spread }); }
+  const live = wins.filter(w => w.spread > widest * 0.55);                       // half the widest swing in the clip: a stride, not one of its holds
+  const best = live.sort((x, y) => (x.d - x.spread * 0.02) - (y.d - y.spread * 0.02))[0];
+  if (!best) { console.log('--cycle: nothing in this clip swings far enough to be a stride'); process.exit(1); }
+  console.log(`--cycle: frames ${best.a}..${best.a + best.len} (${(best.len / FPS).toFixed(2)} s) — the ends match to ${best.d.toFixed(2)}° and it swings ${best.spread.toFixed(0)}° through the middle. Rerun with --cut ${best.a}:${best.a + best.len}`); process.exit(0); }
 // ---- A: our rest pose → their reference pose, per mapped bone
 const arc = (a, b) => new Q4().setFromUnitVectors(a.clone().normalize(), b.clone().normalize());
 const A = {}, mappedUp = k => { let p = T[k].parent; while (p >= 0 && !(T[p].name in prof.map)) p = T[p].parent; return p; };
@@ -178,6 +196,14 @@ for (let f = 0; f < frames; f++) {
   pos.push(Pw[tIx.pelvis]);
   soles.push(SOLE.map(o => o.local.clone().applyQuaternion(Qw[tIx[o.bone]]).add(Pw[tIx[o.bone]]).y));
 }
+
+// ---- a cut cycle is a slice out of a performance, so its end does not quite meet its start (14° on the worst bone of the
+// forward walk) and the loop pops. Ease the tail into the head: over the last SEAM frames every bone is slerped toward the
+// pose frame 0 holds, the weight ramping 0 → 1, so the last frame IS the first. Only for --cut; a clip that closed on its
+// own already meets itself.
+if (CUT.length === 2 && Number.isFinite(CUT[0]) && frames > 12) { const SEAM = Math.min(10, Math.floor(frames / 4));
+  for (const nm of names) { const tr = tracks[nm]; if (!tr || !tr.length) continue;
+    for (let k = 1; k <= SEAM; k++) { const f = frames - k, w = 1 - (k - 1) / SEAM, e = w * w * (3 - 2 * w); tr[f].slerp(tr[0], e); } } }
 
 // ---- a clip starts where he stands. The author laid these clips END TO END across his floor (the kick begins 2 m out, where
 // the jump came down), which is his scene, not the motion. A start more than 25 cm off is that and is taken out; less is

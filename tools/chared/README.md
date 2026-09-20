@@ -154,6 +154,19 @@ which touches the bind pose (skinning is unchanged), then bump `game.js?v=`:
    (the sheathed blade at the hip, the shop's — they are placed in the old bind orientation and must not move, checked:
    0.0009 mm), and `syncModelRigs` lays the turn on the sword hand, on top of whatever pose asks of it (a bow takes it off).
 
+**Into the game.** A clip the game should play is copied to `assets/motions/` (with an `index.json`) — `assets` is already
+a tree in `tools/build-site.js`, so it deploys. game.js loads one on demand (`motionClip`), and `motionPose` lays it over
+the pose the plastic rig drives, by a weight that eases in and out. Two rules keep it honest:
+
+* **only the lower body** (`MOTION_BONES` = pelvis, thighs, shins, feet, toes). The game AIMS the man — the chest turns to
+  the foe, the shield comes up, a blow swings the arms — and that is the sim's, tied to what actually lands. The stride is
+  the clip's, the fight stays the game's;
+* **played at the speed he is really moving** (rate = his speed ÷ the clip's own `speed`), with the clip's travel taken back
+  out. The sim moves the man; the clip only shows him walking. That is what stops the feet skating.
+
+`BV.motion()` says which clip each figure is on and how strongly. A long take is no good for this — cut a cycle out of it
+first (`--cycle` finds one, `--cut A:B` takes it, and the last frames are eased into the first so the loop does not pop).
+
 ## From the editor into the game
 
 The editor shows the pieces live; the game gets them baked, so what you judged is what ships.

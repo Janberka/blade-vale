@@ -1579,7 +1579,55 @@ const MODEL_HIP = { x: 0.30, y: -0.06, z: -0.12, rx: Math.PI / 2 + 0.38, ry: 0, 
 function modelHipPlace(m) { m.position.set(MODEL_HIP.x, MODEL_HIP.y, MODEL_HIP.z); m.rotation.set(MODEL_HIP.rx, MODEL_HIP.ry, MODEL_HIP.rz); }
 // every render: copy the pivots onto the bones, top-down (unmapped bones keep their rest pose)
 const _tmpQ = new THREE.Quaternion();
+// ---- MOTIONS: the retargeted clips (assets/motions/, built by tools/realmesh/base/motion.js from the source takes and
+// judged in the char editor) played on a figure. A clip holds a LOCAL quaternion per bone per frame on this very rig, so
+// playing it is a copy onto the bones — no retargeting at run time — and it is laid OVER the pose the plastic rig drives,
+// by a weight that eases in and out, so anything the clips do not cover (a blow, a block, a horse) is still the game's own.
+// The stride is played at the speed he is ACTUALLY moving (rate = his speed / the clip's own), which is what stops the feet
+// skating, and the travel baked into the clip is taken back out — the sim moves the man, the clip only shows him walking.
+const MOTION = { clips: new Map(), t: 0 };
+function motionClip(id) {
+  if (MOTION.clips.has(id)) return MOTION.clips.get(id);
+  MOTION.clips.set(id, null);                               // (a placeholder: in flight, so we ask once)
+  fetch('assets/motions/' + id + '.json').then(r => r.ok ? r.json() : null).then(c => {
+    if (!c) return; c.q = c.q.map(a => new Float32Array(a)); c.pos = new Float32Array(c.pos); MOTION.clips.set(id, c);
+  }).catch(() => {});
+  return null;
+}
+const MOTION_FOR = { walk: 'walk_cycle', back: 'walk_back_cycle' };
+// ONLY THE LOWER BODY. A clip holds the whole man, but the game AIMS him — the upper body turns to the foe, the shield
+// comes up to block, a blow swings the arms — and all of that is the sim's, tied to what actually lands. So a walk gives
+// its legs and its hips and nothing above: the stride is the clip's, the fight is still the game's. (The hips may turn:
+// the spine's targets are WORLD quaternions, so the chest still faces where the game points it.)
+const MOTION_BONES = /^(pelvis|thigh|shin|foot|toe)[LR]?$/;
+function motionWanted(b) {                                  // which clip suits the man this frame, if any
+  if (!b || b.dead || b.mounted || b.atk || b.charge || b.blocking || b.rollT > 0 || b.airT > 0 || b.landT > 0 || b.rushT > 0) return null;
+  const sp = Math.hypot(b.vx || 0, b.vz || 0); if (!b.moving || sp < 0.35) return null;
+  const fwd = Math.sin(b.yaw || 0) * (b.vx || 0) + Math.cos(b.yaw || 0) * (b.vz || 0);   // (yaw 0 faces +z)
+  return { id: fwd < -0.15 ? MOTION_FOR.back : MOTION_FOR.walk, sp };
+}
+const _moQa = new THREE.Quaternion(), _moQb = new THREE.Quaternion(), _moP = new THREE.Vector3();
+function motionPose(L, dt) {                                // → a local quaternion per node index for this frame, or null
+  const want = motionWanted(L.body), mo = L.mo || (L.mo = { id: null, t: 0, w: 0 });
+  if (want && want.id !== mo.id) { const c = motionClip(want.id); if (c) { mo.id = want.id; mo.c = c; mo.t = 0; mo.map = null; } else if (!mo.c) return null; }
+  if (!mo.c) return null;
+  const on = !!(want && want.id === mo.id);
+  mo.w = Math.max(0, Math.min(1, mo.w + (on ? dt / 0.14 : -dt / 0.12)));   // ease in, ease out — never a cut
+  if (mo.w <= 0) { if (!on) mo.id = null; return null; }
+  const c = mo.c; if (on) mo.t += dt * Math.max(0.35, Math.min(2.2, want.sp / (c.speed || 1)));   // his speed, not the clip's
+  if (!mo.map) { mo.map = c.bones.map(nm => { const n = MOTION_BONES.test(nm) && L.inst.byName[nm]; return n ? L.inst.nodes.indexOf(n) : -1; }); mo.root = c.root && L.inst.byName[c.root] ? L.inst.nodes.indexOf(L.inst.byName[c.root]) : -1; }
+  const n = c.frames, f = ((mo.t * c.fps) % n + n) % n, i0 = Math.floor(f), a = f - i0, i1 = (i0 + 1) % n, out = [];
+  for (let k = 0; k < mo.map.length; k++) { const i = mo.map[k]; if (i < 0) continue;
+    _moQa.fromArray(c.q[k], i0 * 4); _moQb.fromArray(c.q[k], i1 * 4); out[i] = _moQa.clone().slerp(_moQb, a); }
+  if (mo.root >= 0) { const tr = f / n;                     // in place: the clip's own travel taken back out
+    _moP.set(c.pos[i0 * 3] + (c.pos[i1 * 3] - c.pos[i0 * 3]) * a - (c.travel ? c.travel[0] * tr : 0),
+             c.pos[i0 * 3 + 1] + (c.pos[i1 * 3 + 1] - c.pos[i0 * 3 + 1]) * a,
+             c.pos[i0 * 3 + 2] + (c.pos[i1 * 3 + 2] - c.pos[i0 * 3 + 2]) * a - (c.travel ? c.travel[2] * tr : 0));
+    out.root = { i: mo.root, p: _moP.clone() }; }
+  out.w = mo.w; return out;
+}
 function syncModelRigs() {
+  const now = performance.now(), dtMo = Math.min(0.05, MOTION.t ? (now - MOTION.t) / 1000 : 0); MOTION.t = now;
   for (let k = MODEL_LIVE.length - 1; k >= 0; k--) {
     const L = MODEL_LIVE[k]; if (!L.g.parent) { MODEL_LIVE.splice(k, 1); continue; }
     const { inst, drive } = L, target = new Map();
@@ -1587,8 +1635,11 @@ function syncModelRigs() {
     if (!L.body && L.bodyLooked++ % 30 === 0 && AF.bodies) L.body = AF.bodies.find(b => b.parts === L.P) || null;
     const want = L.body && L.body.blocking ? 0 : L.armBase; if (Math.abs(want - L.armAmt) > 0.002) { L.armAmt += (want - L.armAmt) * 0.12; for (const d of drive) if (d.limb === 'arms') d.fix = new THREE.Quaternion().slerp(d.full, L.armAmt); }
     for (const d of drive) { _tmpQ.identity(); for (const p of d.chain) _tmpQ.multiply(p.quaternion); if (d.fix) _tmpQ.multiply(d.fix); target.set(d.i, _tmpQ.clone().multiply(inst.restWorld[d.i])); }
+    const mo = motionPose(L, dtMo);                                        // a clip over the plastic rig's pose, if one suits him
     const W = L.w; for (const i of inst.order) { const b = inst.nodes[i], pi = inst.parent[i]; const pw = pi < 0 ? null : W[pi];
       let t = target.get(i); if (t) { b.quaternion.copy(t); if (pw) b.quaternion.premultiply(pw.clone().invert()); } else b.quaternion.copy(inst.restLocal[i]);
+      if (mo && mo[i]) b.quaternion.slerp(mo[i], mo.w);                    // (the clip's locals are on THIS rig: a copy, weighted)
+      if (mo && mo.root && mo.root.i === i) b.position.lerp(mo.root.p, mo.w);
       W[i] = pw ? pw.clone().multiply(b.quaternion) : b.quaternion.clone(); }
     // the sword in his hand: the figure's own for the plain iron blade, the loadout's BUILT one for anything else
     // (the market sells fifteen — a falchion must look like a falchion on him); afDressGear stamps P.gearSword
@@ -1604,6 +1655,7 @@ function syncModelRigs() {
   }
 }
 { const _r = renderer.render.bind(renderer); renderer.render = (s, c) => { if (MODEL_LIVE.length) syncModelRigs(); return _r(s, c); }; }
+BV.motion = () => MODEL_LIVE.map(L => ({ name: L.body && L.body.name, clip: L.mo && L.mo.id, w: L.mo ? +L.mo.w.toFixed(2) : 0, t: L.mo ? +L.mo.t.toFixed(2) : 0, loaded: [...MOTION.clips.keys()].filter(k => MOTION.clips.get(k)) }));   // test: which clip each figure is playing, and how strongly
 BV.modelRig = { load: loadModelRig, wear: wearModelRig, live: () => MODEL_LIVE.length, pos: () => MODEL_LIVE.map(L => [L.g.position.x, L.g.position.y, L.g.position.z, L.g.rotation.y]) };
 
 // ---------- LOOKS: no two fighters alike ----------

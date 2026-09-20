@@ -86,5 +86,21 @@
   "fps": 60,
   "loop": true,
   "credit": "Gladiator 1+motions by Kapi777 (Sketchfab), CC-BY-4.0"
+ },
+ {
+  "id": "walk_cycle",
+  "name": "Walk cycle (fwd)",
+  "frames": 96,
+  "fps": 60,
+  "loop": true,
+  "credit": "Gladiator 1+motions by Kapi777 (Sketchfab), CC-BY-4.0"
+ },
+ {
+  "id": "walk_back_cycle",
+  "name": "Walk cycle (back)",
+  "frames": 56,
+  "fps": 60,
+  "loop": true,
+  "credit": "Gladiator 1+motions by Kapi777 (Sketchfab), CC-BY-4.0"
  }
 ]

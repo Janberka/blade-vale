@@ -105,12 +105,18 @@ const leaf = S.joints.map(p => p.split('/').pop()), sFound = {}, sIx = nm => { i
   if (i < 0) throw new Error('no source joint ' + nm + ' — is this the right --profile? the file has: ' + leaf.slice(0, 12).join(', ') + '…'); return (sFound[nm] = i); };
 const N = leaf.length, fkS = loc => { const W = []; for (let i = 0; i < N; i++) W[i] = S.parents[i] < 0 ? loc[i].clone() : W[S.parents[i]].clone().multiply(loc[i]); return W; };
 const refW = fkS(S.rest.map(a => new M4().fromArray(a))), refQ = refW.map(rotOf), refP = refW.map(posOf);   // their reference pose = the REST locals (every joint has them; the binds are missing on half the limbs, and agree within ~3°)
+// how far the hips are CARRIED goes by the legs, not by the height: a stride is as long as thigh + shin swing it, and his
+// are only 1.025 of theirs where his hips stand 1.093 of theirs (a boot's ankle 18 cm up does the rest) — carried by the
+// height, the hips outran the feet by 6% and every planted foot slid. Up and down stays with the height (then the soles).
+const legOf = (P, th, sh, ft) => P(th).distanceTo(P(sh)) + P(sh).distanceTo(P(ft)), KXZ = legOf(n => T[tIx[n]].Pw, 'thighL', 'shinL', 'footL') / legOf(n => refP[sIx(prof.map[n])], 'thighL', 'shinL', 'footL');
 const hipRef = prof.travel ? refP[sIx(prof.travel)].clone() : posOf(new M4().fromArray(S.bind[sIx(prof.hip)])), hipY = hipRef.y, K = T[tIx.pelvis].Pw.y / hipY;   // (a glTF's hip is a joint: its place in the reference pose; the usdz's is outside the skeleton: its bind)
 
 // the keys → uniform frames. A loop closes on a copy of its first key (and exporters pad more behind it): find where, stop there.
-const nk = clip.times.length, keyDist = (a, b) => { let s = 0; for (let i = 0; i < N; i++) { const o = i * 4, A = clip.r[a], B = clip.r[b]; s += 2 * Math.acos(Math.min(1, Math.abs(A[o] * B[o] + A[o + 1] * B[o + 1] + A[o + 2] * B[o + 2] + A[o + 3] * B[o + 3]))); } return s; };
-let end = nk - 1, step = 0; for (let f = 1; f < nk; f++) step += keyDist(f - 1, f); step /= nk - 1;
-const closes = !noloop && keyDist(end, 0) < step * 0.1; if (closes) while (end > 1 && keyDist(end - 1, 0) < step * 0.1) end--;
+const used = [...new Set(Object.values(prof.map).filter(v => v !== '@world').map(sIx))];   // closure is judged on the joints we TAKE: their hair, cloth and face bones never come back to the same place, and summed over 250 of them that hid a loop
+const nk = clip.times.length, keyDist = (a, b) => { let s = 0; for (const i of used) { const o = i * 4, A = clip.r[a], B = clip.r[b]; s += 2 * Math.acos(Math.min(1, Math.abs(A[o] * B[o] + A[o + 1] * B[o + 1] + A[o + 2] * B[o + 2] + A[o + 3] * B[o + 3]))); } return s; };
+let end = nk - 1, step = 0, reach = 0; for (let f = 1; f < nk; f++) { step += keyDist(f - 1, f); reach = Math.max(reach, keyDist(f, 0)); } step /= nk - 1;
+const near = Math.max(step * 0.1, reach * 0.01);     // "the same pose again": a tenth of a frame's change — or, in a clip that HOLDS STILL for seconds (an advance in bursts: its mean frame barely moves), a hundredth of how far it ever gets from its first pose
+const closes = !noloop && keyDist(end, 0) < near; if (closes) while (end > 1 && keyDist(end - 1, 0) < near) end--;
 const t0 = clip.times[0], dur = clip.times[end] - t0, frames = closes ? Math.round(dur * FPS) : Math.round(dur * FPS) + 1;
 const world = clip.world ? clip.world.map(a => { const m = new M4().fromArray(a), p = new V3(), q = new Q4(), s = new V3(); m.decompose(p, q, s); return { p: p.divideScalar(s.x), q }; }) : null;
 function sample(t) {                                 // their locals and the skeleton's own placement at time t
@@ -157,7 +163,7 @@ for (let f = 0; f < frames; f++) {
     const aim = nm => { const src = prof.map[nm], D = src === '@world' ? w.q.clone() : w.q.clone().multiply(rotOf(W[sIx(src)])).multiply(refQ[sIx(src)].clone().invert()); return D.multiply(A[nm]).multiply(T[tIx[nm]].Qw); };
     if (src) Qw[k] = aim(b.name);
     else Qw[k] = (par < 0 ? new Q4() : Qw[par].clone()).multiply(b.q);
-    if (b.name === 'pelvis') Pw[k] = b.Pw.clone().add((prof.travel ? posOf(W[sIx(prof.travel)]) : w.p.clone()).sub(hipRef).multiplyScalar(K)); else Pw[k] = Pw[par].clone().add(b.p.clone().applyQuaternion(Qw[par])); }
+    if (b.name === 'pelvis') { const d = (prof.travel ? posOf(W[sIx(prof.travel)]) : w.p.clone()).sub(hipRef); Pw[k] = b.Pw.clone().add(new V3(d.x * KXZ, d.y * K, d.z * KXZ)); } else Pw[k] = Pw[par].clone().add(b.p.clone().applyQuaternion(Qw[par])); }
   if (!theirHands) { const side = SIDE.clone().applyQuaternion(Qw[chestK].clone().multiply(T[chestK].Qw.clone().invert()));          // the body's left-right now
     for (const H of HANDS) { const a = Pw[H.h].clone().sub(Pw[H.fo]).normalize(), want = side.clone().addScaledVector(a, -side.dot(a)), have = H.u.clone().applyQuaternion(Qw[H.h]); have.addScaledVector(a, -have.dot(a));
       const fade = smooth(0.15, 0.45, Math.min(want.length(), have.length())); if (!fade) continue; want.normalize(); have.normalize();
@@ -187,7 +193,7 @@ const moving = names.filter(nm => !still(nm));
 // how far the clip CARRIES him: a walk that walks (WalkForward02 crosses the floor and snaps back; the angry walk trod on the
 // spot). Over a loop it is the hip's place one whole period on, minus where it began; over a one-off, last frame minus first.
 // The path keeps it — the editor can take it out again ("in place") and the game will want the speed to keep his feet from skating.
-const hipAt = t => { const { W, w } = sample(t); return (prof.travel ? posOf(W[sIx(prof.travel)]) : w.p.clone()).sub(hipRef).multiplyScalar(K); };
+const hipAt = t => { const { W, w } = sample(t), d = (prof.travel ? posOf(W[sIx(prof.travel)]) : w.p.clone()).sub(hipRef); return new V3(d.x * KXZ, d.y * K, d.z * KXZ); };
 const carried = closes ? hipAt(t0 + dur - 1e-6).sub(hipAt(t0)) : pos[pos.length - 1].clone().sub(pos[0]); carried.y = 0;
 const travel = carried.length() > 0.05 ? [r4(carried.x), 0, r4(carried.z)] : [0, 0, 0], speed = r4(Math.hypot(travel[0], travel[2]) / (frames / FPS));
 const out = { id, name: title || id, travel, speed, source: path.basename(srcFile) + ' · ' + clip.name.split('/').pop(), credit, fps: FPS, frames, duration: r4(frames / FPS), loop: closes,
@@ -197,7 +203,7 @@ const ixFile = path.join(OUT, 'index.json'), list = fs.existsSync(ixFile) ? JSON
 const entry = { id, name: out.name, frames, fps: FPS, loop: closes, credit }, at = list.findIndex(e => e.id === id); if (at < 0) list.push(entry); else list[at] = entry;
 fs.writeFileSync(ixFile, JSON.stringify(list, null, 1));
 const cm = x => (x * 100).toFixed(1);
-console.log(`${out.name}: ${frames} frames @ ${FPS} (${out.duration}s) ${closes ? 'LOOP' : 'once'} · ${moving.length}/${names.length} bones move · his hip ${(T[tIx.pelvis].Pw.y).toFixed(3)} over theirs ${hipY.toFixed(1)} → travel ×${K.toFixed(4)}`);
+console.log(`${out.name}: ${frames} frames @ ${FPS} (${out.duration}s) ${closes ? 'LOOP' : 'once'} · ${moving.length}/${names.length} bones move · his hip ${(T[tIx.pelvis].Pw.y).toFixed(3)} over theirs ${hipY.toFixed(1)} → up/down ×${K.toFixed(4)}, along the floor ×${KXZ.toFixed(4)} (by the legs)`);
 if (!theirHands) { const H = HANDS.find(h => 'hand' + h.sd === (rigSpec.swordHand || 'handR')), rg = a => Math.round(Math.min(...a)) + '…' + Math.round(Math.max(...a)) + '°';
   console.log(`  hands: thumbs to the front — rolled up to ${(rollMax * 180 / Math.PI).toFixed(0)}° about the forearm (${WRIST_SHARE * 100}% in the forearm bone), own turn R ${HAND_TURN.R.map(x => Math.round(x * 180 / Math.PI)).join(',')} L ${HAND_TURN.L.map(x => Math.round(x * 180 / Math.PI)).join(',')} · the blade's line: ${rg(H.fwd)} forward of upright, ${rg(H.inw)} toward his middle`); }
 console.log(travel[0] || travel[2] ? `  TRAVELS ${(Math.hypot(travel[0], travel[2]) * 100).toFixed(0)} cm a ${closes ? 'loop' : 'clip'} (${(speed * 100).toFixed(0)} cm/s, heading ${(Math.atan2(travel[0], travel[2]) * 180 / Math.PI).toFixed(0)}° off straight ahead)` : '  treads on the spot');

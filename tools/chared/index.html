@@ -30,7 +30,10 @@
   <div class=row style=margin-top:4px><button id=mo_play style=min-width:52px>pause</button><button id=mo_prev title="a frame back">◀</button><button id=mo_next title="a frame on">▶</button></div>
   <label class=sm>frame <span id=v_mof>–</span></label><input type=range id=s_mof min=0 max=0 value=0>
   <label class=sm>speed <span id=v_mos>1.00×</span></label><input type=range id=s_mos min=5 max=150 value=100>
-  <label id=mo_inplace_row style=display:none title="a clip that carries him across the floor: tread it on the spot instead"><input type=checkbox id=mo_inplace checked> in place <span class=sm id=v_travel></span></label>
+  <div id=mo_inplace_row style=display:none>
+    <label title="the camera goes with him: he crosses the floor as the clip has it, and the grid shows whether his feet hold or skate"><input type=checkbox id=mo_follow checked> follow him <span class=sm id=v_travel></span></label>
+    <label title="take the clip's travel back out, evenly over its length — right for a steady cycle, wrong for a clip that moves in bursts (he would slide back while he stands)"><input type=checkbox id=mo_inplace> in place</label>
+  </div>
   <div class=sm id=mo_info></div>
   <h4>pose</h4>
   <div class=row><button id=p_bind class=on>bind</button><button id=p_a>A</button><button id=p_t>T</button></div>
@@ -632,7 +635,7 @@ async function loadMotions() {
 }
 function restPose() { for (const [nm, r0] of REST) { const b = BONE[nm]; if (b && b.isBone) { b.position.copy(r0.p); b.quaternion.copy(r0.q); } } pose(); }
 async function setMotion(id) {
-  el$('mo').value = id || ''; MO.clip = null; if (id) preset(0, 0, 'p_bind'); restPose();
+  el$('mo').value = id || ''; MO.clip = null; tgt.x = 0; tgt.z = 0; cam(); if (id) preset(0, 0, 'p_bind'); restPose();
   if (id) { const c = await (await fetch('motions/' + id + '.json?' + Date.now())).json(); c.q = c.q.map(a => new Float32Array(a)); c.pos = new Float32Array(c.pos); MO.clip = c; MO.t = 0; MO.play = true; }
   const c = MO.clip; el$('s_mof').max = c ? c.frames - 1 : 0; el$('mo_play').textContent = 'pause';
   const goes = !!(c && c.travel && (c.travel[0] || c.travel[2])); el$('mo_inplace_row').style.display = goes ? '' : 'none'; if (goes) el$('v_travel').textContent = '(it travels ' + (Math.hypot(c.travel[0], c.travel[2]) * 100).toFixed(0) + ' cm, ' + (c.speed * 100).toFixed(0) + ' cm/s)';
@@ -645,12 +648,13 @@ function applyMotion(tf) {                          // tf in frames, fractional:
   poseOver(carryDeg(carry) * Math.PI / 180, legA * Math.PI / 180); handOver();
   const tr = c.travel && (c.travel[0] || c.travel[2]) && el$('mo_inplace').checked ? (c.loop ? f / n : f / Math.max(1, n - 1)) : 0;   // "in place": the clip's own travel taken back out, evenly over its length
   const rb = BONE[c.root]; if (rb) rb.position.set(-(tr && c.travel[0] * tr) + c.pos[i0 * 3] + (c.pos[i1 * 3] - c.pos[i0 * 3]) * a, c.pos[i0 * 3 + 1] + (c.pos[i1 * 3 + 1] - c.pos[i0 * 3 + 1]) * a, c.pos[i0 * 3 + 2] + (c.pos[i1 * 3 + 2] - c.pos[i0 * 3 + 2]) * a - (tr && c.travel[2] * tr));
+  if (rb && c.travel && (c.travel[0] || c.travel[2]) && el$('mo_follow').checked && !el$('mo_inplace').checked) { tgt.x = rb.position.x - c.pos[0]; tgt.z = rb.position.z - c.pos[2]; cam(); }   // follow: the lens keeps its offset from the hips
   el$('v_mof').textContent = f.toFixed(1) + ' / ' + (n - 1); el$('s_mof').value = i0;
 }
 function stepMotion(now) { const dt = Math.min(0.1, (now - MO.last) / 1000 || 0); MO.last = now; const c = MO.clip; if (!c || !MO.play) return; MO.t += dt * MO.speed; if (!c.loop && MO.t * c.fps >= c.frames - 1) MO.t = 0; applyMotion(MO.t * c.fps); }
 function moFrame(f) { const c = MO.clip; if (!c) return; MO.play = false; el$('mo_play').textContent = 'play'; MO.t = (c.loop ? ((f % c.frames) + c.frames) % c.frames : Math.min(Math.max(f, 0), c.frames - 1)) / c.fps; applyMotion(MO.t * c.fps); }
 el$('mo').onchange = e => setMotion(e.target.value);
-el$('mo_inplace').onchange = () => { if (MO.clip) applyMotion(MO.t * MO.clip.fps); };
+el$('mo_inplace').onchange = el$('mo_follow').onchange = () => { if (!el$('mo_follow').checked || el$('mo_inplace').checked) { tgt.x = 0; tgt.z = 0; cam(); } if (MO.clip) applyMotion(MO.t * MO.clip.fps); };
 el$('mo_play').onclick = () => { if (!MO.clip) return; MO.play = !MO.play; el$('mo_play').textContent = MO.play ? 'pause' : 'play'; };
 el$('mo_prev').onclick = () => MO.clip && moFrame(Math.round(MO.t * MO.clip.fps) - 1);
 el$('mo_next').onclick = () => MO.clip && moFrame(Math.round(MO.t * MO.clip.fps) + 1);

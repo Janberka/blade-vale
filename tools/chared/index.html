@@ -538,8 +538,17 @@ function setPose(arm, leg) {
   put('thighL', Z, leg); put('thighR', Z, -leg);
   M.root.updateMatrixWorld(true);
 }
+// …and OVER a clip: the same two turns laid on top of whatever frame is playing, so the carriage of the arms (and the width
+// of the stride) can be tried while he walks. Taken in the PARENT's frame — about the axis the bone's own Z has at rest,
+// i.e. fore-and-aft through the shoulder — and not about the bone's own Z as it is now: once the clip has swung and twisted
+// the upper arm, its own Z is no longer "out from the body". On the bind pose the two are the same turn.
+const poseQ = new THREE.Quaternion(), poseAx = new THREE.Vector3();
+function poseOver(arm, leg) {
+  const over = (name, ang) => { const b = BONE[name]; if (!b || !ang) return; poseAx.set(0, 0, 1).applyQuaternion(REST.get(name).q); b.quaternion.premultiply(poseQ.setFromAxisAngle(poseAx, ang)); };
+  over('armL', -arm); over('armR', arm); over('thighL', leg); over('thighR', -leg);
+}
 let armA = 0, legA = 0;
-function pose() { setPose(armA * Math.PI / 180, legA * Math.PI / 180); el$('v_arm').textContent = armA.toFixed(0) + '°'; el$('v_leg').textContent = legA.toFixed(0) + '°'; }
+function pose() { if (MO.clip) applyMotion(MO.t * MO.clip.fps); else setPose(armA * Math.PI / 180, legA * Math.PI / 180); const d = MO.clip ? ' over the clip' : ''; el$('v_arm').textContent = (MO.clip && armA > 0 ? '+' : '') + armA.toFixed(0) + '°' + d; el$('v_leg').textContent = (MO.clip && legA > 0 ? '+' : '') + legA.toFixed(0) + '°' + d; }
 el$('s_arm').oninput = e => { armA = +e.target.value; el$('s_arm').value = armA; pose(); };
 el$('s_leg').oninput = e => { legA = +e.target.value; pose(); };
 function preset(a, l, btn) { armA = a; legA = l; el$('s_arm').value = a; el$('s_leg').value = l; pose(); ['p_bind', 'p_a', 'p_t'].forEach(i => el$(i).classList.toggle('on', i === btn)); }
@@ -548,8 +557,8 @@ el$('p_a').onclick = () => preset(-30, 8, 'p_a');
 el$('p_t').onclick = () => preset(-65, 0, 'p_t');
 
 // ---- motion: clips retargeted onto THIS rig by tools/realmesh/base/motion.js — motions/index.json lists them, one file a
-// clip: a local quaternion per moving bone per frame and the pelvis' place. A clip owns the skeleton while it is picked; the
-// pose sliders get it back on "none".
+// clip: a local quaternion per moving bone per frame and the pelvis' place. A clip owns the skeleton while it is picked and
+// the pose sliders turn into an OFFSET over it (poseOver; zeroed when a clip is picked); on "none" they pose him again.
 const MO = { list: [], clip: null, t: 0, play: true, speed: 1, last: 0 }, moQa = new THREE.Quaternion(), moQb = new THREE.Quaternion();
 async function loadMotions() {
   try { MO.list = await (await fetch('motions/index.json?' + Date.now())).json(); } catch (e) { MO.list = []; }
@@ -558,15 +567,16 @@ async function loadMotions() {
 }
 function restPose() { for (const [nm, r0] of REST) { const b = BONE[nm]; if (b && b.isBone) { b.position.copy(r0.p); b.quaternion.copy(r0.q); } } pose(); }
 async function setMotion(id) {
-  el$('mo').value = id || ''; MO.clip = null; restPose();
+  el$('mo').value = id || ''; MO.clip = null; if (id) preset(0, 0, 'p_bind'); restPose();
   if (id) { const c = await (await fetch('motions/' + id + '.json?' + Date.now())).json(); c.q = c.q.map(a => new Float32Array(a)); c.pos = new Float32Array(c.pos); MO.clip = c; MO.t = 0; MO.play = true; }
   const c = MO.clip; el$('s_mof').max = c ? c.frames - 1 : 0; el$('mo_play').textContent = 'pause';
   el$('mo_info').textContent = c ? c.bones.length + ' bones · ' + c.frames + ' frames @ ' + c.fps + (c.credit ? ' · ' + c.credit : '') : '';
-  if (c) applyMotion(0); else { el$('v_mof').textContent = '–'; el$('s_mof').value = 0; }
+  if (!c) { el$('v_mof').textContent = '–'; el$('s_mof').value = 0; } pose();
 }
 function applyMotion(tf) {                          // tf in frames, fractional: slerp between the two around it
   const c = MO.clip, n = c.frames, f = c.loop ? ((tf % n) + n) % n : Math.min(Math.max(tf, 0), n - 1), i0 = Math.floor(f), a = f - i0, i1 = c.loop ? (i0 + 1) % n : Math.min(i0 + 1, n - 1);
   c.bones.forEach((nm, k) => { const b = BONE[nm]; if (!b) return; moQa.fromArray(c.q[k], i0 * 4); moQb.fromArray(c.q[k], i1 * 4); b.quaternion.copy(moQa).slerp(moQb, a); });
+  poseOver(armA * Math.PI / 180, legA * Math.PI / 180);
   const rb = BONE[c.root]; if (rb) rb.position.set(c.pos[i0 * 3] + (c.pos[i1 * 3] - c.pos[i0 * 3]) * a, c.pos[i0 * 3 + 1] + (c.pos[i1 * 3 + 1] - c.pos[i0 * 3 + 1]) * a, c.pos[i0 * 3 + 2] + (c.pos[i1 * 3 + 2] - c.pos[i0 * 3 + 2]) * a);
   el$('v_mof').textContent = f.toFixed(1) + ' / ' + (n - 1); el$('s_mof').value = i0;
 }

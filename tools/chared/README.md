@@ -14,7 +14,7 @@ the game's tints (`headbake.py`) and the game paints the tone back on, which the
 
 | panel | what |
 | --- | --- |
-| MOTION | the clips in `motions/` played on him: pick one, pause, step a frame, scrub, slow it down. A clip owns the skeleton while it is picked; "none" hands it back to the POSE sliders |
+| MOTION | the clips in `motions/` played on him: pick one, pause, step a frame, scrub, slow it down. A clip owns the skeleton while it is picked, and the POSE sliders become an OFFSET over it — drag "arms down" while he walks to try a wider or a closer carriage of the arms (the label reads "+15° over the clip"; picking a clip zeroes them); "none" hands him back to the sliders |
 | SHOW | every mesh in the file, its triangle count, on/off |
 | ITEMS | what he WEARS, by the game's rules: the leather wrist bands always (there are no bare wrists), a steel arm either side, a leather pauldron either side, the helm. A steel arm takes that side's band and pauldron off; the helm takes the hair — the same table the game reads from `rig.json.wear` |
 | SHADING | textured / clay (judge the form, no paint) / normals / vertex class / silhouette; wireframe, smooth normals, double-sided (finds flipped faces), skeleton, grid + ruler |

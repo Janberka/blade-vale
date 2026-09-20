@@ -1567,11 +1567,11 @@ function wearModelRig(h, name, o = {}) {
   // team colour: the cloak is dyed outright, the shield's face is tinted — the steel stays steel
   if (o.team != null) { const cloak = inst.skinned[M.cloak]; if (cloak) { cloak.userData.mm = { ctx: inst.ctx, skinning: true, map: false, color: o.team }; cloak.material = modelMaterial(R, cloak.userData.mm); }
     if (mShield) { mShield.userData.mm = { ctx: inst.ctx, skinning: true, color: new THREE.Color(o.team).lerp(new THREE.Color(0xffffff), 0.35).getHex() }; mShield.material = modelMaterial(R, mShield.userData.mm); } }
-  // his sword hand's own turn: how he holds a hilt (rig.json.grip.sword.turn, set by eye in the char editor). The hand is
-  // driven by the game's poses, so the turn rides on top of whatever the pose asks of it — the same post-multiply the
-  // editor and motion.js do. The bow hand draws a string instead, so a bow takes it off.
-  const gspec = (R.spec.grip || {}).sword, gbone = gspec && inst.byName[gspec.hand], grip = gbone ? { i: inst.nodes.indexOf(gbone), q: new THREE.Quaternion().fromArray(gspec.turn) } : null;
-  const live = { h, P, g, inst, drive, grip, mSword, mShield, mHip, mRound: null, shieldKind: 'heater', plume, q: new THREE.Quaternion(), w: [], armBase, armAmt: armBase, body: null, bodyLooked: 0 };
+  // (rig.json.grip.sword.turn — the hand's own turn, how he holds a hilt — is NOT laid on here. It was set by eye against a
+  //  CLIP's arm pose and it belongs to the clips, which bake it (motion.js HAND_ZERO); over the game's own poses, which were
+  //  authored for the sword the rig used to carry, it dragged the blade down across his body instead of holding it ready.
+  //  The SEAT is what the game needs, and the mesh carries that already.)
+  const live = { h, P, g, inst, drive, mSword, mShield, mHip, mRound: null, shieldKind: 'heater', plume, q: new THREE.Quaternion(), w: [], armBase, armAmt: armBase, body: null, bodyLooked: 0 };
   MODEL_LIVE.push(live); P.modelRig = live; g.userData.model = name; return true;
 }
 // where the sheathed blade hangs (rig units off the hips bone, +x = his left): grip at the hip, the blade down and swept back along the thigh
@@ -1587,7 +1587,6 @@ function syncModelRigs() {
     if (!L.body && L.bodyLooked++ % 30 === 0 && AF.bodies) L.body = AF.bodies.find(b => b.parts === L.P) || null;
     const want = L.body && L.body.blocking ? 0 : L.armBase; if (Math.abs(want - L.armAmt) > 0.002) { L.armAmt += (want - L.armAmt) * 0.12; for (const d of drive) if (d.limb === 'arms') d.fix = new THREE.Quaternion().slerp(d.full, L.armAmt); }
     for (const d of drive) { _tmpQ.identity(); for (const p of d.chain) _tmpQ.multiply(p.quaternion); if (d.fix) _tmpQ.multiply(d.fix); target.set(d.i, _tmpQ.clone().multiply(inst.restWorld[d.i])); }
-    if (L.grip && !(L.P.bow && L.P.bow.visible)) { const t = target.get(L.grip.i); if (t) t.multiply(L.grip.q); }   /* the hilt turn, in the hand's own frame: world = parent · local, so post-multiplying the world target IS turning the local */
     const W = L.w; for (const i of inst.order) { const b = inst.nodes[i], pi = inst.parent[i]; const pw = pi < 0 ? null : W[pi];
       let t = target.get(i); if (t) { b.quaternion.copy(t); if (pw) b.quaternion.premultiply(pw.clone().invert()); } else b.quaternion.copy(inst.restLocal[i]);
       W[i] = pw ? pw.clone().multiply(b.quaternion) : b.quaternion.clone(); }

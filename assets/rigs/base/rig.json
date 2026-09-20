@@ -237,7 +237,7 @@
     51,
     40
    ],
-   "note": "grip.js --bake: the sword mesh carries `seat` already (modelPropGeo UNDOES it for a prop taken off the hand); `turn` is the hand's own, laid on the sword hand by syncModelRigs"
+   "note": "grip.js --bake: the sword mesh carries `seat` already (modelPropGeo UNDOES it for a prop taken off the hand). `turn`/`deg` are the hand's own turn as the char editor set it \u2014 the CLIPS bake it (motion.js HAND_ZERO); game.js does NOT lay it on its own procedural poses, which were authored for the sword the rig used to carry."
   }
  }
 }

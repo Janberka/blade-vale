@@ -54,7 +54,10 @@ node tools/realmesh/base/motion.js /tmp/anim.json <id> "<Name>" --credit "<autho
 
 `motion.js` works in world space, bone by bone (its header has the rule): their turn away from THEIR rest pose laid on
 OUR bone, after our rest pose (Thor's A, soft knees) is brought to theirs (a T) — limbs by the shortest arc carried down
-the chain, feet about the vertical only, the collar bones by their LIFT only, the trunk not at all (his posture stays his). The hip's travel is scaled by hip
+the chain, feet about the vertical only, the collar bones by their LIFT only, the trunk not at all (his posture stays his).
+**His hands stay HIS: thumbs to the front, palm to the body** — the clip gives the hand its direction, and it is then rolled
+about the forearm until it sits as his own model carries it (half the roll in the forearm bone, half at the wrist);
+`--theirhands` keeps the clip's roll, for a cut or a parry where the turn of the wrist is the move. The hip's travel is scaled by hip
 height, and the clip is then lifted frame by frame so his lowest sole point is ON the ground (`--air` for a jump or a
 fall, `--noloop` for a clip that must not be closed). A new SOURCE skeleton is a new entry in its `PROFILES` (which of
 their joints drives which of our bones).
@@ -79,6 +82,12 @@ pose comes round). "The neck became too big" was the SHOULDERS: a T holds the co
 11–25° from there; his A already has them down, so unaligned their drop landed on top of his, the shoulders sank 4–9 cm
 and the traps were dragged into one slope from skull to shoulder (how the nod is split between neck and head made no
 visible difference — tried, dropped). Check `armL/armR` in the chest's frame against the bind pose before blaming a neck.
+"The hand made a twist" was their carriage — elbows out, knuckles forward — and it comes down the whole ARM: with
+the hand riding the forearm untouched its thumb line still swung 90° through the cycle, so taking the wrist's turn out
+is not enough; hence the rule above. **THE BASE'S FINGER CHAINS ARE MIS-NAMED**: from the thumb across the palm they are
+called pinky, ring, index, middle (the skin's vertices say so, and "ring" is the longest, "middle" the shortest). The rig
+keeps its names (`motion.js` maps by what a finger IS, `PHYS`, and refuses to run if the geometry stops agreeing) — aiming
+the hand down the chain called "middle" aimed it down the LITTLE finger's knuckle, a wrist skewed ~20° in every frame.
 The pane does not run `requestAnimationFrame` while it is hidden: a clip that "does not play" in a
 test is a hidden pane — hold frames with `__motion(id, f)`.
 

@@ -1,6 +1,6 @@
 // A MOTION for the base: a clip on somebody else's skeleton (usdanim.swift's JSON) retargeted onto assets/rigs/base, for the
 // char editor's MOTION panel.
-//   node tools/realmesh/base/motion.js <anim.json> <id> "<Name>" [--clip 0] [--profile cc_sketchfab] [--credit "…"] [--noloop] [--air]
+//   node tools/realmesh/base/motion.js <anim.json> <id> "<Name>" [--clip 0] [--profile cc_sketchfab] [--credit "…"] [--noloop] [--air] [--theirhands]
 //   → tools/chared/motions/<id>.json, listed in tools/chared/motions/index.json
 //
 // HOW: in WORLD space, bone by bone. A source bone's turn away from its own reference pose, D(t) = Qs(t)·Qs_ref⁻¹, is laid
@@ -14,14 +14,26 @@
 // at rest is each rig's own convention (theirs 15° back, his 4° forward), so that stays his and only their movement is
 // added; for the trunk, nothing: his posture stays his own and only their movement is added. Locals fall out of the parent's world. Bones with no source
 // (the spare spine joints, the metacarpals) ride their parent.
+// HIS HANDS: THUMBS TO THE FRONT. Their walk carries the arms elbows-out, knuckles forward — the roll comes down the whole
+// arm (the hand riding the forearm untouched still swings its thumb line 90° through the cycle), and on him it read as "the
+// hand made a twist". His hands are carried as his own model carries them: palm to the body, thumb to the front. Per frame
+// the hand keeps the DIRECTION the clip gives it and is rolled about the forearm's axis until the line that lay along the
+// body's left-right at rest lies along it again (as far as a roll can: when the forearm itself points sideways there is
+// nothing to roll to, and the rule fades out). Half the roll goes into the forearm bone, half into the wrist — all of it at
+// the wrist wrings the wrist like a rag. The fingers ride the hand. --theirhands keeps the clip's own roll (a cut, a parry:
+// where the turn of the wrist IS the move).
 // The hip's travel comes from the clip's `world` (the skeleton prim's matrix per key), scaled by our hip height over theirs.
 const fs = require('fs'), path = require('path');
 const THREE = require('../../../vendor/three.min.js');
 const ROOT = path.join(__dirname, '..', '..', '..'), RIG = path.join(ROOT, 'assets', 'rigs', 'base'), OUT = path.join(ROOT, 'tools', 'chared', 'motions');
 const V3 = THREE.Vector3, Q4 = THREE.Quaternion, M4 = THREE.Matrix4;
 
-const finger = (side, s) => { const o = {}, put = (nm, from, arr) => arr.forEach((src, k) => { o[nm + side + (from + k)] = src; });
-  put('index', 1, s.index); put('middle', 1, s.mid); put('ring', 1, s.ring); put('pinky', 0, s.pinky); put('thumb', 0, s.thumb); return o; };   // our index/middle/ring 0 is the metacarpal
+// OUR FINGERS ARE MIS-NAMED. Across the palm from the thumb the base's chains are called pinky, ring, index, middle (the
+// skin says so: their vertices lie at z 15 / 10.6 / 6 / 1.7 cm with the thumb at 12–15; the one called ring is the longest,
+// the one called middle the shortest). The rig keeps its names — the map goes by what a finger IS: PHYS[theirs] = ours.
+// (The one called pinky has no metacarpal and starts at 0; the other three start at 1.) Checked against the geometry below.
+const PHYS = { index: ['pinky', 0], mid: ['ring', 1], ring: ['index', 1], pinky: ['middle', 1], thumb: ['thumb', 0] }, KNUCKLE = 'ring';   // KNUCKLE: the chain that IS the middle finger — the hand is aimed down it
+const finger = (side, s) => { const o = {}; for (const f in PHYS) s[f].forEach((src, k) => { o[PHYS[f][0] + side + (PHYS[f][1] + k)] = src; }); return o; };
 const PROFILES = {
   // Character Creator (CC_Base_*) as Sketchfab's USDZ conversion leaves it: joints anonymised (n36…), every bone under a
   // *_scaleCompensation joint of its own, the HIP left outside the skeleton as an animated Xform (→ `world`), so the pelvis
@@ -37,16 +49,16 @@ const PROFILES = {
 };
 // how each of OUR bones is brought to the source's reference pose: [mode, the child that gives the bone its direction]
 const ALIGN = {}; for (const s of ['L', 'R']) {
-  Object.assign(ALIGN, { ['clav' + s]: ['lift', 'arm' + s], ['arm' + s]: ['dir', 'fore' + s], ['fore' + s]: ['dir', 'hand' + s], ['hand' + s]: ['dir', 'middle' + s + '1'],
+  Object.assign(ALIGN, { ['clav' + s]: ['lift', 'arm' + s], ['arm' + s]: ['dir', 'fore' + s], ['fore' + s]: ['dir', 'hand' + s], ['hand' + s]: ['dir', KNUCKLE + s + '1'],
     ['thigh' + s]: ['dir', 'shin' + s], ['shin' + s]: ['dir', 'foot' + s], ['foot' + s]: ['yaw', 'toe' + s], ['toe' + s]: ['as', 'foot' + s] });
   for (const f of ['index', 'middle', 'ring']) { ALIGN[f + s + '1'] = ['dir', f + s + '2']; ALIGN[f + s + '2'] = ['dir', f + s + '3']; ALIGN[f + s + '3'] = ['up']; }
   for (const f of ['pinky', 'thumb']) { ALIGN[f + s + '0'] = ['dir', f + s + '1']; ALIGN[f + s + '1'] = ['dir', f + s + '2']; ALIGN[f + s + '2'] = ['up']; }
 }
 
 const args = process.argv.slice(2), flag = (k, d) => { const i = args.indexOf('--' + k); if (i < 0) return d; const v = args[i + 1]; args.splice(i, 2); return v; };
-const sw = k => { const i = args.indexOf('--' + k); if (i < 0) return false; args.splice(i, 1); return true; }, noloop = sw('noloop'), air = sw('air');
+const sw = k => { const i = args.indexOf('--' + k); if (i < 0) return false; args.splice(i, 1); return true; }, noloop = sw('noloop'), air = sw('air'), theirHands = sw('theirhands');
 const clipNo = +flag('clip', 0), prof = PROFILES[flag('profile', 'cc_sketchfab')], credit = flag('credit', ''), FPS = +flag('fps', 60);
-const [srcFile, id, title] = args; if (!srcFile || !id) { console.log('usage: motion.js <anim.json> <id> "<Name>" [--clip n] [--profile p] [--credit "…"] [--noloop] [--air]'); process.exit(1); }
+const [srcFile, id, title] = args; if (!srcFile || !id) { console.log('usage: motion.js <anim.json> <id> "<Name>" [--clip n] [--profile p] [--credit "…"] [--noloop] [--air] [--theirhands]'); process.exit(1); }
 
 // ---- ours: the bind pose from the inverse bind matrices, as the editor and the game read it
 const g = JSON.parse(fs.readFileSync(path.join(RIG, 'scene.gltf'))), bin = fs.readFileSync(path.join(RIG, g.buffers[0].uri));
@@ -94,6 +106,15 @@ for (const k of order) { const nm = T[k].name, src = prof.map[nm]; if (!src) con
   else { const dt = T[tIx[al[1]]].Pw.clone().sub(T[k].Pw), ds = refP[sIx(prof.map[al[1]])].clone().sub(refP[sIx(src)]);
     if (al[0] === 'yaw') { dt.y = 0; ds.y = 0; A[nm] = arc(dt, ds); } else if (al[0] === 'lift') { dt.z = 0; ds.z = 0; A[nm] = arc(dt, ds); } else A[nm] = arc(dt.clone().applyQuaternion(Aup), ds).multiply(Aup); } }
 
+// the finger names against the geometry: from the thumb's tip outwards the knuckles must come in PHYS's order
+for (const sd of ['L', 'R']) { const tip = T[tIx['thumb' + sd + '2']].Pw, kn = f => T[tIx[PHYS[f][0] + sd + (PHYS[f][1] === 0 ? 0 : 1)]].Pw.distanceTo(tip), d = ['index', 'mid', 'ring', 'pinky'].map(kn);
+  if (!(d[0] < d[1] && d[1] < d[2] && d[2] < d[3])) { console.log('the finger chains are not where PHYS says (' + sd + '): ' + d.map(x => (x * 100).toFixed(1)).join(' < ') + ' — was the rig rebuilt with its fingers renamed? fix PHYS'); process.exit(1); } }
+const SIDE = new V3(1, 0, 0), WRIST_SHARE = 0.5, HANDS = ['L', 'R'].map(sd => { const h = tIx['hand' + sd], fo = tIx['fore' + sd], a = T[h].Pw.clone().sub(T[fo].Pw).normalize(), u = SIDE.clone().addScaledVector(a, -SIDE.dot(a)).normalize();
+  const kids = []; (function down(p) { T.forEach((b, k) => { if (b.parent === p) { kids.push(k); down(k); } }); })(h);
+  return { h, fo, kids, u: u.applyQuaternion(T[h].Qw.clone().invert()) }; });                            // u: the body's left-right, square to the forearm, in the hand's own frame — at REST
+const chestK = tIx.chest, smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+let rollMax = 0;
+
 // ---- the frames
 const names = order.map(k => T[k].name).filter(nm => prof.map[nm] || true), tracks = {}; names.forEach(nm => { tracks[nm] = []; });
 const pos = [], soles = []; let last = {};
@@ -106,10 +127,15 @@ for (let f = 0; f < frames; f++) {
     const aim = nm => { const src = prof.map[nm], D = src === '@world' ? w.q.clone() : w.q.clone().multiply(rotOf(W[sIx(src)])).multiply(refQ[sIx(src)].clone().invert()); return D.multiply(A[nm]).multiply(T[tIx[nm]].Qw); };
     if (src) Qw[k] = aim(b.name);
     else Qw[k] = (par < 0 ? new Q4() : Qw[par].clone()).multiply(b.q);
-    const ql = par < 0 ? Qw[k].clone() : Qw[par].clone().invert().multiply(Qw[k]); ql.normalize();
-    const prev = last[b.name]; if (prev && prev.dot(ql) < 0) ql.set(-ql.x, -ql.y, -ql.z, -ql.w); last[b.name] = ql;
-    tracks[b.name].push(ql);
     if (b.name === 'pelvis') Pw[k] = b.Pw.clone().add(w.p.clone().sub(hipRef).multiplyScalar(K)); else Pw[k] = Pw[par].clone().add(b.p.clone().applyQuaternion(Qw[par])); }
+  if (!theirHands) { const side = SIDE.clone().applyQuaternion(Qw[chestK].clone().multiply(T[chestK].Qw.clone().invert()));          // the body's left-right now
+    for (const H of HANDS) { const a = Pw[H.h].clone().sub(Pw[H.fo]).normalize(), want = side.clone().addScaledVector(a, -side.dot(a)), have = H.u.clone().applyQuaternion(Qw[H.h]); have.addScaledVector(a, -have.dot(a));
+      const fade = smooth(0.15, 0.45, Math.min(want.length(), have.length())); if (!fade) continue; want.normalize(); have.normalize();
+      const roll = Math.atan2(a.dot(have.clone().cross(want)), have.dot(want)) * fade; rollMax = Math.max(rollMax, Math.abs(roll));
+      const all = new Q4().setFromAxisAngle(a, roll), part = new Q4().setFromAxisAngle(a, roll * WRIST_SHARE);
+      Qw[H.fo].premultiply(part); Qw[H.h].premultiply(all); for (const k of H.kids) Qw[k].premultiply(all); } }   // a roll about the forearm's own axis moves no joint: Pw stands
+  for (const k of order) { const b = T[k], par = b.parent, ql = par < 0 ? Qw[k].clone() : Qw[par].clone().invert().multiply(Qw[k]); ql.normalize();
+    const prev = last[b.name]; if (prev && prev.dot(ql) < 0) ql.set(-ql.x, -ql.y, -ql.z, -ql.w); last[b.name] = ql; tracks[b.name].push(ql); }
   pos.push(Pw[tIx.pelvis]);
   soles.push(SOLE.map(o => o.local.clone().applyQuaternion(Qw[tIx[o.bone]]).add(Pw[tIx[o.bone]]).y));
 }
@@ -133,6 +159,7 @@ const entry = { id, name: out.name, frames, fps: FPS, loop: closes, credit }, at
 fs.writeFileSync(ixFile, JSON.stringify(list, null, 1));
 const cm = x => (x * 100).toFixed(1);
 console.log(`${out.name}: ${frames} frames @ ${FPS} (${out.duration}s) ${closes ? 'LOOP' : 'once'} · ${moving.length}/${names.length} bones move · his hip ${(T[tIx.pelvis].Pw.y).toFixed(3)} over theirs ${hipY.toFixed(1)} → travel ×${K.toFixed(4)}`);
+if (!theirHands) console.log(`  hands: thumbs to the front — rolled up to ${(rollMax * 180 / Math.PI).toFixed(0)}° about the forearm, ${WRIST_SHARE * 100}% of it in the forearm bone`);
 console.log(`  pelvis y ${cm(Math.min(...pos.map(p => p.y)))}…${cm(Math.max(...pos.map(p => p.y)))} cm (rest ${cm(T[tIx.pelvis].Pw.y)}) · x ${cm(Math.min(...pos.map(p => p.x)))}…${cm(Math.max(...pos.map(p => p.x)))} · z ${cm(Math.min(...pos.map(p => p.z)))}…${cm(Math.max(...pos.map(p => p.z)))}`);
 console.log(`  lowest sole point over the clip: before the lift ${cm(Math.min(...low0))}…${cm(Math.max(...low0))}, after ${cm(Math.min(...low))}…${cm(Math.max(...low))} cm (0 = on the ground) · L ${cm(Math.min(...lowL))}…${cm(Math.max(...lowL))} · R ${cm(Math.min(...lowR))}…${cm(Math.max(...lowR))}`);
 console.log(`  → ${path.relative(ROOT, path.join(OUT, id + '.json'))} (${(fs.statSync(path.join(OUT, id + '.json')).size / 1024).toFixed(0)} KB)`);

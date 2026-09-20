@@ -1,0 +1,658 @@
+<!doctype html><meta charset=utf-8><title>Blade Vale — char editor</title>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<style>
+  :root{--bg:#23262b;--pnl:#15171acc;--ink:#e6e6e6;--dim:#9aa0a8;--acc:#d8a56a}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden}
+  canvas{display:block;touch-action:none}
+  .pnl{position:fixed;background:var(--pnl);backdrop-filter:blur(6px);border:1px solid #ffffff1a;border-radius:8px;padding:8px 10px}
+  #ui{left:10px;top:10px;width:212px;max-height:calc(100vh - 20px);overflow:auto}
+  #ui h4{margin:10px 0 5px;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);font-weight:600}
+  #ui h4:first-child{margin-top:0}
+  label{display:flex;align-items:center;gap:6px;padding:1px 0;cursor:pointer;user-select:none}
+  label input{accent-color:var(--acc)}
+  .row{display:flex;flex-wrap:wrap;gap:4px}
+  button{background:#ffffff14;color:var(--ink);border:1px solid #ffffff1f;border-radius:5px;padding:4px 7px;font:inherit;cursor:pointer}
+  button:hover{background:#ffffff26}
+  button.on{background:var(--acc);color:#1a1a1a;border-color:var(--acc)}
+  select{background:#ffffff14;color:var(--ink);border:1px solid #ffffff1f;border-radius:5px;padding:3px 5px;font:inherit;width:100%}
+  input[type=range]{width:100%;accent-color:var(--acc)}
+  #stat{right:10px;top:10px;min-width:210px;white-space:pre;font-size:11px;color:var(--dim)}
+  #stat b{color:var(--ink);font-weight:600}
+  #hint{left:50%;bottom:10px;transform:translateX(-50%);color:var(--dim);padding:5px 12px}
+  .k{color:var(--acc)}
+  .sm{color:var(--dim);font-size:11px}
+</style>
+<body>
+<div id=ui class=pnl>
+  <h4>show</h4>
+  <div id=meshlist></div>
+  <h4>items</h4>
+  <div class=sm style="margin-bottom:4px">wrists: leather bands (always)</div>
+  <label><span style="width:64px;display:inline-block">gauntlet</span><input type=checkbox id=i_gauntlet_L> L <input type=checkbox id=i_gauntlet_R style=margin-left:8px> R</label>
+  <label><span style="width:64px;display:inline-block">shoulder <span class=sm>leather</span></span><input type=checkbox id=i_pauldron_L> L <input type=checkbox id=i_pauldron_R style=margin-left:8px> R</label>
+  <label><span style="width:64px;display:inline-block">helmet</span><input type=checkbox id=i_helmet></label>
+  <h4>shading</h4>
+  <select id=shade>
+    <option value=tex>textured (atlas)</option>
+    <option value=clay selected>clay — judge the form</option>
+    <option value=norm>normals</option>
+    <option value=cls>vertex classes</option>
+    <option value=sil>silhouette</option>
+  </select>
+  <label><input type=checkbox id=t_wire> wireframe over</label>
+  <label><input type=checkbox id=t_smooth checked> smooth normals</label>
+  <label><input type=checkbox id=t_double> double-sided (find flipped faces)</label>
+  <label><input type=checkbox id=t_bones> skeleton</label>
+  <label><input type=checkbox id=t_grid checked> grid + ruler</label>
+  <h4>isolate</h4>
+  <select id=iso><option value="">— whole body —</option></select>
+  <h4>pose</h4>
+  <div class=row><button id=p_bind class=on>bind</button><button id=p_a>A</button><button id=p_t>T</button></div>
+  <label class=sm>arms down <span id=v_arm>0°</span></label><input type=range id=s_arm min=-90 max=90 value=0>
+  <label class=sm>legs apart <span id=v_leg>0°</span></label><input type=range id=s_leg min=-20 max=30 value=0>
+  <h4>camera</h4>
+  <div class=row>
+    <button data-v="0">front</button><button data-v="180">back</button>
+    <button data-v="90">left</button><button data-v="-90">right</button>
+    <button data-v="35">3/4</button><button id=c_reset>reset</button>
+  </div>
+  <div class=row style=margin-top:4px>
+    <button data-z=head>head</button><button data-z=torso>torso</button>
+    <button data-z=hands>hands</button><button data-z=legs>legs</button><button data-z=feet>feet</button>
+  </div>
+  <label style=margin-top:6px><input type=checkbox id=t_spin> turntable</label>
+  <h4>light</h4>
+  <label class=sm>key angle <span id=v_key>35°</span></label><input type=range id=s_key min=-180 max=180 value=35>
+  <label class=sm>exposure <span id=v_exp>1.0</span></label><input type=range id=s_exp min=40 max=200 value=100>
+</div>
+<div id=stat class=pnl>loading…</div>
+<div id=hint class=pnl><span class=k>drag</span> turn · <span class=k>wheel</span> zoom · <span class=k>right/shift-drag</span> move · <span class=k>double-click</span> centre here</div>
+<script src="../../vendor/three.min.js?v=r128"></script>
+<script>
+const q = new URLSearchParams(location.search);
+// THE CHAR: the game's own rig, exactly as it ships (assets/rigs/base — dress.js writes it). ?rig=<path> points at a
+// build you are testing before it ships. The PAINTED atlas lives here beside the editor: the shipped atlas.jpg has its
+// skin normalised for the game's tints (headbake.py), and the game paints the tone back on — the editor has no look
+// system, so it shows the paint the sculpt was made with.
+const DIR = q.get('rig') || '../../assets/rigs/base', RAW = 'items/atlas_raw.jpg';   // (beside this page, not under the rig: the painted atlas is the editor's, and assets/ is what players download)
+const r = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+r.setPixelRatio(Math.min(devicePixelRatio, 2)); r.setSize(innerWidth, innerHeight);
+r.outputEncoding = THREE.sRGBEncoding; r.physicallyCorrectLights = false;
+document.body.appendChild(r.domElement);
+
+const s = new THREE.Scene(); s.background = new THREE.Color(0x23262b);
+const c = new THREE.PerspectiveCamera(32, innerWidth / innerHeight, 0.01, 200);
+
+// ---- lights
+const hemi = new THREE.HemisphereLight(0xdfe6f0, 0x3a3630, 0.55); s.add(hemi);
+const key = new THREE.DirectionalLight(0xfff2e2, 1.15); key.position.set(2, 3.4, 3); s.add(key);
+const fill = new THREE.DirectionalLight(0xbfd4ff, 0.34); fill.position.set(-3, 1.6, -1.5); s.add(fill);
+const rim = new THREE.DirectionalLight(0xffffff, 0.5); rim.position.set(-1.2, 2.4, -3.4); s.add(rim);
+
+// ---- ground
+const gnd = new THREE.Group(); s.add(gnd);
+gnd.add(new THREE.GridHelper(6, 24, 0x4a4f57, 0x33373d));
+(function ruler() {
+  const g = new THREE.Group(); g.position.set(0.85, 0, 0);
+  const pts = [new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 2.2, 0)];
+  g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0x5a6069 })));
+  for (let y = 0; y <= 2.2001; y += 0.1) {
+    const big = Math.abs(y * 2 % 1) < 1e-6, w = big ? 0.07 : 0.035;
+    const l = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-w, y, 0), new THREE.Vector3(0, y, 0)]),
+      new THREE.LineBasicMaterial({ color: big ? 0x8b939c : 0x545a62 }));
+    g.add(l);
+  }
+  gnd.add(g);
+})();
+
+let az = (+q.get('az') || 28) * Math.PI / 180, el = (+q.get('el') || 4) * Math.PI / 180;
+let dist = +q.get('d') || 5.2, tgt = new THREE.Vector3(0, +q.get('cy') || 1.04, 0);
+function cam() {
+  c.position.set(tgt.x + Math.sin(az) * Math.cos(el) * dist, tgt.y + Math.sin(el) * dist, tgt.z + Math.cos(az) * Math.cos(el) * dist);
+  c.lookAt(tgt);
+}
+cam();
+
+// ---- glTF (skinned, bind pose from the inverse bind matrices — same as the game's instanceModelRig)
+async function loadGltf(dir) {
+  const g = await (await fetch(dir + '/scene.gltf?' + Date.now())).json();
+  const bin = await (await fetch(dir + '/' + g.buffers[0].uri + '?' + Date.now())).arrayBuffer();
+  const CT = { 5121: Uint8Array, 5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array }, NC = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT4: 16 };
+  const acc = i => { const a = g.accessors[i], bv = g.bufferViews[a.bufferView], T = CT[a.componentType], n = NC[a.type]; return new T(bin, (bv.byteOffset || 0) + (a.byteOffset || 0), a.count * n); };
+  const raw = await fetch(RAW, { method: 'HEAD' }).then(r => r.ok, () => false);
+  const texs = (g.images || []).map(im => { const t = new THREE.TextureLoader().load(im.uri === 'atlas.jpg' && raw ? RAW : dir + '/' + im.uri); t.flipY = false; t.encoding = THREE.sRGBEncoding; if (im.uri === 'leather_tile.png') t.wrapS = t.wrapT = THREE.RepeatWrapping; return t; });
+  const atlasImage = await new Promise(res => { const im = new Image(); im.onload = () => res(im); im.onerror = () => res(null); im.src = dir + '/' + ((g.images || [])[0] || {}).uri; });
+  const mats = (g.materials || []).map(m => {
+    const p = m.pbrMetallicRoughness || {};
+    const mm = new THREE.MeshStandardMaterial({ roughness: p.roughnessFactor != null ? p.roughnessFactor : 0.9, metalness: 0, skinning: true, side: m.doubleSided ? THREE.DoubleSide : THREE.FrontSide });
+    if (p.baseColorTexture) mm.map = texs[g.textures[p.baseColorTexture.index].source];
+    if (m.alphaMode === 'MASK') { mm.alphaTest = m.alphaCutoff || 0.5; mm.transparent = false; }
+    mm.name = m.name; return mm;
+  });
+  const nodes = g.nodes.map(n => { const b = new THREE.Bone(); b.name = n.name; if (n.matrix) new THREE.Matrix4().fromArray(n.matrix).decompose(b.position, b.quaternion, b.scale); return b; });
+  const parent = new Array(nodes.length).fill(-1);
+  g.nodes.forEach((n, i) => (n.children || []).forEach(ch => { parent[ch] = i; nodes[i].add(nodes[ch]); }));
+  const root = new THREE.Group();
+  g.nodes.forEach((n, i) => { if (parent[i] < 0 && n.mesh == null) root.add(nodes[i]); });
+  const order = []; const dfs = i => { order.push(i); (g.nodes[i].children || []).forEach(dfs); }; g.nodes.forEach((n, i) => { if (parent[i] < 0) dfs(i); });
+  const worldM = new Map();
+  for (const n of g.nodes) {
+    if (n.mesh == null) continue; const sk = g.skins[n.skin], ibm = acc(sk.inverseBindMatrices);
+    sk.joints.forEach((j, k) => { if (!worldM.has(j)) { const m = new THREE.Matrix4().fromArray(ibm, k * 16).invert(); if (m.elements.every(Number.isFinite) && Math.abs(m.determinant()) > 1e-6) worldM.set(j, m); } });
+  }
+  const worldOf = new Map();
+  for (const i of order) {
+    let wm = worldM.get(i); const pw = parent[i] >= 0 ? worldOf.get(parent[i]) : null;
+    if (!wm) wm = pw ? pw.clone().multiply(nodes[i].matrix) : nodes[i].matrix.clone();
+    const local = pw ? pw.clone().invert().multiply(wm) : wm.clone();
+    local.decompose(nodes[i].position, nodes[i].quaternion, nodes[i].scale); nodes[i].updateMatrix(); worldOf.set(i, wm.clone());
+  }
+  const meshes = [];
+  for (const n of g.nodes) {
+    if (n.mesh == null) continue;
+    const p = g.meshes[n.mesh].primitives[0], geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(acc(p.attributes.POSITION), 3));
+    if (p.attributes.NORMAL != null) geo.setAttribute('normal', new THREE.BufferAttribute(acc(p.attributes.NORMAL), 3)); else geo.computeVertexNormals();
+    if (p.attributes.TEXCOORD_0 != null) geo.setAttribute('uv', new THREE.BufferAttribute(acc(p.attributes.TEXCOORD_0), 2));
+    geo.setAttribute('skinIndex', new THREE.BufferAttribute(acc(p.attributes.JOINTS_0), 4));
+    geo.setAttribute('skinWeight', new THREE.BufferAttribute(acc(p.attributes.WEIGHTS_0), 4));
+    geo.setIndex(new THREE.BufferAttribute(acc(p.indices), 1));
+    const sk = g.skins[n.skin], ibm = acc(sk.inverseBindMatrices);
+    const sm = new THREE.SkinnedMesh(geo, mats[p.material || 0]); sm.name = n.name; sm.frustumCulled = false; root.add(sm);
+    const bones = sk.joints.map(j => nodes[j]), inv = bones.map((b, k) => { const m = new THREE.Matrix4().fromArray(ibm, k * 16); return m.elements.every(Number.isFinite) ? m : new THREE.Matrix4(); });
+    sm.bind(new THREE.Skeleton(bones, inv), new THREE.Matrix4());
+    meshes.push(sm);
+  }
+  root.updateMatrixWorld(true);
+  return { g, root, nodes, parent, meshes, worldOf, atlasImage };
+}
+
+const CLS_COL = [0xffd8a8, 0x4a3524, 0x8a5a2e, 0x6b4a2a, 0x2b2b3a, 0xf2f2f2, 0xd88a6a, 0x7fd1ff, 0x5ab0e0, 0x9ae06a, 0x7fc24a, 0xffd24a, 0xe0b030, 0xff8f8f, 0xe06a6a, 0xc08aff, 0xa06ae0, 0x8affd8, 0x5ae0b0];
+let M, BODY, PIECES, BONE = {}, REST = new Map();
+const NAMES = ['base'], MODELS = [];   // the editor shows ONE character: the base, dressed from the ITEMS panel
+
+(async () => {
+  for (let i = 0; i < NAMES.length; i++) {
+    const mm = await loadGltf(DIR);
+    mm.key = NAMES[i]; s.add(mm.root); MODELS.push(mm);
+    try { mm.pieces = await (await fetch(DIR + '/pieces.json?' + Date.now())).json(); } catch (e) { mm.pieces = null; }
+  }
+  M = MODELS[0]; PIECES = M.pieces || {};
+  BODY = M.meshes.find(m => m.name === 'base_body' || /_body$/.test(m.name));
+  M.nodes.forEach(n => { BONE[n.name] = n; REST.set(n.name, { p: n.position.clone(), q: n.quaternion.clone() }); });
+
+  // keep the original material of each mesh, plus the swap materials
+  for (const m of ALL()) {
+    if (m.userData.helm) continue;
+    m.userData.tex = m.material;
+    m.userData.clay = new THREE.MeshStandardMaterial({ color: 0xc8c3bb, roughness: 0.62, metalness: 0, skinning: true });
+    m.userData.norm = new THREE.MeshNormalMaterial({ skinning: true });
+    m.userData.sil = new THREE.MeshBasicMaterial({ color: 0x14161a, skinning: true });
+    m.userData.smooth = m.geometry.getAttribute('normal').clone();
+    const flat = m.geometry.clone().toNonIndexed(); flat.computeVertexNormals();
+    m.userData.flatGeo = flat;
+    m.userData.idxGeo = m.geometry;
+  }
+  // vertex classes on the body
+  if (BODY && PIECES.body && PIECES.body.vclass) {
+    const vc = PIECES.body.vclass, n = BODY.geometry.getAttribute('position').count, col = new Uint8Array(n * 3);
+    for (let v = 0; v < n; v++) { const k = new THREE.Color(CLS_COL[vc[v] % CLS_COL.length]); col[v * 3] = k.r * 255; col[v * 3 + 1] = k.g * 255; col[v * 3 + 2] = k.b * 255; }
+    BODY.geometry.setAttribute('color', new THREE.BufferAttribute(col, 3, true));
+    BODY.userData.cls = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8, metalness: 0, skinning: true });
+    const isoSel = document.getElementById('iso');
+    PIECES.body.classes.forEach((nm, i) => { const o = document.createElement('option'); o.value = i; o.textContent = nm; isoSel.appendChild(o); });
+  }
+  for (const mm of MODELS) { mm.skel = new THREE.SkeletonHelper(mm.root); mm.skel.visible = false; mm.skel.material.depthTest = false; mm.skel.renderOrder = 9; s.add(mm.skel); }
+  for (const mm of MODELS) await loadHelm(mm);
+  for (const mm of MODELS) dressPauldrons(mm);
+  buildMeshList();
+  applyShade(); applyShow(); measure();
+  window.__ready = true;
+})();
+
+// ---- the helm: helm_corinthian.json + .bin (positions, normals, uvs, u16 indices, already fitted to the base head in
+// the bind pose, with its own maps). It rides the head bone as a plain mesh, so it turns with the head when posed.
+async function loadHelm(mm) {
+  try {
+    const dir = DIR, j = await (await fetch(dir + '/helm_corinthian.json?' + Date.now())).json();
+    const bin = await (await fetch(dir + '/helm_corinthian.bin?' + Date.now())).arrayBuffer();
+    const nv = j.verts, nt = j.tris; let off = 0;
+    const pos = new Float32Array(bin, off, nv * 3); off += nv * 12;
+    const nrm = new Float32Array(bin, off, nv * 3); off += nv * 12;
+    const uv = new Float32Array(bin, off, nv * 2); off += nv * 8;
+    const idx = new Uint16Array(bin, off, nt * 3);
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.BufferAttribute(nrm, 3)); g.setAttribute('uv', new THREE.BufferAttribute(uv, 2)); g.setIndex(new THREE.BufferAttribute(idx, 1));
+    const tex = nm => { const t = new THREE.TextureLoader().load(dir + '/' + j.textures[nm]); t.flipY = true; return t; };
+    const map = tex('color'); map.encoding = THREE.sRGBEncoding;
+    const mat = new THREE.MeshStandardMaterial({ map, normalMap: tex('normal'), roughnessMap: tex('rough'), aoMap: tex('occl'), metalness: 0.35, roughness: 1 });   /* the asset says metalness 1, but a full metal with no environment map draws BLACK in three; the game lights it its own way */
+    const head = mm.nodes.find(n => n.name === 'head');
+    const mesh = new THREE.Mesh(g, mat); mesh.name = 'helmet'; mesh.frustumCulled = false;
+    if (head) { head.updateMatrixWorld(true); mesh.applyMatrix4(head.matrixWorld.clone().invert()); head.add(mesh); } else mm.root.add(mesh);
+    mesh.userData.helm = true; mm.meshes.push(mesh);
+  } catch (e) { console.warn('no helm for', mm.key, e.message); }
+}
+// ---- ARMOUR PARTS — a generator. Give it any fitted plate (an open shell over a rim) and it returns a finished piece:
+// the plate's edge raised into a bevelled BORDER like the cuff of the steel arm, the underside closed flat, and the
+// whole thing painted with a TILE repeated at world scale — a rib every few centimetres however big the piece.
+// STYLES: every piece is built in one of these, and every piece in a style looks the same way. `leather` is what the
+// user signed off on the shoulder plate on 2026-09-20 ("current texture of the shoulder armor should be called the
+// leather version"): the ribbed tile off the gauntlet's sheet, ribs laid along the plate's own lames, soft sheen. An
+// `iron` style is to come later — do not change `leather`; add beside it.
+const STYLES = {
+  leather: { out: 0.015, up: 0.008, down: 0.020, tuck: 0.010, tileU: 0.10, tileV: 0.04, roughness: 0.62, metalness: 0.25 }
+};
+let STEEL = null;   // the tile: the silver ribbed column of Thor's Equip_03, cropped out of the atlas once
+function steelTile(mm) {
+  if (STEEL) return STEEL;
+  const img = mm.atlasImage; if (!img) return null;
+  const S = img.width / 2048, cv = document.createElement('canvas'); cv.width = 128; cv.height = 64;
+  // atlas px: the Equip_03 slot is [0.25, 0.625] x [0.25, 0.25]; the silver column sits at source u 0.84..0.98, v 0.05..0.36
+  const sx = (0.25 + 0.86 * 0.25) * 2048 * S, sy = (0.625 + 0.09 * 0.25) * 2048 * S, sw = 0.10 * 0.25 * 2048 * S, sh = 0.057 * 0.25 * 2048 * S;   // inside one plate, exactly ONE rib period (the column's ribs sit 58 px apart on the 1024 sheet), so it tiles both ways
+  cv.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, 128, 64);
+  STEEL = new THREE.CanvasTexture(cv); STEEL.wrapS = STEEL.wrapT = THREE.RepeatWrapping; STEEL.encoding = THREE.sRGBEncoding; STEEL.anisotropy = 4;
+  return STEEL;
+}
+function armorPart(mm, m, ax, o = {}) {
+  const ST = STYLES[o.style || 'leather']; o = Object.assign({}, ST, o);
+  const RIM_OUT = o.out, RIM_UP = o.up, RIM_DOWN = o.down, RIM_IN = o.tuck;   // metres
+  const TILE_U = o.tileU, TILE_V = o.tileV;   // one repeat of the steel: 10 cm along a rib, 4 cm from rib to rib — the gauntlet's pitch
+  const g = m.geometry, pos = g.getAttribute('position'), idx = Array.from(g.index.array);
+  // new vertices go into plain arrays, then everything is rebuilt as one geometry
+  const P = [], UV = [], JI = [], JW = [], N = pos.count;
+  const A = { ji: g.getAttribute('skinIndex'), jw: g.getAttribute('skinWeight') };
+  for (let v = 0; v < N; v++) { P.push([pos.getX(v), pos.getY(v), pos.getZ(v)]); UV.push([0, 0]); JI.push([A.ji.getX(v), A.ji.getY(v), A.ji.getZ(v), A.ji.getW(v)]); JW.push([A.jw.getX(v), A.jw.getY(v), A.jw.getZ(v), A.jw.getW(v)]); }
+  const add = (p, uv, from) => { P.push(p); UV.push(uv); JI.push(JI[from]); JW.push(JW[from]); return P.length - 1; };
+  const used = [...new Set(idx)]; const C = [0, 0, 0]; for (const v of used) { C[0] += P[v][0] / used.length; C[1] += P[v][1] / used.length; C[2] += P[v][2] / used.length; }
+  // the plate's own frame in its plane: long axis by PCA
+  const T0 = new THREE.Vector3(0, 1, 0).cross(ax).normalize(), T1 = ax.clone().cross(T0); let sxx = 0, sxy = 0, syy = 0;
+  const flat = v => { const d = new THREE.Vector3(P[v][0] - C[0], P[v][1] - C[1], P[v][2] - C[2]); return [d.dot(T0), d.dot(T1)]; };
+  for (const v of used) { const [x, y] = flat(v); sxx += x * x; sxy += x * y; syy += y * y; }
+  const th = 0.5 * Math.atan2(2 * sxy, sxx - syy), ce = Math.cos(th), se = Math.sin(th);
+  const along = new Map(); for (const v of used) { const [x, y] = flat(v); along.set(v, [x * ce + y * se, -x * se + y * ce]); }
+  // the steel's ribs are turned to lie ALONG the plate's own lames instead of crossing them. This twist is applied to
+  // the uv frame only — `along` still carries the geometry's frame, so nothing moves.
+  // the ribs are laid ALONG THE PLATE'S OWN LAMES, not along its long axis — the two are not the same, and either way
+  // round the ribs crossed the model's pattern. The lames' direction is the dominant edge direction of the plate's own
+  // triangles in its plane, averaged at DOUBLE ANGLE (an edge has no head or tail, so θ and θ+180° must agree).
+  let eC = 0, eS = 0;
+  for (let t = 0; t < idx.length; t += 3) for (let k = 0; k < 3; k++) { const a2 = along.get(idx[t+k]), b2 = along.get(idx[t+(k+1)%3]);
+    if (!a2 || !b2) continue; const dx = b2[0] - a2[0], dy = b2[1] - a2[1], L2 = Math.hypot(dx, dy); if (L2 < 1e-6) continue;
+    const a3 = Math.atan2(dy, dx); eC += L2 * Math.cos(2 * a3); eS += L2 * Math.sin(2 * a3); }
+  const lame = 0.5 * Math.atan2(eS, eC);
+  const TWIST = o.twist != null ? o.twist : q.get('twist') != null ? +q.get('twist') * Math.PI / 180 : -lame;
+  const tc = Math.cos(TWIST), ts = Math.sin(TWIST);
+  const tileUV = (u, w) => [(u * tc - w * ts) / TILE_U, (u * ts + w * tc) / TILE_V];
+  for (const v of used) { const [u, w] = along.get(v); UV[v] = tileUV(u, w); }
+  // THE SILHOUETTE: the kit's plate is several overlapping lames that share no edges, so there is no boundary loop to
+  // follow — a border round each lame drew a grid, and the longest loop alone was one lame's edge. The outline is the
+  // 2-D hull of the vertices in the plate's plane (Andrew's chain), lifted on the vertices it passes through.
+  const pts = used.map(v => ({ v, x: along.get(v)[0], y: along.get(v)[1] })).sort((p, q) => p.x - q.x || p.y - q.y);
+  const cross2 = (o2, a2, b2) => (a2.x - o2.x) * (b2.y - o2.y) - (a2.y - o2.y) * (b2.x - o2.x);
+  const lower = []; for (const p2 of pts) { while (lower.length >= 2 && cross2(lower[lower.length-2], lower[lower.length-1], p2) <= 0) lower.pop(); lower.push(p2); }
+  const upper = []; for (let i = pts.length - 1; i >= 0; i--) { const p2 = pts[i]; while (upper.length >= 2 && cross2(upper[upper.length-2], upper[upper.length-1], p2) <= 0) upper.pop(); upper.push(p2); }
+  const hull = lower.slice(0, -1).concat(upper.slice(0, -1)).map(p2 => p2.v);
+  // the border: out and up to a crest, down the outer face, tucked under, then the underside closed flat
+  const tris = idx.slice();
+  { const loop = hull, Cl = [0, 0, 0]; for (const v of loop) { Cl[0] += P[v][0] / loop.length; Cl[1] += P[v][1] / loop.length; Cl[2] += P[v][2] / loop.length; }
+    const rings = [loop], arc = [0]; let s2 = 0;
+    for (let i = 1; i <= loop.length; i++) { const a2 = P[loop[i-1]], b2 = P[loop[i % loop.length]]; s2 += Math.hypot(b2[0]-a2[0], b2[1]-a2[1], b2[2]-a2[2]); arc.push(s2); }
+    const steps = [[RIM_OUT, RIM_UP, 0.35], [RIM_OUT, -RIM_DOWN, 0.65], [RIM_OUT - RIM_IN, -RIM_DOWN, 0.80]];   // [out, up, v across the border]
+    for (const [out, up, vv] of steps) { const ring = [];
+      loop.forEach((v, i) => { const d = new THREE.Vector3(P[v][0] - Cl[0], P[v][1] - Cl[1], P[v][2] - Cl[2]); d.sub(ax.clone().multiplyScalar(d.dot(ax))).normalize();
+        const q = [P[v][0] + d.x * out + ax.x * up, P[v][1] + d.y * out + ax.y * up, P[v][2] + d.z * out + ax.z * up];
+        ring.push(add(q, [arc[i] / TILE_U, vv], v)); });   // the border: a rib runs round the edge, the cuff's stripe
+      rings.push(ring); }
+    for (let r = 0; r < rings.length - 1; r++) { const a2 = rings[r], b2 = rings[r+1];
+      for (let i = 0; i < loop.length; i++) { const j = (i + 1) % loop.length; tris.push(a2[i], b2[i], b2[j], a2[i], b2[j], a2[j]); } }
+    const last = rings[rings.length - 1], cc = [0, 0, 0]; for (const v of last) { cc[0] += P[v][0] / last.length; cc[1] += P[v][1] / last.length; cc[2] += P[v][2] / last.length; }
+    const ci = add(cc, [0, 0], loop[0]); for (let i = 0; i < last.length; i++) tris.push(last[i], last[(i + 1) % last.length], ci);
+    // THE FLOOR. The hull is convex and the plate is not — it has notches — and the border follows the hull, so
+    // between the plate's real edge and the rim there is a window onto the skin. The floor fills them with steel.
+    // It follows the plate's OWN DOME: each floor point takes its height along the axis from an inverse-distance
+    // average of the plate's nearby vertices, 4 mm under them. (Two things that did not work: a flat fan, which cuts
+    // straight through a round shoulder; and holding each point off the skin by a ray from the joint — a ray that
+    // grazes the deltoid carries on and hits the chest 30 cm away, so "the skin along this ray" is meaningless there.)
+    const H = used.map(v => { const [x, y] = along.get(v); const d = new THREE.Vector3(P[v][0] - C[0], P[v][1] - C[1], P[v][2] - C[2]); return [x, y, d.dot(ax)]; });
+    const heightAt = (x, y) => { let sw = 0, sh = 0; for (const [hx, hy, h] of H) { const dd = (x - hx) * (x - hx) + (y - hy) * (y - hy) + 1e-6; const w = 1 / (dd * dd); sw += w; sh += w * h; } return sh / sw; };
+    // ...and is then held off the skin. The notch has no plate to conform, so the height field only interpolates its
+    // neighbours and the deltoid bulges straight through it — the skin you see in the notch. The cast runs INWARD from
+    // 25 cm outside: the first surface it meets is the skin facing us. (Outward from the joint, a ray that grazes the
+    // deltoid carries on into the chest 30 cm away and reports that as "the skin", which is why that attempt failed.)
+    const J2 = o.joint, bodyM = o.body, rcF = new THREE.Raycaster(), FLOOR = 0.014;
+    const side0 = bodyM && bodyM.material.side; if (bodyM) bodyM.material.side = THREE.DoubleSide;
+    const hold = p3 => { if (!J2 || !bodyM) return p3;   // the same rule that seats the plate itself: out from the joint, the skin's farthest crossing
+      const Pv = new THREE.Vector3(p3[0], p3[1], p3[2]), d = Pv.clone().sub(J2), L = d.length(); d.normalize();
+      rcF.set(J2, d); rcF.far = L + 0.3;
+      const h2 = rcF.intersectObject(bodyM, false); if (!h2.length) return p3;
+      const far = h2.reduce((a2, x2) => x2.distance > a2 ? x2.distance : a2, 0);
+      const want = Math.max(L, far + FLOOR); const Q = J2.clone().add(d.multiplyScalar(want)); return [Q.x, Q.y, Q.z]; };
+    const place = (x, y, drop) => { const h = heightAt(x, y) - drop;
+      const T = new THREE.Vector3().copy(T0).multiplyScalar(x * ce - y * se).add(new THREE.Vector3().copy(T1).multiplyScalar(x * se + y * ce));
+      return hold([C[0] + T.x + ax.x * h, C[1] + T.y + ax.y * h, C[2] + T.z + ax.z * h]); };
+    const uvOf2 = (x, y) => tileUV(x, y);
+    let prevRing = loop;
+    for (const k of [0.88, 0.76, 0.64, 0.52, 0.4, 0.28, 0.16]) { const ring = loop.map(v => { const [x, y] = along.get(v);
+        const p3 = place(x * k, y * k, 0.004); return add(p3, uvOf2(x * k, y * k), v); });
+      for (let i = 0; i < loop.length; i++) { const j = (i + 1) % loop.length; tris.push(prevRing[i], ring[i], ring[j], prevRing[i], ring[j], prevRing[j]); }
+      prevRing = ring; }
+    const fc = place(0, 0, 0.004); const fi = add(fc, uvOf2(0, 0), loop[0]);
+    for (let i = 0; i < loop.length; i++) tris.push(prevRing[i], fi, prevRing[(i + 1) % loop.length]);
+    if (bodyM) bodyM.material.side = side0;
+  }
+  const g2 = new THREE.BufferGeometry();
+  g2.setAttribute('position', new THREE.Float32BufferAttribute(P.flat(), 3)); g2.setAttribute('uv', new THREE.Float32BufferAttribute(UV.flat(), 2));
+  g2.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(JI.flat(), 4)); g2.setAttribute('skinWeight', new THREE.Float32BufferAttribute(JW.flat(), 4));
+  g2.setIndex(tris); g2.computeVertexNormals();
+  m.geometry = g2; m.bind(m.skeleton, new THREE.Matrix4());
+  const tile = steelTile(mm);
+  m.userData.armor = true;
+  if (tile) { const mat = new THREE.MeshStandardMaterial({ map: tile, roughness: o.roughness, metalness: o.metalness, skinning: true, side: THREE.DoubleSide }); mat.name = o.style || 'leather'; m.material = mat; m.userData.tex = mat; m.userData.style = mat.name;
+    m.userData.clay = new THREE.MeshStandardMaterial({ color: 0xc8c3bb, roughness: 0.62, metalness: 0, skinning: true, side: THREE.DoubleSide }); }
+}
+// ---- the pauldrons: pauldron_L / pauldron_R in the file (items/pauldron.json, dressed on by dress.js), seated on
+// the shoulder and finished by the generator in the leather style.
+function dressPauldrons(mm) { for (const m of mm.meshes) { const side = (m.name.match(/^pauldron_(L|R)$/) || [])[1]; if (side && m.material.name === 'wear') fitPauldron(mm, m, side); else if (side) m.userData.armor = true; } }   // (a plate on the 'wear' material is raw and gets fitted + finished here; one on 'leather' was baked by __exportArmor and is shown as the game gets it)
+// BAKE FOR THE GAME: the finished plates (fitted, bordered, floored, tiled) and the tile itself go to items/ — then `node dress.js <built> --baked`
+// writes them into the model as pauldron_L / pauldron_R on a `leather` material over leather_tile.png, and the game draws exactly what the editor shows.
+window.__exportArmor = async () => {
+  const out = {}; for (const m of M.meshes) { if (!/^pauldron_(L|R)$/.test(m.name) || !m.userData.armor) continue; const g = m.geometry, A = k => Array.from(g.getAttribute(k).array);
+    out[m.name] = { pos: A('position'), nrm: A('normal'), uv: A('uv'), ji: A('skinIndex'), w: A('skinWeight'), idx: Array.from(g.index.array), style: m.userData.style || 'leather' }; }
+  await fetch('/export?pauldron_baked.json', { method: 'POST', body: JSON.stringify(out) });
+  if (STEEL) await fetch('/export?leather_tile.png', { method: 'POST', body: STEEL.image.toDataURL('image/png') });
+  return Object.keys(out).map(k => k + ' ' + out[k].idx.length / 3 + ' tris').join(', ');
+};
+// SIT IT ON THE SHOULDER, AND DRESS IT LIKE THE STEEL ARM. The kit's plate was fitted to the old lofted body and floats
+// off this one: every vertex is cast from the shoulder joint against the body, the piece is slid rigidly down its own
+// axis until the nearest point stands 1.5 cm off the skin, and the rest of its dome keeps its shape. Its paint is the
+// kit's grey; the uvs are re-projected onto the ribbed plate of Thor's own steel sheet in the atlas, so it reads as
+// one set with the gauntlet.
+function fitPauldron(mm, m, side) {
+  const body = mm.meshes.find(x => /base_body/.test(x.name)); const bone = mm.nodes.find(n => n.name === 'arm' + side); if (!body || !bone) return;
+  const g = m.geometry, used = [...new Set(g.index.array)], pos = g.getAttribute('position');
+  const J = new THREE.Vector3().setFromMatrixPosition(bone.matrixWorld);
+  // the piece's own outward axis: joint -> centroid
+  const C = new THREE.Vector3(); for (const v of used) C.add(new THREE.Vector3(pos.getX(v), pos.getY(v), pos.getZ(v))); C.multiplyScalar(1 / used.length);
+  const ax = C.clone().sub(J).normalize();
+  // conform: every vertex is cast from the joint against the body's outer skin and set a fixed 1.5 cm off it, keeping
+  // only a third of whatever it stood out beyond that — the plate was shaped for the old warrior's shoulder, and slid
+  // rigidly its nearest point touched while the rest hung out in the air. Now it hugs this deltoid like a cap.
+  // the kit's plate sat with its weight on the BACK of the shoulder — thick behind, and the front of the deltoid came
+  // out past its leading edge. Slid forward first, then conformed, so the seating below re-seats it where it now lies.
+  const FWD = window.__pauldronFwd == null ? 0.03 : window.__pauldronFwd;
+  for (const v of used) pos.setZ(v, pos.getZ(v) + FWD);
+  // half the thickness — BEFORE the seating, so the conform below can never leave the squashed crown under the skin
+  { const idx0 = g.index.array, ek = (a, b) => a < b ? a + '_' + b : b + '_' + a, cnt = new Map();
+    for (let t = 0; t < idx0.length; t += 3) for (let k = 0; k < 3; k++) { const kk = ek(idx0[t+k], idx0[t+(k+1)%3]); cnt.set(kk, (cnt.get(kk) || 0) + 1); }
+    const rimVerts = [...new Set([...cnt].filter(([, c]) => c === 1).flatMap(([kk]) => kk.split('_').map(Number)))];
+    const Cr = new THREE.Vector3(); for (const v of rimVerts) Cr.add(new THREE.Vector3(pos.getX(v), pos.getY(v), pos.getZ(v))); Cr.multiplyScalar(1 / (rimVerts.length || 1));
+    const THIN = window.__pauldronThin == null ? 0.5 : window.__pauldronThin;
+    for (const v of used) { const P = new THREE.Vector3(pos.getX(v), pos.getY(v), pos.getZ(v)); const h = P.clone().sub(Cr).dot(ax); if (h <= 0) continue;
+      P.sub(ax.clone().multiplyScalar(h * (1 - THIN))); pos.setXYZ(v, P.x, P.y, P.z); } }
+  const rc = new THREE.Raycaster(), MARGIN = 0.015, KEEP = 0.33, farMap = new Map(); let n = 0;
+  const side0 = body.material.side; body.material.side = THREE.DoubleSide;   // the ray starts INSIDE the body: front-side only, the skin's inner face is culled and nothing is ever hit
+  for (const v of used) { const P = new THREE.Vector3(pos.getX(v), pos.getY(v), pos.getZ(v)), d = P.clone().sub(J), L = d.length(); d.normalize();
+    rc.set(J, d); rc.far = L + 0.3; const hits = rc.intersectObject(body, false); if (!hits.length) continue;
+    const far = hits.reduce((a, h) => h.distance > a ? h.distance : a, 0);   // the OUTER skin along this ray
+    const excess = L - far - MARGIN, want = far + MARGIN + Math.max(0, excess) * KEEP;   // never inside the skin, most of the float taken out
+    const Q = J.clone().add(d.clone().multiplyScalar(want)); pos.setXYZ(v, Q.x, Q.y, Q.z); farMap.set(v, { far, d }); n++; }
+  body.material.side = side0; pos.needsUpdate = true; window.__pauldronFit = (window.__pauldronFit || []).concat([side + ':' + n + '/' + used.length]);
+  armorPart(mm, m, ax, { joint: J, body });   // the rim, the underside and the steel: the same styling as the gauntlet, generated
+
+}
+// ---- show / shading
+const el$ = id => document.getElementById(id);
+const ALL = () => MODELS.flatMap(m => m.meshes);
+function isHair(m) { return /hair/i.test(m.name); }
+const short = n => n.replace(/^FantasyWarrior_/, '').replace(/_6_characters_0$/, '');
+const HIDE = (q.get('hide') || '').split(',').filter(Boolean);
+function buildMeshList() {
+  const host = el$('meshlist'); host.innerHTML = '';
+  for (const mm of MODELS) {
+    for (const m of mm.meshes) {
+      const nm = short(m.name);
+      const on = !(isHair(m) || /gauntlet|pauldron|helmet/i.test(nm)) && !HIDE.some(h => nm.toLowerCase().includes(h.toLowerCase()));   // a ware is off until the ITEMS panel puts it on
+      m.userData.want = on;
+      const l = document.createElement('label');
+      l.innerHTML = '<input type=checkbox' + (on ? ' checked' : '') + '> ' + nm + ' <span class=sm>' + (m.geometry.index.count / 3 | 0) + '</span>';
+      l.querySelector('input').onchange = e => { m.userData.want = e.target.checked; applyShow(); }; l.querySelector('input').__mesh = m;
+      host.appendChild(l);
+    }
+  }
+}
+// WHAT A PIECE COVERS. A gauntlet takes the place of the hand and of that arm's wrist wrap — the same rule as the
+// game's LOOK_UNDER, where a body part is dropped under the piece over it (the file's own left arm wears no wrap either).
+function applyItems() {   // the ITEMS panel is the truth for every ware; the mesh list below it just mirrors that
+  const on = id => { const e = el$(id); return !!(e && e.checked); };
+  for (const mm of MODELS) for (const m of mm.meshes) {
+    if (/^gauntlet_|^pauldron_/.test(m.name)) m.userData.want = on('i_' + m.name);
+    if (m.name === 'helmet') m.userData.want = on('i_helmet');
+    if (/^band_/.test(m.name)) m.userData.want = true;   // the bands are the default wrist: there are no bare ones
+  }
+  for (const mm of MODELS) for (const m of mm.meshes) {
+    const side = (m.name.match(/_(L|R)$/) || [])[1];
+    if (/^pauldron_/.test(m.name) && side && on('i_gauntlet_' + side)) m.userData.want = false;   // the steel arm brings its own shoulder
+    if (/hair/i.test(m.name) && on('i_helmet')) m.userData.want = false;                          // no hair through a helm
+  }
+  applyShow();
+}
+function applyUnder() {
+  for (const mm of MODELS) {
+    const body = mm.meshes.find(m => /base_body/.test(m.name)); const pj = mm.pieces && mm.pieces.body; if (!body || !pj) continue;
+    if (!body.userData.idx0) body.userData.idx0 = Array.from(body.geometry.index.array);
+    const worn = side => { const g = mm.meshes.find(m => m.name === 'gauntlet_' + side); return g && g.userData.want; };
+    // THE WHOLE ARM IS THE PIECE, exactly as the file wears it: shoulder to fingertips in steel, so the hand, the
+    // forearm and the upper arm all go with it. Fitting flesh inside the steel instead — drawn in, flared to the rim,
+    // matched angle by angle — kept coming out through it on one side or leaving a void in the sleeve on the other:
+    // the prosthetic was modelled round a limb that is not the one underneath it.
+    if (!body.userData.pos0) body.userData.pos0 = Float32Array.from(body.geometry.getAttribute('position').array);
+    const bones = body.skeleton.bones, bp = nm => { const i = bones.findIndex(b2 => b2.name === nm); return i < 0 ? null : new THREE.Vector3().setFromMatrixPosition(bones[i].matrixWorld); };
+    const hide = [];
+    for (const side of ['L', 'R']) { if (!worn(side)) continue;
+      // the HAND and the FOREARM go; the upper arm STAYS inside the steel one. Dropped too, the torso is left cut open
+      // at the shoulder — the deltoid belongs to the arm class, and without it there is a notch beside the pauldron.
+      // the HAND and the FOREARM go. The UPPER ARM stays, at its own size: dropped, the torso's shoulder shelf is left
+      // standing in the air (the deltoid's attachment is classed torso), and drawn in, the bicep visibly narrows as it
+      // enters the steel. The steel is grown instead, in the build, until it contains the arm.
+      for (const part of ['hand', 'fore']) { const c2 = pj.classes.indexOf(part + side); if (c2 >= 0) hide.push(c2); }
+      const b2 = mm.meshes.find(m => m.name === 'band_' + side); if (b2) b2.userData.want = false; }
+    const i0 = body.userData.idx0, p0 = body.userData.pos0;
+    const key = hide.join(','); if (body.userData.hideKey === key) continue; body.userData.hideKey = key;
+    if (!hide.length) body.geometry.setIndex(i0.slice());
+    else { const out = []; for (let t = 0; t < i0.length; t += 3) {
+        // ALL THREE corners must be on the arm. On two of three the torso lost its seam ring as well and a long
+        // decimated triangle was left reaching from the neck to nothing — a skin sail off the shoulder.
+        if (hide.includes(pj.vclass[i0[t]]) && hide.includes(pj.vclass[i0[t+1]]) && hide.includes(pj.vclass[i0[t+2]])) continue;
+        out.push(i0[t], i0[t+1], i0[t+2]); } body.geometry.setIndex(out); }
+
+
+
+
+  }
+}
+function applyShow() {
+  applyUnder();
+  for (const m of ALL()) m.visible = !!m.userData.want;
+  document.querySelectorAll('#meshlist input').forEach(cb => { const m = cb.__mesh; if (m) cb.checked = !!m.userData.want; });
+  for (const mm of MODELS) if (mm.skel) mm.skel.visible = el$('t_bones').checked;
+  gnd.visible = el$('t_grid').checked; measure();
+}
+function applyShade() {
+  const mode = el$('shade').value, wire = el$('t_wire').checked, dbl = el$('t_double').checked, smooth = el$('t_smooth').checked;
+  for (const m of ALL()) {
+    if (m.userData.helm) { m.material.wireframe = wire; continue; }
+    let mat = m.userData[mode] || m.userData.tex;
+    if (mode === 'cls' && !m.userData.cls) mat = m.userData.clay;
+    m.material = mat;
+    if (mat.wireframe !== undefined) mat.wireframe = wire && mode !== 'sil';
+    mat.side = (dbl || isHair(m) || m.userData.armor) ? THREE.DoubleSide : THREE.FrontSide;   // an armour part is a SHELL: its floor and its tucked rim face inwards, and culled to front faces they vanish and the body shows through
+    mat.flatShading = !smooth;
+    mat.needsUpdate = true;
+  }
+  isolate();
+  r.setClearColor(mode === 'sil' ? 0xe8e4dc : 0x23262b); s.background = new THREE.Color(mode === 'sil' ? 0xe8e4dc : 0x23262b);
+}
+// isolate: paint the chosen class, grey the rest (the body only)
+let isoMat = null;
+function isolate() {
+  const sel = el$('iso').value;
+  if (!BODY || !PIECES.body) return;
+  if (sel === '') { if (BODY.material === isoMat) applyShadeBodyOnly(); return; }
+  const vc = PIECES.body.vclass, k = +sel, n = BODY.geometry.getAttribute('position').count, col = new Uint8Array(n * 3);
+  for (let v = 0; v < n; v++) {
+    const hit = vc[v] === k, cc = new THREE.Color(hit ? 0xffb14a : 0x3c4046);
+    col[v * 3] = cc.r * 255; col[v * 3 + 1] = cc.g * 255; col[v * 3 + 2] = cc.b * 255;
+  }
+  BODY.geometry.setAttribute('color', new THREE.BufferAttribute(col, 3, true));
+  isoMat = isoMat || new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.75, metalness: 0, skinning: true });
+  isoMat.wireframe = el$('t_wire').checked; isoMat.flatShading = !el$('t_smooth').checked; isoMat.needsUpdate = true;
+  BODY.material = isoMat;
+}
+function applyShadeBodyOnly() {
+  // restore the class colours and the chosen shading on the body
+  if (BODY.userData.cls && PIECES.body.vclass) {
+    const vc = PIECES.body.vclass, n = BODY.geometry.getAttribute('position').count, col = new Uint8Array(n * 3);
+    for (let v = 0; v < n; v++) { const cc = new THREE.Color(CLS_COL[vc[v] % CLS_COL.length]); col[v * 3] = cc.r * 255; col[v * 3 + 1] = cc.g * 255; col[v * 3 + 2] = cc.b * 255; }
+    BODY.geometry.setAttribute('color', new THREE.BufferAttribute(col, 3, true));
+  }
+  const mode = el$('shade').value; BODY.material = BODY.userData[mode] || BODY.userData.tex;
+}
+['t_bones', 't_grid'].forEach(id => el$(id).onchange = applyShow);
+['i_gauntlet_L', 'i_gauntlet_R', 'i_pauldron_L', 'i_pauldron_R', 'i_helmet'].forEach(id => el$(id).onchange = applyItems);
+['shade', 't_wire', 't_smooth', 't_double'].forEach(id => el$(id).onchange = applyShade);
+el$('iso').onchange = () => { if (el$('iso').value === '') { applyShadeBodyOnly(); } else isolate(); };
+
+// ---- pose
+function setPose(arm, leg) {
+  const put = (name, ax, ang) => { const b = BONE[name]; if (!b) return; const rest = REST.get(name); b.quaternion.copy(rest.q).multiply(new THREE.Quaternion().setFromAxisAngle(ax, ang)); };
+  const X = new THREE.Vector3(1, 0, 0), Z = new THREE.Vector3(0, 0, 1);
+  put('armL', Z, -arm); put('armR', Z, arm);
+  put('thighL', Z, leg); put('thighR', Z, -leg);
+  M.root.updateMatrixWorld(true);
+}
+let armA = 0, legA = 0;
+function pose() { setPose(armA * Math.PI / 180, legA * Math.PI / 180); el$('v_arm').textContent = armA.toFixed(0) + '°'; el$('v_leg').textContent = legA.toFixed(0) + '°'; }
+el$('s_arm').oninput = e => { armA = +e.target.value; el$('s_arm').value = armA; pose(); };
+el$('s_leg').oninput = e => { legA = +e.target.value; pose(); };
+function preset(a, l, btn) { armA = a; legA = l; el$('s_arm').value = a; el$('s_leg').value = l; pose(); ['p_bind', 'p_a', 'p_t'].forEach(i => el$(i).classList.toggle('on', i === btn)); }
+el$('p_bind').onclick = () => preset(0, 0, 'p_bind');
+el$('p_a').onclick = () => preset(-30, 8, 'p_a');
+el$('p_t').onclick = () => preset(-65, 0, 'p_t');
+
+// ---- measurements (bind pose, the body mesh)
+function measure() {
+  if (!BODY || !PIECES.body) { el$('stat').textContent = 'base  ' + (ALL().filter(m => m.visible).reduce((a, m) => a + m.geometry.index.count / 3, 0) | 0) + ' tris shown'; return; }
+  const pos = BODY.geometry.getAttribute('position'), vc = PIECES.body && PIECES.body.vclass, names = PIECES.body ? PIECES.body.classes : [];
+  const ci = n => names.indexOf(n);
+  let top = -9, bot = 9;
+  const ext = {};
+  for (let v = 0; v < pos.count; v++) {
+    const x = pos.getX(v), y = pos.getY(v), z = pos.getZ(v);
+    top = Math.max(top, y); bot = Math.min(bot, y);
+    const k = vc ? vc[v] : -1; const e = ext[k] || (ext[k] = { x0: 9, x1: -9, y0: 9, y1: -9, z0: 9, z1: -9 });
+    e.x0 = Math.min(e.x0, x); e.x1 = Math.max(e.x1, x); e.y0 = Math.min(e.y0, y); e.y1 = Math.max(e.y1, y); e.z0 = Math.min(e.z0, z); e.z1 = Math.max(e.z1, z);
+  }
+  for (const mm of ALL()) { if (!mm.visible) continue; mm.geometry.computeBoundingBox(); top = Math.max(top, mm.geometry.boundingBox.max.y); bot = Math.min(bot, mm.geometry.boundingBox.min.y); }   /* his legs are their own mesh now: the height has to see them */
+  const H = top - bot;
+  const head = ext[ci('head')] || { y0: 0, y1: 0 };
+  const headH = head.y1 - head.y0;
+  // a band round the torso: 32 sectors about the body axis -> width, depth and a polygon girth
+  const band = (y, half) => {
+    const R = new Array(32).fill(0); let x0 = 9, x1 = -9, z0 = 9, z1 = -9, n = 0;
+    for (let v = 0; v < pos.count; v++) {
+      const k = vc ? vc[v] : -1; if (names[k] !== 'torso') continue;
+      const yy = pos.getY(v); if (Math.abs(yy - y) > half) continue;
+      const x = pos.getX(v), z = pos.getZ(v); n++;
+      x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z);
+      const a = Math.atan2(z, x), i = ((Math.round(a / (Math.PI * 2) * 32) % 32) + 32) % 32;
+      R[i] = Math.max(R[i], Math.hypot(x, z));
+    }
+    const A = n ? (x1 - x0) / 2 : 0, B = n ? (z1 - z0) / 2 : 0;   /* Ramanujan's ellipse perimeter reads truer than a 32-spoke polygon on a coarse mesh */
+    const g = Math.PI * (3 * (A + B) - Math.sqrt((3 * A + B) * (A + 3 * B)));
+    return { w: n ? x1 - x0 : NaN, d: n ? z1 - z0 : NaN, g, n };
+  };
+  const wp = n => { const b = BONE[n]; if (!b) return null; return new THREE.Vector3().setFromMatrixPosition(b.matrixWorld); };
+  const d = (a, b) => (a && b) ? a.distanceTo(b) : NaN;
+  const sh = wp('armR'), elb = wp('foreR'), wr = wp('handR'), hip = wp('thighR'), kn = wp('shinR'), ft = wp('footR');
+  const chest = band(bot + H * 0.72, H * 0.02), waist = band(bot + H * 0.62, H * 0.02), hips = band(bot + H * 0.53, H * 0.02);
+  const cm = m => (m * 100).toFixed(1);
+  const tris = ALL().filter(m => m.visible).reduce((a, m) => a + m.geometry.index.count / 3, 0) | 0;
+  el$('stat').innerHTML =
+    `<b>the base</b>  ${tris} tris shown\n` +
+    `height        <b>${cm(H)}</b> cm\n` +
+    `head length   <b>${cm(headH)}</b> cm\n` +
+    `heads tall    <b>${(H / headH).toFixed(2)}</b>  (ideal 7.5–8)\n` +
+    `shoulder span <b>${cm(sh ? Math.abs(sh.x) * 2 : NaN)}</b> cm (joints)\n` +
+    `chest  w×d/g  ${cm(chest.w)} × ${cm(chest.d)} / <b>${cm(chest.g)}</b>\n` +
+    `waist  w×d/g  ${cm(waist.w)} × ${cm(waist.d)} / <b>${cm(waist.g)}</b>\n` +
+    `hips   w×d/g  ${cm(hips.w)} × ${cm(hips.d)} / <b>${cm(hips.g)}</b>\n` +
+    `chest / waist <b>${(chest.g / waist.g).toFixed(2)}</b>  (ideal 1.25–1.35)\n` +
+    `upper arm     ${cm(d(sh, elb))} cm\n` +
+    `forearm       ${cm(d(elb, wr))} cm\n` +
+    `arm total     <b>${cm(d(sh, elb) + d(elb, wr))}</b> cm\n` +
+    `thigh         ${cm(d(hip, kn))} cm\n` +
+    `shin          ${cm(d(kn, ft))} cm\n` +
+    `leg total     <b>${cm(d(hip, kn) + d(kn, ft))}</b> cm\n` +
+    `leg / height  <b>${((d(hip, kn) + d(kn, ft)) / H * 100).toFixed(1)}</b> %  (ideal ~47)\n` +
+    `shoulder / head <b>${(sh ? Math.abs(sh.x) * 2 / headH : NaN).toFixed(2)}</b>  (ideal ~2.2)`;
+}
+
+// ---- camera presets
+document.querySelectorAll('[data-v]').forEach(b => b.onclick = () => { az = +b.dataset.v * Math.PI / 180; el = 4 * Math.PI / 180; cam(); });
+const ZOOM = { head: [1.90, 0.80], torso: [1.45, 2.0], hands: [1.05, 1.3], legs: [0.72, 2.2], feet: [0.12, 0.8] };
+document.querySelectorAll('[data-z]').forEach(b => b.onclick = () => { const z = ZOOM[b.dataset.z]; tgt.set(0, z[0], 0); dist = z[1]; cam(); });
+el$('c_reset').onclick = () => { az = 28 * Math.PI / 180; el = 4 * Math.PI / 180; dist = 5.2; tgt.set(0, 1.04, 0); cam(); };
+el$('s_key').oninput = e => { const a = +e.target.value * Math.PI / 180; key.position.set(Math.sin(a) * 3.4, 3.2, Math.cos(a) * 3.4); el$('v_key').textContent = e.target.value + '°'; };
+el$('s_exp').oninput = e => { const x = +e.target.value / 100; r.toneMappingExposure = x; key.intensity = 1.15 * x; hemi.intensity = 0.55 * x; fill.intensity = 0.34 * x; rim.intensity = 0.5 * x; el$('v_exp').textContent = x.toFixed(2); };
+
+// ---- controls
+let drag = null;
+r.domElement.addEventListener('pointerdown', e => { r.domElement.setPointerCapture(e.pointerId); drag = { x: e.clientX, y: e.clientY, pan: e.button === 2 || e.button === 1 || e.shiftKey }; });
+r.domElement.addEventListener('pointerup', e => { drag = null; });
+r.domElement.addEventListener('pointercancel', () => drag = null);
+r.domElement.addEventListener('contextmenu', e => e.preventDefault());
+r.domElement.addEventListener('pointermove', e => {
+  if (!drag) return;
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY;
+  if (drag.pan) {
+    const k = dist * 0.0016;
+    const right = new THREE.Vector3().setFromMatrixColumn(c.matrix, 0), up = new THREE.Vector3().setFromMatrixColumn(c.matrix, 1);
+    tgt.addScaledVector(right, -dx * k).addScaledVector(up, dy * k);
+  } else { az -= dx * 0.0075; el = Math.max(-1.45, Math.min(1.45, el + dy * 0.0075)); }
+  cam();
+});
+r.domElement.addEventListener('wheel', e => { e.preventDefault(); dist = Math.max(0.08, Math.min(20, dist * (1 + e.deltaY * 0.0012))); cam(); }, { passive: false });
+// double-click: centre on what is under the pointer
+r.domElement.addEventListener('dblclick', e => {
+  const m = new THREE.Vector2(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight * 2 + -1) * 1);
+  const rc = new THREE.Raycaster(); rc.setFromCamera(new THREE.Vector2(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1), c);
+  const hit = rc.intersectObjects(ALL().filter(x => x.visible), false)[0];
+  if (hit) { tgt.copy(hit.point); dist = Math.max(0.15, dist * 0.55); cam(); }
+});
+// pinch
+let pinch = null;
+r.domElement.addEventListener('touchmove', e => {
+  if (e.touches.length !== 2) { pinch = null; return; }
+  const dx = e.touches[0].clientX - e.touches[1].clientX, dy = e.touches[0].clientY - e.touches[1].clientY, dd = Math.hypot(dx, dy);
+  if (pinch) { dist = Math.max(0.08, Math.min(20, dist * pinch / dd)); cam(); }
+  pinch = dd;
+}, { passive: true });
+
+addEventListener('keydown', e => {
+  if (e.key === 'f') el$('c_reset').click();
+  if (e.key === 'w') { el$('t_wire').checked = !el$('t_wire').checked; applyShade(); }
+  if (e.key === 'b') { el$('t_bones').checked = !el$('t_bones').checked; applyShow(); }
+  if (e.key === 'h') el$('ui').style.display = el$('ui').style.display === 'none' ? '' : 'none';
+});
+addEventListener('resize', () => { r.setSize(innerWidth, innerHeight); c.aspect = innerWidth / innerHeight; c.updateProjectionMatrix(); });
+
+// ---- test hooks
+window.__view = (a, e, d, y, x, z) => { if (a != null) az = a * Math.PI / 180; if (e != null) el = e * Math.PI / 180; if (d != null) dist = d; if (y != null) tgt.y = y; if (x != null) tgt.x = x; if (z != null) tgt.z = z; cam(); };
+window.__focus = (c, size, k) => { tgt.set(c[0], c[1], c[2]); dist = (size / 2) / Math.tan(c__fov / 2) * (k || 1.7); cam(); };
+const c__fov = c.fov * Math.PI / 180;
+window.__set = (k, v) => { const n = el$(k); if (!n) return 'no ' + k; if (n.type === 'checkbox') { n.checked = v; n.onchange && n.onchange(); } else { n.value = v; (n.oninput || n.onchange) && (n.oninput ? n.oninput({ target: n }) : n.onchange()); } return k + '=' + v; };
+window.__save = async (name) => { r.render(s, c); const d = r.domElement.toDataURL('image/jpeg', 0.92); await fetch('/shot?' + name, { method: 'POST', body: d }); return name; };
+
+(function loop() { requestAnimationFrame(loop); if (el$('t_spin').checked) { az += 0.0045; cam(); } r.render(s, c); })();
+</script>

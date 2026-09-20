@@ -3,7 +3,7 @@
 # skin cell (#ffdcb4 — lookApply divides the tone by it), the painted hair and beard flattened to skin so the look's hair colour paints them
 import json, struct, sys, math
 from PIL import Image, ImageDraw, ImageFilter
-out = sys.argv[1] if len(sys.argv) > 1 else 'view/models/base/'
+out = sys.argv[1] if len(sys.argv) > 1 else 'build/base/'
 g = json.load(open(out + 'scene.gltf')); bb = open(out + 'scene.bin', 'rb').read()
 FMT = {5121: 'B', 5123: 'H', 5125: 'I', 5126: 'f'}; NC = {'SCALAR': 1, 'VEC2': 2, 'VEC3': 3, 'VEC4': 4, 'MAT4': 16}
 def acc(i):
@@ -77,8 +77,7 @@ mask = mask.filter(ImageFilter.MaxFilter(5))
 N = A.copy(); npx = N.load(); mpx = mask.load()
 for y in range(H):
     for x in range(W):
-        if x >= 1024 and y >= 1024: continue                  # (the free quadrant)
-        if x < 256 and y >= 1024: continue                    # (the eyes keep their paint)
+        if y >= 1024: continue                                # (the lower half is not skin: the eyes at the left keep their paint, Thor's leather, cloth and steel — Equip_01 at (1024,1024), Equip_02/03 at y 1280 — must not take the skin's gain)
         r, gg, b = px[x, y]
         if mpx[x, y]:
             l = (0.299 * r + 0.587 * gg + 0.114 * b) / 255; f = 0.86 + 0.28 * min(1.0, l / max(0.05, medL))   # a little of the strands' shading, on skin

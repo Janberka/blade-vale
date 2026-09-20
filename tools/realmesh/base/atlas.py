@@ -1,10 +1,14 @@
 # one 2048x2048 atlas for the base body: body colour (0,0), head (1024,0), eyes (0,1024) 256px, a plain skin patch (256,1024) 256px
 import json, sys
 from PIL import Image, ImageFilter
-src = 'thor/0/'; out = sys.argv[1] if len(sys.argv) > 1 else 'view/models/base/'
+src = 'thor/0/'; out = sys.argv[1] if len(sys.argv) > 1 else 'build/base/'
 import os; os.makedirs(out, exist_ok=True)
 body = Image.open(src + 'MI_1039506_Body_baseColor.jpg').convert('RGB'); head = Image.open(src + 'MI_1039506_Head_baseColor.jpg').convert('RGB'); eyes = Image.open(src + 'MI_1039506_Eyes_01_baseColor.jpg').convert('RGB')
 A = Image.new('RGB', (2048, 2048), (120, 80, 60)); A.paste(body, (0, 0)); A.paste(head, (1024, 0)); A.paste(eyes.resize((256, 256)), (0, 1024))
+band = Image.open(src + 'MI_1039506_Equip_01_baseColor.jpg').convert('RGB'); A.paste(band.resize((1024, 1024)), (1024, 1024))
+# his pants, boots and shin wraps are his LEGS — the body mesh has none, they lived under these — so they come too, at 512
+for nm, xy in (('Equip_02', (0, 1280)), ('Equip_03', (512, 1280))):
+    A.paste(Image.open(src + 'MI_1039506_%s_baseColor.jpg' % nm).convert('RGB').resize((512, 512)), xy)   # the wrist band's leather: the naked man keeps it, it covers the wrist where his hand has no skin
 # the plainest skin-coloured 96px window of the body texture -> a 256px patch (blurred a touch so the tubes read as skin, not as a crop)
 sm = body.resize((128, 128)); px = sm.load(); best = None
 for y in range(0, 128 - 12):
@@ -44,7 +48,7 @@ def flatten(im):
             if b < 90 or (r + g + b) < 120: px[x, y] = (128, 128, 255)
     return im
 N = Image.new('RGB', (2048, 2048), (128, 128, 255)); N.paste(flatten(bn).resize((1024, 1024)), (0, 0)); N.paste(flatten(hn).resize((1024, 1024)), (1024, 0)); N.save(out + 'atlas_normal.jpg', quality=85)
-json.dump({'body': [0, 0, 0.5, 0.5], 'head': [0.5, 0, 0.5, 0.5], 'eyes': [0, 0.5, 0.125, 0.125], 'skin': [0.125, 0.5, 0.125, 0.125], 'skinMean': [round(m) for m in mean]}, open(out + 'atlas.json', 'w'))
+json.dump({'body': [0, 0, 0.5, 0.5], 'head': [0.5, 0, 0.5, 0.5], 'eyes': [0, 0.5, 0.125, 0.125], 'skin': [0.125, 0.5, 0.125, 0.125], 'band': [0.5, 0.5, 0.5, 0.5], 'legs': [0, 0.625, 0.25, 0.25], 'wraps': [0.25, 0.625, 0.25, 0.25], 'skinMean': [round(m) for m in mean]}, open(out + 'atlas.json', 'w'))
 hp = Image.open(src + 'MI_1039506_Hair_01_baseColor.png').convert('RGBA'); hpx = hp.load(); W2, H2 = hp.size
 lums = [0.299 * hpx[x, y][0] + 0.587 * hpx[x, y][1] + 0.114 * hpx[x, y][2] for y in range(0, H2, 4) for x in range(0, W2, 4) if hpx[x, y][3] > 128]; ml = sum(lums) / len(lums); k = 205 / ml
 for y in range(H2):

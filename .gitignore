@@ -37,3 +37,6 @@ dist/
 
 # wrangler dev state (local D1 + Durable Object storage)
 .wrangler/
+
+# the char editor's screenshots (tools/chared/serve.py writes them)
+tools/chared/shots/

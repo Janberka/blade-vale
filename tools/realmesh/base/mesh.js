@@ -95,6 +95,69 @@ function sweepFill(m, loop, o) { const ids = loop.ids, N = ids.length, ax = V3.n
     for (let k = 1; k < K; k++) for (let j = 0; j < N; j++) { const nb = [snap[k-1][j], snap[k+1][j], snap[k][(j+1)%N], snap[k][(j-1+N)%N]];
       let a = [0, 0, 0]; for (const q of nb) a = V3.add(a, q); a = V3.scale(a, 1 / nb.length); const id = grid[k][j], p = V3.lerp(snap[k][j], a, 0.5); m.pos[id*3] = p[0]; m.pos[id*3+1] = p[1]; m.pos[id*3+2] = p[2]; } }
   return { grid, ring: prev, u, v, thetas: P.map(p => p.th) }; }
+
+// ---- close an open rim with a lid: triangulated FLAT, in the plane the hole faces, only its height relaxed, so it can
+// never fold over itself the way a 3-D minimum-area triangulation of this rim did. Thor's right hand has no skin from the
+// wrist up the back of the metacarpals — it lived under his gauntlet — and the WRIST BAND covers nearly all of it; this
+// closes the strip that still shows past the leather, and nothing more.
+function patchFill(m, loop, o = {}) {
+  const ids = loop.ids, n = ids.length; if (n < 3) return null;
+  const P = ids.map(id => vpos(m, id));
+  let ax = o.axis;
+  if (!ax) { const c = P.reduce((a, p) => V3.add(a, V3.scale(p, 1 / n)), [0, 0, 0]); let nn = [0, 0, 0];
+    for (let i = 0; i < n; i++) nn = V3.add(nn, V3.cross(V3.sub(P[i], c), V3.sub(P[(i + 1) % n], c))); ax = nn; }
+  ax = V3.norm(ax);
+  const U = V3.norm(V3.cross(Math.abs(ax[1]) < 0.9 ? [0, 1, 0] : [0, 0, 1], ax)), Vv = V3.cross(ax, U), org = P[0];
+  const XY = P.map(p => { const d = V3.sub(p, org); return [V3.dot(d, U), V3.dot(d, Vv)]; });
+  const H = P.map(p => V3.dot(V3.sub(p, org), ax));
+  let poly = XY.map((_, i) => i); let a2 = 0;
+  for (let i = 0; i < n; i++) { const a = XY[i], b = XY[(i + 1) % n]; a2 += a[0] * b[1] - b[0] * a[1]; }
+  if (a2 < 0) poly.reverse();
+  const cr = (a, b, c) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+  const inTri = (p, a, b, c) => cr(a, b, p) >= -1e-12 && cr(b, c, p) >= -1e-12 && cr(c, a, p) >= -1e-12;
+  let T = [], guard = 0;
+  while (poly.length > 3 && guard++ < n * n + 64) { let cut = false;
+    for (let k = 0; k < poly.length; k++) { const i0 = poly[(k - 1 + poly.length) % poly.length], i1 = poly[k], i2 = poly[(k + 1) % poly.length];
+      if (cr(XY[i0], XY[i1], XY[i2]) <= 1e-12) continue;
+      let bad = false; for (const q of poly) { if (q === i0 || q === i1 || q === i2) continue; if (inTri(XY[q], XY[i0], XY[i1], XY[i2])) { bad = true; break; } }
+      if (bad) continue; T.push([i0, i1, i2]); poly.splice(k, 1); cut = true; break; }
+    if (!cut) { T.push([poly[0], poly[1], poly[2]]); poly.splice(1, 1); } }
+  if (poly.length === 3) T.push([poly[0], poly[1], poly[2]]);
+  const el = []; for (let i = 0; i < n; i++) el.push(Math.hypot(XY[(i + 1) % n][0] - XY[i][0], XY[(i + 1) % n][1] - XY[i][1]));
+  const target = o.edge || el.slice().sort((x, y) => x - y)[n >> 1];
+  const pts = XY.slice(), hs = H.slice();
+  for (let round = 0; round < (o.refine == null ? 4 : o.refine); round++) { const T2 = []; let added = 0;
+    for (const [a, b, c] of T) { const s = (Math.hypot(pts[b][0] - pts[a][0], pts[b][1] - pts[a][1]) + Math.hypot(pts[c][0] - pts[b][0], pts[c][1] - pts[b][1]) + Math.hypot(pts[a][0] - pts[c][0], pts[a][1] - pts[c][1])) / 3;
+      if (s > target * 1.25) { const id = pts.push([(pts[a][0] + pts[b][0] + pts[c][0]) / 3, (pts[a][1] + pts[b][1] + pts[c][1]) / 3]) - 1; hs.push((hs[a] + hs[b] + hs[c]) / 3); T2.push([a, b, id], [b, c, id], [c, a, id]); added++; }
+      else T2.push([a, b, c]); }
+    T = T2; if (!added) break; }
+  const nb = pts.map(() => new Set());
+  for (const [a, b, c] of T) { nb[a].add(b); nb[a].add(c); nb[b].add(a); nb[b].add(c); nb[c].add(a); nb[c].add(b); }
+  for (let it = 0; it < 20; it++) { const snap = pts.map(p => p.slice());
+    for (let v = n; v < pts.length; v++) { let x = 0, y = 0, k = 0; for (const j of nb[v]) { x += snap[j][0]; y += snap[j][1]; k++; } if (!k) continue;
+      pts[v][0] += (x / k - pts[v][0]) * 0.5; pts[v][1] += (y / k - pts[v][1]) * 0.5; } }
+  for (let it = 0; it < (o.iters == null ? 200 : o.iters); it++) { const snap = hs.slice();
+    for (let v = n; v < hs.length; v++) { let h = 0, k = 0; for (const j of nb[v]) { h += snap[j]; k++; } if (k) hs[v] = h / k; } }
+  if (o.bulge) { const dist = new Float64Array(pts.length).fill(Infinity), q = [];
+    for (let i = 0; i < n; i++) { dist[i] = 0; q.push(i); }
+    for (let h = 0; h < q.length; h++) for (const j of nb[q[h]]) if (dist[j] === Infinity) { dist[j] = dist[q[h]] + 1; q.push(j); }
+    let dmax = 0; for (let v = n; v < pts.length; v++) if (dist[v] < Infinity) dmax = Math.max(dmax, dist[v]);
+    if (dmax > 0) for (let v = n; v < pts.length; v++) hs[v] += o.bulge * Math.sin(Math.PI / 2 * Math.min(1, dist[v] / dmax)); }
+  const vid = weldIds(m), dirs = new Set();
+  for (let t = 0; t < m.idx.length; t += 3) { const a = vid[m.idx[t]], b = vid[m.idx[t+1]], c = vid[m.idx[t+2]]; dirs.add(a + '>' + b); dirs.add(b + '>' + c); dirs.add(c + '>' + a); }
+  let fwd = 0, bwd = 0; for (let i = 0; i < n; i++) { const a = vid[ids[i]], b = vid[ids[(i + 1) % n]]; if (dirs.has(a + '>' + b)) fwd++; if (dirs.has(b + '>' + a)) bwd++; }
+  const flipAll = (fwd >= bwd) !== !!o.flip;
+  const map = new Int32Array(pts.length).fill(-1); for (let i = 0; i < n; i++) map[i] = ids[i];
+  for (let v = n; v < pts.length; v++) { const p = V3.add(org, V3.add(V3.add(V3.scale(U, pts[v][0]), V3.scale(Vv, pts[v][1])), V3.scale(ax, hs[v])));
+    let su = 0, sv = 0, sw = 0, best = Infinity, bi = 0;
+    for (let i = 0; i < n; i++) { const d = Math.hypot(pts[v][0] - XY[i][0], pts[v][1] - XY[i][1]) + 1e-6; if (d < best) { best = d; bi = i; }
+      const w = 1 / (d * d); su += m.uv[ids[i]*2] * w; sv += m.uv[ids[i]*2+1] * w; sw += w; }
+    const [ji, w4] = packW(weightsOf(m, ids[bi]));
+    map[v] = addVert(m, p, [su / sw, sv / sw], ji, w4, o.part || m.part[ids[bi]]); }
+  for (const [a, b, c] of T) { if (flipAll) m.idx.push(map[a], map[c], map[b]); else m.idx.push(map[a], map[b], map[c]); }
+  return { tris: T.length, added: pts.length - n };
+}
+
 const len2 = a => Math.hypot(a[0], a[1], a[2]);
 function pack(m) { return { pos: Float32Array.from(m.pos), uv: Float32Array.from(m.uv), ji: Uint16Array.from(m.ji), w: Float32Array.from(m.w), idx: Uint32Array.from(m.idx), part: m.part }; }
 // compact + smooth normals (welded by position so uv-seam duplicates share a normal)
@@ -102,4 +165,4 @@ function finish(m) { const nv = nverts(m), used = new Int32Array(nv).fill(-1); l
   for (let k = 0; k < n; k++) { const v = inv[k]; addVert(o, vpos(m, v), [m.uv[v*2], m.uv[v*2+1]], m.ji.slice(v*4, v*4+4), m.w.slice(v*4, v*4+4), m.part[v]); } for (const i of m.idx) o.idx.push(used[i]);
   const vid = weldIds(o), acc = new Float64Array(n * 3); for (let t = 0; t < o.idx.length; t += 3) { const a = vpos(o, o.idx[t]), b = vpos(o, o.idx[t+1]), c = vpos(o, o.idx[t+2]); const nn = V3.cross(V3.sub(b, a), V3.sub(c, a)); for (const i of [o.idx[t], o.idx[t+1], o.idx[t+2]]) { const w = vid[i]; acc[w*3] += nn[0]; acc[w*3+1] += nn[1]; acc[w*3+2] += nn[2]; } }
   o.nrm = []; for (let v = 0; v < n; v++) { const w = vid[v]; const nn = V3.norm([acc[w*3], acc[w*3+1], acc[w*3+2]]); o.nrm.push(nn[0], nn[1], nn[2]); } return o; }
-module.exports = { sweepFill, fixOrientation, clipPlane, bridgeByAngle, V3, empty, nverts, vpos, addVert, weightsOf, blendW, packW, append, weldIds, openLoops, loopByAngle, tube, stitch, cap, ringAt, clipX, mirrorX, zipper, pack, finish };
+module.exports = { patchFill, sweepFill, fixOrientation, clipPlane, bridgeByAngle, V3, empty, nverts, vpos, addVert, weightsOf, blendW, packW, append, weldIds, openLoops, loopByAngle, tube, stitch, cap, ringAt, clipX, mirrorX, zipper, pack, finish };

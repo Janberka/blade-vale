@@ -1706,6 +1706,15 @@ const LOOK_SKIN = [0xf0d4b8, 0xe4c4a4, 0xd8b090, 0xc89a78, 0xa87858, 0x8a5c40, 0
 // THE BARBER (gear.look = { s, f, h, c, b }, indexes below; ARENA_LOOK in arena-items.js holds the ranges): what a player picks
 // for his own face; the vale's men roll theirs from the name
 const LOOK_HAIR_PICK = [0x1a1210, 0x3a2416, 0x5c3a1e, 0x8a5a2e, 0xa04a20, 0xb08040, 0xd0b078, 0x8a8a88, 0xd8d4cc];   // black, dark brown, brown, auburn, red, fair, blond, grey, white
+// ONE CUT (2026-09-20, the user: "cancel hair style customization — everyone will have the same hair as we see here in
+// the editor, just a different colours should be possible"): every fighter wears the base's own mane, the long cards the
+// sculpt came with, and only its COLOUR is a choice. The styles below are no longer picked: the cast cap (lookHairGeo)
+// they describe is only what a rig with no cards of its own would fall back to. The barber's `h` pick is gone from
+// ARENA_LOOK, so a saved one falls out of range and is ignored. The mane is ~6k triangles a man, drawn on every tier —
+// a cheap cast cap was tried for the low one and dropped: it reads as a skullcap, which is a different cut.
+const _hc = new THREE.Color();                              // scratch: the hair tint while it is mixed with the skin's
+const LOOK_HAIR_TEX = [0.564, 0.401, 0.301];                // what the sculpt's PAINTED crop averages in the atlas (headbake.py prints it): the chosen colour is divided by this before it is written as a vertex tint, so tint × paint lands back on the swatch while the paint keeps the hairline and the strands
+const LOOK_HAIR_ONE = 1;                                    // the short crop the sculpt is PAINTED with — the head's own 'hair' class, dyed by the look. Not `hair_long`: the mane is 6k cards the base also carries, and it is not what he wears (it is a ware waiting for a slot).
 const LOOK_HAIR_STYLES = ['shaved', 'short crop', 'crown', 'long', 'mohawk'];
 const LOOK_INK = [null, 'wolf', 'serpent', 'tide', 'sun', 'thorn'], LOOK_INK_NAMES = ['none', 'wolf', 'serpent', 'tide', 'sun', 'thorn'];   // the ink's DESIGN (gear.look.i): free, the barber's — it shows on whatever skin the kit leaves bare; bands of the ink atlas, in this order
 const LOOK_INK_COLOURS = [0x12192a, 0x101010, 0x6b1410, 0xe8dcc8, 0x2f5a2a, 0xb8752a, 0x4a2a6a, 0x1f6b6b], LOOK_INK_COLOUR_NAMES = ['blue-black', 'black', 'blood', 'bone', 'moss', 'ochre', 'violet', 'teal'];   // the ink's COLOUR (gear.look.k)
@@ -1756,11 +1765,11 @@ function lookRoll(name, arch, gear, pal, o = {}) {
   const skinBase = has('s') ? LOOK_SKIN[LK.s] : skinPick, sunned = new THREE.Color(skinBase).multiply(new THREE.Color(0.84, 0.68, 0.61));   // weathered: the tone itself, darkened and reddened (a fixed tan target lightened the dark tones — a fair man's target is still ~#c89070)
   look.skin = c.setHex(skinBase).lerp(sunned, has('s') ? 0.15 : weather).getHex();
   look.body = look.skin;   // THE BODY under the armour: the face's tone exactly (2026-09-17 — the paler unweathered chest read as a different skin colour from the head and hands, worst on the dark tones); lookBodyColour keeps the muscle shading
-  const bald = r() < 0.28, hairRoll = pick(LOOK_HAIR), hairC = has('c') ? LOOK_HAIR_PICK[LK.c] : hairRoll, skinC = new THREE.Color(look.skin);
-  const beardOn = r() < 0.75, fullBeard = r() < 0.65, styleRoll = r(), beardKind = r();
-  look.hairStyle = has('h') ? LK.h : bald ? 0 : styleRoll < 0.64 ? 1 : styleRoll < 0.74 ? 2 : styleRoll < 0.94 ? 3 : 4;   // most cropped, some long, a mohawk now and then
+  const hairRoll = pick(LOOK_HAIR), hairC = has('c') ? LOOK_HAIR_PICK[LK.c] : hairRoll, skinC = new THREE.Color(look.skin);
+  const beardOn = r() < 0.75, fullBeard = r() < 0.65, styleRoll = r(), beardKind = r();   // (styleRoll: drawn and dropped, so a man's beard and scar are the same as before the cut was fixed)
+  look.hairStyle = LOOK_HAIR_ONE;                            // the one cut — his colour is the choice (LOOK_HAIR_ONE)
   look.beardStyle = has('b') ? LK.b : !beardOn ? 0 : beardKind < 0.12 ? 3 : beardKind < 0.17 ? 4 : fullBeard ? 2 : 1;      // most wear a beard, most of those a full one
-  look.hair = look.hairStyle === 0 ? null : hairC; look.beard = look.beardStyle ? c.setHex(hairC).lerp(skinC, 0.08).getHex() : null; look.stubble = c.setHex(hairC).lerp(skinC, 0.45).getHex();
+  look.hair = hairC; look.beard = look.beardStyle ? c.setHex(hairC).lerp(skinC, 0.08).getHex() : null; look.stubble = c.setHex(hairC).lerp(skinC, 0.45).getHex();
   look.brow = c.setHex(hairC).lerp(skinC, 0.3).getHex(); look.socket = c.copy(skinC).multiplyScalar(0.91).getHex(); look.lip = c.copy(skinC).multiplyScalar(0.88).getHex();   // dark brows, a light shadow round the eyes (0.78 sank them into a skull), a hard mouth
   look.faceShape = has('f') ? LK.f : Math.floor(lookRng(lookSeed(name) ^ 0x2545f491)() * LOOK_FACE_SHAPES.length);   // (its own stream: the bones came later, nobody's hair or kit re-rolls for them)
   const scar = r(); look.scar = scar < 0.18 ? 'scarL' : scar < 0.36 ? 'scarR' : null; look.scarC = c.copy(skinC).lerp(new THREE.Color(0xe8a0a0), 0.45).multiplyScalar(1.05).getHex();
@@ -1847,7 +1856,10 @@ function lookApply(L, look) {
     // skin vertices carry a per-vertex colour, so the palette's skin (~#ffdcb4) × tint: the tint is chosen so tint × skin ≈ the tone wanted
     if (skinTint && !pj.sculpted) lookFaceApply(sm, look, pj);                 // (the bones: this body's own head positions)
     const pos = sm.userData.geo0.getAttribute('position'), scalp = skinTint ? lookScalpMask(sm, look, pj) : null, brow = skinTint ? lookBrowMask(sm, pj) : null;
-    for (let v = 0; v < nv; v++) { const cls = pj.classes[pj.vclass[v]], mt = pj.mats[pj.vmat[v]]; if (pj.naked && mt === 'skin') lookBodyColour(c, look, cls, pos.getX(v), pos.getY(v), pos.getZ(v), pj.body); else c.setHex(skinTint ? lookFaceColour(look, cls, mt, pos.getX(v), pos.getY(v), pos.getZ(v), !!(scalp && scalp[v]), !!(brow && brow[v])) : lookColour(look, cls, mt)); if ((skinTint || pj.naked) && mt === 'skin' && cls !== 'eye') { const lift = pj.sculpted ? 1.16 : 1; /* (a sculpted body's painted skin averages 0.86 of the palette cell — its bright parts sit AT the cell so the paint keeps its shape — so the tone is lifted back) */ c.r = Math.min(1, c.r * lift / 1.0); c.g = Math.min(1, c.g * lift / 0.86); c.b = Math.min(1, c.b * lift / 0.70); } col.setXYZ(v, c.r * 255, c.g * 255, c.b * 255); } col.needsUpdate = true;
+    for (let v = 0; v < nv; v++) { const cls = pj.classes[pj.vclass[v]], mt = pj.mats[pj.vmat[v]]; if (pj.naked && mt === 'skin') lookBodyColour(c, look, cls, pos.getX(v), pos.getY(v), pos.getZ(v), pj.body); else c.setHex(skinTint ? lookFaceColour(look, cls, mt, pos.getX(v), pos.getY(v), pos.getZ(v), !!(scalp && scalp[v]), !!(brow && brow[v])) : lookColour(look, cls, mt)); if (pj.sculpted && skinTint && scalp && scalp[v] && look.hair != null && cls !== 'eye') { const k = scalp[v] / 255;   // THE CROP: his hair colour over the paint (divided by what the paint averages), faded into his skin across the hairline
+        _hc.setHex(look.hair); _hc.setRGB(Math.min(1, _hc.r / LOOK_HAIR_TEX[0]), Math.min(1, _hc.g / LOOK_HAIR_TEX[1]), Math.min(1, _hc.b / LOOK_HAIR_TEX[2]));
+        c.setHex(look.skin); c.setRGB(Math.min(1, c.r * 1.16 / 1.0), Math.min(1, c.g * 1.16 / 0.86), Math.min(1, c.b * 1.16 / 0.70)); c.lerp(_hc, k); }
+      else if ((skinTint || pj.naked) && mt === 'skin' && cls !== 'eye') { const lift = pj.sculpted ? 1.16 : 1; /* (a sculpted body's painted skin averages 0.86 of the palette cell — its bright parts sit AT the cell so the paint keeps its shape — so the tone is lifted back) */ c.r = Math.min(1, c.r * lift / 1.0); c.g = Math.min(1, c.g * lift / 0.86); c.b = Math.min(1, c.b * lift / 0.70); } col.setXYZ(v, c.r * 255, c.g * 255, c.b * 255); } col.needsUpdate = true;
     const kd0 = sm.userData.geo0.getAttribute('kind');           // this body's own kinds, following the paint (lookKind)
     if (kd0 && !skinTint) { if (!sm.userData.ownKind) { sm.geometry.setAttribute('kind', kd0.clone()); sm.userData.ownKind = true; } const kd = sm.geometry.getAttribute('kind');
       for (let v = 0; v < nv; v++) kd.setX(v, lookKind(look, pj.classes[pj.vclass[v]], pj.mats[pj.vmat[v]], kd0.getX(v))); kd.needsUpdate = true; }
@@ -1958,8 +1970,19 @@ function lookHairUnder(hs, x, y, z) { if (hs <= 0) return false; if (hs === 4 &&
 function lookScalpMask(sm, look, pj) {
   const hs = look.hairStyle | 0; if (hs <= 0 || look.hair == null) return null; pj.scalpMask = pj.scalpMask || {}; if (pj.scalpMask[hs]) return pj.scalpMask[hs];
   const g0 = sm.userData.geo0, pos = g0.getAttribute('position'), adj = lookFaceAdj(g0, pj), n = adj.groups.length, under = new Uint8Array(n), mask = new Uint8Array(pos.count);
-  for (let w = 0; w < n; w++) { const v = adj.groups[w][0]; under[w] = pj.classes[pj.vclass[v]] === 'hair' && lookHairUnder(hs, pos.getX(v), pos.getY(v), pos.getZ(v)) ? 1 : 0; }
-  for (let w = 0; w < n; w++) { if (!under[w] || !adj.nbr[w].every(j => under[j])) continue; for (const v of adj.groups[w]) mask[v] = 1; }
+  // a SCULPTED head wears the crop it was painted with, and the bake cut that from the paint itself (headbake.py), so the
+  // class alone says "under the hair" — the hairline curve below is the lathed head's guess. The erosion still applies:
+  // a painted vertex ON the edge bleeds its colour across every triangle it touches, down the forehead's tall slivers.
+  for (let w = 0; w < n; w++) { const v = adj.groups[w][0], isHair = pj.classes[pj.vclass[v]] === 'hair';
+    under[w] = isHair && (pj.sculpted || lookHairUnder(hs, pos.getX(v), pos.getY(v), pos.getZ(v))) ? 1 : 0; }
+  // A SCULPTED HEAD FADES INSTEAD OF STOPPING. Its hairline is in the paint, so the tint only has to say "this is hair"
+  // — but as a yes/no it drew a zigzag along the triangle edges, and one dyed vertex on the skull reached down a long
+  // neck sliver as a brown patch. So the mask is a WEIGHT: how much of a vertex's welded neighbourhood is hair (its own
+  // ring counted twice). Deep in the crop it is 1, it ramps to 0 across the hairline, and the paint does the rest.
+  if (pj.sculpted) { for (let w = 0; w < n; w++) { const nb = adj.nbr[w], hairN = nb.reduce((a, j) => a + under[j], 0);
+      const k = (under[w] * 2 + hairN) / (2 + nb.length); if (k > 0.02) for (const v of adj.groups[w]) mask[v] = Math.round(k * 255); }
+    return (pj.scalpMask[hs] = mask); }
+  for (let w = 0; w < n; w++) { if (!under[w] || !adj.nbr[w].every(j => under[j])) continue; for (const v of adj.groups[w]) mask[v] = 255; }
   return (pj.scalpMask[hs] = mask);
 }
 // the brow the same way: the bake's brow box takes the eyebrow's ridge AND the skin round its root, and that skin's paint ran up the
@@ -2039,11 +2062,15 @@ function lookHairGeo(R, hs) {
 // the figure's hair: the cap for his cut in his colour, riding the head bone; gone under a helm, or shaved
 function lookHairApply(L, look) {
   const hs = look.hairStyle | 0, on = look.hair != null && hs > 0 && !look.helmet;
-  { const HL = L.inst.skinned.hair_long, BC = L.inst.skinned.beard_cards;   // THE BASE'S OWN CARDS: the long mane for the long cut, the beard cards for a full beard — in the look's colours; under a helm the mane goes
-    if (HL) { HL.visible = on && hs === 3; if (HL.visible) HL.material.color.setHex(look.hair); }
+  { const HL = L.inst.skinned.hair_long, BC = L.inst.skinned.beard_cards;   // THE BASE'S OWN CARDS: the mane every man wears, the beard cards for a full beard — in the look's colours; under a helm the mane goes
+    if (HL) HL.visible = false;                              // the mane is not the cut (2026-09-20) — it stays in the rig, unworn
     if (BC) { BC.visible = look.beard != null && (look.beardStyle | 0) === 2; if (BC.visible) BC.material.color.setHex(look.beard); }
     if (HL && HL.visible) { if (L.mHair) L.mHair.visible = false; return; } }
   const R = MODEL_RIGS.get(L.g.userData.model), body = on && R && Object.values(L.inst.skinned).find(sm => sm.userData.pieces && sm.userData.pieces.classes.indexOf('hair') >= 0);
+  // A SCULPTED HEAD WEARS ITS OWN HAIR: the crop is painted into the sculpt and the bake classed it (`hair`), so the
+  // look's colour dyes it in place — no cap of geometry. The cast cap below is for the old lathed head, whose scalp is
+  // a few big triangles that paint alone smeared: over a sculpt it reads as a shell sitting on top of the hair.
+  if (body && body.userData.pieces.sculpted) { if (L.mHair) L.mHair.visible = false; return; }
   const g0 = body && lookHairGeo(R, hs); if (!g0) { if (L.mHair) L.mHair.visible = false; return; }
   if (!L.mHair) { const sm = new THREE.SkinnedMesh(g0, new THREE.MeshPhongMaterial({ color: look.hair, shininess: 10, specular: 0x202020, skinning: true, flatShading: true, side: THREE.DoubleSide }));
     sm.frustumCulled = false; sm.castShadow = true; sm.name = 'hair'; body.parent.add(sm); sm.bind(body.skeleton, body.bindMatrix); L.mHair = sm; }
@@ -24539,8 +24566,7 @@ function afBarberRender() {
   p.innerHTML = '<div class="bb-head">' + (window.net && net.session ? 'Your face, kept with your career — every fighter in the pit sees it.' : 'Kept in this browser — sign in and it follows your career.') + ' Tap his head, a hand or the legs to look closer; tap again to step back.</div>'
     + sec('s', 'Skin', 'the tone', cur('s', LOOK_SKIN_NAMES), sw('s', LOOK_SKIN, LOOK_SKIN_NAMES))
     + sec('f', 'Face', 'the bones', cur('f', LOOK_FACE_SHAPES), chips('f', LOOK_FACE_SHAPES))
-    + sec('h', 'Hair', 'the cut', cur('h', LOOK_HAIR_STYLES), chips('h', LOOK_HAIR_STYLES))
-    + sec('c', 'Colour', 'hair and beard', cur('c', HAIR_COLOURS), sw('c', LOOK_HAIR_PICK, HAIR_COLOURS))
+    + sec('c', 'Hair', 'the colour — every fighter wears the same cut', cur('c', HAIR_COLOURS), sw('c', LOOK_HAIR_PICK, HAIR_COLOURS))
     + sec('b', 'Beard', 'the chin', cur('b', LOOK_BEARD_STYLES), chips('b', LOOK_BEARD_STYLES))
     + sec('i', 'Ink', 'on bare skin — the wolf pelt, the berserker\'s mantle', cur('i', LOOK_INK_NAMES), chips('i', LOOK_INK_NAMES))
     + sec('k', 'Ink colour', 'the dye', cur('k', LOOK_INK_COLOUR_NAMES), sw('k', LOOK_INK_COLOURS, LOOK_INK_COLOUR_NAMES))

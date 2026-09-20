@@ -234,6 +234,7 @@ const NAMES = ['base'], MODELS = [];   // the editor shows ONE character: the ba
 // editor lays it on at load. ?rawsword=1 shows the rig's own.
 async function seatSword(mm) {
   if (q.get('rawsword')) return;
+  try { const rg = await (await fetch(DIR + '/rig.json?' + Date.now())).json(); if (rg.grip && rg.grip.sword) return; } catch (e) {}   // baked into the rig (grip.js --bake) — laying it on again would double it
   let j; try { j = await (await fetch('items/sword_grip.json?' + Date.now())).json(); } catch (e) { return; }
   const m = mm.meshes.find(x => x.name === j.mesh); if (!m || m.userData.seated) return;
   const S = new THREE.Matrix4().fromArray(j.matrix), N = new THREE.Matrix3().getNormalMatrix(S), g = m.geometry;

@@ -204,5 +204,40 @@
    "slot": "pauldR",
    "side": true
   }
+ },
+ "grip": {
+  "sword": {
+   "hand": "handR",
+   "seat": [
+    0.155261,
+    -0.983501,
+    -0.092847,
+    0,
+    0.102995,
+    -0.077359,
+    0.991669,
+    0,
+    -0.98249,
+    -0.163531,
+    0.089285,
+    0,
+    -0.427541,
+    0.423475,
+    -1.135115,
+    1
+   ],
+   "turn": [
+    -0.213649,
+    -0.467759,
+    0.022046,
+    0.857362
+   ],
+   "deg": [
+    -30,
+    51,
+    40
+   ],
+   "note": "grip.js --bake: the sword mesh carries `seat` already (modelPropGeo UNDOES it for a prop taken off the hand); `turn` is the hand's own, laid on the sword hand by syncModelRigs"
+  }
  }
 }

@@ -116,6 +116,17 @@ the hand down the chain called "middle" aimed it down the LITTLE finger's knuckl
 The pane does not run `requestAnimationFrame` while it is hidden: a clip that "does not play" in a
 test is a hidden pane — hold frames with `__motion(id, f)`.
 
+**...and into the game** — `node tools/realmesh/base/grip.js --bake` writes three things into `assets/rigs/base`, none of
+which touches the bind pose (skinning is unchanged), then bump `game.js?v=`:
+
+1. the **sword's vertices take the seat** — `mSword` in game.js is this very mesh, so it lands in his fist;
+2. the **fingers' node matrices take the fist** the clip closes. game.js already prefers a hand bone's node matrix over
+   its bind ("the model was saved gripping") — the base was saved with an OPEN hand, so the game drew splayed fingers
+   round a hilt. Writing the fist there closes it with no game code at all;
+3. **`rig.json.grip`** carries the seat and the hand's turn: `modelPropGeo` UNDOES the seat for a prop taken off the hand
+   (the sheathed blade at the hip, the shop's — they are placed in the old bind orientation and must not move, checked:
+   0.0009 mm), and `syncModelRigs` lays the turn on the sword hand, on top of whatever pose asks of it (a bow takes it off).
+
 ## From the editor into the game
 
 The editor shows the pieces live; the game gets them baked, so what you judged is what ships.

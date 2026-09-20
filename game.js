@@ -1518,7 +1518,10 @@ function modelPropGeo(R, key) {
   R.props = R.props || {}; if (R.props[key] !== undefined) return R.props[key];
   const name = (R.spec.meshes || {})[key], m = R.meshes.find(x => x.name === name); if (!m) return (R.props[key] = null);
   const j = m.geo.getAttribute('skinIndex').getX(0), o = new THREE.Vector3().setFromMatrixPosition(new THREE.Matrix4().fromArray(m.ibm, j * 16).invert());
-  const geo = m.geo.clone(); geo.deleteAttribute('skinIndex'); geo.deleteAttribute('skinWeight'); geo.translate(-o.x, -o.y, -o.z); geo.computeBoundingBox();
+  const geo = m.geo.clone(); geo.deleteAttribute('skinIndex'); geo.deleteAttribute('skinWeight');
+  const seat = ((R.spec.grip || {})[key] || {}).seat;   // the mesh carries its GRIP (grip.js --bake: the hilt in his fist); a prop taken OFF the hand — the sheathed blade at the hip, the shop's — is placed in the old bind orientation, so undo it here and MODEL_HIP keeps its meaning
+  if (seat) geo.applyMatrix4(new THREE.Matrix4().fromArray(seat).invert());
+  geo.translate(-o.x, -o.y, -o.z); geo.computeBoundingBox();
   return (R.props[key] = geo);
 }
 // dress a built plastic rig in the figure; the plastic body hides, the held gear stays and rides the figure's hands
@@ -1564,7 +1567,11 @@ function wearModelRig(h, name, o = {}) {
   // team colour: the cloak is dyed outright, the shield's face is tinted — the steel stays steel
   if (o.team != null) { const cloak = inst.skinned[M.cloak]; if (cloak) { cloak.userData.mm = { ctx: inst.ctx, skinning: true, map: false, color: o.team }; cloak.material = modelMaterial(R, cloak.userData.mm); }
     if (mShield) { mShield.userData.mm = { ctx: inst.ctx, skinning: true, color: new THREE.Color(o.team).lerp(new THREE.Color(0xffffff), 0.35).getHex() }; mShield.material = modelMaterial(R, mShield.userData.mm); } }
-  const live = { h, P, g, inst, drive, mSword, mShield, mHip, mRound: null, shieldKind: 'heater', plume, q: new THREE.Quaternion(), w: [], armBase, armAmt: armBase, body: null, bodyLooked: 0 };
+  // his sword hand's own turn: how he holds a hilt (rig.json.grip.sword.turn, set by eye in the char editor). The hand is
+  // driven by the game's poses, so the turn rides on top of whatever the pose asks of it — the same post-multiply the
+  // editor and motion.js do. The bow hand draws a string instead, so a bow takes it off.
+  const gspec = (R.spec.grip || {}).sword, gbone = gspec && inst.byName[gspec.hand], grip = gbone ? { i: inst.nodes.indexOf(gbone), q: new THREE.Quaternion().fromArray(gspec.turn) } : null;
+  const live = { h, P, g, inst, drive, grip, mSword, mShield, mHip, mRound: null, shieldKind: 'heater', plume, q: new THREE.Quaternion(), w: [], armBase, armAmt: armBase, body: null, bodyLooked: 0 };
   MODEL_LIVE.push(live); P.modelRig = live; g.userData.model = name; return true;
 }
 // where the sheathed blade hangs (rig units off the hips bone, +x = his left): grip at the hip, the blade down and swept back along the thigh
@@ -1580,6 +1587,7 @@ function syncModelRigs() {
     if (!L.body && L.bodyLooked++ % 30 === 0 && AF.bodies) L.body = AF.bodies.find(b => b.parts === L.P) || null;
     const want = L.body && L.body.blocking ? 0 : L.armBase; if (Math.abs(want - L.armAmt) > 0.002) { L.armAmt += (want - L.armAmt) * 0.12; for (const d of drive) if (d.limb === 'arms') d.fix = new THREE.Quaternion().slerp(d.full, L.armAmt); }
     for (const d of drive) { _tmpQ.identity(); for (const p of d.chain) _tmpQ.multiply(p.quaternion); if (d.fix) _tmpQ.multiply(d.fix); target.set(d.i, _tmpQ.clone().multiply(inst.restWorld[d.i])); }
+    if (L.grip && !(L.P.bow && L.P.bow.visible)) { const t = target.get(L.grip.i); if (t) t.multiply(L.grip.q); }   /* the hilt turn, in the hand's own frame: world = parent · local, so post-multiplying the world target IS turning the local */
     const W = L.w; for (const i of inst.order) { const b = inst.nodes[i], pi = inst.parent[i]; const pw = pi < 0 ? null : W[pi];
       let t = target.get(i); if (t) { b.quaternion.copy(t); if (pw) b.quaternion.premultiply(pw.clone().invert()); } else b.quaternion.copy(inst.restLocal[i]);
       W[i] = pw ? pw.clone().multiply(b.quaternion) : b.quaternion.clone(); }

@@ -7,8 +7,12 @@
 // on our bone: Qt(t) = D(t)·A·Qt_rest. A is what our rest pose lacks to BE the source's reference pose (they stand in a T,
 // he stands in Thor's A with his knees soft): for a limb, the shortest arc that lays our bone along theirs, carried down the
 // chain so a twist is inherited, not invented; for the FEET a turn about the vertical only — both men stand flat in their
-// rest pose, and an ankle→toe line pitches with the boot's proportions, not with the pose; for the trunk, nothing: his
-// posture stays his own and only their movement is added. Locals fall out of the parent's world. Bones with no source
+// rest pose, and an ankle→toe line pitches with the boot's proportions, not with the pose; for the CLAVICLES the lift only
+// (the turn in the frontal plane): a T carries its collar bones 8° UP and a walk drops them 11–25° from there, while his A
+// already has them down at −7° — left unaligned, their drop went on top of his, his shoulders sank 4–9 cm and the traps were
+// dragged into one slope from the skull to the shoulder ("the neck became too big"); how far FORWARD a collar bone points
+// at rest is each rig's own convention (theirs 15° back, his 4° forward), so that stays his and only their movement is
+// added; for the trunk, nothing: his posture stays his own and only their movement is added. Locals fall out of the parent's world. Bones with no source
 // (the spare spine joints, the metacarpals) ride their parent.
 // The hip's travel comes from the clip's `world` (the skeleton prim's matrix per key), scaled by our hip height over theirs.
 const fs = require('fs'), path = require('path');
@@ -33,7 +37,7 @@ const PROFILES = {
 };
 // how each of OUR bones is brought to the source's reference pose: [mode, the child that gives the bone its direction]
 const ALIGN = {}; for (const s of ['L', 'R']) {
-  Object.assign(ALIGN, { ['arm' + s]: ['dir', 'fore' + s], ['fore' + s]: ['dir', 'hand' + s], ['hand' + s]: ['dir', 'middle' + s + '1'],
+  Object.assign(ALIGN, { ['clav' + s]: ['lift', 'arm' + s], ['arm' + s]: ['dir', 'fore' + s], ['fore' + s]: ['dir', 'hand' + s], ['hand' + s]: ['dir', 'middle' + s + '1'],
     ['thigh' + s]: ['dir', 'shin' + s], ['shin' + s]: ['dir', 'foot' + s], ['foot' + s]: ['yaw', 'toe' + s], ['toe' + s]: ['as', 'foot' + s] });
   for (const f of ['index', 'middle', 'ring']) { ALIGN[f + s + '1'] = ['dir', f + s + '2']; ALIGN[f + s + '2'] = ['dir', f + s + '3']; ALIGN[f + s + '3'] = ['up']; }
   for (const f of ['pinky', 'thumb']) { ALIGN[f + s + '0'] = ['dir', f + s + '1']; ALIGN[f + s + '1'] = ['dir', f + s + '2']; ALIGN[f + s + '2'] = ['up']; }
@@ -88,7 +92,7 @@ for (const k of order) { const nm = T[k].name, src = prof.map[nm]; if (!src) con
   else if (al[0] === 'up') A[nm] = Aup.clone();
   else if (al[0] === 'as') A[nm] = A[al[1]].clone();
   else { const dt = T[tIx[al[1]]].Pw.clone().sub(T[k].Pw), ds = refP[sIx(prof.map[al[1]])].clone().sub(refP[sIx(src)]);
-    if (al[0] === 'yaw') { dt.y = 0; ds.y = 0; A[nm] = arc(dt, ds); } else A[nm] = arc(dt.clone().applyQuaternion(Aup), ds).multiply(Aup); } }
+    if (al[0] === 'yaw') { dt.y = 0; ds.y = 0; A[nm] = arc(dt, ds); } else if (al[0] === 'lift') { dt.z = 0; ds.z = 0; A[nm] = arc(dt, ds); } else A[nm] = arc(dt.clone().applyQuaternion(Aup), ds).multiply(Aup); } }
 
 // ---- the frames
 const names = order.map(k => T[k].name).filter(nm => prof.map[nm] || true), tracks = {}; names.forEach(nm => { tracks[nm] = []; });
@@ -99,7 +103,8 @@ SOLE.forEach(o => { o.local = o.at.clone().applyMatrix4(T[tIx[o.bone]].W.clone()
 for (let f = 0; f < frames; f++) {
   const { W, w } = sample(t0 + f / FPS), Qw = [], Pw = [];
   for (const k of order) { const b = T[k], src = prof.map[b.name], par = b.parent;
-    if (src) { const D = src === '@world' ? w.q.clone() : w.q.clone().multiply(rotOf(W[sIx(src)])).multiply(refQ[sIx(src)].clone().invert()); Qw[k] = D.multiply(A[b.name]).multiply(b.Qw); }
+    const aim = nm => { const src = prof.map[nm], D = src === '@world' ? w.q.clone() : w.q.clone().multiply(rotOf(W[sIx(src)])).multiply(refQ[sIx(src)].clone().invert()); return D.multiply(A[nm]).multiply(T[tIx[nm]].Qw); };
+    if (src) Qw[k] = aim(b.name);
     else Qw[k] = (par < 0 ? new Q4() : Qw[par].clone()).multiply(b.q);
     const ql = par < 0 ? Qw[k].clone() : Qw[par].clone().invert().multiply(Qw[k]); ql.normalize();
     const prev = last[b.name]; if (prev && prev.dot(ql) < 0) ql.set(-ql.x, -ql.y, -ql.z, -ql.w); last[b.name] = ql;

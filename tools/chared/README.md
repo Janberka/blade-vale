@@ -54,7 +54,7 @@ node tools/realmesh/base/motion.js /tmp/anim.json <id> "<Name>" --credit "<autho
 
 `motion.js` works in world space, bone by bone (its header has the rule): their turn away from THEIR rest pose laid on
 OUR bone, after our rest pose (Thor's A, soft knees) is brought to theirs (a T) — limbs by the shortest arc carried down
-the chain, feet about the vertical only, the trunk not at all (his posture stays his). The hip's travel is scaled by hip
+the chain, feet about the vertical only, the collar bones by their LIFT only, the trunk not at all (his posture stays his). The hip's travel is scaled by hip
 height, and the clip is then lifted frame by frame so his lowest sole point is ON the ground (`--air` for a jump or a
 fall, `--noloop` for a clip that must not be closed). A new SOURCE skeleton is a new entry in its `PROFILES` (which of
 their joints drives which of our bones).
@@ -68,7 +68,11 @@ carries only the first (the glTF download has them all, by name); its joints com
 `*_scaleCompensation` joint; the HIP is left OUTSIDE the skeleton as an animated Xform, so no joint carries the bob, the
 sway or the yaw — `usdanim.swift` samples the skeleton prim's own world matrix per key for that (`clip.world`); keys are
 not evenly spaced and the loop is padded past its closing key (`motion.js` resamples by time and stops where the first
-pose comes round). The pane does not run `requestAnimationFrame` while it is hidden: a clip that "does not play" in a
+pose comes round). "The neck became too big" was the SHOULDERS: a T holds the collar bones 8° up and a walk drops them
+11–25° from there; his A already has them down, so unaligned their drop landed on top of his, the shoulders sank 4–9 cm
+and the traps were dragged into one slope from skull to shoulder (how the nod is split between neck and head made no
+visible difference — tried, dropped). Check `armL/armR` in the chest's frame against the bind pose before blaming a neck.
+The pane does not run `requestAnimationFrame` while it is hidden: a clip that "does not play" in a
 test is a hidden pane — hold frames with `__motion(id, f)`.
 
 ## From the editor into the game

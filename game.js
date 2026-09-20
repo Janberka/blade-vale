@@ -23019,7 +23019,7 @@ function afCamera(dt) {
     for (const o of AF.bodies) { if (o === me || o.dead) continue; const ox = o.x - me.x, oz = o.z - me.z, along = ox * bx + oz * bz; if (along < 0.6 || along > L + 1) continue; if (Math.abs(ox * bz - oz * bx) < 1.1) { blocked = true; break; } }
     AF.camLift = lerp(AF.camLift || 0, blocked ? 1 : 0, clamp(dt * (blocked ? 6 : 2), 0, 1));
     const dist = cam.dist * (1 - 0.2 * AF.camLift), lift = 2.1 * AF.camLift;
-    const sdx = Math.cos(cam.yaw) * AF_CAM_DEF.side, sdz = -Math.sin(cam.yaw) * AF_CAM_DEF.side;   // (over his right shoulder: the offset is along his right, turned with the lens)
+    const sdx = -Math.cos(cam.yaw) * AF_CAM_DEF.side, sdz = Math.sin(cam.yaw) * AF_CAM_DEF.side;   // (over his right shoulder: the lens looks along (sin yaw, cos yaw), so its right is (-cos yaw, sin yaw) — the old (cos, -sin) sat on his LEFT)
     tmpV.set(me.x - Math.sin(cam.yaw) * dist * cp + sdx, hy + dist * Math.sin(cam.pitch) + 0.6 + lift, me.z - Math.cos(cam.yaw) * dist * cp + sdz);
     if (AF.phase === 'countdown' && !AF.noSweep) {           // the SWEEP: from high over the pit down onto your shoulder as the bell nears (not after a film: its walk-in has already brought the lens here)
       const k = 1 - clamp(AF.countdown / AF_F.countdown, 0, 1), e = k * k * (3 - 2 * k), a = cam.yaw + Math.PI * 0.9 * (1 - e);

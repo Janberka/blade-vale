@@ -185,6 +185,7 @@ const NAMES = ['base'], MODELS = [];   // the editor shows ONE character: the ba
     try { mm.pieces = await (await fetch(DIR + '/pieces.json?' + Date.now())).json(); } catch (e) { mm.pieces = null; }
   }
   M = MODELS[0]; PIECES = M.pieces || {};
+  await seatSword(M);
   BODY = M.meshes.find(m => m.name === 'base_body' || /_body$/.test(m.name));
   M.nodes.forEach(n => { BONE[n.name] = n; REST.set(n.name, { p: n.position.clone(), q: n.quaternion.clone() }); });
 
@@ -217,6 +218,19 @@ const NAMES = ['base'], MODELS = [];   // the editor shows ONE character: the ba
   await loadMotions();
   window.__ready = true;
 })();
+
+// ---- the sword in his fist: items/sword_grip.json (tools/realmesh/base/grip.js) is a bind-space seat for the rig's sword —
+// the grip laid through the tunnel his closed fingers make, blade out of the thumb side. The rig still carries the sword
+// where the OLD warrior's hand held it (upright, 10 cm off the wrist); until the seat is baked into assets/rigs/base the
+// editor lays it on at load. ?rawsword=1 shows the rig's own.
+async function seatSword(mm) {
+  if (q.get('rawsword')) return;
+  let j; try { j = await (await fetch('items/sword_grip.json?' + Date.now())).json(); } catch (e) { return; }
+  const m = mm.meshes.find(x => x.name === j.mesh); if (!m || m.userData.seated) return;
+  const S = new THREE.Matrix4().fromArray(j.matrix), N = new THREE.Matrix3().getNormalMatrix(S), g = m.geometry;
+  g.getAttribute('position').applyMatrix4(S); if (g.getAttribute('normal')) g.getAttribute('normal').applyNormalMatrix(N);
+  g.computeBoundingBox(); g.computeBoundingSphere(); m.userData.seated = j;
+}
 
 // ---- the helm: helm_corinthian.json + .bin (positions, normals, uvs, u16 indices, already fitted to the base head in
 // the bind pose, with its own maps). It rides the head bone as a plain mesh, so it turns with the head when posed.

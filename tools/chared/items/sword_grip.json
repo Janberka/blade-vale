@@ -1,0 +1,30 @@
+{
+ "mesh": "FantasyWarrior_sword_6_characters_0",
+ "bone": "handR",
+ "clip": "angry_walk",
+ "knobs": {
+  "gap": 1,
+  "tilt": 0,
+  "turn": 0,
+  "push": 0
+ },
+ "matrix": [
+  0.155261,
+  -0.983501,
+  -0.092847,
+  0,
+  0.102995,
+  -0.077359,
+  0.991669,
+  0,
+  -0.98249,
+  -0.163531,
+  0.089285,
+  0,
+  -0.427541,
+  0.423475,
+  -1.135115,
+  1
+ ],
+ "note": "bind-space seat of the sword in the fist (tools/realmesh/base/grip.js): applied by the char editor at load; to be baked into assets/rigs/base once signed off"
+}

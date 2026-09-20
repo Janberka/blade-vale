@@ -69,6 +69,16 @@ looks best, so the knob rests at **+8 (−10.5°)**. `CARRY` in `index.html`; th
 clip is first seen with the same carriage. It is a live offset (`poseOver`, in the clavicle's frame) — when clips go into
 the game this is the turn to bake into them.
 
+**The sword in his fist.** The rig's sword is bound to `handR` but still stands where the OLD warrior's hand held it —
+upright, 10 cm off the wrist. `node tools/realmesh/base/grip.js` seats it from the geometry: the fist is read off a clip
+that closes it (each finger makes a loop — knuckle, two joints, fingertip — whose centre is a point on the handle's line),
+the sword's own axis, guard and flat come from its mesh, and the grip is laid through the fist: blade out of the thumb
+side, guard 1 cm clear of the index finger, an edge leading the way the knuckles point. It writes
+`items/sword_grip.json` (a bind-space matrix) and the editor lays it on at load (`?rawsword=1` shows the rig's own).
+Knobs for the eye: `--tilt` (blade toward the knuckles), `--turn` (about the handle), `--push` (along it), `--gap`.
+NOT YET IN THE GAME: baking it into `assets/rigs/base` also moves the sheathed sword at the hip (`modelPropGeo` reads the
+same mesh), so `MODEL_HIP` has to take the inverse — a step of its own, after the grip is signed off here.
+
 | clip | from | |
 | --- | --- | --- |
 | `angry_walk` | *Gladiator 1+motions* by Kapi777 (Sketchfab), **CC-BY-4.0** — credit him wherever it ships | 56 frames, loop, in place |

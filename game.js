@@ -1712,7 +1712,7 @@ function motionPose(L, dt) {                                // → a local quate
       mo.id = want.id; mo.c = c; mo.t = 0; mo.map = null; }
     else if (!mo.c) return null; }
   if (!mo.c) return null;
-  const on = mo.on = !!(want && want.id === mo.id), B = L.body, cut = !!(B && (B.flinch > 0 || B.stagger > 0 || B.downT > 0 || B.dodgeT > 0 || B.clashT > 0 || B.dead));   // (cut: struck, floored, rolling — the blow is simply over)
+  const on = mo.on = !!(want && want.id === mo.id), B = L.body, cut = !!(B && (B.flinch > 0 || B.stagger > 0 || B.downT > 0 || B.dodgeT > 0 || B.clashT > 0 || B.dead || B.dazed));   // (cut: struck, floored, rolling — the blow is simply over)
   mo.w = Math.max(0, Math.min(1, mo.w + (on ? dt / (want.frame != null ? 0.07 : 0.14) : -dt / (cut ? 0.1 : mo.wasBlow ? (B && B.blocking ? 0.18 : 0.3) : 0.12))));   // ease in, ease out — never a cut (a blow hands back to the guard slower than a walk does)
   if (on) { mo.wasBlow = want.frame != null; if (want.rate && want.frame != null) mo.rate = want.rate; }
   if (mo.w <= 0) { if (!on) mo.id = null; return null; }
@@ -2608,6 +2608,7 @@ const POSES = {
   windupHeavy:{ shRx: -3.05, shRz:  0.05, elR: -0.95, shLx: -2.20, shLz:  0.30, elL: -0.95, leanX: -0.40, twistY:  0.05, wristX: 0.10 },
   strikeHeavy:{ shRx:  0.05, shRz:  0.00, elR: -0.30, shLx:  0.00, shLz:  0.30, elL: -0.35, leanX: 0.70,  twistY:  0.00, wristX: 1.95 },
   hurt:       { shRx: -0.30, shRz:  0.55, elR: -1.00, shLx: -0.50, shLz:  0.60, elL: -1.20, leanX: -0.28, twistY:  0.15, wristX: 0 },
+  dazed:      { shRx: -0.24, shRz:  0.24, elR: -0.28, shLx: -0.28, shLz: -0.22, elL: -0.34, leanX:  0.30, twistY:  0.06, wristX: 2.2 },   // FINISH HIM (afFinStart): out on his feet — the arms hanging, the blade trailing, the body folding forward over its knees (afDazedPose sways him)
   dive:       { shRx: -1.10, shRz:  1.30, elR: -0.15, shLx: -1.10, shLz: -1.30, elL: -0.15, leanX:  0.30, twistY:  0.00, wristX: 0 },
   charge:     { shRx: -0.55, shRz:  0.55, elR: -1.15, shLx: -1.55, shLz:  0.25, elL: -0.95, leanX:  0.14, twistY: -0.15, wristX: 0.40 },   // the shield charge: the shield UP before the face, the head tucked behind it, the sword hand cocked back — the body only a little forward (the user: head-first behind a shield 'looks stupid')   // the running leap: head first, both arms flung open (the body's pitch is the group's — afCommit's diveAng)
   block:      { shRx: -1.05, shRz: -0.45, elR: -1.30, shLx: -0.80, shLz:  0.40, elL: -1.25, leanX:  0.26, twistY: -0.20, wristX: 0.55 },   // shield at the chest, not the face; the body tucks forward and the head drops behind it
@@ -20869,6 +20870,232 @@ function afOutroEnd() {
 }
 function afOutroSkip() { if (AF.outro) afOutroEnd(); }
 
+// ---- FINISH HIM: sometimes the last blow does not end the fight — it ends the MAN ----
+/* (2026-09-21, the user: "sometimes when the last hit lands make a finish him cinematics like the mortal kombat".)
+   The blow that would have felled the last man standing against the winners is, on a roll of the die, held one hair
+   short (afFinTry, in afDamage — the host's sim or a solo fight; a sword blow on a man on his feet, nobody in a saddle):
+   he keeps 1 hp and is OUT ON HIS FEET (b.dazed — afDazedBody: nothing he presses reaches his hands, he sways and lurches
+   about his own boots), and AF.fin runs three beats:
+     the CALL   AF_FIN.call seconds: the sim crawls (a fight with nobody else in it — a shared sim is never slowed), the lens
+                leaves your shoulder for a side-on two-shot of the pair, the screen darkens, FINISH HIM slams in over a
+                gong, the house and a voice from the pit of somebody's stomach. No blow counts yet: the chain that was
+                already in your hands must not end it before the call has rung.
+     the WINDOW AF_FIN.window seconds in which ANY blow of the winners' that reaches him is the last (afFinBlow). You are
+                alive on the winning side: the lens is back on your shoulder and he is yours. The man whose blow it was is
+                an NPC: he lets the call ring, WALKS up and loads the whole heavy (afFinThink; the rest of his side only
+                turn and watch) — get there first and it is yours instead. You are the man swaying, or already dead: you
+                watch it, the lens circling the two of them. Nobody comes: he goes down on his own and the kill is still
+                the man's who made it (afFinFell).
+     the BLOW   the sim crawls again, the lens low on the far side of him as he is thrown back past it, more blood than a
+                blow usually draws, NO MERCY — and only then the bell (afTick holds afFinish for AF_FIN.blow), the victory
+                and its film as ever.
+   Guests: the host's events carry it ({k:'fin', e:'call'|'blow'|'fell'}, state code 19 = dazed) and every client runs the
+   dressing and the film on its own clock. A headset gets the state, the banner and the sound — never a lens it did not
+   move itself. BV.arenaFinish('always' | 'never' | 'dice') forces the die for a test. */
+const AF_FIN = { chance: { pit: 0.5, colosseum: 0.35 }, call: 1.9, callTs: 0.2, window: 5.5, npcWait: 0.9, blow: 2.6, blowTs: 0.16, windTs: 0.4, knock: 13, reel: { secs: 1.0, gap: 3.4, pace: 2.7 } };   // (reel: the blow sends him back on his heels until there is `gap` between the two — the pair of them chest to chest is no picture, and the man who ends it has ground to cross)
+function afFinSeen(set) { try { if (set) localStorage.setItem('bv-fin-seen', '1'); return !!localStorage.getItem('bv-fin-seen'); } catch (e) { return true; } }   // (the first last blow YOU land on this device always stops short: nobody should have to wait for the dice to meet it)
+function afFinTry(t, from, arrow, wasDown) {
+  if (AF.fin || AF.hurry || AF.leaving || AF.role === 'guest' || AF.phase !== 'fight' || AF.finForce === false) return false;
+  if (!from || from === t || from.dead || from.team === t.team || arrow || from.weapon === 'bow' || from.mounted || t.mounted || wasDown || t.airT > 0) return false;
+  for (const b of AF.bodies) if (!b.dead && b !== t && b.team !== from.team) return false;   // (someone else still stands against the winners: this blow does not end the fight)
+  const first = from === AF.me && !afFinSeen();
+  if (AF.finForce !== true && !first && Math.random() >= (AF_FIN.chance[AF.cfg.venue] || AF_FIN.chance.colosseum)) return false;
+  if (from === AF.me) afFinSeen(true);
+  afFinStart(t, from); AF.events.push({ k: 'fin', e: 'call', i: t.idx, by: from.idx });
+  return true;
+}
+function afFinStart(t, from) {                                // (the host's sim, and a guest told of it by the event)
+  t.hp = Math.max(1, t.hp); t.dazed = { t: 0, lurch: 0.35 }; t.downT = 0; t.stagger = 0; t.flinch = 0; t.tiltX = 0; t.atk = null; t.charge = null; t.bash = null; t.queued = false; t.blocking = false; t.backing = false; t.run01 = 0; t.rushT = 0; t.aiHoldT = 0;
+  if (from.ctrl === 'ai') { from.cd = 0; from.aiHoldT = 0; }
+  AF.fin = { v: t, by: from, phase: 'call', t: 0, s: 0, bt: 0, side: 0, cx: (t.x + from.x) / 2, cz: (t.z + from.z) / 2, a0: 0, ux: 0, uz: 1, cut: true };
+  afFinFx('call');
+}
+function afFinMine() { const me = AF.me, Fn = AF.fin; return !!(Fn && me && !me.dead && me !== Fn.v); }   // am I alive on the winners' side — is he mine to finish?
+function afFinOpen() { const Fn = AF.fin; if (!Fn || Fn.phase !== 'call') return; Fn.phase = 'open'; Fn.s = 0; Fn.cut = true; afFinUi(); }
+// a blow lands while AF.fin runs (afDamage hands every one of them here): in the window, on him, from the winners — the last
+function afFinHit(t, from, heavy, arrow) {
+  const Fn = AF.fin; if (t !== Fn.v || Fn.phase !== 'open' || !from || from === t || from.team === t.team) return;
+  const amt = Math.max(1, Math.round(t.hp)), pos = t.group.position;
+  t.hp = 0; from.dmgDealt = (from.dmgDealt || 0) + amt; t.dmgTaken = (t.dmgTaken || 0) + amt; if (arrow) from.bowHits = (from.bowHits || 0) + 1; else from.swordHits = (from.swordHits || 0) + 1;
+  try { SFX.hit(pos, true); } catch (e) {} t.hitT = 0.25; t.flashT = 0.09;
+  AF.events.push({ k: 'hit', i: t.idx, d: amt, b: 0, h: 1, by: from.idx, hd: 0 }, { k: 'fin', e: 'blow', i: t.idx, by: from.idx });
+  afFinBlow(t, from); afKill(t, from);
+  if (t === AF.me) afBanner('YOU FELL', from.name + ' finished you', 2.6);
+}
+function afFinBlow(t, from) {                                 // the look of the last blow (host and guests): he is THROWN by it, and it is filmed
+  const Fn = AF.fin; if (!Fn || Fn.phase === 'blow') return;
+  const ax = t.x - from.x, az = t.z - from.z, ad = Math.hypot(ax, az) || 1;
+  Fn.phase = 'blow'; Fn.s = 0; Fn.bt = 0; Fn.by = from; Fn.ux = ax / ad; Fn.uz = az / ad; Fn.cut = true; t.dazed = null;
+  t.vx += Fn.ux * AF_FIN.knock; t.vz += Fn.uz * AF_FIN.knock;
+  from.vx *= 0.25; from.vz *= 0.25; if (from.atk) from.atk.still = true;   // (the man who struck it stays where he struck: the blow's lunge would carry him over the body and out of the frame)
+  afFinFx('blow');
+}
+function afFinFell(quiet) {                                   // nobody came: his legs go on their own (the kill is still the man's whose blow it was)
+  const Fn = AF.fin; if (!Fn || (Fn.phase !== 'open' && Fn.phase !== 'call')) return;
+  const t = Fn.v; Fn.phase = 'fell'; Fn.s = 0; t.dazed = null;
+  if (!quiet) { AF.events.push({ k: 'fin', e: 'fell', i: t.idx, by: Fn.by.idx }); if (!t.dead) { t.hp = 0; afKill(t, Fn.by); } }
+  afFinUi();
+}
+function afFinEvent(ev) {                                     // a guest: the host's word
+  const t = AF.bodies[ev.i], by = AF.bodies[ev.by]; if (!t) return;
+  if (ev.e === 'call') { if (by && !AF.fin) afFinStart(t, by); }
+  else if (ev.e === 'blow') { if (!AF.fin && by) { afFinStart(t, by); AF.fin.phase = 'open'; } if (by) afFinBlow(t, by); if (t === AF.me && by) setTimeout(() => afBanner('YOU FELL', by.name + ' finished you', 2.6), 0); }
+  else if (ev.e === 'fell') afFinFell(true);
+}
+function afFinHolds() { const Fn = AF.fin; return !!(Fn && Fn.phase === 'blow' && !AF.hurry && Fn.bt < AF_FIN.blow && Fn.s < AF_FIN.blow); }   // the bell waits for the film of the blow (Fn.s: the sim's own count — a headless run has no frames to count by)
+function afFinSim(dt) {                                       // the sim's side of the clock (afTick)
+  const Fn = AF.fin; if (!Fn) return; Fn.s += dt;
+  if (Fn.phase === 'call' && Fn.s >= AF_FIN.call) afFinOpen();
+  else if (Fn.phase === 'open' && Fn.s >= AF_FIN.window) afFinFell();
+}
+function afFinStep(dt) {                                      // the frame's side of it, in real seconds (afFrame — host, solo and guest alike): the beats, the house, the meter
+  const Fn = AF.fin; if (!Fn) return; Fn.t += dt;
+  if (Fn.phase === 'call') { if (Fn.t >= AF_FIN.call) afFinOpen(); }
+  else if (Fn.phase === 'open') { Fn.ot = (Fn.ot || 0) + dt; if (AF.role !== 'guest' && Fn.ot >= AF_FIN.window) afFinFell(); }
+  else if (Fn.phase === 'blow') Fn.bt += dt;
+  if (Fn.phase === 'call' || Fn.phase === 'open') AF.roar = Math.max(AF.roar, 1.5 + 0.9 * Math.max(0, Math.sin(Fn.t * TAU * 1.5)));   // the house chants it
+  else if (Fn.phase === 'blow') AF.roar = Math.max(AF.roar, 2.4);
+  const m = AF.finEl && AF.finEl.meter; if (m && Fn.phase === 'open') m.style.transform = 'scaleX(' + clamp(1 - (Fn.ot || 0) / AF_FIN.window, 0, 1).toFixed(3) + ')';
+}
+function afFinScale() {                                       // how slowly the sim runs through it (1 whenever the sim is somebody else's too)
+  const Fn = AF.fin; if (!Fn || afOthersInFight() || AF.hurry) return 1; const sm = q => { q = clamp(q, 0, 1); return q * q * (3 - 2 * q); };
+  if (Fn.phase === 'call') return lerp(AF_FIN.callTs, 1, sm((Fn.t - AF_FIN.call * 0.6) / (AF_FIN.call * 0.4)));
+  if (Fn.phase === 'blow') return lerp(AF_FIN.blowTs, 0.6, sm((Fn.bt - 1.0) / (AF_FIN.blow - 1.0)));
+  if (Fn.phase === 'open') { for (const b of AF.bodies) { if (b.dead || b === Fn.v || !((b.atk && !b.atk.hit && !b.atk.bow) || (b.airAtk && !b.airAtk.hit && b.vy < 0))) continue; if (Math.hypot(b.x - Fn.v.x, b.z - Fn.v.z) < AF_F.reach * 1.5) return AF_FIN.windTs; } }   // the blade on its way down at him
+  return 1;
+}
+function afFinEnd() {                                         // the bell, a rematch, the way out: the dressing comes off
+  const Fn = AF.fin; AF.fin = null; if (Fn && Fn.v) Fn.v.dazed = null;
+  const E = AF.finEl; if (E) { E.root.style.opacity = '0'; E.root.dataset.phase = ''; }
+  try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch (e) {}
+}
+// the dressing: the dark round the edges, the bars of a film while the lens is not yours, the call, the meter of the window
+function afFinUi() {
+  const Fn = AF.fin; if (!Fn) return; let E = AF.finEl;
+  if (!E) {
+    const root = document.createElement('div'); root.id = 'af-fin'; root.style.cssText = 'position:fixed;inset:0;z-index:42;pointer-events:none;opacity:0;transition:opacity .3s;overflow:hidden';
+    root.innerHTML = '<style>' +
+      '#af-fin .dark{position:absolute;inset:0;background:radial-gradient(ellipse at 50% 55%,rgba(0,0,0,0) 22%,rgba(0,0,0,.5) 62%,rgba(0,0,0,.9) 100%)}' +
+      '#af-fin .bar{position:absolute;left:0;right:0;height:9vh;background:#000;transition:transform .45s}#af-fin .bar.t{top:0;transform:translateY(-100%)}#af-fin .bar.b{bottom:0;transform:translateY(100%)}' +
+      '#af-fin[data-film="1"] .bar{transform:none}' +
+      '#af-fin .call{position:absolute;left:0;right:0;top:19vh;text-align:center;transition:top .5s cubic-bezier(.2,.8,.2,1),transform .5s cubic-bezier(.2,.8,.2,1);transform-origin:50% 0}' +
+      '#af-fin[data-phase="open"] .call{top:11vh;transform:scale(.5)}#af-fin[data-phase="open"] .sub{font-size:clamp(20px,3vw,34px)}#af-fin[data-phase="open"] .meter{height:12px;width:min(84vw,960px);border-radius:6px}#af-fin[data-phase="fell"] .call{opacity:0;transition:opacity .4s}' +
+      '#af-fin[data-phase="blow"] .call{top:13vh;transform:scale(.7);transition:none}#af-fin[data-phase="blow"] .big.slam{animation-delay:.55s,1.1s}#af-fin[data-phase="blow"] .sub{animation:afFinSub .4s .95s both}' +   // (the blow itself is seen clean: the card comes half a second after it, over the top of the frame)
+      '#af-fin .big{display:inline-block;font:900 clamp(46px,11vw,150px)/1 Impact,Haettenschweiler,"Arial Narrow Bold","Roboto Condensed",system-ui,sans-serif;letter-spacing:.05em;color:#d8141c;-webkit-text-stroke:2px #250000;text-shadow:0 0 34px rgba(255,40,30,.6),0 .05em 0 #3a0000,0 .1em .3em rgba(0,0,0,.9);white-space:nowrap}' +
+      '#af-fin .big.slam{animation:afFinSlam .55s cubic-bezier(.2,.9,.3,1) both,afFinThrob 1.1s ease-in-out .55s infinite}' +
+      '#af-fin .sub{margin-top:.5em;font:700 clamp(12px,1.7vw,20px) system-ui;letter-spacing:.32em;text-transform:uppercase;color:#f3ead8;text-shadow:0 2px 10px #000;opacity:.9}' +
+      '#af-fin .meter{display:none;width:min(46vw,520px);height:6px;margin:1.1em auto 0;border-radius:3px;background:rgba(0,0,0,.6);overflow:hidden;box-shadow:0 0 0 1px rgba(255,80,60,.35)}#af-fin[data-phase="open"] .meter{display:block}' +
+      '#af-fin .meter i{display:block;height:100%;background:linear-gradient(90deg,#7a0a0e,#ff3b2b);transform-origin:0 50%}' +
+      '@keyframes afFinSlam{0%{transform:scale(3.4);opacity:0;filter:blur(8px)}55%{transform:scale(.93);opacity:1;filter:none}72%{transform:scale(1.06)}100%{transform:scale(1)}}' +
+      '@keyframes afFinSub{from{opacity:0}to{opacity:.9}}' +
+      '@keyframes afFinThrob{0%,100%{text-shadow:0 0 34px rgba(255,40,30,.6),0 .05em 0 #3a0000,0 .1em .3em rgba(0,0,0,.9)}50%{text-shadow:0 0 60px rgba(255,60,40,.95),0 .05em 0 #3a0000,0 .1em .3em rgba(0,0,0,.9)}}' +
+      '@media (prefers-reduced-motion:reduce){#af-fin .big.slam{animation:none}}' +
+      '</style><div class="dark"></div><div class="bar t"></div><div class="bar b"></div><div class="call"><div class="big"></div><div class="sub"></div><div class="meter"><i></i></div></div>';
+    document.body.appendChild(root);
+    E = AF.finEl = { root, big: root.querySelector('.big'), sub: root.querySelector('.sub'), meter: root.querySelector('.meter i') };
+  }
+  const me = AF.me, mine = afFinMine(), v = Fn.v, by = Fn.by, blow = Fn.phase === 'blow';
+  const big = blow ? 'NO MERCY' : 'FINISH HIM', sub = blow ? (by === me ? 'you finished ' + v.name : by.name + ' finished ' + (v === me ? 'you' : v.name)) : v === me ? 'you are out on your feet' : by === me ? 'he is out on his feet — any blow ends it' : mine ? by.name + ' has him — unless you get there first' : by.name + ' has ' + v.name + ' at his mercy';
+  if (E.big.textContent !== big || E.fin !== Fn) { E.fin = Fn; E.big.textContent = big; E.big.classList.remove('slam'); void E.big.offsetWidth; E.big.classList.add('slam'); }   // (a new word — or a new fight's call — slams in again)
+  E.sub.textContent = sub; E.meter.style.transform = 'scaleX(1)';
+  E.root.dataset.phase = Fn.phase; E.root.dataset.film = afFinFilm() ? '1' : ''; E.root.style.opacity = Fn.phase === 'fell' ? '0' : '1';
+  if (VR.on && Fn.phase !== 'fell') VR.banner = { big, sub, until: rtNow + (blow ? 2.4 : 3) };   // (the headset's head-locked plate)
+}
+function afFinFx(e) {                                         // what a beat looks and sounds like, wherever it is seen
+  const Fn = AF.fin, v = Fn.v, by = Fn.by, near = v === AF.me || by === AF.me;
+  afFinUi(); afCrowdReact(true);
+  if (e === 'call') { for (const p of popups) p.life = Math.min(p.life, 0.3);   // (the last blow's numbers clear the frame)
+    if (!VR.on) { addShake(near ? 0.3 : 0.16); if (AF.role !== 'host') AF.hitstop = Math.max(AF.hitstop, 0.1); } AF.hurt = 0; }
+  else {
+    const gy = afY(v.x, v.z);
+    for (let i = 0; i < 3; i++) afSparks(tmpV.set(v.x + Fn.ux * 0.3 * i, gy + 1.9 - i * 0.35, v.z + Fn.uz * 0.3 * i), i === 1 ? 0xff3b2b : 0xb00d12, 16);
+    for (let i = 0; i < 5; i++) afSplat(v.x + Fn.ux * (0.5 + i * 0.75) + (Math.random() - 0.5) * 0.7, v.z + Fn.uz * (0.5 + i * 0.75) + (Math.random() - 0.5) * 0.7, 1.5 - i * 0.18);   // thrown the way the blade went
+    if (!VR.on) { addShake(near ? 0.55 : 0.3); addFovPunch(6); if (AF.role !== 'host') AF.hitstop = Math.max(AF.hitstop, 0.14); } else if (by === AF.me) vrHaptic('right', 1, 220);
+    AF.roar = 2.6;
+  }
+  afFinSound(e);
+}
+function afFinSound(e) {
+  try {
+    if (!SFX.ctx || SFX.muted) return;
+    if (e === 'call') {                                        // a gong under the floor, the steel's ring dragged down two octaves, the house — and the voice
+      SFX._tone('sine', 74, 34, 0.004, 2.4, 0.95); SFX._tone('triangle', 148, 70, 0.004, 1.5, 0.3, -9); SFX._noise('lowpass', 520, 80, 0.7, 0.002, 1.0, 0.5);
+      SFX._sample('ring', 0.9, null, 0.36, 0.02); SFX._sample('clash', 0.5, null, 0.5, 0.02); SFX.cheer('big', 1); afFinVoice();
+    } else { SFX._tone('sine', 120, 28, 0.003, 1.3, 1.0); SFX._noise('lowpass', 1500, 110, 0.8, 0.001, 0.55, 0.7); SFX._sample('body', 1, null, 0.62, 0.03); SFX._sample('slice', 0.8, null, 0.7, 0.04); SFX._cheerAt = -9; SFX.cheer('big', 1); }
+  } catch (err) {}
+}
+function afFinVoice() {                                       // "Finish him": the browser's own voice, as far down as it will go (no sample to ship; a device without one simply has the gong)
+  try {
+    const S = window.speechSynthesis; if (!S || typeof SpeechSynthesisUtterance === 'undefined') return;
+    const u = new SpeechSynthesisUtterance('Finish him!'); u.lang = 'en-US'; u.pitch = 0.1; u.rate = 0.7; u.volume = 1;
+    const vs = (S.getVoices && S.getVoices()) || [], en = vs.filter(x => /^en/i.test(x.lang)), pick = en.find(x => /daniel|alex|fred|aaron|arthur|gordon|david|mark|george|james|ryan|guy|\bmale\b/i.test(x.name) && !/female/i.test(x.name)) || en[0];
+    if (pick) u.voice = pick; if (S.speaking) S.cancel(); S.speak(u);
+  } catch (e) {}
+}
+// THE FILM of it (afCamera hands the lens over while afFinFilm says so — never in a headset). The side of the pair the lens
+// takes is the one it already stood on, unless the ring's wall is there; a cut at the head of each beat, a drift inside it.
+function afFinFilm() { const Fn = AF.fin; return !!Fn && !VR.on && (Fn.phase === 'call' || Fn.phase === 'blow' || (Fn.phase === 'open' && !afFinMine())); }
+function afFinCamera(dt) {
+  const Fn = AF.fin, v = Fn.v, k = Fn.by, sm = q => { q = clamp(q, 0, 1); return q * q * (3 - 2 * q); };
+  let ux = k.x - v.x, uz = k.z - v.z; const sep = Math.hypot(ux, uz) || 1; ux /= sep; uz /= sep;   // (u: from him to the man who has him)
+  const mx = (v.x + k.x) / 2, mz = (v.z + k.z) / 2, q = Fn.cut ? 1 : clamp(dt * 3, 0, 1); Fn.cx = lerp(Fn.cx, mx, q); Fn.cz = lerp(Fn.cz, mz, q);
+  if (!Fn.side) {                                              // which side of their line: where the lens is now — unless that side is the wall's
+    const room = s => AF_F.radius - Math.hypot(mx - uz * s * 6, mz + ux * s * 6), cs = Math.sign((camera.position.x - mx) * -uz + (camera.position.z - mz) * ux) || 1;
+    Fn.side = room(cs) > 1.5 || room(cs) >= room(-cs) ? cs : -cs;
+  }
+  const nx = -uz * Fn.side, nz = ux * Fn.side, gy = afY(Fn.cx, Fn.cz);
+  let px, py, pz, lx, ly, lz, fov;
+  if (Fn.phase === 'call') {                                   // THE TWO-SHOT: side on, low, a long lens pushing in as the word lands
+    const e = sm(Fn.t / AF_FIN.call), d = clamp(sep * 0.7 + 8.0, 8.4, 12) * lerp(1, 0.86, e);   // (a Vale fighter stands 2.9 tall and two wide: nearer than this and the bars cut his boots off)
+    px = Fn.cx + nx * d - ux * 0.6; pz = Fn.cz + nz * d - uz * 0.6; py = gy + 1.1; lx = Fn.cx; lz = Fn.cz; ly = gy + 1.7; fov = lerp(42, 37, e);
+  } else if (Fn.phase === 'open') {                            // THE WAIT (you are not the one to end it): a slow circle round the pair, the man walking in across the frame
+    if (Fn.cut) Fn.a0 = Math.atan2(nz, nx); const a = Fn.a0 + Fn.side * 0.3 * (Fn.ot || 0), r = clamp(sep * 0.5 + 6.2, 7, 10);
+    px = Fn.cx + Math.cos(a) * r; pz = Fn.cz + Math.sin(a) * r; py = gy + 1.35; lx = Fn.cx; lz = Fn.cz; ly = gy + 1.7; fov = 40;
+  } else {                                                     // THE BLOW: side on to the throw and low in the sand — he goes across the frame and down, the man who did it still in it (never in the road of either: a lens on the line of the blow had the pair of them through it)
+    const e = sm(Fn.bt / AF_FIN.blow); if (Fn.cut) { Fn.bx = v.x; Fn.bz = v.z; Fn.bnx = nx; Fn.bnz = nz; }
+    const d = lerp(6.4, 7.4, e); px = Fn.bx + Fn.bnx * d + Fn.ux * 1.4; pz = Fn.bz + Fn.bnz * d + Fn.uz * 1.4; py = afY(px, pz) + lerp(0.75, 1.25, e);
+    lx = lerp(Fn.bx, v.x, 0.7) - Fn.ux * 0.4; lz = lerp(Fn.bz, v.z, 0.7) - Fn.uz * 0.4; ly = afY(v.x, v.z) + lerp(1.5, 0.95, e); fov = lerp(38, 42, e);
+  }
+  camera.position.set(px, py, pz); afCamInPit(); afCamAboveGround(0.45); camera.lookAt(lx, ly, lz); AF.fov = fov; Fn.cut = false;
+}
+// OUT ON HIS FEET. afDazedBody is the sim's (afDrive's first branch: the host's copy of him, and a guest's own body);
+// afDazedPose is the look of it, shared with the copies a guest draws of other men; afDazedSway rides afCommit.
+function afDazedBody(b, dt) {
+  const D = b.dazed, I = b.inp; D.t += dt;
+  b.atk = null; b.charge = null; b.bash = null; b.airAtk = null; b.queued = false; b.blocking = false; b.backing = false; b.stagger = 0; b.flinch = 0; b.downT = 0; b.clashT = 0; b.dodgeT = 0; b.landRollT = 0; b.rollAng = 0; b.rollSq = 0; b.run01 = 0; b.rushT = 0; b.moving = false; b.aiHoldT = 0;
+  if (I) { b.prevHold = !!I.hold; b.seenAtk = I.atk; b.seenDodge = I.dodge; b.seenJump = I.jump; b.seenSwap = I.swap; }   // (nothing pressed now is owed to him later)
+  const Fn = AF.fin, RL = AF_FIN.reel, k = Fn && Fn.v === b ? Fn.by : null;
+  if (k && D.t < RL.secs) { const ax = b.x - k.x, az = b.z - k.z, ad = Math.hypot(ax, az) || 1; if (ad < RL.gap) { afMove(b, ax / ad, az / ad, RL.pace * (1 - 0.5 * D.t / RL.secs), dt); D.lurch = Math.max(D.lurch, 0.5); } }   // REELING: back on his heels, away from the man who hit him
+  if ((D.lurch -= dt) <= 0) { D.n = (D.n | 0) + 1; D.lurch = 0.95 + ((b.idx * 7 + D.n * 3) % 5) * 0.13; const a = b.yaw + Math.PI + Math.sin(D.n * 2.4 + b.idx) * 1.7; b.vx += Math.sin(a) * 1.6; b.vz += Math.cos(a) * 1.6; }   // a lurch now and then, mostly backwards — never a roll of the dice: his own copy and the host's agree
+  afDazedPose(b, dt); afIntegrate(b, dt); afCommit(b, dt);
+}
+function afDazedPose(b, dt) {
+  const t = b.dazed.t, p = b.parts, k = clamp(t / 0.6, 0, 1);
+  if (b.tinted && b.flashT <= 0) { setTint(p, null); b.tinted = false; }
+  b.anim.ease = null; setPose(b.anim, 'dazed', 0.5);
+  const sp = Math.hypot(b.vx || 0, b.vz || 0), crouch = (0.17 + 0.08 * Math.sin(t * 2.1)) * k;
+  if (sp > 0.7 && !p.mount) walkLegs(p, b.phase -= dt * 8, 0.3 + 0.1 * Math.min(1, sp / 2.5), crouch); else restLegs(p, dt, false, crouch);   // the knees going — and short broken steps under him while he is still travelling
+  b.tiltX = (0.05 + 0.07 * Math.sin(t * 1.9)) * k; b.roll = 0.13 * Math.sin(t * 1.27 + 0.8) * k;   // the whole man sways about his boots
+}
+function afDazedSway(b, p) {                                  // (afCommit, after the pose: the trunk rolls round over the hips, the head hangs and lolls)
+  const t = b.dazed.t, k = clamp(t / 0.6, 0, 1);
+  p.upperBody.rotation.z += 0.11 * Math.sin(t * 1.27 + 2.2) * k; p.upperBody.rotation.x += 0.07 * Math.sin(t * 1.9 + 1.1) * k;
+  if (p.headPivot) { p.headPivot.rotation.x = (0.42 + 0.1 * Math.sin(t * 1.9 + 0.4)) * k; p.headPivot.rotation.y = 0.3 * Math.sin(t * 0.83) * k; b.headYaw = p.headPivot.rotation.y; }
+}
+// an NPC while AF.fin runs (in afThink's place): everyone turns to look; the man whose blow it was lets the call ring, WALKS
+// up — the angry walk, not a run: the house waits for it — and loads the whole heavy. The others leave it to him.
+function afFinThink(b, dt) {
+  const Fn = AF.fin, v = Fn.v, I = b.inp, F = AF_F; I.mx = 0; I.mz = 0; I.block = false;
+  if (b.aiHoldT > 0) { b.aiHoldT -= dt; I.hold = true; } else I.hold = false;
+  if (b === v) return;
+  const dx = v.x - b.x, dz = v.z - b.z, d = Math.hypot(dx, dz) || 1e-4; I.yaw = Math.atan2(dx, dz);
+  if (b !== Fn.by || Fn.phase !== 'open' || Fn.s < AF_FIN.npcWait || b.mounted) return;
+  if (b.weapon === 'bow') { if (!b.atk && !b.charge && b.swapT <= 0) I.swap++; return; }
+  const busy = b.atk || b.charge || b.aiHoldT > 0 || b.flinch > 0 || b.stagger > 0 || b.clashT > 0 || b.landT > 0 || b.swapT > 0 || b.airT > 0 || b.downT > 0;
+  if (d > (F.reach + (b.reachBonus || 0)) * 0.72) { if (!busy) { const pace = 0.5; I.mx = dx / d * pace; I.mz = dz / d * pace; } return; }
+  if (!busy && Math.abs(angleDelta(b.yaw, I.yaw)) < 0.3) b.aiHoldT = F.chargeMax + 0.08;   // the full load: the executioner's blow
+}
+
 // ---- fighters ----
 // A name floats a hand above the helmet: a Vale knight is ~3.4 units tall on foot, his crown ~4.3 up when he sits a
 // horse (rider at 1.22 + a 0.88-scaled rig), and the whole group scales with his archetype (and his horse's size).
@@ -21271,6 +21498,7 @@ function afSetWeapon(b, w) {
 }
 function afStateCode(b) {
   if (b.dead) return 8;
+  if (b.dazed) return 19;                                    // FINISH HIM: out on his feet
   if (b.downT > 0) return 13;
   if (b.clashT > 0) return 12;
   if (b.stagger > 0) return 11;
@@ -21351,7 +21579,7 @@ function afCommit(b, dt) {
     const ex = b.maxStam ? 1 - b.stam / b.maxStam : 0;      // (spent: the breath deepens and quickens — bent over it when winded)
     const leanX = 0.16 * (b.run01 || 0) + (b.rushT > 0 ? 0.05 : 0);   // THE SPRINT: the body goes down over the stride (a charge keeps the back up: the shield is before the face, not the head — POSES.charge)
     p.upperBody.rotation.x += clamp(fwd / F.move, -1, 1) * (0.14 + leanX) + Math.sin(rtNow * (2.1 + 2.6 * ex) + b.phase0) * (0.012 + 0.04 * ex * ex) + (b.winded ? 0.12 : 0); // lean into the run + breathe
-    if (!b.moving && !b.atk && b.dodgeT <= 0 && !(b.downT > 0)) {   // standing guard: the weight shifts from foot to foot
+    if (!b.moving && !b.atk && b.dodgeT <= 0 && !(b.downT > 0) && !b.dazed) {   // standing guard: the weight shifts from foot to foot
       const w = Math.sin(rtNow * 0.9 + b.sway); p.upperBody.rotation.z += w * 0.03; p.hipL.rotation.x += w * 0.05; p.hipR.rotation.x -= w * 0.05; b.roll = w * 0.015;
     }
     if (b.hitT > 0) {                                        // the blow throws the shoulders back and the head snaps
@@ -21368,8 +21596,9 @@ function afCommit(b, dt) {
       const want = b.mounted ? clamp(angleDelta(b.yaw, b.lookYaw) - p.upperBody.rotation.y, -0.85, 0.85) : clamp(angleDelta(b.yaw, b.lookYaw), -0.85, 0.85) - p.upperBody.rotation.y;
       b.headYaw = lerp(b.headYaw, want, clamp(dt * 7, 0, 1)); p.headPivot.rotation.y = b.headYaw;
     }
+    if (b.dazed) afDazedSway(b, p);                          // FINISH HIM: the trunk rolls round over the hips, the head hangs
     if (p.cape) afCape(b, p, dt, fwd, sp);
-    if (b.moving && b.dodgeT <= 0) b.roll = Math.sin(b.phase) * 0.035; else if (b.moving || b.atk || b.dodgeT > 0) b.roll = 0;
+    if (b.dazed) { /* the sway is afDazedPose's */ } else if (b.moving && b.dodgeT <= 0) b.roll = Math.sin(b.phase) * 0.035; else if (b.moving || b.atk || b.dodgeT > 0) b.roll = 0;
     if (b.moving && b.dodgeT <= 0) {                         // a footfall: dust at the planted foot (near the camera only)
       const step = Math.floor(b.phase / Math.PI);
       if (step !== b.lastStep) { b.lastStep = step; if (sp > 3 && camera.position.distanceToSquared(b.group.position) < (AF.bodies.length > AF_LIM.heroCap ? 120 : 900)) afSparks(tmpV.set(b.x, afY(b.x, b.z) + 0.15, b.z), 0xc9b79a, AF.bodies.length > AF_LIM.heroCap ? 1 : 2); }
@@ -21394,7 +21623,7 @@ function afCommit(b, dt) {
     if (b.baseScale && b.group.scale.y !== b.baseScale) b.group.scale.setScalar(b.baseScale);
     b.group.position.set(b.x, y, b.z); b.group.rotation.set(b.tiltX || 0, b.yaw, b.roll || 0);
   }
-  if (b.tag) { b.tag.visible = !b.dead && AF.phase !== 'intro' && !AF.outro && afTagNear(b.group.position); b.tag.position.set(b.x, y + (b.tagH || afTagH(b.mounted, b.baseScale)), b.z); b.bar.quaternion.copy(camera.quaternion); b.bar.userData.fill.scale.x = clamp(b.hp / b.maxHp, 0, 1); }
+  if (b.tag) { b.tag.visible = !b.dead && AF.phase !== 'intro' && !AF.outro && !(AF.fin && afFinFilm()) && afTagNear(b.group.position); b.tag.position.set(b.x, y + (b.tagH || afTagH(b.mounted, b.baseScale)), b.z); b.bar.quaternion.copy(camera.quaternion); b.bar.userData.fill.scale.x = clamp(b.hp / b.maxHp, 0, 1); }
 }
 // THE LEAP. afJump puts a body in the air (afIntegrate flies the arc and lands it); afAirPose draws the knees up through it;
 // afTackle (host / solo, in the air) is the horse's trick on foot: come down on a man with a full stride behind you and he
@@ -21519,6 +21748,7 @@ function afStamina(b, dt) {                                 // every tick, befor
 }
 function afDrive(b, dt, sim) {
   const I = b.inp, F = AF_F, human = b.ctrl !== 'ai';
+  if (b.dazed) { afDazedBody(b, dt); return; }               // FINISH HIM: out on his feet — nothing he presses reaches his hands
   afStamina(b, dt);
   if (b.dodgeCd > 0) b.dodgeCd -= dt; if (b.mountCd > 0) b.mountCd -= dt; if (b.landT > 0) b.landT -= dt; if (b.rushHitT > 0) b.rushHitT -= dt;
   if (b.cd > 0 && (human || (!b.atk && !b.charge && !(b.aiHoldT > 0)))) b.cd -= dt;   // an NPC's pause between blows starts once the blow is DONE (it used to run out mid-swing: jab, jab, jab)
@@ -21692,7 +21922,7 @@ function afDrive(b, dt, sim) {
       }
     }
     b.prevInYaw = I.yaw;
-    if (!a.bow && a.t < a.wind + a.strike)                   // lunge with the blow, harder the more it was loaded
+    if (!a.bow && !a.still && a.t < a.wind + a.strike)       // lunge with the blow, harder the more it was loaded (still: FINISH HIM's last blow has landed — he stands over it)
       afMove(b, Math.sin(b.yaw), Math.cos(b.yaw), F.move * lerp(F.lunge, F.heavyLunge, a.k || 0) * 0.85, dt);
     if (!a.hit && a.t >= a.wind) {
       a.hit = true;
@@ -21905,6 +22135,8 @@ function afStrike(b, heavy, k) {
 }
 function afDamage(t, amt, from, heavy, exec, arrow, k) {   // heavy: cracks guards; k (0..1): how loaded the blow was (knock, poise)
   if (t.dead || AF.over) return;
+  if (AF.fin) { afFinHit(t, from, heavy, arrow); return; }   // FINISH HIM: the fight is decided — the only blow left in it is the last one
+  const wasDown = t.downT > 0;
   if (t.mounted && t.horse && !t.horse.dead && !exec && afBlowHitsHorse(t, from, arrow)) { afDamageHorse(t.horse, amt * 0.9, from, arrow); return; }
   const weight = k != null ? k : heavy ? 1 : 0;
   const pos = t.group.position;
@@ -21967,7 +22199,7 @@ function afDamage(t, amt, from, heavy, exec, arrow, k) {   // heavy: cracks guar
   t.hp -= amt; from.dmgDealt = (from.dmgDealt || 0) + amt; t.dmgTaken = (t.dmgTaken || 0) + amt; if (arrow) from.bowHits = (from.bowHits || 0) + 1; else from.swordHits = (from.swordHits || 0) + 1;   // (the career's ledger)
   if ((from === AF.me || t === AF.me) && AF.role !== 'guest') afJuice(from, t, amt, heavy, blocked); // your blows and your wounds rattle the camera
   AF.events.push({ k: 'hit', i: t.idx, d: Math.round(amt), b: blocked, h: heavy ? 1 : 0, by: from.idx, hd: head ? 1 : 0 });
-  if (t.hp <= 0) afKill(t, from);
+  if (t.hp <= 0 && !afFinTry(t, from, arrow, wasDown)) afKill(t, from);   // (afFinTry: sometimes the last blow of a fight stops a hair short — FINISH HIM)
 }
 // no helm on his head: none in his look (a bareheaded roll, no helm bought), or the one he owns still in his hand (the don)
 function afBareHead(t) { const L = t.parts && t.parts.modelRig; return !!(L && (L.helmOff || !(L.look && L.look.helmet))); }   // (a plastic body wears its helm always)
@@ -22745,7 +22977,7 @@ function afTick(dt) {
   if (AF.teams) for (const T of AF.teams) afCaptainThink(T, dt);
   for (const b of AF.bodies) {
     if (b.dead) { afStepDead(b, dt); continue; }
-    if (b.ctrl === 'ai') { afThink(b, dt); afSteerRocks(b); }
+    if (b.ctrl === 'ai') { if (AF.fin) afFinThink(b, dt); else afThink(b, dt); afSteerRocks(b); }   // (FINISH HIM: the man whose blow it was walks up to end it, the rest watch)
     afDrive(b, dt, true);
   }
   afSeparate();
@@ -22753,11 +22985,11 @@ function afTick(dt) {
   for (const h of AF.horses) afStepHorse(h, dt, true);
   afMountCheck(); afHorseTags();
   afStepArrows(dt, true);
-  AF.t += dt;
+  AF.t += dt; afFinSim(dt);
   const alive = new Map();
   for (const b of AF.bodies) if (!b.dead) alive.set(b.team, (alive.get(b.team) || 0) + 1);
-  if (alive.size <= 1) afFinish(alive.size ? [...alive.keys()][0] : -1);
-  else if (AF.t >= AF_F.timeLimit * (AF.bodies.length > AF_LIM.heroCap ? 2 : 1)) { const st = afStandings(); afFinish(st[0].alive === st[1].alive && st[0].hp === st[1].hp ? -1 : st[0].team); }
+  if (alive.size <= 1) { if (!afFinHolds()) afFinish(alive.size ? [...alive.keys()][0] : -1); }   // (afFinHolds: the bell waits for the film of the finishing blow)
+  else if (!AF.fin && AF.t >= AF_F.timeLimit * (AF.bodies.length > AF_LIM.heroCap ? 2 : 1)) { const st = afStandings(); afFinish(st[0].alive === st[1].alive && st[0].hp === st[1].hp ? -1 : st[0].team); }
 }
 // nobody overlaps — they shove (heavier when it's you, so you can wade through a press)
 function afSeparate() {
@@ -22933,6 +23165,7 @@ function afRevealStart() {                                  // the purse, one li
 }
 function afEndRewards() { const el = document.getElementById('af-rewards'); if (!el) return; if (AF.reward) afRevealStart(); else el.innerHTML = afRewardHtml(null); }
 function afFinish(winner, standings) {
+  afFinEnd();                                                // (FINISH HIM's dressing comes off at the bell)
   AF.over = true; AF.phase = 'over'; AF.winner = winner; AF.standings = standings || afStandings();
   if (AF.role !== 'guest') { const st = afStarOf(); AF.starName = st ? st.name : null; }
   if (AF.role === 'host') afSend({ k: 'over', winner, standings: AF.standings, star: AF.starName, ledger: afLedger() });
@@ -23011,6 +23244,7 @@ function afPredicted(i) {                                    // the host confirm
 }
 function afApplyRemotePose(b, dt) {
   const s = b.tstate, mv = AF_MOVES[b.tmove] || 'slashR';
+  if ((b.dazed || s === 19) && !b.dead) { if (!b.dazed) b.dazed = { t: 0, lurch: 9 }; b.dazed.t += dt; b.lookYaw = b.yaw; b.rollT = 0; b.rollAng = 0; b.rollSq = 0; b.airT = 0; b.airY = 0; b.dive = false; b.diveAng = 0; b.airAtk = null; b.rushT = 0; afDazedPose(b, dt); return; }   // FINISH HIM: out on his feet
   b.lookYaw = b.tyaw;                                        // a remote fighter looks where he faces (the host's snapshot carries no target)
   if (b.mounted) { b.aimYaw = b.yaw + (b.taim || 0); b.lookYaw = b.aimYaw; }   // …a rider where he's turned in the saddle
   const hurt = s === 5 || s === 11;
@@ -23057,6 +23291,7 @@ function afApplySnap(s) {
     if (b === AF.me) {                                       // my body: the host owns hp/death/stuns; position is softly corrected
       b.hp = hp;
       if (code === 8 && !b.dead) afKill(b, null, true);
+      if (code === 19 && !b.dazed && !b.dead) b.dazed = { t: 0, lurch: 0.35 };   // (FINISH HIM: I am the man out on his feet — the event says so too, this is the net under it)
       if (code === 5) b.flinch = Math.max(b.flinch, 0.12); else if (code === 11) b.stagger = Math.max(b.stagger, 0.2); else if (code === 13) b.downT = Math.max(b.downT || 0, 0.3);
       // the host's word is a round trip old: compare it with where I WAS then (hist), not where I am now — a running
       // man used to be dragged back a stride every row, because his own copy was always ahead of the host's
@@ -23114,6 +23349,7 @@ function afApplyEvent(ev) {
     afSparks(tmpV.set(b.x, afY(b.x, b.z) + 1.6, b.z), 0xff6b6b, 14); afSplat(b.x, b.z, 1.6); b.deadSide = Math.random() < 0.5 ? -1 : 1; setPose(b.anim, 'relax', 0.35);
     if (by === AF.me || b === AF.me) { addShake(FEEL.killShake); AF.hitstop = Math.max(AF.hitstop, FEEL.killStop); addFovPunch(FEEL.fovPunchKill); }
     if (b === AF.me && !b.dead) afKill(b, null, true);
+  } else if (ev.k === 'fin') { afFinEvent(ev);              // FINISH HIM: the call, the blow, the fall
   } else if (ev.k === 'arrow') {
     afAddArrow(ev.t, ev.o, ev.p[0], ev.p[1], ev.p[2], new THREE.Vector3(ev.v[0], ev.v[1], ev.v[2]), ev.g != null ? ev.g : 9, ev.l);
   } else if (ev.k === 'order') {
@@ -23238,6 +23474,7 @@ function afFrame(now, noRaf) {
   afNetStats(Math.max(rawDt, 1e-3));
   let gdt = dt;                                              // hit-stop: the fight crawls for a few frames on impact; camera/FX stay real-time
   if (AF.hitstop > 0) { AF.hitstop -= dt; if (AF.role !== 'host') gdt = dt * 0.08; }   // (a host with guests never freezes the SHARED sim on his own blows — the shake, the kick and the FOV punch stay)
+  if (AF.fin) { afFinStep(dt); gdt *= afFinScale(); }        // FINISH HIM: its beats run on the real clock; the sim crawls through the call and the blow (never a shared one)
   if (AF.phase === 'countdown') { AF.countdown -= dt; if (AF.countdown <= 0) { AF.phase = 'fight'; afBellInputs(); afIntroTailEnd(); afBanner('FIGHT', '', 1.0); afCrowdReact(false); } } // guests count too (the host's snapshot also flips it)
   if (AF.me && !AF.me.dead && AF.phase === 'fight') { afReadLocalInput(); if (VR.on) vrInput(dt); } else { const I = AF.locIn; I.mx = I.mz = 0; I.block = false; if (AF.phase === 'intro' || AF.phase === 'countdown') afNoPresses(I); }   // (VR: the head and the sticks fill the same struct · before the bell no press is kept, so a guest sends none either — afNoPresses)
   afGoResend(now);
@@ -23256,7 +23493,7 @@ function afFrame(now, noRaf) {
   try { SFX.bed(AF.cfg.venue === 'pit' ? 'murmur_loop' : 'crowd_loop', (AF.cfg.venue === 'pit' ? AUDIO.pitCrowdVol : AUDIO.crowdVol) * (1 + clamp(AF.roar, 0, 2.6) * 0.25)); } catch (e) {}   // the house, always there under the steel
   if (AF.outro) afOutroStep(dt);                             // the end-game film (real time, whatever the hit-stop)
   if (AF.phase !== 'intro') afStepGates(dt);                 // (the gates swing shut behind the men during the countdown)
-  updateSparks(gdt); updatePopups(gdt); updateArcs(dt); updateTrails(dt); afStepSplats(dt);
+  updateSparks(gdt); updatePopups(AF.fin ? dt : gdt); updateArcs(dt); updateTrails(dt); afStepSplats(dt);
   const TT = AF_TIMES[AF.cfg.time] || AF_TIMES.day;
   for (const t of AF.torches) { const f = 0.85 + Math.sin(rtNow * 9 + t.position.x) * 0.15 + Math.random() * 0.1; t.userData.flame.scale.setScalar((t.userData.flameBase || 1) * (0.85 + f * 0.25)); if (t.userData.light) t.userData.light.intensity = (TT.torch || 1.3) * f * (t.userData.lightK || 1); }   // (lightK: the pits' braziers burn low)
   afStepWeather(dt); afStepCrowd(dt);
@@ -23291,6 +23528,7 @@ function afCamera(dt) {
   const me = AF.me, cam = AF.cam;
   if (AF.phase === 'intro' && AF.intro) afIntroCamera(dt);   // the entrance's own lens (afIntroStart's shot list)
   else if (AF.outro) afOutroCamera(dt);                      // the end-game film's (afOutroCompose)
+  else if (AF.fin && afFinFilm()) afFinCamera(dt);           // FINISH HIM: the call, the wait you can only watch, the blow
   else if (me && !me.dead) {
     const hy = afY(me.x, me.z) + AF_CAM_DEF.eye + (me.airY || 0) * 0.6, cp = Math.cos(cam.pitch);
     // OVER THE CROWD: if a body stands between you and the lens (the press behind you in a big fight), the camera
@@ -23372,6 +23610,7 @@ function afFastForward() {
   if (!AF.on || AF.over || AF.role === 'guest' || AF.phase !== 'fight' || afOthersInFight()) return false;
   const dt = 1 / 30, cap = Math.ceil((AF_F.timeLimit * (AF.bodies.length > AF_LIM.heroCap ? 2 : 1) - AF.t) / dt) + 90;
   AF.hitstop = 0; AF.timeScale = 1; AF.hurry = true;        // (hurried: no end-game film, the panel comes straight up)
+  if (AF.fin) afFinFell();                                   // (FINISH HIM was running: he goes down on his own, now)
   for (let i = 0; i < cap && !AF.over; i++) afTick(dt);
   if (!AF.over) { const st = afStandings(); afFinish(st[0].alive === st[1].alive && st[0].hp === st[1].hp ? -1 : st[0].team); }
   AF.hurry = false;
@@ -23719,6 +23958,7 @@ function afLeaveToMenu() {
 
 // ---- lifecycle ----
 function afClear() {
+  afFinEnd();                                                // (FINISH HIM's dressing, if a rematch or the way out cut it short)
   if (VR.dressed) vrUndress();                              // (the steel goes back into the body's hands before the body is disposed)
   for (const b of AF.bodies) { scene.remove(b.group); try { disposeGroup(b.group); } catch (e) {} if (b.tag) { scene.remove(b.tag); try { disposeGroup(b.tag); } catch (e) {} } }
   for (const a of AF.arrows) { scene.remove(a.g); try { disposeGroup(a.g); } catch (e) {} }
@@ -24991,8 +25231,10 @@ function afTitlePresence() {
     if (pend && pend.room) afJoin(pend.room, pend.host);
   });
 }
-BV.arena = (cfg) => { afOpenLobby('host'); if (cfg && cfg.intro != null) AF.introOff = !cfg.intro; if (cfg && cfg.outro != null) AF.outroOff = !cfg.outro; if (cfg && cfg.film) AF.introFilm = cfg.film; if (cfg && AF.lobby) { if (cfg.venue) afSetVenue(AF.lobby, cfg.venue); const LM = afLim(AF.lobby); if (cfg.teams) AF.lobby.teams = clamp(cfg.teams, LM.teamsMin, LM.teamsMax); if (cfg.per) AF.lobby.per = clamp(cfg.per, LM.perMin, LM.perMax); if (cfg.xp) AF.lobby.xp = cfg.xp; afResize(AF.lobby);
+BV.arena = (cfg) => { afOpenLobby('host'); if (cfg && cfg.intro != null) AF.introOff = !cfg.intro; if (cfg && cfg.outro != null) AF.outroOff = !cfg.outro; if (cfg && cfg.film) AF.introFilm = cfg.film; if (cfg && cfg.fin != null) AF.finForce = cfg.fin === 'always' || cfg.fin === true ? true : cfg.fin === 'never' || cfg.fin === false ? false : null; if (cfg && AF.lobby) { if (cfg.venue) afSetVenue(AF.lobby, cfg.venue); const LM = afLim(AF.lobby); if (cfg.teams) AF.lobby.teams = clamp(cfg.teams, LM.teamsMin, LM.teamsMax); if (cfg.per) AF.lobby.per = clamp(cfg.per, LM.perMin, LM.perMax); if (cfg.xp) AF.lobby.xp = cfg.xp; afResize(AF.lobby);
   if (cfg.npcXp) AF.lobby.npcXp = cfg.npcXp; if (cfg.clutter != null) AF.clutterK = cfg.clutter; if (cfg.time) AF.lobby.time = cfg.time; if (cfg.weather) AF.lobby.weather = cfg.weather; if (cfg.pit) AF.lobby.pit = cfg.pit; if (cfg.ground) AF.lobby.ground = cfg.ground; if (cfg.arch) AF.lobby.npcArch = AF.lobby.npcArch.map(row => row.map(() => cfg.arch)); afLobbyRender(); if (cfg.start) afStartFight(); } return BV.arenaStatus(); }; // (npcXp / arch: test overrides)
+BV.arenaFinish = (cmd) => { if (cmd === 'always') AF.finForce = true; else if (cmd === 'never') AF.finForce = false; else if (cmd === 'dice') AF.finForce = null; else if (cmd === 'fell') afFinFell(); const Fn = AF.fin; return { force: AF.finForce == null ? 'dice' : AF.finForce ? 'always' : 'never', seen: afFinSeen(), fin: Fn ? { phase: Fn.phase, t: +Fn.t.toFixed(2), s: +Fn.s.toFixed(2), ot: +(Fn.ot || 0).toFixed(2), bt: +Fn.bt.toFixed(2), v: Fn.v.name, by: Fn.by.name, hp: Fn.v.hp, mine: afFinMine(), film: afFinFilm(), ts: +afFinScale().toFixed(2) } : null, over: AF.over, phase: AF.phase }; };   // test: FINISH HIM — force the die ('always' / 'never' / 'dice'), let him fall ('fell'), read the beat
+BV.arenaFeed = (d, from) => { afOnFightMsg({ from: from || AF.hostPeer || 999, data: d }); return BV.arenaStatus(); };   // test: hand the fight a wire message as if the relay had brought it (a guest's snaps and events, without a second tab)
 BV.arenaStart = () => { afStartFight(); return BV.arenaStatus(); };
 BV.arenaRematch = () => { afRematch(); return BV.arenaStatus(); };   // test: the Rematch button (also what a guest runs when the host's new 'go' lands)
 BV.ruinPreview = (scale = 1.9) => { if (!AF_RUINPACK || !AF.on) return null; const m = afMesher(), names = Object.keys(AF_RUINPACK); names.forEach((n, i) => { const x = (i - (names.length - 1) / 2) * 7; m.add(afPackGeo(n), x, afY(x, 0), 0, 0, null, scale, scale, scale); }); const mesh = m.build(); scene.add(mesh); AF.props.push(mesh); return names; };   // test: the pack's pieces in a row across the sand

@@ -337,6 +337,31 @@ the end panel. `?nooutro` (or `BV.arena({ outro: false })`) drops the film — t
 and *Leave* never run it. Test hooks: `BV.arenaOutro()` reads it, `BV.arenaOutro(n)` jumps to shot n,
 `BV.arenaOutro({ advance: secs })` steps it (sim included), `BV.arenaOutro('skip')`. Durations in `AF_OUTRO.shots`.
 
+**Finish him** (2026-09-21 — `AF_FIN`, `afFinTry` … `afFinThink`, state `AF.fin`): *sometimes* the last blow of a fight
+does not end it. When a sword blow would fell the **last man standing against the winners** (a man on his feet, nobody in
+a saddle, not an arrow), the host's sim rolls a die — `AF_FIN.chance`: one in two in the pits, about one in three in
+the Colosseum; the first such blow YOU land on a device always stops short (`bv-fin-seen`) — and on a hit the blow is
+held a hair short: he keeps 1 hp and is **out on his feet** (`b.dazed`, state code 19: `afDazedBody` first in `afDrive`
+— nothing he presses reaches his hands; he reels back from the man who hit him until there are `reel.gap` paces between
+them, then sways and lurches about his own boots, head hanging, the blade trailing — pose `dazed`). Three beats:
+the **call** (`call` 1.9 s: the sim crawls at `callTs` — only in a fight with nobody else in it, a shared sim is never
+slowed — the lens leaves your shoulder for a low side-on two-shot of the pair, the screen darkens, **FINISH HIM** slams
+in over a gong, the house and the browser's own voice as low as it goes; no blow counts yet, so the chain already in
+your hands cannot end it before the call has rung); the **window** (`window` 5.5 s, a meter under the call: ANY blow of
+the winners' that reaches him is the last — alive on the winning side, the lens is back on your shoulder and he is
+yours; if the blow was an NPC's he lets the call ring, WALKS up and loads the whole heavy while the rest of his side
+only turn and watch (`afFinThink` runs in `afThink`'s place) — get there first and it is yours; the man swaying, or a
+dead man, watches it as a film, the lens circling the pair; nobody comes and he goes down on his own, the kill still
+the man's who made it — `afFinFell`); the **blow** (`afFinHit` → `afFinBlow`: he is thrown, `knock`, more blood than a
+blow draws, the sim crawls at `blowTs`, the lens low and side on to the throw, **NO MERCY**) — and only then the bell:
+`afTick` holds `afFinish` for `AF_FIN.blow` seconds (`afFinHolds`), then the victory and its film as ever. While it
+runs the time limit is off and `afDamage` hands every blow to `afFinHit`. Guests get it from the host's events
+(`{k:'fin', e:'call'|'blow'|'fell'}`) and run the dressing (`#af-fin`) and the film on their own clocks; a headset
+gets the state, the banner and the sound, never a lens it did not move. ⏭ *Skip to the end* resolves it at once.
+Test: `BV.arenaFinish('always' | 'never' | 'dice')` forces the die (also `BV.arena({ fin: 'always' })`),
+`BV.arenaFinish('fell')` lets him fall, `BV.arenaFinish()` reads the beat; `BV.arenaFeed(msg)` hands the fight a wire
+message, so a guest's side can be driven from one tab.
+
 **Camera**: during the countdown the camera sweeps from high over the pit down onto your shoulder,
 the lens widens slightly on a run, and the field-fight shake / kick / FOV punch land on your hits.
 Strikes use an ease-out-back so the blade whips past the mark and settles; every hit puts a white
@@ -1168,6 +1193,8 @@ BV.arena({ teams: 3, per: 2, start: true })   // open the lobby (optionally star
 BV.arenaStatus()                              // phase, roster, every body's hp/state/position
 BV.arenaStep(steps, dt)                       // headless sim ticks (no render)
 BV.arenaOutro(cmd)                            // the end-game film: read / jump to shot n / { advance } / 'skip'
+BV.arenaFinish(cmd)                           // FINISH HIM: 'always' / 'never' / 'dice' forces the die, 'fell' lets him fall, no arg reads the beat
+BV.arenaFeed(msg, from)                       // hand the fight a wire message as if the relay had brought it (drive a guest's side from one tab)
 BV.arenaPump(frames, dt)                      // whole frames incl. network + camera, without rAF
 BV.arenaInput({ atk: n })                     // poke the local input record
 BV.arena({ xp: 'green', npcXp, arch })       // test overrides: XP band, per-seat XP, one archetype for all

@@ -1,0 +1,25 @@
+{
+ "about": "THE FLOW OF THE BLADE: which blow follows which, by where the last one left the blade. Read by game.js (afFlowPick) and by the char editor's COMBO panel; measured by tools/realmesh/base/flow.js. Frames are the game clips' own, 30 fps. after.<blow> = ranges [frames past its landing, the blow that follows from there, the frame of THAT clip to take it up at]; past the last range he is back in his guard and open.<stance> says how he opens: a tap, or a press held into a heavy (heavyFrom: the frame of the heavy to take up, by the light whose wind-up the hold had begun). A heavy never chains into a heavy.",
+ "fps": 30,
+ "past": 0.06,
+ "rate": 1.25,
+ "keep": 0.12,
+ "xfade": 0.12,
+ "run": 0.45,
+ "clips": { "stab": "g_stab", "up": "g_slashup", "down": "g_slashdown", "spin": "g_spin", "jump": "g_jump", "bash": "g_swipe" },
+ "moves": { "walk": "angry_walk", "back": "walk_back_cycle", "guardFrame": 42 },
+ "open": {
+  "guard": { "tap": "down", "long": "spin" },
+  "run": { "tap": "stab", "long": "spin" },
+  "block": { "tap": "stab", "long": "spin" }
+ },
+ "heavyFrom": { "down": 14, "stab": 10 },
+ "after": {
+  "down": [[6.5, "up", 23], [19, "down", 24]],
+  "up": [[13, "down", 17]],
+  "stab": [[8, "up", 19], [22, "up", 14]],
+  "spin": [[10.5, "stab", 21]],
+  "jump": [[18, "up", 19]],
+  "bash": [[17.5, "up", 15]]
+ }
+}

@@ -218,6 +218,55 @@ runs take-off → the blade's top while he flies to where the blow falls, top �
 touch (the blade comes down WITH him), then on through the hard landing. The frame only ever moves forward: a man under
 him can call the blow early, and the blade must not jump back up.
 
+**THE FLOW OF THE BLADE — combos, judged in the editor first** (the user: "bring momentum to our attacks… if I attack when
+my sword is near my left foot after a swing and tap again, the system should pick the correct attack animation instead of
+random, so we won't look like our char is jumping from one anim to another real fast" — then: "show me how the combos will
+work in the editor screen, not the game… don't add long long… also add moves, jump, guard to combos"). A chain that picks
+its next clip by COUNT (1st rising cut, 2nd thrust, 3rd cut down) drags the blade from wherever the last cut left it to
+wherever the next wind-up wants it, in 0.06 s. The flow picks by WHERE THE BLADE IS:
+
+| the blade is… | because he has just… | a tap is | held (heavy) |
+|---|---|---|---|
+| in his guard, standing | — | CUT DOWN (right-top → left-bottom) | SPIN |
+| in his guard, moving in | — | THRUST | SPIN |
+| cocked behind the raised shield | raised his guard / is backing off under it | THRUST (past the shield's edge) | SPIN |
+| low by his left foot | cut down | RISING CUT (left-bottom → overhead) | the rising cut, loaded |
+| overhead, behind | cut up — or let the cut down's moulinet run | CUT DOWN | the cut down, loaded |
+| out ahead, right shoulder forward | thrust | RISING CUT | the rising cut, loaded |
+| low at his right hip | spun | THRUST | — (a heavy never chains into a heavy) |
+| low ahead, crouched | landed a jump attack | RISING CUT | loaded |
+| forward on the right | swiped the shield (the bash) | RISING CUT | loaded |
+
+So `tap tap tap` = cut down → rising cut → cut down (the finisher); `tap tap LONG` = down → up → the BIG cut down;
+`tap LONG tap` = down → coiled low-left, the big rising cut → down; `LONG tap tap` = spin → thrust → rising cut;
+`move-in tap tap tap` = thrust → rising cut → cut down; `JUMP tap tap` = the jump attack → rising cut out of the landing
+crouch → cut down; `guard tap tap` = thrust from behind the shield → rising cut; `bash tap tap` = shield swipe → rising
+cut → cut down. There is no `LONG LONG`: the second heavy starts from his guard, after the first has recovered.
+The pairs were found, not invented: `node tools/realmesh/base/flow.js` prints, for every frame of every blow's
+follow-through, the pose distance (hand + ½ tip + the chest's and hips' turn + the feet) to every frame of every wind-up —
+cut-down f30 ≈ rising-cut f23 (0.84) and rising-cut f37 ≈ cut-down f17 (0.84): the performer made them as a pair; the spin
+ends in the thrust's coil; the guard-retreat stance IS the spin's early wind-up (0.62). What a TAP can reach in its 0.06 s
+decides the openers: from the guard the thrust costs 0.65 against 3.6 for the cut down — the cut down is kept as the
+STANDING opener anyway, because its raise reads as a quick overhead and it puts the user's own example (down, then up from
+the left foot) on the first two clicks. The table is **`assets/motions/flow.json`** — written BY HAND from those numbers
+(`--check` fails when a range's clip is no longer the nearest): `after.<blow>` = `[frames past its landing, what follows,
+the frame of THAT clip to take it up at]`; past the last range he is back in his guard and `open.<stance>` applies.
+
+Three things make it read as one motion, all in the editor's **COMBO** panel (and `__combo('t,L,t', {flow, late}, t)` —
+pieces `t` tap · `L` LONG · `J` jump + a tap in the air · `G` guard · `B` bash · `F` moves in · `K` backs off; "your own"
+builds any sequence): the **entry** frame (the next clip is taken up where its pose is nearest, not from its frame 0); the
+**pre-wind** (the click came DURING the blow, so the moment the strike is over the next clip's wind-up begins — there is no
+walk back to the guard in between; the chain still fires when the sim says, ¾ through the follow-through); and the
+**crossfade** (every change of clip starts from the pose he is in, 0.12 s, never a cut). "late taps" shows why it is a table
+of RANGES: click after the cut has landed and the blade has already swung up the left side, so the cut down follows itself
+as a moulinet. "flow" off is the game as it is today — watch the blade trail: the straight strokes in it are the jumps.
+The panel scrubs the clips on the SIM's clock with the sim's numbers (`CBF` = game.js `AF_F`: wind 0.06 + 0.08 k, strike
+0.10 → 0.12, rec 0.28 → 0.50, chain at ¾, the third light a finisher with twice the follow-through, a press held past
+0.51 s a heavy; the bash 0.10 / 0.10 / 0.26; the leap v 6.6, g 18, the blow at 0.5 up on the way down, a hard landing of
+0.35 s). The standing GUARD is a planted frame of the guard-retreat cycle (`moves.guardFrame`), so guard, retreat and the
+blows out of them are one stance. What the editor cannot show is the game's own procedural poses (a plain leap, the roll,
+the run): those stay the game's.
+
 `BV.motion()` says which clip each figure is on and how strongly. A long take is no good for this — cut a cycle out of it
 first (`--cycle` finds one, `--cut A:B` takes it, and the last frames are eased into the first so the loop does not pop).
 

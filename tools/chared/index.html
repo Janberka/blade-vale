@@ -35,6 +35,19 @@
     <label title="take the clip's travel back out, evenly over its length — right for a steady cycle, wrong for a clip that moves in bursts (he would slide back while he stands)"><input type=checkbox id=mo_inplace> in place</label>
   </div>
   <div class=sm id=mo_info></div>
+  <h4>combo <span class=sm>— chained as the game chains them</span></h4>
+  <div class=row><button data-cb="t,t,t" title="three quick clicks">tap tap tap</button><button data-cb="t,t,L" title="two clicks, then press and hold">tap tap LONG</button></div>
+  <div class=row style=margin-top:4px><button data-cb="t,L,t">tap LONG tap</button><button data-cb="L,t,t">LONG tap tap</button></div>
+  <div class=row style=margin-top:4px><button data-cb="F,t,t,t" title="he comes in with his stride behind him: the thrust opens">move-in tap tap tap</button><button data-cb="J,t,t" title="a tap in the air is the jump attack; then on from its landing">JUMP tap tap</button></div>
+  <div class=row style=margin-top:4px><button data-cb="G,t,t" title="from behind the raised shield">guard tap tap</button><button data-cb="B,t,t" title="BLOCK tapped is the shield swipe; the blade comes out behind it">bash tap tap</button></div>
+  <div class=row style=margin-top:4px><button data-cb="K,L,t" title="giving ground under the shield, then the heavy out of that stance">back-off LONG tap</button><button data-cb="t,t,G,t" title="two blows, the shield up, and out again">tap tap guard tap</button></div>
+  <div class=sm style=margin-top:6px>your own:</div>
+  <div class=row><button data-add=t>+tap</button><button data-add=L>+LONG</button><button data-add=J>+jump</button><button data-add=G>+guard</button></div>
+  <div class=row style=margin-top:4px><button data-add=B>+bash</button><button data-add=F>+move in</button><button data-add=K>+back off</button><button id=cb_stop>stop</button></div>
+  <label title="the second click comes AFTER the cut has landed instead of during it: the blade has moved on, so what follows is a different blow"><input type=checkbox id=cb_late> late taps</label>
+  <label title="off = the game as it is today: the next blow is picked by COUNT (1st, 2nd, 3rd), wherever the blade is, and the clip is cut in"><input type=checkbox id=cb_flow checked> flow <span class=sm>(off: today's game)</span></label>
+  <label><input type=checkbox id=cb_trail checked> blade trail</label>
+  <div class=sm id=cb_say style="white-space:pre-line;min-height:4.8em"></div>
   <h4>pose</h4>
   <div class=row><button id=p_bind class=on>bind</button><button id=p_a>A</button><button id=p_t>T</button></div>
   <label class=sm><span id=l_arm>arms down</span> <span id=v_arm>0°</span></label><input type=range id=s_arm min=-90 max=90 value=0>
@@ -653,13 +666,146 @@ function applyMotion(tf) {                          // tf in frames, fractional:
 }
 function stepMotion(now) { const dt = Math.min(0.1, (now - MO.last) / 1000 || 0); MO.last = now; const c = MO.clip; if (!c || !MO.play) return; MO.t += dt * MO.speed; if (!c.loop && MO.t * c.fps >= c.frames - 1) MO.t = 0; applyMotion(MO.t * c.fps); }
 function moFrame(f) { const c = MO.clip; if (!c) return; MO.play = false; el$('mo_play').textContent = 'play'; MO.t = (c.loop ? ((f % c.frames) + c.frames) % c.frames : Math.min(Math.max(f, 0), c.frames - 1)) / c.fps; applyMotion(MO.t * c.fps); }
-el$('mo').onchange = e => setMotion(e.target.value);
+el$('mo').onchange = e => { cbStop(); setMotion(e.target.value); };
 el$('mo_inplace').onchange = el$('mo_follow').onchange = () => { if (!el$('mo_follow').checked || el$('mo_inplace').checked) { tgt.x = 0; tgt.z = 0; cam(); } if (MO.clip) applyMotion(MO.t * MO.clip.fps); };
-el$('mo_play').onclick = () => { if (!MO.clip) return; MO.play = !MO.play; el$('mo_play').textContent = MO.play ? 'pause' : 'play'; };
-el$('mo_prev').onclick = () => MO.clip && moFrame(Math.round(MO.t * MO.clip.fps) - 1);
-el$('mo_next').onclick = () => MO.clip && moFrame(Math.round(MO.t * MO.clip.fps) + 1);
-el$('s_mof').oninput = e => moFrame(+e.target.value);
+el$('mo_play').onclick = () => { if (!MO.clip && !CB.on) return; MO.play = !MO.play; el$('mo_play').textContent = MO.play ? 'pause' : 'play'; };
+const cbHold = t => { MO.play = false; el$('mo_play').textContent = 'play'; CB.t = Math.min(Math.max(t, 0), CB.total - 1e-3); cbApply(CB.t); };   // (a combo's frames are sixtieths of its own clock)
+el$('mo_prev').onclick = () => CB.on ? cbHold(CB.t - 1 / 60) : MO.clip && moFrame(Math.round(MO.t * MO.clip.fps) - 1);
+el$('mo_next').onclick = () => CB.on ? cbHold(CB.t + 1 / 60) : MO.clip && moFrame(Math.round(MO.t * MO.clip.fps) + 1);
+el$('s_mof').oninput = e => CB.on ? cbHold(+e.target.value / 60) : moFrame(+e.target.value);
 el$('s_mos').oninput = e => { MO.speed = +e.target.value / 100; el$('v_mos').textContent = MO.speed.toFixed(2) + '×'; };
+
+// ---- COMBO: what a fighter DOES, chained the way the game chains it — judged HERE before the game gets it (the user: "show
+// me how the combos will work in the editor screen, not the game… also add moves, jump, guard to combos… don't add long
+// long"). The game does not PLAY an attack clip, it SCRUBS it on the sim's clock (game.js motionBlow): the hold draws the
+// blade up to the clip's `top` mark, `wind` finishes the draw, `strike` runs top → `land` so the cut arrives when the sim
+// says it hits, `rec` runs on through the follow-through. This is that clock, with the sim's own numbers (CBF = AF_F),
+// driven by a scripted hand. The pieces: t a TAP (a click) · L a LONG press (held past the heavy line, 0.51 s) · J a JUMP
+// with a tap in the air (the jump attack, flown on the sim's arc) · G the GUARD (shield up, standing) · B a BASH (BLOCK
+// tapped: the shield swipe) · F he MOVES IN · K he BACKS OFF under his shield.
+// What it shows is THE FLOW (assets/motions/flow.json, measured by tools/realmesh/base/flow.js): the next blow is picked
+// by WHERE THE BLADE IS — after the cut from right-top to left-bottom the blade is by his left foot, and the blow that
+// starts there is the rising cut — it is taken up at the frame whose pose is nearest (`entry`), its wind-up begins IN the
+// follow-through of the blow before (the pre-wind: no walk back to the guard in between), and every change of clip is a
+// crossfade from the pose he is in, never a cut. From a stance it is `open`: standing he opens with the cut down, moving in
+// or from behind the shield with the thrust (what a tap can reach in its 0.06 s), a held press with the spin. "flow" off is
+// the game as it is today: the next blow by COUNT (rising cut, thrust, cut down — wherever the blade is), cut in.
+const CB = { flow: null, clips: {}, kinds: null, own: [], A: null, segs: null, t: 0, on: false, total: 0, bones: null, chain: null, trail: null, S: 1.39 },
+      CBF = { light: { strike: 0.10, rec: 0.28 }, heavy: { strike: 0.12, rec: 0.50 }, chargeMax: 0.85, heavyAt: 0.6, comboMax: 3, comboRest: 2.0, comboCd: 0.35, comboKeep: 1.1, chainAt: 0.75, tap: 0.08, long: 0.62,
+              bash: { wind: 0.10, strike: 0.10, rec: 0.26 }, jump: { v: 6.6, g: 18, land: 0.22, strikeY: 0.5 }, guard: 0.7, move: 0.95 };
+const cbS = u => { u = Math.min(1, Math.max(0, u)); return u * u * (3 - 2 * u); }, cbL = (a, b, k) => a + (b - a) * k;
+const CB_TOK = { t: 'tap', L: 'LONG', J: 'JUMP+tap', G: 'guard', B: 'bash', F: 'move in', K: 'back off' },
+      CB_NAME = { stab: 'THRUST', up: 'RISING CUT', down: 'CUT DOWN', spin: 'SPIN', jump: 'JUMP ATTACK', bash: 'SHIELD SWIPE', walk: 'moving in', back: 'backing off under the shield', hold: 'shield up' };
+async function cbLoad() { if (CB.flow) return; const FL = await (await fetch('../../assets/motions/flow.json?' + Date.now())).json();
+  const get = async id => { const c = await (await fetch('../../assets/motions/' + id + '.json?' + Date.now())).json(); c.q = c.q.map(a => new Float32Array(a)); c.pos = new Float32Array(c.pos); return c; };
+  for (const [k, id] of Object.entries(FL.clips)) CB.clips[k] = await get(id); CB.clips.walk = await get(FL.moves.walk); CB.clips.back = await get(FL.moves.back);
+  CB.bones = CB.clips.down.bones; for (const c of Object.values(CB.clips)) if (c.bones.join() !== CB.bones.join()) throw new Error('combo: the clips do not share one bone list');
+  const rg = await (await fetch(DIR + '/rig.json?' + Date.now())).json(), g = rg.grip && rg.grip.sword; CB.S = rg.hipY ? 1.52 / rg.hipY : 1.39;   // game units per metre of him (the sim's leap is in game units)
+  if (g) { CB.grip = { at: new THREE.Vector3().fromArray(g.at), ax: new THREE.Vector3().fromArray(g.axis).normalize(), len: 1 };            // the blade's length off the mesh itself: whatever size the rig's sword is, the trail ends at its tip
+    const swm = M.meshes.find(x => x.name === (rg.meshes || {}).sword), bi = swm && swm.skeleton ? swm.skeleton.bones.indexOf(BONE.handR) : -1;
+    if (bi >= 0) { const inv = swm.skeleton.boneInverses[bi], pa = swm.geometry.getAttribute('position'), v = new THREE.Vector3(); let len = 0; for (let i = 0; i < pa.count; i++) len = Math.max(len, v.fromBufferAttribute(pa, i).applyMatrix4(inv).sub(CB.grip.at).dot(CB.grip.ax)); if (len > 0.3) CB.grip.len = len; } }
+  CB.chain = []; for (let b = BONE.handR; b && b !== M.root; b = b.parent) CB.chain.unshift(b);                           // model root → … → the sword hand: the blade's trail is FK down this line only
+  CB.flow = FL; }
+// what follows from where the blade is (the game's afFlowPick): `past` = frames of the last blow's clip gone by since it landed
+function cbPick(from, past, combo, o, stance) { const FL = CB.flow;
+  if (!o.flow) return { clip: ['up', 'stab', 'down'][combo % 3], entry: null, flowed: false };                              // today: by count
+  const R = from ? (FL.after[from] || []).find(r => past <= r[0]) : null; if (R) return { clip: R[1], entry: R[2], flowed: true, from };
+  return { clip: FL.open[stance].tap, entry: null, flowed: false, stance }; }
+function cbBuild(kinds, o) { const F = CBF, FL = CB.flow, fps = FL.fps, A = []; let combo = 0, lastLight = -9, prev = null, free = 0.5, stance = 'guard';
+  for (const kd of kinds) { const a = { kd };
+    if (kd === 't' || kd === 'L') { const long = kd === 'L', pb = prev && prev.blow ? prev : null, chained = !!(pb && !pb.last && !(pb.heavy && long));   // (a heavy never chains into a heavy: the second starts from his guard)
+      a.blow = true; a.long = long; a.chained = chained; a.t0 = chained ? pb.tChain : prev ? free + (prev.blow ? 0.25 : 0.03) : free;   // the load begins: at the chain point of the blow before (the click came during it), or when his hands are free
+      if (a.t0 - lastLight > F.comboKeep) combo = 0;
+      a.hold = long ? F.long : chained ? 0 : F.tap; a.tRel = a.t0 + a.hold; const k = Math.min(1, a.hold / F.chargeMax); a.k = k; a.heavy = k >= F.heavyAt;
+      const late = chained && o.late ? 0.15 : 0; let from = null, past = 0;
+      if (chained) { a.preAt = pb.tEnd + late; from = pb.clip; past = FL.past * fps + late * fps * FL.rate; }               // when the click is KNOWN and the strike is over: the next blow is picked there, by where the blade is then
+      else if (prev && prev.out && a.t0 - prev.tFree <= FL.keep) { from = prev.out.k; past = prev.out.past; }               // not chained, but the blade is still out (a landing, a bash, a blow just over)
+      a.light = cbPick(from, past, combo, o, stance);
+      if (a.heavy) { if (o.flow) { a.hv = a.light.flowed ? a.light : { clip: FL.open[stance].long, entry: FL.heavyFrom[a.light.clip] || 0 }; a.tHeavy = a.t0 + F.chargeMax * F.heavyAt; } else { a.hv = { clip: 'spin', entry: null }; a.tHeavy = a.t0 + 0.35; } }
+      a.clip = a.heavy ? a.hv.clip : a.light.clip;
+      if (a.heavy) combo = 0; else { combo++; lastLight = a.tRel; } a.last = !a.heavy && combo >= F.comboMax; if (a.last) combo = 0;   // the third light is the finisher: twice the follow-through, nothing chains out of it
+      a.wind = 0.06 + 0.08 * k; a.strike = cbL(F.light.strike, F.heavy.strike, k); a.rec = cbL(F.light.rec, F.heavy.rec, k) * (a.last ? F.comboRest : 1);
+      a.tHit = a.tRel + a.wind; a.tEnd = a.tHit + a.strike; a.tChain = a.tEnd + a.rec * F.chainAt; a.tDone = a.tEnd + a.rec; a.tFree = a.tDone;
+      a.out = { k: a.clip, past: FL.past * fps + a.rec * fps * FL.rate }; free = a.tDone + (a.last ? F.comboCd : 0.04); stance = 'guard'; }
+    else if (kd === 'J') { const J = F.jump; a.t0 = free + (prev ? 0.1 : 0); a.tS = (J.v + Math.sqrt(J.v * J.v - 2 * J.g * J.strikeY)) / J.g; a.tLand = 2 * J.v / J.g; a.landT = J.land * 1.6;   // the sim's arc: the blow falls at strikeY on the way down, a hard landing after
+      a.tTouch = a.t0 + a.tLand; a.tFree = a.tTouch + a.landT; a.clip = 'jump'; a.out = { k: 'jump', past: a.landT * fps * 1.15 }; free = a.tFree; combo = 0; stance = 'guard'; }
+    else if (kd === 'B') { const BA = F.bash; a.t0 = free + (prev ? 0.05 : 0); a.tHit = a.t0 + BA.wind; a.tEnd = a.tHit + BA.strike; a.tDone = a.tEnd + BA.rec; a.tFree = a.tDone; a.clip = 'bash';
+      a.out = { k: 'bash', past: FL.past * fps + BA.rec * fps * FL.rate }; free = a.tFree; stance = 'guard'; }
+    else { a.t0 = free + (prev ? 0.05 : 0); a.dur = kd === 'G' ? F.guard : F.move; a.tFree = a.t0 + a.dur; a.clip = kd === 'F' ? 'walk' : kd === 'K' ? 'back' : 'hold'; free = a.tFree; stance = kd === 'F' ? 'run' : 'block'; }
+    A.push(a); prev = a; }
+  return A; }
+function cbSegs(A, o) { const S = [], F = CBF, FL = CB.flow, fps = FL.fps, xd = o.flow ? FL.xfade : 0.045;                 // (today's change of clip is a dip to 35 % and back in 0.045 s: as good as a cut)
+  S.push({ ta: 0, tb: A[0].t0, clip: 'down', f: () => 0, say: 'in his guard' });
+  const tail = (a, i, key, recF, nx) => S.push({ ta: a.tFree, tb: nx ? nx.t0 : a.tFree + 1.0, clip: key, f: o.flow ? recF : () => recF(a.tFree), xs: a.xs, xd, toGuard: a.tFree, gd: o.flow ? 0.3 : 0.2, lift: a.lift, a, i, say: 'back to his guard' });   // (flow: the clip runs ON while it fades to the guard; today it freezes and fades)
+  A.forEach((a, i) => { const nx = A[i + 1];
+    if (a.blow) { const goesOn = !!(nx && nx.blow && nx.chained), cl = CB.clips[a.light.clip], topL = cl.marks.top, e = a.light.entry == null ? 0 : a.light.entry, pre = o.flow && a.preAt != null, pw = pre ? Math.max(e, topL - 0.12 * fps) : e;
+      let xs = pre ? a.preAt : a.t0, key = a.light.clip, top = topL, rel = pw;
+      if (pre) S.push({ ta: a.preAt, tb: a.t0, clip: key, f: t => e + (pw - e) * cbS((t - a.preAt) / Math.max(1e-3, a.t0 - a.preAt)), xs, xd, a, i, say: 'gathers — taken up from the ' + CB_NAME[a.light.from] + '\'s follow-through' });
+      const loadF = t => pw + (topL - pw) * cbS(Math.min(1, (t - a.t0) / (F.chargeMax * 0.8)));
+      if (a.heavy && a.hv.clip !== key) { S.push({ ta: a.t0, tb: a.tHeavy, clip: key, f: loadF, xs, xd, a, i, say: 'loads' });
+        const ch = CB.clips[a.hv.clip], th = ch.marks.top, eh = a.hv.entry == null ? 0 : a.hv.entry, hF = o.flow ? t => eh + (th - eh) * cbS((t - a.tHeavy) / (a.t0 + F.chargeMax - a.tHeavy)) : t => th * cbS(Math.min(1, (t - a.t0) / (F.chargeMax * 0.8)));
+        S.push({ ta: a.tHeavy, tb: a.tRel, clip: a.hv.clip, f: hF, xs: a.tHeavy, xd, a, i, say: 'held: coils into the HEAVY' }); rel = hF(a.tRel); key = a.hv.clip; top = th; xs = a.tHeavy; }
+      else if (a.tRel > a.t0) { S.push({ ta: a.t0, tb: a.tRel, clip: key, f: loadF, xs, xd, a, i, say: a.heavy ? 'held: loads the HEAVY' : 'loads' }); rel = loadF(a.tRel); }
+      const c = CB.clips[key], land = c.marks.land, from = Math.max(rel, top - 0.12 * fps), endF = land + FL.past * fps, recF = t => Math.min(c.frames - 1, endF + (t - a.tEnd) * fps * FL.rate); a.xs = xs;
+      S.push({ ta: a.tRel, tb: a.tHit, clip: key, f: t => from + (top - from) * (t - a.tRel) / a.wind, xs, xd, a, i, say: 'wind' });
+      S.push({ ta: a.tHit, tb: a.tEnd, clip: key, f: t => top + (endF - top) * (t - a.tHit) / a.strike, xs, xd, a, i, say: 'STRIKE' });
+      S.push({ ta: a.tEnd, tb: goesOn ? (o.flow ? nx.preAt : nx.t0) : a.tDone, clip: key, f: recF, xs, xd, a, i, say: a.last ? 'follow-through — the FINISHER: twice as long, nothing chains out of it' : 'follow-through' });
+      if (!goesOn) tail(a, i, key, recF, nx); }
+    else if (a.kd === 'J') { const c = CB.clips.jump, K = c.marks, J = F.jump; a.xs = a.t0; a.lift = t => { const u = Math.min(Math.max(t - a.t0, 0), a.tLand); return (J.v * u - 0.5 * J.g * u * u) / CB.S; };   // the sim lifts him; the clip only tucks the knees and coils the blade
+      S.push({ ta: a.t0, tb: a.t0 + a.tS, clip: 'jump', f: t => K.takeoff + (K.top - K.takeoff) * (t - a.t0) / a.tS, xs: a.t0, xd, lift: a.lift, a, i, say: 'in the air: the blade coils overhead' });
+      S.push({ ta: a.t0 + a.tS, tb: a.tTouch, clip: 'jump', f: t => K.top + (K.land + 1 - K.top) * (t - a.t0 - a.tS) / (a.tLand - a.tS), xs: a.t0, xd, lift: a.lift, a, i, say: 'STRIKE' });
+      const recF = t => Math.min(c.frames - 1, K.land + 1 + (t - a.tTouch) * c.fps * 1.15);
+      S.push({ ta: a.tTouch, tb: a.tFree, clip: 'jump', f: recF, xs: a.t0, xd, a, i, say: 'the hard landing' }); a.lift = null; tail(a, i, 'jump', recF, nx); }
+    else if (a.kd === 'B') { const c = CB.clips.bash, BA = F.bash, top = c.marks.top, endF = c.marks.land + FL.past * fps, from = Math.max(0, top - 0.12 * fps), recF = t => Math.min(c.frames - 1, endF + (t - a.tEnd) * fps * FL.rate); a.xs = a.t0;
+      S.push({ ta: a.t0, tb: a.tHit, clip: 'bash', f: t => from + (top - from) * (t - a.t0) / BA.wind, xs: a.t0, xd, a, i, say: 'the shield cocked' });
+      S.push({ ta: a.tHit, tb: a.tEnd, clip: 'bash', f: t => top + (endF - top) * (t - a.tHit) / BA.strike, xs: a.t0, xd, a, i, say: 'the shield goes out' });
+      S.push({ ta: a.tEnd, tb: a.tDone, clip: 'bash', f: recF, xs: a.t0, xd, a, i, say: 'follow-through' }); tail(a, i, 'bash', recF, nx); }
+    else { const key = a.clip === 'hold' ? 'back' : a.clip, c = CB.clips[key], rate = a.clip === 'walk' ? 1.3 : 1.2, f = a.clip === 'hold' ? () => FL.moves.guardFrame : t => (t - a.t0) * c.fps * rate;
+      S.push({ ta: a.t0, tb: nx ? nx.t0 : a.tFree, clip: key, f, xs: a.t0, xd: o.flow ? 0.2 : 0.1, a, i, say: CB_NAME[a.clip] });
+      if (!nx) S.push({ ta: a.tFree, tb: a.tFree + 1.0, clip: 'down', f: () => 0, xs: a.tFree, xd: 0.3, a, i, say: 'back to his guard' }); } });
+  return S; }
+function cbClipPose(key, f) { const c = CB.clips[key], n = c.frames; f = c.loop ? ((f % n) + n) % n : Math.min(Math.max(f, 0), n - 1); const i0 = Math.floor(f), a = f - i0, i1 = c.loop ? (i0 + 1) % n : Math.min(i0 + 1, n - 1), nb = c.bones.length, P = { q: new Float32Array(nb * 4), p: [0, 0, 0] };
+  for (let k = 0; k < nb; k++) THREE.Quaternion.slerpFlat(P.q, k * 4, c.q[k], i0 * 4, c.q[k], i1 * 4, a);
+  for (let d = 0; d < 3; d++) P.p[d] = c.pos[i0 * 3 + d] + (c.pos[i1 * 3 + d] - c.pos[i0 * 3 + d]) * a - (c.travel && d !== 1 ? c.travel[d] * f / n : 0); return P; }   // (in place: a cycle's own travel taken back out, as the game does)
+function cbMix(A, Bp, u) { if (u <= 0) return A; if (u >= 1) return Bp; const nb = A.q.length / 4, P = { q: new Float32Array(nb * 4), p: [0, 0, 0] }; for (let k = 0; k < nb; k++) THREE.Quaternion.slerpFlat(P.q, k * 4, A.q, k * 4, Bp.q, k * 4, u); for (let d = 0; d < 3; d++) P.p[d] = A.p[d] + (Bp.p[d] - A.p[d]) * u; return P; }
+function cbSegAt(t) { return CB.segs.find(sg => t >= sg.ta && t < sg.tb) || CB.segs[CB.segs.length - 1]; }
+function cbPose(t, depth) { const sg = cbSegAt(t); let P = cbClipPose(sg.clip, sg.f(Math.min(t, sg.tb)));
+  if (sg.toGuard != null) P = cbMix(P, cbClipPose('down', 0), cbS((t - sg.toGuard) / sg.gd));
+  if (sg.lift) P.p[1] += sg.lift(t);
+  if (sg.xs != null && t - sg.xs < sg.xd && (depth | 0) < 3) P = cbMix(cbPose(sg.xs - 1e-4, (depth | 0) + 1), P, cbS((t - sg.xs) / sg.xd));   // a change of clip: from the pose he was IN, never a cut
+  return P; }
+function cbBlade(P) {                                  // the blade's last third for a pose: FK down the sword arm only (the trail asks for this two dozen times a frame)
+  const m = new THREE.Matrix4().copy(M.root.matrixWorld), l = new THREE.Matrix4(), q = new THREE.Quaternion(), one = new THREE.Vector3(1, 1, 1), p = new THREE.Vector3();
+  for (const b of CB.chain) { const k = CB.bones.indexOf(b.name); if (k >= 0) q.fromArray(P.q, k * 4); else q.copy(REST.has(b.name) ? REST.get(b.name).q : b.quaternion);
+    if (b.name === CB.clips.down.root) p.fromArray(P.p); else p.copy(REST.has(b.name) ? REST.get(b.name).p : b.position); m.multiply(l.compose(p, q, b.scale || one)); }
+  const g = CB.grip; return [g.at.clone().addScaledVector(g.ax, g.len * 0.7).applyMatrix4(m), g.at.clone().addScaledVector(g.ax, g.len).applyMatrix4(m)]; }   // (the last third: the ribbon shows the blade's ROAD without hiding the man)
+function cbTrail(t) { const N = 28, span = 0.30;
+  if (!CB.trail) { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 2 * 3), 3)); g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(N * 2 * 3), 3)); const ix = []; for (let i = 0; i < N - 1; i++) { const a = i * 2; ix.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); } g.setIndex(ix);
+    CB.trail = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending })); CB.trail.frustumCulled = false; CB.trail.renderOrder = 8; s.add(CB.trail); }
+  const on = CB.on && el$('cb_trail').checked && CB.grip; CB.trail.visible = !!on; if (!on) return;
+  const pa = CB.trail.geometry.getAttribute('position'), ca = CB.trail.geometry.getAttribute('color');
+  for (let i = 0; i < N; i++) { const tt = Math.max(0, t - span * i / (N - 1)), [r0, tip] = cbBlade(cbPose(tt)), k = Math.pow(1 - i / (N - 1), 1.6), hot = cbSegAt(tt).say === 'STRIKE';
+    pa.setXYZ(i * 2, r0.x, r0.y, r0.z); pa.setXYZ(i * 2 + 1, tip.x, tip.y, tip.z); const cr = hot ? 1 : 0.35, cg = hot ? 0.62 : 0.75, cbb = hot ? 0.25 : 1;   // the cut itself burns orange, the rest of the blade's road is blue
+    ca.setXYZ(i * 2, cr * k * 0.2, cg * k * 0.2, cbb * k * 0.2); ca.setXYZ(i * 2 + 1, cr * k * 0.8, cg * k * 0.8, cbb * k * 0.8); }
+  pa.needsUpdate = true; ca.needsUpdate = true; }
+function cbApply(t) { const P = cbPose(t); CB.bones.forEach((nm, k) => { const b = BONE[nm]; if (b) b.quaternion.fromArray(P.q, k * 4); }); const rb = BONE[CB.clips.down.root]; if (rb) rb.position.fromArray(P.p);
+  const sg = cbSegAt(t), a = sg.a; cbTrail(t);
+  el$('v_mof').textContent = t.toFixed(2) + ' / ' + CB.total.toFixed(2) + ' s'; el$('s_mof').value = Math.round(t * 60);
+  const what = !a ? sg.say : a.blow ? (a.heavy ? 'HEAVY ' : a.last ? 'finisher ' : 'light ') + CB_NAME[sg.clip] + '  ·  ' + sg.say : CB_NAME[a.clip] + (sg.say !== CB_NAME[a.clip] ? '  ·  ' + sg.say : '');
+  el$('cb_say').textContent = CB.kinds.map((k, i) => (a && sg.i === i ? '[' + CB_TOK[k] + ']' : CB_TOK[k])).join(' · ') + '\n' + what + '\n' + CB.A.map(x => CB_NAME[x.clip] + (x.heavy ? ' (heavy)' : '')).join('  →  ') + '\n' + (CB.clips[sg.clip].id || sg.clip) + ' f' + sg.f(Math.min(t, sg.tb)).toFixed(1); }
+async function cbStart(kinds) { await cbLoad(); if (MO.clip) await setMotion(''); preset(0, 0, 'p_bind');
+  if (!CB.framed && dist === 5.2 && tgt.y === 1.04) { dist = 8; tgt.y = 1.5; cam(); } CB.framed = true;                        // (a rising cut ends 3.4 m up: the lens steps back once, unless it has been moved already)
+  const o = CB.o = { flow: el$('cb_flow').checked, late: el$('cb_late').checked }; CB.kinds = kinds; CB.A = cbBuild(kinds, o); CB.segs = cbSegs(CB.A, o); CB.total = CB.segs[CB.segs.length - 1].tb; CB.t = 0; CB.on = true; MO.play = true;
+  el$('mo_play').textContent = 'pause'; el$('s_mof').max = Math.ceil(CB.total * 60); document.querySelectorAll('[data-cb]').forEach(x => x.classList.toggle('on', x.dataset.cb === kinds.join(','))); cbApply(0); }
+function cbStop() { if (!CB.on) return; CB.on = false; if (CB.trail) CB.trail.visible = false; el$('cb_say').textContent = ''; document.querySelectorAll('[data-cb]').forEach(x => x.classList.remove('on')); el$('s_mof').max = 0; el$('v_mof').textContent = '–'; restPose(); }
+function stepCombo(now) { if (!CB.on) return false; const dt = Math.min(0.1, (now - MO.last) / 1000 || 0); MO.last = now; if (MO.play) { CB.t += dt * MO.speed; if (CB.t >= CB.total) CB.t = 0; cbApply(CB.t); } return true; }
+document.querySelectorAll('[data-cb]').forEach(x => { x.onclick = () => { CB.own = []; cbStart(x.dataset.cb.split(',')); }; });
+document.querySelectorAll('[data-add]').forEach(x => { x.onclick = () => { CB.own.push(x.dataset.add); cbStart(CB.own.slice()); }; });
+el$('cb_stop').onclick = () => { CB.own = []; cbStop(); };
+['cb_late', 'cb_flow'].forEach(id => { el$(id).onchange = () => { if (CB.on) { const t = CB.t; cbStart(CB.kinds).then(() => { CB.t = Math.min(t, CB.total - 1e-3); cbApply(CB.t); }); } }; });
+el$('cb_trail').onchange = () => { if (CB.on) cbApply(CB.t); };
+window.__combo = async (kinds, o, t) => { for (const [id, k] of [['cb_flow', 'flow'], ['cb_late', 'late']]) if (o && o[k] != null) el$(id).checked = !!o[k]; await cbStart(typeof kinds === 'string' ? kinds.split(',') : kinds); if (t != null) { MO.play = false; el$('mo_play').textContent = 'play'; CB.t = Math.min(Math.max(t, 0), CB.total - 1e-3); cbApply(CB.t); }
+  return { total: +CB.total.toFixed(3), acts: CB.A.map(a => ({ kd: a.kd, clip: a.clip, heavy: !!a.heavy, last: !!a.last, chained: !!a.chained, entry: a.blow ? (a.heavy ? a.hv : a.light).entry : null, flowed: !!(a.light && a.light.flowed), t0: +a.t0.toFixed(3), hit: a.tHit == null ? null : +a.tHit.toFixed(3), end: +(a.tEnd != null ? a.tEnd : a.tTouch != null ? a.tTouch : a.tFree).toFixed(3), free: +a.tFree.toFixed(3) })), now: cbSegAt(CB.t).say }; };   // a combo, held at a time (or playing when none is given): pieces t L J G B F K
 
 // ---- measurements (bind pose, the body mesh)
 function measure() {
@@ -780,5 +926,5 @@ window.__save = async (name) => { r.render(s, c); const d = r.domElement.toDataU
 
 window.__motion = async (id, frame) => { if (!MO.clip || MO.clip.id !== id) await setMotion(id); if (frame != null) moFrame(frame); return MO.clip ? MO.clip.id + ' @ ' + (MO.t * MO.clip.fps).toFixed(1) : 'none'; };   // a clip, held on a frame (or playing when no frame is given)
 
-(function loop(now) { requestAnimationFrame(loop); if (el$('t_spin').checked) { az += 0.0045; cam(); } stepMotion(now || 0); r.render(s, c); })();
+(function loop(now) { requestAnimationFrame(loop); if (el$('t_spin').checked) { az += 0.0045; cam(); } if (!stepCombo(now || 0)) stepMotion(now || 0); r.render(s, c); })();
 </script>

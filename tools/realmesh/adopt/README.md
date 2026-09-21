@@ -28,8 +28,8 @@ feet: about the vertical only            (both stand flat; lining up ankle → t
 
 Then **one clip, one fist, one grip, one wardrobe serve every body**, with no per-body bake of any of them. The only thing
 a clip needs on another body is its hips' road re-laid for his legs (scaled by the legs' ratio, then every grounded frame
-put back ON the floor from his own soles; a flight is kept) — the editor does it when it loads a clip (`fitClip`), and the
-game will have to do the same.
+put back ON the floor from his own soles; a flight is kept) — the editor does it when it loads a clip (`fitClip`), the
+game the first time a rig plays it (`motionFit`).
 
 ## The steps
 
@@ -48,7 +48,7 @@ node tools/realmesh/adopt/wardrobe.js tools/realmesh/adopt/profiles/<id>.json
 #    open the editor on him (sizes.json), look at the plates, then in the console:  await __exportArmor()
 node tools/realmesh/adopt/wardrobe.js tools/realmesh/adopt/profiles/<id>.json --baked
 # 4. JUDGE HIM IN THE CHAR EDITOR — every clip, the combos, every item, clay first. Add him to tools/chared/sizes.json.
-# 5. (the game, when he is signed off)  … --baked --ship  → assets/rigs/<id>; see "What the game still needs" below
+# 5. (the game, when he is signed off)  … --baked --ship  → assets/rigs/<id>; see "In the game" below
 ```
 
 `tools/chared/sources/` (converted source models: big, somebody else's files) and `tools/chared/build/` (the intermediate)
@@ -99,17 +99,24 @@ GOTCHA that cost an hour: a LEFT limb's anatomical frame is its right twin seen 
 the joint back UP the limb. Congruence does not care (both rigs are read the same way); walking along a bone does —
 the left leg's skin was being read above the hip, and the left trouser leg ballooned (`ALONG`).
 
-## What the game still needs (not done — the editor first, as always)
+## In the game (2026-09-21, game.js v=313)
 
-1. `instanceModelRig`: honour `rig.json.rest === "nodes"` (rest pose from the nodes, not the inverse bind matrices).
-2. `motionClip`/`motionPose`: re-lay a clip's hip road per rig (the editor's `fitClip`).
-3. The look tables are GLOBALS overwritten by the last rig loaded (`Object.assign(LOOK_SKULL, spec.skull)` …): two bodies
-   live at once need them per rig.
-4. A size on the fighter (career / NPC roll / net row) → which rig `wearModelRig` dresses; `MODEL_NAME` becomes a lookup.
-5. His head's look classes (hair / beard / brow / socket — `headbake.py` is Thor's paint-driven cut; he is bald, so cut by
-   the hairline tables) and his atlas's skin normalised for the tints; `wear.kind` for his loincloth and sandals.
-6. `covers: ["hips", …]`, slots `bandL/bandR/legs` are new names — harmless where unknown, but no item carries them yet.
-7. Both bodies stand ~2.9 game units (the game scales a rig by hip height; his legs are as long as the base's): the
-   difference in the arena is BULK — 41 cm against 58 cm across the shoulders, 107 against 146 cm round the chest. If
-   `normal` should also stand shorter, that is one factor on `S` in `wearModelRig`.
-8. Credit line: *Gladiator by huyunited (Sketchfab), CC-BY-4.0*.
+`node tools/realmesh/adopt/wardrobe.js <profile> --baked --ship` writes `assets/rigs/<id>` (no debug files) and runs
+`skinbake.py` on it. What the game does with an adopted rig, and what a NEW one needs:
+
+| what | where |
+| --- | --- |
+| which body a man wears | `MODEL_BY_SIZE = { normal: 'glad', huge: 'base' }`, `modelSizeOf(name, gear, npc)`, `modelNameFor(size)`. The build is part of the LOOK — `gear.look.z` (`ARENA_LOOK.z` in arena-items.js, so server, worker and guests validate it); a player without a pick is normal, an NPC rolls huge from his name (`AF_HUGE_ODDS`). A third body = a new entry there + a bigger `ARENA_LOOK.z` + a name in `LOOK_BUILD_NAMES` (the barber's BUILD row). Every body in the table loads at the start (`BV.modelLoadAll`); only the default is waited for |
+| rest pose | `rig.json.rest === "nodes"` → `instanceModelRig` keeps the nodes (the base's stance) instead of writing the bind pose into them |
+| the head's and the hand's measures | `lookRigUse(R)` points the look tables (`LOOK_SKULL/FACE/HAIRLINE`, `MODEL_HELM_HAND`, `LOOK_HAIR_TEX`) at the rig of the man being dressed — they were globals the last rig loaded overwrote |
+| a clip on his legs | `rig.json.clipFit = { pelvis, k }` (where the BASE's pelvis rests, his legs over the base's) → `motionFit` re-lays the hips' road per clip and rig (the editor's `fitClip`), and a stride's pace follows the legs (`clipK`) |
+| the sheathed sword | `rig.json.hip` (x, y, z of the hang at his hip; wardrobe.js, by the pelvis' half-width) over `MODEL_HIP` |
+| skin tones | the game lays a TONE on as a vertex tint, tone × paint, and expects the paint's bright skin AT the palette's skin cell `#ffdcb4`. `skinbake.py` normalises the SKIN texels only (the body mesh's own triangles in uv space; what he wears on the same sheet keeps its paint). The painted sheet is kept for the editor in `tools/chared/items/atlas_raw.<id>.jpg` |
+| brow / socket classes | carried from the base's head by the head map (wardrobe.js) so the brow tint and the eye sockets work |
+| credit | the start page's credit line (index.html, twice) + `assets/rigs/CREDITS.md` |
+
+Still open on the gladiator: he is BALD — no `hair` / `beard` class, so the barber's hair colour does nothing on him (a crop
+painted into his sheet + `rig.json.hairTex`, which `lookRigUse` already honours, or hair cards carried like the helm); both
+bodies stand ~2.9 game units (the game scales a rig by hip height, and his legs are as long as the base's), the difference
+is BULK — 41 cm against 58 cm across the shoulders. If `normal` should also stand shorter, that is one factor on `S` in
+`wearModelRig`. Body size is cosmetic: the sim's capsules and reach are the same for both.

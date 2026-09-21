@@ -80,6 +80,37 @@ looks best, so the knob rests at **+8 (−10.5°)**. `CARRY` in `index.html`; th
 clip is first seen with the same carriage. It is a live offset (`poseOver`, in the clavicle's frame) — when clips go into
 the game this is the turn to bake into them.
 
+**A BLOW IS BAKED BY ITS BLADE (`--blade`, 2026-09-21).** The user, on the cut down: "the sword is not pointing front at the peak
+of the attack". At the top of that cut his forearm reached straight ahead and the blade stood 77° off it, pointing at the sky —
+and measured against the performer, EVERY blow was out: the blade 34–60° from his on average, the thrust landing aimed at the
+ground, the spin tilted 33° down. A hand retargeted bone for bone does not put a blade where the performer's was: his sword
+leaves his fist its own way, ours leaves ours another (48° apart at the reference pose — the eye had found 51° of it and called
+it the zero's tilt), and the walk's rules (thumbs to the front, the zero turn) hold the wrist in a CARRY all through a cut.
+So for a blow the sword hand is SOLVED, not retargeted: the performer's own sword is a rigid prop under his hand
+(`gltfanim.js` writes every such prop — its long axis, width and flat in its bone's frame — as `props`), its frame in the world
+is known every frame, and our hand is turned until OUR blade (`rig.json grip.sword` axis + flat) lies in it. A double-edged
+blade rolled half a turn is the same blade, so of the two hands that do it the one nearer the plain retarget is taken, once;
+half the twist this asks of the wrist goes into the forearm bone. The other hand keeps the walk's rule. motion.js prints where
+the blade points at each mark and how far the wrist is asked off its rest (45–98° in the cut down: read it, then LOOK at the
+wrist). All eight attack clips and the six game blows (`assets/motions/g_*`) are baked this way; the walks are NOT — a walk's
+carriage is the user's own, set by eye (below). `flow.js --check` still agrees with the table: the same blows meet.
+And the blade leaves EVERY body's fist the same way: `wardrobe.js` puts the hilt in an adopted body's own finger loops but
+keeps the base's axis and flat in the hand's frame, or a clip baked for the base's blade would land 7.8° wide on him.
+
+| clip | how it is baked (`motion.js <glad_gltf.json> <id> "<Name>" --profile cc_gltf --credit "…"` +) |
+| --- | --- |
+| `angry_walk`, `walk_backward`, `walk_back_cycle` | `--clip 0` · `--clip 2` · `--clip 2 --cut 205:261` |
+| `walk_forward`, `walk_cycle` | `--clip 1 --overR 22,-54,0` · `--clip 1 --cut 13:109 --overR 22,-54,0` (the user's hand state for this carriage: the blade upright behind the shield) |
+| `atk_jump` … `atk_stab` | `--clip 3 --air --blade` · `--clip 4…10 --blade` (+ `--marks` for the log) |
+| `g_slashdown` · `g_slashup` · `g_stab` | `--clip 7 --keep 2:136 --marks top=52,land=60` · `--clip 8 --keep 4:146 --marks top=59,land=74` · `--clip 10 --keep 36:164 --marks top=79,land=92`, all `--fps 30 --blade` |
+| `g_spin` · `g_swipe` · `g_jump` | `--clip 9 --keep 0:134 --marks top=41,land=51 --inplace` · `--clip 6 --keep 4:130 --marks top=50,land=73` · `--clip 3 --keep 44:150 --marks takeoff=49,apex=60,top=72,land=82 --inplace`, all `--fps 30 --blade` (then move `tools/chared/motions/g_*.json` to `assets/motions/` and take them back out of the editor's index) |
+
+**What the eye adds, clip by clip (`--overR x,y,z` / `--overL`).** The hand sliders read 0 at whatever turn a clip was baked with
+and lay theirs ON TOP of it; `--overR` bakes exactly those numbers, as they are read under the sliders, and the sliders are
+back at 0 for that clip (checked: old hand · slider turn = baked hand to 0.014°, and only `handR`'s track changes).
+`--handR` REPLACES the zero; `--overR` is laid over it — and over a `--blade` solve too. (The sliders' lines are read off the
+BIND pose, as motion.js reads them: off the rest pose, where the fist is closed, they sat a hair elsewhere.)
+
 **The sword hand's zero.** Every clip is baked with the fist turned as it HOLDS A SWORD — **right −30 bend, +51 tilt, +40
 roll** (`HAND_ZERO` in `motion.js`, the user's own numbers, 2026-09-20). So a fighter carries his blade the same way in
 every motion, and the editor's hand sliders start from it at **0**. A clip where that hand is empty or doing something of

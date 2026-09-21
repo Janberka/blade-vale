@@ -161,7 +161,11 @@ const grip = JSON.parse(JSON.stringify(baseRig.grip || {})), kMan = rig.height /
 { const sw = meshT(baseRig.meshes.sword), gs = grip.sword; if (sw && gs && gs.at) { const fT = fist(REF, WT, ref.tips, 'R'), fG = fist(A, WG, adopt.tips, 'R'), kF = fG.span / fT.span;
     // what grip.js (and the eye, after it) settled on the base, said relative to the base's own fist — and said again relative to this one
     const atT = new THREE.Vector3(...gs.at), axT = new THREE.Vector3(...gs.axis).normalize(), flT = new THREE.Vector3(...gs.flat).normalize(), lean = new THREE.Quaternion().setFromUnitVectors(fT.axis, axT);
-    const axG = fG.axis.clone().applyQuaternion(lean).normalize(), atG = fG.mid.clone().add(atT.clone().sub(fT.mid).multiplyScalar(kF)), flG = flT.clone().addScaledVector(axG, -flT.dot(axG)).normalize(), reachG = gs.reach * kF;
+    // THE BLADE LEAVES EVERY FIST THE SAME WAY. Where the hilt sits is his own (the middle of HIS finger loops); the way the blade points out of the hand —
+    // axis and flat, in the hand's frame — is the base's, to the degree. A clip is baked so that the BLADE is where the performer's was (motion.js --blade),
+    // and that is only true on another body if its blade lies in its hand's frame as the base's does. (Laid along his own loops' line it left 7.8° off the
+    // base's: every cut would have landed 7.8° wide on him. The price is the hilt crossing his loops 6 mm off-centre at each end — nothing the eye finds.)
+    const axG = axT.clone(), atG = fG.mid.clone().add(atT.clone().sub(fT.mid).multiplyScalar(kF)), flG = flT.clone(), reachG = gs.reach * kF, off = fG.axis.clone().applyQuaternion(lean).angleTo(axT) * 180 / Math.PI;
     const basis = (ax, fl) => new THREE.Matrix4().makeBasis(new THREE.Vector3().crossVectors(ax, fl).normalize(), ax, fl), hT = new THREE.Matrix4().fromArray(WT[REF.names.indexOf('handR')]), hG = new THREE.Matrix4().fromArray(WG[A.names.indexOf('handR')]);
     // the blade: rigid, the guard's place on the handle line → the same place on his, scaled with the MAN (a plain sword is 53 % of a man's height — swordsize.js), not with his fingers
     const gT = hT.clone().multiply(new THREE.Matrix4().makeTranslation(...atT.clone().addScaledVector(axT, gs.reach).toArray())).multiply(basis(axT, flT)), gG = hG.clone().multiply(new THREE.Matrix4().makeTranslation(...atG.clone().addScaledVector(axG, reachG).toArray())).multiply(basis(axG, flG));
@@ -172,7 +176,7 @@ const grip = JSON.parse(JSON.stringify(baseRig.grip || {})), kMan = rig.height /
     const seatT = new THREE.Matrix4().fromArray(gs.seat), un = new THREE.Matrix4().makeTranslation(...PG.handR).multiply(new THREE.Matrix4().makeScale(kMan, kMan, kMan)).multiply(new THREE.Matrix4().makeTranslation(-PT.handR[0], -PT.handR[1], -PT.handR[2])).multiply(seatT.clone().invert()).multiply(M.clone().invert());
     Object.assign(gs, { seat: un.clone().invert().elements.map(x => +x.toFixed(6)), at: atG.toArray().map(x => +x.toFixed(5)), axis: axG.toArray().map(x => +x.toFixed(5)), flat: flG.toArray().map(x => +x.toFixed(5)), reach: +reachG.toFixed(5) }); if (gs.size) gs.size = +(gs.size * kMan * (baseRig.hipY / rig.hipY)).toFixed(3); if (gs.own) delete gs.own;
     gs.note = 'wardrobe.js: the base\'s grip said again about THIS fist (its loops ×' + kF.toFixed(3) + ' the base\'s), the blade ×' + kMan.toFixed(3) + ' with the man. ' + (gs.note || '');
-    log('sword       in his fist (fist ×' + kF.toFixed(3) + ', blade ×' + kMan.toFixed(3) + ')'); }
+    log('sword       in his fist (fist ×' + kF.toFixed(3) + ', blade ×' + kMan.toFixed(3) + '; the blade leaves it as the base\'s does — his own loops\' line lies ' + off.toFixed(1) + '° off that)'); }
   const sh = meshT(baseRig.meshes.shield); if (sh) { const c = [0, 0, 0], nv = sh.pos.length / 3; for (let v = 0; v < nv; v++) { c[0] += sh.pos[v * 3] / nv; c[1] += sh.pos[v * 3 + 1] / nv; c[2] += sh.pos[v * 3 + 2] / nv; }
     // the shield's middle keeps its place along the forearm and its distance off the SKIN; the board keeps its shape, scaled with the man
     const Rq = FG.foreL.clone().multiply(FT.foreL.clone().invert()), cg = mapBone('foreL', c, {}), M = new THREE.Matrix4().compose(new THREE.Vector3(...cg), Rq, new THREE.Vector3(kMan, kMan, kMan)).multiply(new THREE.Matrix4().makeTranslation(-c[0], -c[1], -c[2])), r = rigidM(sh, M, Rq);

@@ -656,8 +656,8 @@ el$('p_t').onclick = () => preset(-65, 0, 'p_t');
 // baked: node tools/realmesh/base/motion.js … --handR x,y,z --handL x,y,z
 const HT = { pick: '', R: [0, 0, 0], L: [0, 0, 0], ax: {} }, htQ = new THREE.Quaternion();
 try { const v = JSON.parse(localStorage.getItem('chared-hands2') || 'null'); if (v && v.R && v.L) { HT.R = v.R.map(Number); HT.L = v.L.map(Number); } } catch (e) {}
-function handAxes() { for (const sd of ['L', 'R']) { const h = BONE['hand' + sd], P = n => BONE[n].getWorldPosition(new THREE.Vector3()), inv = h.getWorldQuaternion(new THREE.Quaternion()).invert();
-    const t = P('pinky' + sd + '0').sub(P('middle' + sd + '1')).normalize(), d = P('ring' + sd + '1').sub(h.getWorldPosition(new THREE.Vector3())); d.addScaledVector(t, -d.dot(t)).normalize();
+function handAxes() { for (const sd of ['L', 'R']) { const P = n => M.bindPos(n), inv = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().extractRotation(M.bindW['hand' + sd])).invert();   // (off the BIND pose, as motion.js reads them — the rest pose closes the fist, which shifts the knuckles a hair, and a baked turn then missed the sliders by a degree)
+    const t = P('pinky' + sd + '0').sub(P('middle' + sd + '1')).normalize(), d = P('ring' + sd + '1').sub(P('hand' + sd)); d.addScaledVector(t, -d.dot(t)).normalize();
     HT.ax[sd] = { t: t.clone().applyQuaternion(inv), d: d.clone().applyQuaternion(inv), n: t.clone().cross(d).normalize().applyQuaternion(inv) }; } }   // called once, on the bind pose
 function handOver() { const D = Math.PI / 180; for (const sd of ['L', 'R']) { const v = HT[sd], a = HT.ax[sd], b = BONE['hand' + sd]; if (!a || !b || !(v[0] || v[1] || v[2])) continue; const m = sd === 'L' ? -1 : 1;
     b.quaternion.multiply(htQ.setFromAxisAngle(a.d, v[2] * D * m)).multiply(htQ.setFromAxisAngle(a.n, v[1] * D)).multiply(htQ.setFromAxisAngle(a.t, v[0] * D * m)); } }

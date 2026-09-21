@@ -1,6 +1,6 @@
 // A MOTION for the base: a clip on somebody else's skeleton (usdanim.swift's JSON) retargeted onto assets/rigs/base, for the
 // char editor's MOTION panel.
-//   node tools/realmesh/base/motion.js <anim.json> <id> "<Name>" [--clip 0] [--profile cc_sketchfab] [--credit "…"] [--noloop] [--air] [--theirhands] [--handR x,y,z] [--handL x,y,z] [--hands x,y,z] [--cut A:B] [--cycle] [--keep A:B] [--marks top=52,land=60] [--fps 30] [--inplace]
+//   node tools/realmesh/base/motion.js <anim.json> <id> "<Name>" [--clip 0] [--profile cc_sketchfab] [--credit "…"] [--noloop] [--air] [--theirhands] [--blade] [--handR x,y,z] [--handL x,y,z] [--hands x,y,z] [--overR x,y,z] [--overL x,y,z] [--cut A:B] [--cycle] [--keep A:B] [--marks top=52,land=60] [--fps 30] [--inplace]
 //   → tools/chared/motions/<id>.json, listed in tools/chared/motions/index.json
 //
 // HOW: in WORLD space, bone by bone. A source bone's turn away from its own reference pose, D(t) = Qs(t)·Qs_ref⁻¹, is laid
@@ -74,7 +74,7 @@ const ALIGN = {}; for (const s of ['L', 'R']) {
 }
 
 const args = process.argv.slice(2), flag = (k, d) => { const i = args.indexOf('--' + k); if (i < 0) return d; const v = args[i + 1]; args.splice(i, 2); return v; };
-const sw = k => { const i = args.indexOf('--' + k); if (i < 0) return false; args.splice(i, 1); return true; }, noloop = sw('noloop'), air = sw('air'), theirHands = sw('theirhands'), findCycle = sw('cycle'), inPlace = sw('inplace');
+const sw = k => { const i = args.indexOf('--' + k); if (i < 0) return false; args.splice(i, 1); return true; }, noloop = sw('noloop'), air = sw('air'), theirHands = sw('theirhands'), findCycle = sw('cycle'), inPlace = sw('inplace'), BLADE = sw('blade');
 const CUT = String(flag('cut', '')).split(':').map(Number);   // --cut A:B  keeps source frames A..B (at 60 a second) AS A LOOP (its tail eased into its head)
 const KEEP = String(flag('keep', '')).split(':').map(Number);  // --keep A:B the same slice as a ONE-OFF: a blow, from leaving the guard to being back in it
 const MARKS = Object.fromEntries(String(flag('marks', '')).split(',').filter(Boolean).map(kv => { const [k, v] = kv.split('='); return [k, +v]; }));   // --marks top=52,land=60  moments the GAME needs, in source frames
@@ -85,6 +85,10 @@ const MARKS = Object.fromEntries(String(flag('marks', '')).split(',').filter(Boo
 const HAND_ZERO = { R: [-30, 51, 40], L: [0, 0, 0] };
 const turn3 = v => String(v).split(',').map(x => (+x || 0) * Math.PI / 180).concat(0, 0, 0).slice(0, 3), both = flag('hands', null);
 const HAND_TURN = { R: turn3(flag('handR', both != null ? both : HAND_ZERO.R.join(','))), L: turn3(flag('handL', both != null ? both : HAND_ZERO.L.join(','))) };
+// …AND WHAT THE EYE ADDS TO IT, CLIP BY CLIP. The editor's hand sliders read 0 at the turn a clip was baked with and lay theirs ON TOP
+// of it (handOver: the clip's hand · Rz·Ry·Rx). --overR / --overL x,y,z bakes exactly that: the numbers under the sliders, as they are
+// read there, and the sliders are back at 0 for this clip. (--handR REPLACES the zero; --overR is laid over whatever the zero is.)
+const HAND_OVER = { R: turn3(flag('overR', '0,0,0')), L: turn3(flag('overL', '0,0,0')) };
 const clipNo = +flag('clip', 0), prof = PROFILES[flag('profile', 'cc_sketchfab')], credit = flag('credit', ''), FPS = +flag('fps', 60);
 const [srcFile, id, title] = args; if (!srcFile || !id) { console.log('usage: motion.js <anim.json> <id> "<Name>" [--clip n] [--profile p] [--credit "…"] [--noloop] [--air] [--theirhands]'); process.exit(1); }
 
@@ -168,8 +172,25 @@ const SIDE = new V3(1, 0, 0), WRIST_SHARE = 0.5, HANDS = ['L', 'R'].map(sd => { 
   const kids = []; (function down(p) { T.forEach((b, k) => { if (b.parent === p) { kids.push(k); down(k); } }); })(h);
   const t = T[tIx[PHYS.index[0] + sd + PHYS.index[1]]].Pw.clone().sub(T[tIx[PHYS.pinky[0] + sd + PHYS.pinky[1]]].Pw).normalize();   // the thumb's line: little knuckle → index knuckle, the way a blade leaves the fist
   const d = T[tIx[KNUCKLE + sd + '1']].Pw.clone().sub(T[h].Pw); d.addScaledVector(t, -d.dot(t)).normalize(); const inv = T[h].Qw.clone().invert(), m = sd === 'L' ? -1 : 1, v = HAND_TURN[sd];
-  const own = new Q4().setFromAxisAngle(d.clone().applyQuaternion(inv), v[2] * m).multiply(new Q4().setFromAxisAngle(t.clone().cross(d).normalize().applyQuaternion(inv), v[1])).multiply(new Q4().setFromAxisAngle(t.clone().applyQuaternion(inv), v[0] * m));   // the editor's handOver, turn for turn
-  return { sd, h, fo, kids, own, u: u.applyQuaternion(inv), t: t.applyQuaternion(inv), fwd: [], inw: [] }; });   // u: the body's left-right, square to the forearm, in the hand's own frame — at REST
+  const turnOf = v => new Q4().setFromAxisAngle(d.clone().applyQuaternion(inv), v[2] * m).multiply(new Q4().setFromAxisAngle(t.clone().cross(d).normalize().applyQuaternion(inv), v[1])).multiply(new Q4().setFromAxisAngle(t.clone().applyQuaternion(inv), v[0] * m));   // the editor's handOver, turn for turn
+  const over = turnOf(HAND_OVER[sd]), own = turnOf(v).multiply(over);
+  return { sd, h, fo, kids, own, over, u: u.applyQuaternion(inv), t: t.applyQuaternion(inv), fwd: [], inw: [] }; });   // u: the body's left-right, square to the forearm, in the hand's own frame — at REST
+// THE SWORD HAND AIMED BY THE BLADE (--blade). A cut is about where the BLADE is, and a hand retargeted bone for bone does not put
+// it there: his sword leaves HIS fist its own way (rig.json grip.sword — axis and flat in the hand's frame), the performer's leaves
+// his another, and on top of that the walk's rules (thumbs to the front, the zero turn) hold the wrist in a carry. At the top of the
+// cut down his forearm reached straight ahead and the blade stood 77° off it, pointing at the sky ("the sword is not pointing front
+// at the peak of the attack"). With --blade the sword hand's place in the world is SOLVED per frame: the performer's own sword (a
+// rigid prop under his hand — gltfanim.js `props`) gives the blade's frame in the world, and our hand is turned until OUR blade lies
+// in it. A double-edged blade rolled half a turn is the same blade, so of the two hands that do it the one nearer the plain retarget
+// is taken, once, at the reference pose. Half of the twist this asks of the wrist goes into the forearm bone, as for the walk's roll.
+let bladeFix = null; if (BLADE) { const sd = (rigSpec.swordHand || 'handR').slice(-1), H = HANDS.find(h => h.sd === sd), hs = sIx(prof.map['hand' + sd]), gs = (rigSpec.grip || {}).sword;
+  const P = (S.props || []).filter(p => p.joint === hs && p.length > p.breadth * 3).sort((a, b) => b.length - a.length)[0];
+  if (!P || !gs || !gs.axis) { console.log('--blade: ' + (!P ? 'the source carries no long rigid prop under ' + prof.map['hand' + sd] + ' (re-run gltfanim.js: it writes `props`)' : 'rig.json has no grip.sword.axis')); process.exit(1); }
+  const basis = (ax, fl) => { const a = new V3().fromArray(ax).normalize(), f = new V3().fromArray(fl); f.addScaledVector(a, -f.dot(a)).normalize(); return new Q4().setFromRotationMatrix(new M4().makeBasis(new V3().crossVectors(a, f).normalize(), a, f)); };
+  const ours = basis(gs.axis, gs.flat), theirs = [basis(P.axis, P.flat), basis(P.axis, P.flat.map(x => -x))], nat = A['hand' + sd].clone().multiply(T[H.h].Qw);
+  const pick = theirs.map(q => refQ[hs].clone().multiply(q).multiply(ours.clone().invert()).angleTo(nat)), k = pick[0] <= pick[1] ? 0 : 1;
+  bladeFix = { H, hs, turn: theirs[k].clone().multiply(ours.clone().invert()), over: H.over, wrist: [], az: [], el: [] };
+  console.log(`  --blade: ${P.name} (${P.length.toFixed(0)} long) under ${prof.map['hand' + sd]} — at the reference pose the solved hand stands ${(pick[k] * 180 / Math.PI).toFixed(0)}° off the plain retarget (the other roll: ${(pick[1 - k] * 180 / Math.PI).toFixed(0)}°)`); }
 const chestK = tIx.chest, smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 let rollMax = 0;
 
@@ -187,7 +208,7 @@ for (let f = 0; f < frames; f++) {
     else Qw[k] = (par < 0 ? new Q4() : Qw[par].clone()).multiply(b.q);
     if (b.name === 'pelvis') { const d = (prof.travel ? posOf(W[sIx(prof.travel)]) : w.p.clone()).sub(hipRef); Pw[k] = b.Pw.clone().add(new V3(d.x * KXZ, d.y * K, d.z * KXZ)); } else Pw[k] = Pw[par].clone().add(b.p.clone().applyQuaternion(Qw[par])); }
   if (!theirHands) { const side = SIDE.clone().applyQuaternion(Qw[chestK].clone().multiply(T[chestK].Qw.clone().invert()));          // the body's left-right now
-    for (const H of HANDS) { const a = Pw[H.h].clone().sub(Pw[H.fo]).normalize(), want = side.clone().addScaledVector(a, -side.dot(a)), have = H.u.clone().applyQuaternion(Qw[H.h]); have.addScaledVector(a, -have.dot(a));
+    for (const H of HANDS) { if (bladeFix && bladeFix.H === H) continue; const a = Pw[H.h].clone().sub(Pw[H.fo]).normalize(), want = side.clone().addScaledVector(a, -side.dot(a)), have = H.u.clone().applyQuaternion(Qw[H.h]); have.addScaledVector(a, -have.dot(a));
       const fade = smooth(0.15, 0.45, Math.min(want.length(), have.length())); if (!fade) continue; want.normalize(); have.normalize();
       const roll = Math.atan2(a.dot(have.clone().cross(want)), have.dot(want)) * fade; rollMax = Math.max(rollMax, Math.abs(roll));
       const all = new Q4().setFromAxisAngle(a, roll), part = new Q4().setFromAxisAngle(a, roll * WRIST_SHARE);
@@ -195,6 +216,11 @@ for (let f = 0; f < frames; f++) {
       const was = Qw[H.h].clone(); Qw[H.h].multiply(H.own); const dW = Qw[H.h].clone().multiply(was.invert()); for (const k of H.kids) Qw[k].premultiply(dW);   // …and the turn of its own
       const yaw = new THREE.Euler().setFromQuaternion(Qw[tIx.pelvis].clone().multiply(T[tIx.pelvis].Qw.clone().invert()), 'YXZ').y, t = H.t.clone().applyQuaternion(Qw[H.h]).applyAxisAngle(new V3(0, 1, 0), -yaw);
       H.fwd.push(Math.atan2(t.z, t.y) * 180 / Math.PI); H.inw.push(Math.asin(Math.max(-1, Math.min(1, t.x * (H.sd === 'R' ? 1 : -1)))) * 180 / Math.PI); } }   /* out of the fore-and-aft plane, toward his middle */
+  if (bladeFix) { const { H, hs, turn, over } = bladeFix, a = Pw[H.h].clone().sub(Pw[H.fo]).normalize(), target = w.q.clone().multiply(rotOf(W[hs])).multiply(turn).multiply(over), was = Qw[H.h].clone(), dW = target.clone().multiply(was.clone().invert());
+    const tw = 2 * Math.atan2(dW.x * a.x + dW.y * a.y + dW.z * a.z, dW.w), twist = Math.atan2(Math.sin(tw), Math.cos(tw));              // how much of the change is a roll about the forearm's own line
+    Qw[H.fo].premultiply(new Q4().setFromAxisAngle(a, twist * WRIST_SHARE)); Qw[H.h].copy(target); for (const k of H.kids) Qw[k].premultiply(dW);
+    const bl = new V3().fromArray(rigSpec.grip.sword.axis).normalize().applyQuaternion(target), yaw = new THREE.Euler().setFromQuaternion(Qw[tIx.pelvis].clone().multiply(T[tIx.pelvis].Qw.clone().invert()), 'YXZ').y; bl.applyAxisAngle(new V3(0, 1, 0), -yaw);
+    bladeFix.az.push(Math.atan2(bl.x, bl.z) * 180 / Math.PI); bladeFix.el.push(Math.asin(Math.max(-1, Math.min(1, bl.y))) * 180 / Math.PI); bladeFix.wrist.push(2 * Math.acos(Math.min(1, Math.abs(Qw[H.fo].clone().invert().multiply(target).dot(T[H.fo].Qw.clone().invert().multiply(T[H.h].Qw))))) * 180 / Math.PI); }
   for (const k of order) { const b = T[k], par = b.parent, ql = par < 0 ? Qw[k].clone() : Qw[par].clone().invert().multiply(Qw[k]); ql.normalize();
     const prev = last[b.name]; if (prev && prev.dot(ql) < 0) ql.set(-ql.x, -ql.y, -ql.z, -ql.w); last[b.name] = ql; tracks[b.name].push(ql); }
   pos.push(Pw[tIx.pelvis]);
@@ -267,7 +293,11 @@ const entry = { id, name: out.name, frames, fps: FPS, loop: closes, credit }, at
 fs.writeFileSync(ixFile, JSON.stringify(list, null, 1));
 const cm = x => (x * 100).toFixed(1);
 console.log(`${out.name}: ${frames} frames @ ${FPS} (${out.duration}s) ${closes ? 'LOOP' : 'once'} · ${moving.length}/${names.length} bones move · his hip ${(T[tIx.pelvis].Pw.y).toFixed(3)} over theirs ${hipY.toFixed(1)} → up/down ×${K.toFixed(4)}, along the floor ×${KXZ.toFixed(4)} (by the legs)`);
-if (!theirHands) { const H = HANDS.find(h => 'hand' + h.sd === (rigSpec.swordHand || 'handR')), rg = a => Math.round(Math.min(...a)) + '…' + Math.round(Math.max(...a)) + '°';
+if (bladeFix) { const B = bladeFix, row = f => 'f' + f + ' az ' + B.az[f].toFixed(0) + '° el ' + B.el[f].toFixed(0) + '°', mk = Object.entries(MARKS).map(([k, v]) => k + ' ' + row(Math.max(0, Math.min(frames - 1, Math.round((v - keepFrom) * FPS / SRC_FPS))))).join(' · ');
+  let lowest = 0; B.el.forEach((e, f) => { if (e < B.el[lowest]) lowest = f; });
+  console.log(`  the blade, in his own heading (az 0 = dead ahead, el 0 = level): ${mk || 'lowest at ' + row(lowest)} · the wrist is asked ${Math.round(Math.min(...B.wrist))}…${Math.round(Math.max(...B.wrist))}° off its rest`);
+  if (process.env.BLADE_TABLE) for (let f = 0; f < frames; f += +process.env.BLADE_TABLE) console.log('    ' + row(f) + '  wrist ' + B.wrist[f].toFixed(0) + '°'); }
+if (!theirHands && !bladeFix) { const H = HANDS.find(h => 'hand' + h.sd === (rigSpec.swordHand || 'handR')), rg = a => Math.round(Math.min(...a)) + '…' + Math.round(Math.max(...a)) + '°';
   console.log(`  hands: thumbs to the front — rolled up to ${(rollMax * 180 / Math.PI).toFixed(0)}° about the forearm (${WRIST_SHARE * 100}% in the forearm bone), own turn R ${HAND_TURN.R.map(x => Math.round(x * 180 / Math.PI)).join(',')} L ${HAND_TURN.L.map(x => Math.round(x * 180 / Math.PI)).join(',')} · the blade's line: ${rg(H.fwd)} forward of upright, ${rg(H.inw)} toward his middle`); }
 console.log(`  his stride runs the ground past him at ${(stride * 100).toFixed(0)} cm/s (flat feet sliding back, ${plantedFrames} frames) — what the game plays it against`);
 console.log(travel[0] || travel[2] ? `  TRAVELS ${(Math.hypot(travel[0], travel[2]) * 100).toFixed(0)} cm a ${closes ? 'loop' : 'clip'} (${(speed * 100).toFixed(0)} cm/s, heading ${(Math.atan2(travel[0], travel[2]) * 180 / Math.PI).toFixed(0)}° off straight ahead)` : '  treads on the spot');

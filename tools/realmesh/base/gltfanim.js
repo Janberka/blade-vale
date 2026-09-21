@@ -48,8 +48,27 @@ const clips = (g.animations || []).map((anim, ai) => { const chans = anim.channe
     T.push([].concat(...tt)); R.push([].concat(...rr)); S.push([].concat(...ss)); }
   return { name: anim.name || ('clip' + ai), times, t: T, r: R, s: S, moving: new Set(chans.map(c => c.k)).size }; }).filter(Boolean);
 
+// ---- PROPS: what he CARRIES. A performer's sword (shield, hair piece…) is a rigid mesh hung under a joint, and where his BLADE
+// points is the one thing a cut is about — so every unskinned mesh subtree under a joint is measured in THAT JOINT's frame: its long
+// axis (PCA; + is the end farther from the joint, a sword's tip), its width and the normal of its flat. motion.js --blade aims our
+// sword hand by it. (Static node transforms only: Sketchfab keys a prop's nodes too, but with one constant value.)
+// A BONE is a joint some skin vertex hangs on; exporters list a prop's own nodes among the skin's joints too (Greek Sword_099 is one),
+// and a prop is measured in the frame of the BONE that carries it — the hand — not of its own handle node.
+const bones = new Set(), props = []; for (const n of g.nodes) { if (n.mesh == null || n.skin == null) continue; const J = g.skins[n.skin].joints; for (const pr of g.meshes[n.mesh].primitives) { if (pr.attributes.JOINTS_0 == null) continue; const ji = acc(pr.attributes.JOINTS_0), jw = acc(pr.attributes.WEIGHTS_0); for (let k = 0; k < ji.length; k++) if (jw[k] > 0.05) bones.add(J[ji[k]]); } }
+{ const groups = new Map(), local = i => new THREE.Matrix4().fromArray(m16(trs(g.nodes[i])));
+  g.nodes.forEach((n, i) => { if (n.mesh == null || n.skin != null) return; let j = par[i], top = i; while (j >= 0 && !bones.has(j)) { top = j; j = par[j]; } if (j < 0) return;
+    const m = new THREE.Matrix4(); for (let k = i; k !== j; k = par[k]) m.premultiply(local(k)); const key = j + ':' + top, G = groups.get(key) || groups.set(key, { joint: j, top, pts: [] }).get(key);
+    for (const pr of g.meshes[n.mesh].primitives) { const P = acc(pr.attributes.POSITION), v = new THREE.Vector3(); for (let k = 0; k < P.length; k += 3) G.pts.push(v.set(P[k], P[k + 1], P[k + 2]).applyMatrix4(m).clone()); } });
+  for (const G of groups.values()) { const n = G.pts.length; if (n < 8) continue; const c = G.pts.reduce((a, p) => a.add(p), new THREE.Vector3()).multiplyScalar(1 / n), C = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+    for (const p of G.pts) { const d = [p.x - c.x, p.y - c.y, p.z - c.z]; for (let a = 0; a < 3; a++) for (let b = 0; b < 3; b++) C[a][b] += d[a] * d[b]; }
+    const power = skip => { let v = [0.61, 0.53, 0.59]; for (let it = 0; it < 300; it++) { if (skip) { const k = v[0] * skip[0] + v[1] * skip[1] + v[2] * skip[2]; v = v.map((x, a) => x - k * skip[a]); } const w = [0, 1, 2].map(a => C[a][0] * v[0] + C[a][1] * v[1] + C[a][2] * v[2]), l = Math.hypot(...w) || 1; v = w.map(x => x / l); } return v; };
+    let ax = power(), wd = power(ax); const A = new THREE.Vector3(...ax), along = G.pts.map(p => p.clone().sub(c).dot(A)), lo = Math.min(...along), hi = Math.max(...along), sJ = -c.dot(A);   // (the joint is this frame's origin)
+    if (Math.abs(lo - sJ) > Math.abs(hi - sJ)) { ax = ax.map(x => -x); }                       // + runs AWAY from the joint: toward a blade's tip
+    const A2 = new THREE.Vector3(...ax), W2 = new THREE.Vector3(...wd), across = G.pts.map(p => Math.abs(p.clone().sub(c).dot(W2))), fl = new THREE.Vector3().crossVectors(W2, A2).normalize();
+    props.push({ name: g.nodes[G.top].name || ('node' + G.top), joint: at.get(G.joint), verts: n, centre: c.toArray(), axis: ax, width: wd, flat: fl.toArray(), length: +(hi - lo).toFixed(4), breadth: +(2 * Math.max(...across)).toFixed(4) }); } }
 console.log(`${path.basename(src)}: ${skin.joints.length} joints (+${order.length - skin.joints.length} nodes above them), ${clips.length} clip${clips.length === 1 ? '' : 's'}`);
+for (const p of props) console.log(`  prop  ${p.name.padEnd(24)} on ${names[p.joint].padEnd(22)} ${p.length.toFixed(1)} long × ${p.breadth.toFixed(1)} wide, ${p.verts} verts`);
 clips.forEach((c, i) => console.log(`  --clip ${i}  ${c.name.padEnd(28)} ${(c.times[c.times.length - 1]).toFixed(2)} s  ${c.times.length} frames  ${c.moving} nodes move`));
 if (out) { const paths = order.map((i, k) => { const chain = []; let n = i; while (n >= 0 && at.has(n)) { chain.unshift(names[at.get(n)]); n = par[n]; } return chain.join('/'); });
-  fs.writeFileSync(out, JSON.stringify({ source: path.basename(src), joints: paths, parents: order.map(i => par[i] >= 0 && at.has(par[i]) ? at.get(par[i]) : -1), rest: restTRS.map(m16), bind, clips: clips.map(c => ({ name: c.name, times: c.times, t: c.t, r: c.r, s: c.s })) }));
+  fs.writeFileSync(out, JSON.stringify({ source: path.basename(src), joints: paths, parents: order.map(i => par[i] >= 0 && at.has(par[i]) ? at.get(par[i]) : -1), rest: restTRS.map(m16), bind, props, clips: clips.map(c => ({ name: c.name, times: c.times, t: c.t, r: c.r, s: c.s })) }));
   console.log(`→ ${out} (${(fs.statSync(out).size / 1e6).toFixed(1)} MB)`); }

@@ -188,6 +188,14 @@ the hold draws guard → top, `strike` runs top → land so the cut ARRIVES when
 ease back to guard covers the tail. Moves → clips: slashR `g_slashup`, slashL `g_stab`, chop `g_slashdown`, heavy `g_spin`,
 shield bash `g_swipe`. What lands, when and on whom stays the sim's.
 
+**Giving ground is a guard** (the user: "walking backwards can be slow and you go guard mode, otherwise you could just turn
+and run"). A man with a shield who steps back from the way he faces (`b.backing`: move·facing < −0.5 in, −0.3 out; not with a
+bow, in the saddle or mid-blow) has his guard up FOR REAL (`b.blocking` — blows from the front ring on the shield as if he
+held BLOCK), moves at `AF_F.backpedal` (0.18 of his pace: ~1 unit/s against a 3.5 jog) and plays `walk_back_cycle`, the
+stride cut from WalkBackward02 — here its bladed crouch is the point. The pace was set FROM the clip: at 0.18 it plays at
+~1.25× its own speed, so the feet hold the ground. (Measure speed against wall-clock with the pane visible — `arenaStep`
+adds to the live loop, it does not replace it, and a stepped measurement reads 2× high.)
+
 **The jump attack** (`g_jump`, from Atk_Jump; in the game: attack inside the first 0.4 s of a leap → `b.airAtk`). The sim owns
 the flight, so the clip is baked `--inplace` (the hips' SLOW travel along the floor low-passed out — evenly removing it, as
 the editor's "in place" does, slides a scrubbed clip back through its wind-up and forward through its flight) and without

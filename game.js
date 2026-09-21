@@ -1606,7 +1606,7 @@ function motionClip(id) {
   }).catch(() => {});
   return null;
 }
-const MOTION_FOR = { walk: 'angry_walk' };            // his ordinary walk. (The source's WalkForward02 is a bladed crouch — right legs for a man turned side-on behind his shield, wrong under a torso the game points straight ahead.)
+const MOTION_FOR = { walk: 'angry_walk', back: 'walk_back_cycle' };   // back: WalkBackward02's stride — the guard retreat, shield leading (played only while b.backing: there its bladed crouch is the point)            // his ordinary walk. (The source's WalkForward02 is a bladed crouch — right legs for a man turned side-on behind his shield, wrong under a torso the game points straight ahead.)
 // THE WHOLE MAN, not just his legs. Legs alone were faithful to the frame — 1° from the clip — and still read as some other
 // walk, because a walk is the lean and the swing of the arms as much as the feet: under a torso the game held in a fixed
 // guard, the same legs looked like a stranger's ("compare the walk with the editor's angry walk, they don't look alike at
@@ -1665,8 +1665,9 @@ function motionBlow(b, mo, dt) {
   return { id, frame: f };
 }
 function motionWanted(b, mo, S) {                           // which clip suits the man this frame, if any
-  if (!b || b.dead || b.mounted || b.atk || b.charge || b.blocking || b.rollT > 0 || b.airT > 0 || b.landT > 0 || b.rushT > 0) return null;
-  const sp = Math.hypot(b.vx || 0, b.vz || 0); if (!b.moving || sp < 0.35) return null;
+  if (!b || b.dead || b.mounted || b.atk || b.charge || (b.blocking && !b.backing) || b.rollT > 0 || b.airT > 0 || b.landT > 0 || b.rushT > 0) return null;
+  const sp = Math.hypot(b.vx || 0, b.vz || 0); if (!b.moving || sp < (b.backing ? 0.15 : 0.35)) return null;
+  if (b.backing) { const cb = motionClip(MOTION_FOR.back); return { id: MOTION_FOR.back, rate: Math.max(0.5, Math.min(MOTION_MAX_RATE, sp / (((cb && cb.speed) || 0.55) * (S || 1)))) }; }   // giving ground behind the shield, at the pace he is really giving it
   const c = MOTION.clips.get(MOTION_FOR.walk), v0 = ((c && c.speed) || 1.4) * (S || 1), rate = sp / v0;
   if (rate > MOTION_MAX_RATE * (mo && mo.on ? 1.08 : 0.95)) return null;          // a run: not this clip's to play
   const back = Math.sin(b.yaw || 0) * (b.vx || 0) + Math.cos(b.yaw || 0) * (b.vz || 0) < -0.1;   // (yaw 0 faces +z) giving ground: the same stride, run backwards
@@ -18177,7 +18178,7 @@ function afSetVenue(L, v) {                                  // the host picks t
   L.venue = v; afResize(L); return true;
 }
 // the feel of the pit — one table, like BATTLE_MELEE
-const AF_F = { hp: 100, move: 5.6, reach: 2.5, cone: 0.3, radius: 34, timeLimit: 120, countdown: 3,
+const AF_F = { hp: 100, move: 5.6, backpedal: 0.18, reach: 2.5, cone: 0.3, radius: 34, timeLimit: 120, countdown: 3,
   light: { wind: 0.24, strike: 0.10, rec: 0.28, dmg: [10, 15] },
   heavy: { wind: 0.60, strike: 0.12, rec: 0.50, dmg: [24, 32] },
   bow:   { wind: 0.50, strike: 0.06, rec: 0.40, dmg: [11, 16], speed: 42, range: 44 },
@@ -21629,6 +21630,13 @@ function afDrive(b, dt, sim) {
   const R = F.run, RU = F.rush, landK = b.landT > 0 ? 0.5 * clamp(b.landT / F.jump.land, 0, 1) : 0;   // (landK: the knees give under a landing — and the stumble after a charge)
   if (mm > 1e-3 && canMove) {
     const fwdDot = ux * Math.sin(b.yaw) + uz * Math.cos(b.yaw);       // backpedaling plays the cycle in reverse
+    // GIVING GROUND IS A GUARD (the user, 2026-09-21: "walking backwards can be slow and you go guard mode, otherwise you
+    // could just turn and run"). A man with a shield who steps BACK from the way he faces does it behind that shield: the
+    // guard is up for real (b.blocking — blows from the front ring on it, as if he held BLOCK), he moves at F.backpedal of
+    // his pace, and the figure plays the pack's guard retreat (motionWanted → walk_back_cycle). To get away fast you turn
+    // and run, and show your back. Not with a bow in hand, not in the saddle, not mid-blow. (In at −0.5, out at −0.3.)
+    b.backing = fwdDot < (b.backing ? -0.3 : -0.5) && b.weapon !== 'bow' && !b.noShield && !b.atk && !b.charge && !b.bash && b.rushT <= 0 && b.landT <= 0;
+    if (b.backing) { b.blocking = true; setPose(b.anim, 'block', 0.1); }
     const vsp = Math.hypot(b.vx, b.vz), along = vsp > 1 ? (ux * b.vx + uz * b.vz) / vsp : 1;
     // THE SHIELD CHARGE: block at full stride and the shield comes down in front, the head behind it, and you keep the
     // stride and go THROUGH (afRushHit). Drop the guard, ease the stick, cut across, hit the wall, run out of breath, time
@@ -21649,14 +21657,14 @@ function afDrive(b, dt, sim) {
     const straight = mm > 0.5 && (!b.blocking || rush) && !b.atk && !b.charge && b.landT <= 0 && fwdDot > 0.35 && along > 0.5 && !b.winded && b.stam > 0;   // (no wind, no stride)
     b.run01 = straight ? Math.min(1, b.run01 + dt / R.up) : Math.max(0, b.run01 - dt / (along < 0 ? R.down * 0.5 : R.down));
     const stride = lerp(R.jog, R.top, b.run01 * b.run01 * (3 - 2 * b.run01)), inert = 1 - R.inertia * b.run01;
-    const spd = F.move * (b.moveMul || 1) * (rush ? stride * RU.speed : b.blocking ? 0.4 : (b.atk || b.charge) ? 0.35 : b.landT > 0 ? 0.5 : stride) * Math.min(1, mm) * (b.winded ? F.stam.winded.move : 1);
+    const spd = F.move * (b.moveMul || 1) * (rush ? stride * RU.speed : b.backing ? F.backpedal : b.blocking ? 0.4 : (b.atk || b.charge) ? 0.35 : b.landT > 0 ? 0.5 : stride) * Math.min(1, mm) * (b.winded ? F.stam.winded.move : 1);
     afMove(b, ux, uz, spd * inert, dt); b.moving = true;
     if (b === AF.me) { if (b.run01 > 0.98 && !b._strode) { b._strode = true; afPopup(b.group.position, 'FULL STRIDE', '#ffe089'); } else if (b.run01 < 0.5) b._strode = false; }
     const g = b.gait = (b.blocking && !rush) || b.atk || b.charge ? GAIT.walk : GAIT.run;
     b.phase += dt * g.tempo * (fwdDot < -0.1 ? -1 : 1) * Math.min(1.15, spd / F.move + 0.3);
     walkLegs(b.parts, b.phase, g.leg * (g === GAIT.run ? 0.72 + 0.28 * b.run01 : 1), landK + (rush ? 0.12 : 0));   // (a charge runs a little low)
     if (rush && b === AF.me) addShake(0.006);                  // the ground under a charge
-  } else { if (b.rushT > 0) afRushEnd(b, false); b.run01 = Math.max(0, b.run01 - dt / R.down); restLegs(b.parts, dt, true, landK); }
+  } else { b.backing = false; if (b.rushT > 0) afRushEnd(b, false); b.run01 = Math.max(0, b.run01 - dt / R.down); restLegs(b.parts, dt, true, landK); }
   afIntegrate(b, dt); afCommit(b, dt);
 }
 // CLOTH: each hinge of the cape chain is a damped spring chasing a target that its parent's angle sets,

@@ -154,6 +154,20 @@ which touches the bind pose (skinning is unchanged), then bump `game.js?v=`:
    (the sheathed blade at the hip, the shop's — they are placed in the old bind orientation and must not move, checked:
    0.0009 mm), and `syncModelRigs` lays the turn on the sword hand, on top of whatever pose asks of it (a bow takes it off).
 
+**How big a sword is on him** — `node tools/realmesh/base/swordsize.js` (no arguments: the sizes as they stand). The steel
+was sized for the old plastic rig: a plain built blade stood 74 % of this man's height with a flat as wide as his forearm,
+and the rig's own iron sword 60 % ("all the swords are too big for our char"). Two numbers in `rig.json.grip.sword`, both
+set so a plain sword is ~53 % of his height — an arming sword on a man:
+
+* `own` (0.88) — the rig's OWN sword, scaled **in the file** (`--own <k>`) about the point where its guard meets the handle
+  line, so the guard stays a finger clear of his index and the hip copy hangs where it did. The editor, `dress.js` and the
+  game all read the rig as it stands, so nothing else changes;
+* `size` (0.71) — a **built** loadout sword (`afBuildSword`, game units): `wearModelRig` scales the sword group on his hand
+  and re-lands its guard, `afBuildSword` keeps the scale through every gear pass (`userData.modelK`), and the home page's
+  planted sword takes it too. Nothing is baked — `--size <k>` only writes the number. Trails and sparks are sampled in the
+  group's own frame and follow. The sim's reach is a number and does not move; **VR keeps the old size** on the controller,
+  because there the blade itself is the reach (`vrFitHands`).
+
 **Into the game.** A clip the game should play is copied to `assets/motions/` (with an `index.json`) — `assets` is already
 a tree in `tools/build-site.js`, so it deploys. game.js loads one on demand (`motionClip`), and `motionPose` lays it over
 the pose the plastic rig drives, by a weight that eases in and out. Two rules keep it honest:

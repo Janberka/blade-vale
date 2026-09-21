@@ -1524,6 +1524,7 @@ function modelPropGeo(R, key) {
   geo.translate(-o.x, -o.y, -o.z); geo.computeBoundingBox();
   return (R.props[key] = geo);
 }
+const modelSwordK = R => ((R && R.spec.grip || {}).sword || {}).size || 1;   // how big a BUILT sword (afBuildSword, game units) is on this figure: rig.json.grip.sword.size
 // dress a built plastic rig in the figure; the plastic body hides, the held gear stays and rides the figure's hands
 function wearModelRig(h, name, o = {}) {
   const R = MODEL_RIGS.get(name); if (!R || !h || !h.parts) return false;
@@ -1563,10 +1564,16 @@ function wearModelRig(h, name, o = {}) {
     // blade's flat — and afBuildSword's sword is laid on them: its grip runs along its own +Y about the origin, its flat faces
     // its Z, its guard sits 0.2 up. Slid down the line until the guard is a finger clear of the index, and held RIGID there
     // (fixedGrip: the hand bone carries the wrist's turn already; the rig's own iron blade never had the extra channel either).
-    const gs = (R.spec.grip || {}).sword, holder = gs && gs.at && P.sword.parent && P.sword.parent.name === 'gearHolder' ? P.sword.parent : null;
+    // AND SIZED FOR HIM: the built swords are the plastic rig's — toy proportions, a plain blade three quarters of a man's
+    // height and a flat as wide as this one's forearm ("all the swords are too big for our char"). rig.json.grip.sword.size
+    // (tools/realmesh/base/swordsize.js) brings a plain sword to ~53 % of his height, the same as the rig's own iron blade;
+    // the group carries it (modelK) because afBuildSword resets the scale on every gear pass. Trails, sparks and the like
+    // are sampled in the group's own frame, so they follow the blade.
+    const gs = (R.spec.grip || {}).sword, holder = gs && gs.at && P.sword.parent && P.sword.parent.name === 'gearHolder' ? P.sword.parent : null, K = modelSwordK(R);
+    P.sword.userData.modelK = K; P.sword.scale.setScalar(K);
     if (holder) { const ax = new THREE.Vector3().fromArray(gs.axis).normalize(), fl = new THREE.Vector3().fromArray(gs.flat).normalize(), wd = new THREE.Vector3().crossVectors(ax, fl).normalize();
       holder.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(wd, ax, fl));                       // sword X (its width) → wd, Y (the blade) → axis, Z (its flat) → flat
-      holder.position.fromArray(gs.at).addScaledVector(ax, (gs.reach || 0.09) - 0.2 / S);                       // the guard (0.2 game units up the sword) lands `reach` up the line from the fist's middle
+      holder.position.fromArray(gs.at).addScaledVector(ax, (gs.reach || 0.09) - 0.2 * K / S);                   // the guard (0.2 game units up the sword, × its size) lands `reach` up the line from the fist's middle
       P.sword.rotation.set(0, 0, 0); P.sword.userData.fixedGrip = true; } }
   if (P.bow) mount(P.bow, R.spec.bowHand || R.spec.swordHand);
   if (P.shield) { mount(P.shield, R.spec.shieldArm); P.shield.visible = false; P.shield.userData.modelHidden = true; }   // the figure's own shield shows instead
@@ -18520,7 +18527,7 @@ function vrUndress() {
 }
 function vrFitHands(me) {                                   // the steel keeps its world size whatever the rig's scale; the blade's tilt is the player's
   const k = (me.footScale || 1) / (VR.scale || 1);
-  if (VR.sword && VR.sword.userData.vrHome) { VR.sword.scale.copy(VR.sword.userData.vrHome.scale).multiplyScalar(k); VR.sword.rotation.set(-Math.PI / 2 + VR.swordPitch * Math.PI / 180, 0, 0); }
+  if (VR.sword && VR.sword.userData.vrHome) { VR.sword.scale.setScalar(k); VR.sword.rotation.set(-Math.PI / 2 + VR.swordPitch * Math.PI / 180, 0, 0); }   // (k, not vrHome.scale × k: on the body a sword is sized for the figure — modelK — but in the player's fist the blade IS the reach, vrBlade, and keeps its own size)
   if (VR.shield && VR.shield.userData.vrHome) VR.shield.scale.copy(VR.shield.userData.vrHome.scale).multiplyScalar(k);
   if (VR.bow && VR.bow.userData.vrHome) VR.bow.scale.copy(VR.bow.userData.vrHome.scale).multiplyScalar(k);
 }
@@ -21199,7 +21206,7 @@ function afBuildSword(g, sw, tint) {
     const hole = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, t * 1.3, 8), mat(0x1a1214, { shared: false })); hole.rotation.x = Math.PI / 2; hole.position.set(w * 0.45, y0 + len - 0.1, 0); g.add(hole);
   }
   g.userData.axe = sw.style === 'axe'; if (!g.userData.axe) { g.rotation.z = 0; g.userData.axeK = 0; }   // (an axe is carried head UP when the man is at ease — updateAnimator turns it)
-  g.scale.set(1, 1, 1); g.rotation.y = Math.PI / 2;        // (the grip: edge forward, guard vertical to the wrist — same as makeSword)
+  g.scale.setScalar(g.userData.vrHome ? 1 : g.userData.modelK || 1); g.rotation.y = Math.PI / 2;   // (the grip: edge forward, guard vertical to the wrist — same as makeSword; modelK: on the figure's hand a sword is sized for HIM — wearModelRig; on a VR controller it keeps its own size, the blade IS the reach there)
   if (real) { for (const c of g.children) c.visible = false; g.add(real); }
 }
 function afBladeLook(b) { b.parts.lookName = b.name; b.parts.lookArch = b.arch; afDressGear(b.parts, b.gear, b.pal); }   // (the rig swaps on mount / dismount re-dress the man)
@@ -24183,9 +24190,9 @@ function afPreviewFloor(pal, gear) {
     if (own && F.own) { m = new THREE.Mesh(F.own, new THREE.MeshPhongMaterial({ map: R.tex, shininess: 6, specular: 0x111111 })); m.userData.own = true; m.scale.setScalar(S);
       m.rotation.x = Math.PI / 2;                            // the blade ran +Z: now it points −Y, straight down
       m.position.set(F.at.x, (F.own.boundingBox.max.z - 0.2) * S, F.at.z); }   // the tip 0.2 (model units) under the sand, the grip up
-    else if (!own) { m = new THREE.Group(); const trim = g.trim && I[g.trim]; afBuildSword(m, AF_LOOK.sword[g.sword] || AF_LOOK.sword.iron_sword, trim ? trim.blade : null);
+    else if (!own) { m = new THREE.Group(); const trim = g.trim && I[g.trim], K = modelSwordK(R); m.userData.modelK = K; afBuildSword(m, AF_LOOK.sword[g.sword] || AF_LOOK.sword.iron_sword, trim ? trim.blade : null);   // (modelK: the size it has in his hand)
       m.rotation.x = Math.PI; m.rotateY(Math.PI / 2); m.position.set(F.at.x, 0, F.at.z); F.grp.add(m); m.updateMatrixWorld(true);   // built blade-up at the grip: turned over, flat to the lens, then sunk until the whole tip is under
-      const sw2 = AF_LOOK.sword[g.sword] || AF_LOOK.sword.iron_sword, bb = new THREE.Box3().setFromObject(m); m.position.y = -bb.min.y - (0.2 * S + 0.2 + (sw2.w || 0.2) * 0.5); F.grp.remove(m); }
+      const sw2 = AF_LOOK.sword[g.sword] || AF_LOOK.sword.iron_sword, bb = new THREE.Box3().setFromObject(m); m.position.y = -bb.min.y - (0.2 * S + (0.2 + (sw2.w || 0.2) * 0.5) * K); F.grp.remove(m); }
     if (m) { m.name = 'sword'; const sand = [new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)]; m.traverse(x => { if (x.isMesh) { x.castShadow = true; x.material.clippingPlanes = sand; } }); F.grp.add(m); F.sword = m; }   // whatever is under the sand is not drawn (the disc is flat; from the lens a buried tip would show past its rim)
     F.swordKey = key;
   }

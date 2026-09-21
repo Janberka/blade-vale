@@ -1630,8 +1630,28 @@ const MOTION_MAX_RATE = 1.9;
 //   rec           on from there at a bit over life's own pace; whatever is left of the tail, the ease back to his guard covers.
 // What lands, when, and on whom is still entirely the sim's: the clip only ever shows the blow the sim is already making.
 const MOTION_ATK = ['g_slashup', 'g_stab', 'g_slashdown', 'g_spin'], MOTION_BASH = 'g_swipe';   // AF_MOVES: slashR, slashL, chop, heavy
-function motionBlow(b, mo) {
+// THE JUMP ATTACK (attack inside the first `atkBy` of a leap: b.airAtk). The sim owns the flight — a fixed arc, the blow at
+// `strikeY` on the way down (or the moment a man is under him), then a hard landing (landT × 1.6) — so the clip is baked IN
+// PLACE with its own flight taken out (the sim lifts him; the clip only tucks the knees and coils the blade) and scrubbed
+// on the flight: take-off → the blade's top as he flies to where the blow falls, top → the cut in the time left before his
+// feet touch, so the blade comes down WITH him, and then on through the landing at life's pace while landT holds him. The
+// frame only ever moves forward (a man under him can call the blow early; the blade must not jump back up).
+const MOTION_JUMP = 'g_jump';
+function motionLeap(b, mo, dt) {
+  const flying = !!b.airAtk, landing = !flying && mo.leap && b.landT > 0 && b.airT <= 0;
+  if (!flying && !landing) { mo.leap = null; return null; }
+  const c = motionClip(MOTION_JUMP); if (!c || !c.marks) return null; const K = c.marks, J = AF_F.jump, fps = c.fps;
+  const tS = (J.v + Math.sqrt(Math.max(0, J.v * J.v - 2 * J.g * J.strikeY))) / J.g, tLand = 2 * J.v / J.g;   // when the blow falls and when his feet do, on the sim's arc
+  if (!mo.leap) mo.leap = { f: K.takeoff + (K.top - K.takeoff) * Math.min(1, b.airT / tS) };
+  const lp = mo.leap;
+  if (flying && !b.airAtk.hit) lp.f = Math.max(lp.f, K.takeoff + (K.top - K.takeoff) * Math.min(1, b.airT / tS));
+  else if (flying) lp.f = Math.min(K.land + 1, Math.max(lp.f, K.top) + dt * (K.land - K.top) / Math.max(0.05, tLand - tS));
+  else lp.f = Math.min(c.frames - 1, Math.max(lp.f, K.land) + dt * fps * 1.15);
+  return { id: MOTION_JUMP, frame: lp.f };
+}
+function motionBlow(b, mo, dt) {
   if (!b || b.dead || b.mounted || b.weapon === 'bow') return null;
+  const leap = motionLeap(b, mo, dt || 0); if (leap) { mo.blow = leap.id; return leap; }
   const F = AF_F, bash = b.bash, a = b.atk && !b.atk.bow ? b.atk : null, ch = !a && !bash && b.charge ? b.charge : null; if (!a && !ch && !bash) return null;
   const id = bash ? MOTION_BASH : MOTION_ATK[a ? a.move : (ch.heavyPose || ch.t >= F.chargeMax * F.heavyAt ? 3 : (b.chargeMove != null ? b.chargeMove : b.combo % 3))] || MOTION_ATK[0];
   const c = motionClip(id); if (!c || !c.marks) return null; const top = c.marks.top, land = c.marks.land, fps = c.fps;
@@ -1654,7 +1674,7 @@ function motionWanted(b, mo, S) {                           // which clip suits 
 }
 const _moQa = new THREE.Quaternion(), _moQb = new THREE.Quaternion(), _moP = new THREE.Vector3();
 function motionPose(L, dt) {                                // → a local quaternion per node index for this frame, or null
-  const mo = L.mo || (L.mo = { id: null, t: 0, w: 0, on: false }), want = motionBlow(L.body, mo) || motionWanted(L.body, mo, L.inst.root.scale.x);
+  const mo = L.mo || (L.mo = { id: null, t: 0, w: 0, on: false }), want = motionBlow(L.body, mo, dt) || motionWanted(L.body, mo, L.inst.root.scale.x);
   if (!want || want.frame == null) mo.blow = null;
   if (want && want.id !== mo.id) { const c = motionClip(want.id); if (c) { mo.id = want.id; mo.c = c; mo.t = 0; mo.map = null; if (want.frame != null) mo.w = Math.min(mo.w, 0.35); } else if (!mo.c) return null; }   // (a new clip over an old one: drop the weight so the change is eased, not cut)
   if (!mo.c) return null;

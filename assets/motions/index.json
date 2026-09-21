@@ -10,6 +10,21 @@
   "credit": "Gladiator 1+motions by Kapi777 (Sketchfab), CC-BY-4.0"
  },
  {
+  "id": "g_jump",
+  "name": "Jump Attack (game)",
+  "frames": 54,
+  "fps": 30,
+  "loop": false,
+  "speed": 0.0332,
+  "marks": {
+   "takeoff": 2.5,
+   "apex": 8,
+   "top": 14,
+   "land": 19
+  },
+  "credit": "Gladiator 1+motions by Kapi777 (Sketchfab), CC-BY-4.0"
+ },
+ {
   "id": "g_slashdown",
   "name": "Slash Down (game)",
   "frames": 68,
@@ -41,7 +56,7 @@
   "frames": 68,
   "fps": 30,
   "loop": false,
-  "speed": 0.9518,
+  "speed": 0.0743,
   "marks": {
    "top": 20.5,
    "land": 25.5

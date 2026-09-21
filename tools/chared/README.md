@@ -188,6 +188,14 @@ the hold draws guard → top, `strike` runs top → land so the cut ARRIVES when
 ease back to guard covers the tail. Moves → clips: slashR `g_slashup`, slashL `g_stab`, chop `g_slashdown`, heavy `g_spin`,
 shield bash `g_swipe`. What lands, when and on whom stays the sim's.
 
+**The jump attack** (`g_jump`, from Atk_Jump; in the game: attack inside the first 0.4 s of a leap → `b.airAtk`). The sim owns
+the flight, so the clip is baked `--inplace` (the hips' SLOW travel along the floor low-passed out — evenly removing it, as
+the editor's "in place" does, slides a scrubbed clip back through its wind-up and forward through its flight) and without
+`--air`, so its own flight is pinned out and the sim's arc is the only one. Marks `takeoff / apex / top / land`; `motionLeap`
+runs take-off → the blade's top while he flies to where the blow falls, top → the cut in the time left before his feet
+touch (the blade comes down WITH him), then on through the hard landing. The frame only ever moves forward: a man under
+him can call the blow early, and the blade must not jump back up.
+
 `BV.motion()` says which clip each figure is on and how strongly. A long take is no good for this — cut a cycle out of it
 first (`--cycle` finds one, `--cut A:B` takes it, and the last frames are eased into the first so the loop does not pop).
 

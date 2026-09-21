@@ -1,6 +1,6 @@
 // A MOTION for the base: a clip on somebody else's skeleton (usdanim.swift's JSON) retargeted onto assets/rigs/base, for the
 // char editor's MOTION panel.
-//   node tools/realmesh/base/motion.js <anim.json> <id> "<Name>" [--clip 0] [--profile cc_sketchfab] [--credit "…"] [--noloop] [--air] [--theirhands] [--handR x,y,z] [--handL x,y,z] [--hands x,y,z] [--cut A:B] [--cycle] [--keep A:B] [--marks top=52,land=60] [--fps 30]
+//   node tools/realmesh/base/motion.js <anim.json> <id> "<Name>" [--clip 0] [--profile cc_sketchfab] [--credit "…"] [--noloop] [--air] [--theirhands] [--handR x,y,z] [--handL x,y,z] [--hands x,y,z] [--cut A:B] [--cycle] [--keep A:B] [--marks top=52,land=60] [--fps 30] [--inplace]
 //   → tools/chared/motions/<id>.json, listed in tools/chared/motions/index.json
 //
 // HOW: in WORLD space, bone by bone. A source bone's turn away from its own reference pose, D(t) = Qs(t)·Qs_ref⁻¹, is laid
@@ -74,7 +74,7 @@ const ALIGN = {}; for (const s of ['L', 'R']) {
 }
 
 const args = process.argv.slice(2), flag = (k, d) => { const i = args.indexOf('--' + k); if (i < 0) return d; const v = args[i + 1]; args.splice(i, 2); return v; };
-const sw = k => { const i = args.indexOf('--' + k); if (i < 0) return false; args.splice(i, 1); return true; }, noloop = sw('noloop'), air = sw('air'), theirHands = sw('theirhands'), findCycle = sw('cycle');
+const sw = k => { const i = args.indexOf('--' + k); if (i < 0) return false; args.splice(i, 1); return true; }, noloop = sw('noloop'), air = sw('air'), theirHands = sw('theirhands'), findCycle = sw('cycle'), inPlace = sw('inplace');
 const CUT = String(flag('cut', '')).split(':').map(Number);   // --cut A:B  keeps source frames A..B (at 60 a second) AS A LOOP (its tail eased into its head)
 const KEEP = String(flag('keep', '')).split(':').map(Number);  // --keep A:B the same slice as a ONE-OFF: a blow, from leaving the guard to being back in it
 const MARKS = Object.fromEntries(String(flag('marks', '')).split(',').filter(Boolean).map(kv => { const [k, v] = kv.split('='); return [k, +v]; }));   // --marks top=52,land=60  moments the GAME needs, in source frames
@@ -215,6 +215,14 @@ if (CUT.length === 2 && Number.isFinite(CUT[0]) && frames > 12) { const SEAM = M
 // the pose's own lean over the feet and stays (so the clips already signed off do not move by a hair).
 { const o = pos[0].clone().sub(T[tIx.pelvis].Pw); o.y = 0; if (o.length() > 0.25) { pos.forEach(p => p.sub(o)); console.log(`  (began ${(o.length() * 100).toFixed(0)} cm from where he stands — brought back to it)`); } }
 
+// ---- --inplace: a clip the GAME will scrub. The sim moves the man, so the clip must not — and taking its travel out EVENLY
+// (what the editor's "in place" does) is wrong for a clip played at the sim's pace, not its own: a leap that covers its two
+// metres between frames 49 and 72 would slide him backwards through the wind-up and forwards through the flight. So the
+// hips' path along the floor loses its SLOW part (a wide Gaussian, σ 0.25 s) and keeps the quick — the sway of a stride,
+// the lean into a cut — and the clip is written with no travel at all.
+if (inPlace) { const n = pos.length, sig = Math.max(2, Math.round(0.25 * FPS)), R3 = sig * 3, sm = pos.map((_, f) => { let ax = 0, az = 0, w = 0; for (let d = -R3; d <= R3; d++) { let j = f + d; j = closes ? ((j % n) + n) % n : Math.min(n - 1, Math.max(0, j)); const g = Math.exp(-d * d / (2 * sig * sig)); ax += g * pos[j].x; az += g * pos[j].z; w += g; } return [ax / w, az / w]; });
+  const x0 = T[tIx.pelvis].Pw.x, z0 = T[tIx.pelvis].Pw.z; pos.forEach((p, f) => { p.x += x0 - sm[f][0]; p.z += z0 - sm[f][1]; }); }
+
 // ---- his feet on HIS ground. The hip rides at their height scaled by the hips, but his legs are not theirs scaled (longer
 // shins, a boot's ankle 18 cm up, the rest pose's soft knee taken out) so the soles end up a few cm under the floor. A clip
 // that keeps a foot down the whole way (a walk, a guard, a blow) is lifted frame by frame until its lowest sole point is ON
@@ -233,7 +241,7 @@ const moving = names.filter(nm => !still(nm));
 // The path keeps it — the editor can take it out again ("in place") and the game will want the speed to keep his feet from skating.
 const hipAt = t => { const { W, w } = sample(t), d = (prof.travel ? posOf(W[sIx(prof.travel)]) : w.p.clone()).sub(hipRef); return new V3(d.x * KXZ, d.y * K, d.z * KXZ); };
 const carried = closes ? hipAt(t0 + dur - 1e-6).sub(hipAt(t0)) : pos[pos.length - 1].clone().sub(pos[0]); carried.y = 0;
-const travel = carried.length() > 0.05 ? [r4(carried.x), 0, r4(carried.z)] : [0, 0, 0];
+const travel = carried.length() > 0.05 && !inPlace ? [r4(carried.x), 0, r4(carried.z)] : [0, 0, 0];
 // HIS STRIDE'S OWN SPEED — how fast the ground would run past him. A clip that TREADS ON THE SPOT still walks at a speed:
 // it is in the feet, not in the hips. While a foot is down it slides backwards through the hips' frame at exactly the pace
 // the man is covering (on a travelling clip the foot stands still and the hips move — the same number either way), so the

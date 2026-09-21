@@ -1502,7 +1502,7 @@ function instanceModelRig(R, ctx = 'main') {
   for (const i of order) { const wm = worldM.get(i); if (!wm) { const pw = parent[i] >= 0 && worldOf.get(parent[i]); worldOf.set(i, pw ? pw.clone().multiply(nodes[i].matrix) : nodes[i].matrix.clone()); continue; }
     const pw = parent[i] >= 0 ? worldOf.get(parent[i]) : null; const local = pw ? pw.clone().invert().multiply(wm) : wm.clone(); local.decompose(nodes[i].position, nodes[i].quaternion, nodes[i].scale); nodes[i].updateMatrix(); worldOf.set(i, wm.clone()); }
   root.updateMatrixWorld(true);
-  const restLocal = nodes.map(b => b.quaternion.clone()), restWorld = [];   // world = relative to the model root
+  const restLocal = nodes.map(b => b.quaternion.clone()), restPos = nodes.map(b => b.position.clone()), restWorld = [];   // world = relative to the model root (restPos: a clip carries the hips about — they come home to this)
   // THE HANDS: an unmapped bone keeps the bind pose, and in the bind pose the fingers lie open — so a fist round a hilt
   // showed splayed fingers. Every bone under a hand takes the file's own stance instead: the model was saved gripping.
   for (const hn of [R.spec.swordHand, R.spec.bowHand]) { const hb = hn && byName[hn]; if (!hb) continue;
@@ -1510,7 +1510,7 @@ function instanceModelRig(R, ctx = 'main') {
       if (n.matrix) { const q = new THREE.Quaternion(); new THREE.Matrix4().fromArray(n.matrix).decompose(new THREE.Vector3(), q, new THREE.Vector3()); restLocal[i].copy(q); }
       else if (n.rotation) restLocal[i].fromArray(n.rotation); }); }
   for (const i of order) restWorld[i] = parent[i] < 0 ? restLocal[i].clone() : restWorld[parent[i]].clone().multiply(restLocal[i]);
-  return { root, nodes, byName, parent, order, restLocal, restWorld, skinned, mat, ctx };
+  return { root, nodes, byName, parent, order, restLocal, restPos, restWorld, skinned, mat, ctx };
 }
 // a rigid prop of the figure (its sword, its shield — each weighted to one hand bone) as a plain geometry with that
 // hand at the origin and the bind-space orientation kept: the sword's blade runs +Z, the shield's face looks +X
@@ -1636,7 +1636,24 @@ const MOTION_MAX_RATE = 1.9;
 //   wind          on up to the top;          strike   top → a little past `land`, so the cut ARRIVES when the sim says it hits;
 //   rec           on from there at a bit over life's own pace; whatever is left of the tail, the ease back to his guard covers.
 // What lands, when, and on whom is still entirely the sim's: the clip only ever shows the blow the sim is already making.
-const MOTION_ATK = ['g_slashup', 'g_stab', 'g_slashdown', 'g_spin'], MOTION_BASH = 'g_swipe';   // AF_MOVES: slashR, slashL, chop, heavy
+const MOTION_ATK = ['g_slashup', 'g_stab', 'g_slashdown', 'g_spin'], MOTION_BASH = 'g_swipe';   // the blow by COUNT (AF_MOVES: slashR, slashL, chop, heavy) — what plays for a blow the sim gave no clip (the flow table not in yet)
+// THE FLOW OF THE BLADE (2026-09-21, the user: "bring momentum to our attacks… if I attack when my sword is near my left
+// foot after a swing (right top to left bottom) and tap again, the system should pick the correct attack animation instead
+// of random, so we won't look like our char is jumping from one anim to another real fast"). A chain that picks its clip by
+// COUNT drags the blade from wherever the last cut left it to wherever the next wind-up wants it, in the 0.06 s of a tap's
+// wind. So the SIM names the blow by where the blade IS (afFlowPick → a.clip / a.entry, from assets/motions/flow.json —
+// measured by tools/realmesh/base/flow.js, judged in the char editor's COMBO panel before it came here), and three things
+// make it one motion on the figure:
+//   the ENTRY     the next clip is taken up at the frame whose pose is nearest the one he is in, not from its frame 0;
+//   the PRE-WIND  a click that came DURING a blow is known when its strike ends — the next clip's wind-up begins right
+//                 there, inside the follow-through (a.next), with no walk back to the guard in between; the chain itself
+//                 still fires when the sim says (¾ of the recovery);
+//   the CROSSFADE every change of clip — a new blow, a walk after a blow, a blow out of a walk — starts from the pose the
+//                 figure last SHOWED (L.shown), at full weight, over `xfade`. It used to dip to 35 % of the clip and back
+//                 through the plastic rig's pose in 0.045 s: a cut in all but name.
+// None of it touches what lands: damage, reach, timing and the head rule stay the move's and the weight's.
+const MOTION_FLOW = { t: null, pre: false };
+fetch('assets/motions/flow.json').then(r => r.ok ? r.json() : null).then(j => { if (j && j.after && j.open && j.clips) MOTION_FLOW.t = j; }).catch(() => {});
 // THE JUMP ATTACK (attack inside the first `atkBy` of a leap: b.airAtk). The sim owns the flight — a fixed arc, the blow at
 // `strikeY` on the way down (or the moment a man is under him), then a hard landing (landT × 1.6) — so the clip is baked IN
 // PLACE with its own flight taken out (the sim lifts him; the clip only tucks the knees and coils the blade) and scrubbed
@@ -1657,19 +1674,25 @@ function motionLeap(b, mo, dt) {
   return { id: MOTION_JUMP, frame: lp.f };
 }
 function motionBlow(b, mo, dt) {
+  if (b && MOTION_FLOW.t && !MOTION_FLOW.pre) { MOTION_FLOW.pre = true; for (const id of Object.values(MOTION_FLOW.t.clips)) motionClip(id); }   // the first frame a fighter is drawn fetches every blow: none of them is first met in the middle of a swing
   if (!b || b.dead || b.mounted || b.weapon === 'bow') return null;
-  const leap = motionLeap(b, mo, dt || 0); if (leap) { mo.blow = leap.id; return leap; }
-  const F = AF_F, bash = b.bash, a = b.atk && !b.atk.bow ? b.atk : null, ch = !a && !bash && b.charge ? b.charge : null; if (!a && !ch && !bash) return null;
-  const id = bash ? MOTION_BASH : MOTION_ATK[a ? a.move : (ch.heavyPose || ch.t >= F.chargeMax * F.heavyAt ? 3 : (b.chargeMove != null ? b.chargeMove : b.combo % 3))] || MOTION_ATK[0];
-  const c = motionClip(id); if (!c || !c.marks) return null; const top = c.marks.top, land = c.marks.land, fps = c.fps;
-  if (mo.blow !== id) { mo.blow = id; mo.rel = null; }
+  const leap = motionLeap(b, mo, dt || 0); if (leap) { leap.fresh = mo.blowN !== 'leap'; mo.blowN = 'leap'; mo.blow = leap.id; return leap; }
+  const F = AF_F, FL = MOTION_FLOW.t, bash = b.bash, a = b.atk && !b.atk.bow ? b.atk : null, ch = !a && !bash && b.charge ? b.charge : null; if (!a && !ch && !bash) return null;
+  const pre = a && a.next && a.hit && a.t >= a.wind + a.strike ? a.next : null, src = bash || pre || a || ch;                    // (pre: the click came during this blow — the NEXT one's wind-up has begun in its follow-through)
+  const id = (FL && FL.clips[bash ? 'bash' : src.clip]) || (bash ? MOTION_BASH : MOTION_ATK[a ? a.move : (ch.heavyPose || ch.t >= F.chargeMax * F.heavyAt ? 3 : (b.chargeMove != null ? b.chargeMove : b.combo % 3))] || MOTION_ATK[0]);
+  const c = motionClip(id); if (!c || !c.marks) return null; const top = c.marks.top, land = c.marks.land, fps = c.fps, past = (FL ? FL.past : 0.06) * fps, rate = FL ? FL.rate : 1.25;
+  const n = src.n != null ? src.n : src, fresh = mo.blowN !== n || mo.blow !== id;                                               // ONE blow is a pre-wind, a load and a swing: the sim numbers it (n), so the scrub runs on through them
+  if (fresh) { mo.blowN = n; mo.blow = id; mo.rel = null; mo.e = mo.base = src.entry != null ? src.entry : 0; }
   let f;
-  if (ch) { const k = Math.min(1, ch.t / (F.chargeMax * 0.8)); f = top * (k * k * (3 - 2 * k)); mo.rel = f; }                  // the hold: as far up as he has loaded it
-  else { const W = bash ? F.bash : a, t = (bash || a).t, from = Math.max(mo.rel == null ? 0 : mo.rel, top - 0.12 * fps);         // (a tap: the last eighth of a second of the draw)
+  if (pre) { const T = Math.max(0.05, a.wind + a.strike + a.rec * F.chainAt - pre.at), u = Math.max(0, Math.min(1, (a.t - pre.at) / T)), pw = Math.max(mo.e, top - 0.12 * fps);
+    f = mo.e + (pw - mo.e) * (u * u * (3 - 2 * u)); mo.rel = mo.base = f; }                                                       // gathering, in the blow before's follow-through: entry → a tap's start
+  else if (ch) { const k = Math.max(0, Math.min(1, ch.hvT != null ? (ch.t - ch.hvT) / Math.max(0.05, F.chargeMax - ch.hvT) : ch.t / (F.chargeMax * 0.8)));   // (hvT: a load from his guard that coiled into the HEAVY changed clips there)
+    f = mo.base + (top - mo.base) * (k * k * (3 - 2 * k)); mo.rel = f; }                                                          // the hold: as far up as he has loaded it
+  else { const W = bash ? F.bash : a, t = (bash || a).t, from = Math.max(mo.rel == null ? mo.base : mo.rel, top - 0.12 * fps);   // (a tap: the last eighth of a second of the draw)
     if (t < W.wind) f = from + (top - from) * (t / W.wind);
-    else if (t < W.wind + W.strike) f = top + (land + 0.06 * fps - top) * ((t - W.wind) / W.strike);
-    else f = Math.min(c.frames - 1, land + 0.06 * fps + (t - W.wind - W.strike) * fps * 1.25); }
-  return { id, frame: f };
+    else if (t < W.wind + W.strike) f = top + (land + past - top) * ((t - W.wind) / W.strike);
+    else f = Math.min(c.frames - 1, land + past + (t - W.wind - W.strike) * fps * rate); }
+  return { id, frame: f, fresh, rate };
 }
 function motionWanted(b, mo, S) {                           // which clip suits the man this frame, if any
   if (!b || b.dead || b.mounted || b.atk || b.charge || (b.blocking && !b.backing) || b.rollT > 0 || b.airT > 0 || b.landT > 0 || b.rushT > 0) return null;
@@ -1683,15 +1706,19 @@ function motionWanted(b, mo, S) {                           // which clip suits 
 const _moQa = new THREE.Quaternion(), _moQb = new THREE.Quaternion(), _moP = new THREE.Vector3();
 function motionPose(L, dt) {                                // → a local quaternion per node index for this frame, or null
   const mo = L.mo || (L.mo = { id: null, t: 0, w: 0, on: false }), want = motionBlow(L.body, mo, dt) || motionWanted(L.body, mo, L.inst.root.scale.x);
-  if (!want || want.frame == null) mo.blow = null;
-  if (want && want.id !== mo.id) { const c = motionClip(want.id); if (c) { mo.id = want.id; mo.c = c; mo.t = 0; mo.map = null; if (want.frame != null) mo.w = Math.min(mo.w, 0.35); } else if (!mo.c) return null; }   // (a new clip over an old one: drop the weight so the change is eased, not cut)
+  if (!want || want.frame == null) { mo.blow = null; mo.blowN = null; }
+  if (want && (want.id !== mo.id || want.fresh)) { const c = motionClip(want.id);                          // a new clip — or a new BLOW on the same one: taken up from the pose he is IN
+    if (c) { const Z = L.shown; if (Z && Z.ok) { const Fm = mo.from || (mo.from = { q: new Float32Array(Z.q.length), p: new THREE.Vector3() }); Fm.q.set(Z.q); Fm.p.copy(Z.p); mo.x = 0; mo.xd = want.frame != null ? (MOTION_FLOW.t ? MOTION_FLOW.t.xfade : 0.12) : 0.18; mo.w = 1; } else mo.x = 1;   // (w = 1: what he SHOWED already holds whatever of the plastic rig's pose was in it — nothing pops)
+      mo.id = want.id; mo.c = c; mo.t = 0; mo.map = null; }
+    else if (!mo.c) return null; }
   if (!mo.c) return null;
-  const on = mo.on = !!(want && want.id === mo.id);
-  mo.w = Math.max(0, Math.min(1, mo.w + (on ? dt / (want.frame != null ? 0.07 : 0.14) : -dt / (mo.wasBlow ? 0.2 : 0.12))));   // ease in, ease out — never a cut (a blow comes in quicker than a walk and hands back to the guard slower)
-  if (on) mo.wasBlow = want.frame != null;
+  const on = mo.on = !!(want && want.id === mo.id), B = L.body, cut = !!(B && (B.flinch > 0 || B.stagger > 0 || B.downT > 0 || B.dodgeT > 0 || B.clashT > 0 || B.dead));   // (cut: struck, floored, rolling — the blow is simply over)
+  mo.w = Math.max(0, Math.min(1, mo.w + (on ? dt / (want.frame != null ? 0.07 : 0.14) : -dt / (cut ? 0.1 : mo.wasBlow ? (B && B.blocking ? 0.18 : 0.3) : 0.12))));   // ease in, ease out — never a cut (a blow hands back to the guard slower than a walk does)
+  if (on) { mo.wasBlow = want.frame != null; if (want.rate && want.frame != null) mo.rate = want.rate; }
   if (mo.w <= 0) { if (!on) mo.id = null; return null; }
   const c = mo.c;
   if (on) { if (want.frame != null) mo.t = want.frame / c.fps; else mo.t += dt * want.rate; }   // a blow is SCRUBBED by the sim's clock; a walk runs at the pace he is really covering
+  else if (mo.wasBlow && !cut) mo.t = Math.min((c.frames - 1) / c.fps, mo.t + dt * (mo.rate || 1.25));   // a blow that is OVER runs on while it fades: the blade finishes its road home instead of freezing in the air
   if (!mo.map) { mo.map = c.bones.map(nm => { const n = L.inst.byName[nm]; return n ? L.inst.nodes.indexOf(n) : -1; }); mo.root = c.root && L.inst.byName[c.root] ? L.inst.nodes.indexOf(L.inst.byName[c.root]) : -1; }
   const n = c.frames, f = c.loop ? ((mo.t * c.fps) % n + n) % n : Math.max(0, Math.min(n - 1, mo.t * c.fps)), i0 = Math.floor(f), a = f - i0, i1 = c.loop ? (i0 + 1) % n : Math.min(n - 1, i0 + 1), out = [];
   for (let k = 0; k < mo.map.length; k++) { const i = mo.map[k]; if (i < 0) continue;
@@ -1701,6 +1728,9 @@ function motionPose(L, dt) {                                // → a local quate
              c.pos[i0 * 3 + 1] + (c.pos[i1 * 3 + 1] - c.pos[i0 * 3 + 1]) * a,
              c.pos[i0 * 3 + 2] + (c.pos[i1 * 3 + 2] - c.pos[i0 * 3 + 2]) * a - (c.travel ? c.travel[2] * tr : 0));
     out.root = { i: mo.root, p: _moP.clone() }; }
+  if (mo.x < 1 && mo.from) { const x = mo.x * mo.x * (3 - 2 * mo.x), Fq = mo.from.q;                 // the crossfade: from the pose he showed when this clip took him
+    for (let k = 0; k < mo.map.length; k++) { const i = mo.map[k]; if (i < 0 || !out[i]) continue; _moQa.fromArray(Fq, i * 4); out[i] = _moQa.clone().slerp(out[i], x); }
+    if (out.root) out.root.p.copy(_moP.copy(mo.from.p).lerp(out.root.p, x)); mo.x = Math.min(1, mo.x + dt / mo.xd); }
   out.w = mo.w; return out;
 }
 function syncModelRigs() {
@@ -1716,8 +1746,10 @@ function syncModelRigs() {
     const W = L.w; for (const i of inst.order) { const b = inst.nodes[i], pi = inst.parent[i]; const pw = pi < 0 ? null : W[pi];
       let t = target.get(i); if (t) { b.quaternion.copy(t); if (pw) b.quaternion.premultiply(pw.clone().invert()); } else b.quaternion.copy(inst.restLocal[i]);
       if (mo && mo[i]) b.quaternion.slerp(mo[i], mo.w);                    // (the clip's locals are on THIS rig: a copy, weighted)
-      if (mo && mo.root && mo.root.i === i) b.position.lerp(mo.root.p, mo.w);
+      if (mo && mo.root) L.rootI = mo.root.i; if (i === L.rootI) { b.position.copy(inst.restPos[i]); if (mo && mo.root) b.position.lerp(mo.root.p, mo.w); }   // (from REST every frame: lerped from where it stood, the hips never came home — a man stayed wherever his last clip left them, half a pace ahead of himself after a thrust)
       W[i] = pw ? pw.clone().multiply(b.quaternion) : b.quaternion.clone(); }
+    { const Z = L.shown || (L.shown = { q: new Float32Array(inst.nodes.length * 4), p: new THREE.Vector3(), ok: false });   // what he SHOWED this frame: the next clip to take him starts from it (motionPose)
+      for (const i of inst.order) inst.nodes[i].quaternion.toArray(Z.q, i * 4); if (L.rootI == null) L.rootI = inst.byName.pelvis ? inst.nodes.indexOf(inst.byName.pelvis) : -1; if (L.rootI >= 0) Z.p.copy(inst.nodes[L.rootI].position); Z.ok = true; }
     // the sword in his hand: the figure's own for the plain iron blade, the loadout's BUILT one for anything else
     // (the market sells fifteen — a falchion must look like a falchion on him); afDressGear stamps P.gearSword
     const vr = !!L.P.vrGear, sheathed = !vr && !!L.P.sheathed, showGear = vr || (!!L.P.gearSword && !L.P.noModelSword && !sheathed), drawn = !!(L.P.sword && L.P.sword.visible);   // (vrGear: the plastic steel rides the VR controllers, the figure's own is hidden — vrDress; sheathed: the walk into the pit, the blade at his hip — afDonStep)
@@ -1732,7 +1764,7 @@ function syncModelRigs() {
   }
 }
 { const _r = renderer.render.bind(renderer); renderer.render = (s, c) => { if (MODEL_LIVE.length) syncModelRigs(); return _r(s, c); }; }
-BV.motion = () => MODEL_LIVE.map(L => ({ name: L.body && L.body.name, clip: L.mo && L.mo.id, w: L.mo ? +L.mo.w.toFixed(2) : 0, t: L.mo ? +L.mo.t.toFixed(2) : 0, loaded: [...MOTION.clips.keys()].filter(k => MOTION.clips.get(k)) }));   // test: which clip each figure is playing, and how strongly
+BV.motion = () => MODEL_LIVE.map(L => ({ name: L.body && L.body.name, clip: L.mo && L.mo.id, w: L.mo ? +L.mo.w.toFixed(2) : 0, t: L.mo ? +L.mo.t.toFixed(2) : 0, f: L.mo && L.mo.c ? +(L.mo.t * L.mo.c.fps).toFixed(1) : 0, x: L.mo && L.mo.x != null ? +L.mo.x.toFixed(2) : 1, hips: L.rootI >= 0 ? L.inst.nodes[L.rootI].position.toArray().map(v => +v.toFixed(3)) : null, loaded: [...MOTION.clips.keys()].filter(k => MOTION.clips.get(k)) }));   // test: which clip each figure is playing, and how strongly
 BV.modelRig = { load: loadModelRig, wear: wearModelRig, live: () => MODEL_LIVE.length, pos: () => MODEL_LIVE.map(L => [L.g.position.x, L.g.position.y, L.g.position.z, L.g.rotation.y]) };
 
 // ---------- LOOKS: no two fighters alike ----------
@@ -2764,8 +2796,8 @@ function spawnSlashArc(pos, facing, mv, scale = 1, color = 0xfff2c8) {
   const group = new THREE.Group();
   group.position.copy(pos);
   group.rotation.y = facing;
-  const len = 1.9;
-  const geoKey = 'arc:' + scale + ':' + (mv.overhead ? 1 : 0);
+  const len = mv.len || 1.9;
+  const geoKey = 'arc:' + scale + ':' + (mv.overhead ? 1 : 0) + ':' + len;
   const m = new THREE.Mesh(
     cachedGeo(geoKey, () => new THREE.RingGeometry(0.85 * scale, 2.3 * scale, 14, 1,
       (mv.overhead ? 0.7 : -Math.PI / 2) - len / 2, len)),
@@ -21236,6 +21268,33 @@ function afStateCode(b) {
   return b.moving ? 1 : 0;
 }
 const AF_MOVES = ['slashR', 'slashL', 'chop', 'heavy'];
+// ---- THE FLOW OF THE BLADE: the sim names the CLIP of every blow by where the blade is (see MOTION_FLOW). It is a name
+// and nothing more — what lands, how hard, how far and when stay the move's (the count) and the weight's (the hold).
+//   b.flow   { k, past, age }: the last blow's clip, how many of its frames have run since it landed, and how long ago his
+//            hands came free. While the blade is still OUT (flow.json `after`, within `keep` of the blow's end) the next
+//            blow is the one that starts THERE; else he is in his guard and `open` says how he opens: standing with the cut
+//            down, moving in — or from behind his shield — with the thrust, a held press with the spin.
+//   a.next   a click that came DURING a blow: picked the moment its strike is over, so the figure's wind-up can begin in
+//            the follow-through. At the chain point a button that is STILL HELD starts a LOAD from there instead of a light
+//            ("tap LONG": it used to queue a light and throw the hold away). A heavy never chains into a heavy: held through a
+//            heavy's follow-through, the next load starts when his hands are free, from his guard.
+const AF_ARC = { down: { overhead: true }, up: { overhead: true }, spin: { overhead: false }, stab: { overhead: false, len: 0.55 } };   // the flash a blow leaves (spawnSlashArc), by the clip that is on him
+function afFlowOut(b) {                                     // is the blade still OUT from the last blow — and what follows from where it is: [until, clip, entry] (null: he is in his guard)
+  const FL = MOTION_FLOW.t, fl = b.flow, R = FL && fl && FL.after[fl.k]; if (!R || fl.age > FL.keep) return null;
+  const past = fl.past + fl.age * FL.fps * FL.rate; for (const o of R) if (past <= o[0]) return o; return null;
+}
+function afFlowPick(b, heavy) {                             // → { clip, entry, flowed, stance, n }: the blow that follows from where his blade is (n: the blow's number — the figure scrubs ONE blow through its pre-wind, load and swing)
+  const FL = MOTION_FLOW.t, n = (b.blowN = (b.blowN | 0) + 1); if (!FL) return { clip: null, entry: null, flowed: false, n };   // (the table is not in yet: the blow by count, as it was)
+  const o = afFlowOut(b); if (o) return { clip: o[1], entry: o[2], flowed: true, n };
+  const stance = b.blocking || b.guardAgo < 0.25 ? 'block' : (b.vx || 0) * Math.sin(b.yaw) + (b.vz || 0) * Math.cos(b.yaw) > AF_F.move * FL.run ? 'run' : 'guard', O = FL.open[stance] || FL.open.guard;
+  return { clip: heavy ? O.long : O.tap, entry: heavy ? 0 : null, flowed: false, stance, n };
+}
+function afLoad(b, pick) { const p = pick || afFlowPick(b, false); return { t: 0, heavyPose: false, clip: p.clip, entry: p.entry, flowed: p.flowed, stance: p.stance, n: p.n }; }   // the load a press begins
+function afLoadHeavy(b) {                                   // the load has coiled past the heavy line: out of a flow it is the same blow, loaded; from his guard it becomes the heavy that stance opens with
+  const FL = MOTION_FLOW.t, ch = b.charge; ch.heavy = true; if (!FL || !ch.clip || ch.flowed) return;
+  const to = (FL.open[ch.stance] || FL.open.guard).long; if (!to || to === ch.clip) return;
+  ch.entry = FL.heavyFrom[ch.clip] || 0; ch.clip = to; ch.hvT = ch.t; ch.n = b.blowN = (b.blowN | 0) + 1;
+}
 const _rollQ = new THREE.Quaternion(), _rollUp = new THREE.Vector3(0, 1, 0);
 function afMove(b, ux, uz, spd, dt) {                     // steer: accelerate toward a velocity of spd along (ux,uz)
   b.vx += ux * spd * AF_F.accel * dt; b.vz += uz * spd * AF_F.accel * dt;
@@ -21249,7 +21308,7 @@ function afIntegrate(b, dt) {                              // friction + slope +
       if (b.dive) {                                          // the dive lands in a ROLL over the shoulder along the line of flight, then up through the crouch (afDrive's landRoll branch)
         const sp = Math.hypot(b.vx, b.vz), ux = sp > 0.1 ? b.vx / sp : Math.sin(b.yaw), uz = sp > 0.1 ? b.vz / sp : Math.cos(b.yaw), v = clamp(sp, 2.5, 4.5);
         b.dive = false; b.diveAng = 0; b.landRollT = J.roll; b.rollRel = angleDelta(b.yaw, Math.atan2(ux, uz)); b.vx = ux * v; b.vz = uz * v;
-      } else { b.landT = Math.max(b.landT || 0, b.airAtk ? J.land * 1.6 : J.land); if (b.airAtk) { b.airAtk = null; b.cd = Math.max(b.cd || 0, 0.25); b.anim.ease = null; setPose(b.anim, 'guard', 0.3); } b.vx *= 0.75; b.vz *= 0.75; }   // (a jump attack: a hard landing, a breath)
+      } else { b.landT = Math.max(b.landT || 0, b.airAtk ? J.land * 1.6 : J.land); if (b.airAtk) { b.airAtk = null; b.flow = { k: 'jump', n: 'jump', past: 1, age: 0 }; b.cd = Math.max(b.cd || 0, 0.25); b.anim.ease = null; setPose(b.anim, 'guard', 0.3); } b.vx *= 0.75; b.vz *= 0.75; }   // (a jump attack: a hard landing, a breath)
     }
   }
   if (AF.terr.hills.length) {                                // a hill takes the legs out of a run: uphill drags, downhill gives a little
@@ -21446,6 +21505,10 @@ function afDrive(b, dt, sim) {
   if (b.dodgeCd > 0) b.dodgeCd -= dt; if (b.mountCd > 0) b.mountCd -= dt; if (b.landT > 0) b.landT -= dt; if (b.rushHitT > 0) b.rushHitT -= dt;
   if (b.cd > 0 && (human || (!b.atk && !b.charge && !(b.aiHoldT > 0)))) b.cd -= dt;   // an NPC's pause between blows starts once the blow is DONE (it used to run out mid-swing: jab, jab, jab)
   if (b.comboT > 0) { b.comboT -= dt; if (b.comboT <= 0) b.combo = 0; }
+  b.guardAgo = b.blocking ? 0 : Math.min(9, (b.guardAgo == null ? 9 : b.guardAgo) + dt);                       // how long since his shield was up (a blow thrown as the guard comes down still comes from behind it — afFlowPick)
+  if (b.flow) { const fl = b.flow; if (b.downT > 0 || b.stagger > 0 || b.flinch > 0 || b.clashT > 0 || b.dodgeT > 0 || b.landRollT > 0) b.flow = null;   // struck, floored, locked, rolling: the blade is wherever the blow left it no longer
+    else if (fl.k === 'jump' && b.landT > 0) fl.past += dt * 30 * 1.15;                                       // (the hard landing plays on at 1.15 — motionLeap)
+    else if (!b.atk && !b.bash && !b.charge) { fl.age += dt; if (fl.age > 1) b.flow = null; } }              // his hands are free: how long ago (past `keep` he is back in his guard)
   if (b.iframes > 0) b.iframes -= dt;
   if (b.stagger <= 0 && b.poise < b.maxPoise) b.poise = Math.min(b.maxPoise, b.poise + F.poiseRegen * dt); // poise recovers off the pressure
   b.moving = false;
@@ -21570,14 +21633,15 @@ function afDrive(b, dt, sim) {
   if (b.bash) { /* a tap during the bash is kept (seenAtk stands): the light comes out behind the shield */ }
   else if (!b.atk) {
     if (!b.charge && (pressed || (tapped && !bow)) && b.swapT <= 0) {
-      if ((!human || b.cd <= 0) && b.landT <= 0 && b.rushT <= 0) { b.charge = { t: 0, heavyPose: false }; b.chargeMove = b.combo % 3; b.anim.ease = null;
+      if ((!human || b.cd <= 0) && b.landT <= 0 && b.rushT <= 0) { b.charge = afLoad(b); b.chargeMove = b.combo % 3; b.anim.ease = null;
         setPose(b.anim, b.weapon === 'bow' ? 'aimBow' : MOVES[AF_MOVES[b.chargeMove]].windup, 0.1); b.blocking = false;
         b.releaseNow = tapped && !holdNow;                   // a tap that came and went between samples: swing at once
       }
-      b.seenAtk = I.atk;
+      if (!(b.landT > 0 && b.flow && b.flow.k === 'jump')) b.seenAtk = I.atk;   // (a tap during a jump attack's hard landing WAITS for it: the rising cut comes out of the crouch the tick he can move — the breath is still taken, only the click is kept, as behind a bash)
     } else if (b.charge) {
       b.charge.t += dt; if (b.winded && !bow) b.charge.t = Math.min(b.charge.t, F.chargeMax * F.heavyAt - 0.02);   // (winded: the load never coils into a heavy)
       if (b.charge.t > 0.35 && !b.charge.heavyPose && b.weapon !== 'bow') { setPose(b.anim, 'windupHeavy', 0.2); b.charge.heavyPose = true; }
+      if (!bow && !b.charge.heavy && b.charge.t >= F.chargeMax * F.heavyAt) afLoadHeavy(b);                 // (the figure changes blows where the blow BECOMES a heavy, not at the 0.35 s the plastic arm coils: a press let go between the two is a light)
       const released = b.releaseNow || (!holdNow && b.prevHold) || tapped;
       if (released) { b.seenAtk = I.atk; b.releaseNow = false;
         if (bow && b.charge.t < 0.12) { b.anim.ease = null; setPose(b.anim, 'relax', 0.15); }   // too short to be a shot: the bow comes down
@@ -21594,6 +21658,7 @@ function afDrive(b, dt, sim) {
       try { SFX.swing(b.group.position); } catch (e) {} if (b === AF.me) addShake(0.08);
       if (sim) afBashHit(b);                                 // (a guest sees the host's word in the hit events, as with an arrow)
     }
+    if (MOTION_FLOW.t && a.hit && a.t >= BA.wind + BA.strike) { const FL = MOTION_FLOW.t; if (!b.flow || b.flow.n !== a) b.flow = { k: 'bash', n: a, past: FL.past * FL.fps, age: 0 }; else b.flow.past += dt * FL.fps * FL.rate; }   // (the swipe leaves the blade forward on his right: what follows starts there)
     if (a.t >= BA.wind + BA.strike + BA.rec) { b.bash = null; b.cd = Math.max(human ? 0 : b.cd, BA.cd); b.anim.ease = null; setPose(b.anim, 'guard', 0.25); if (b === AF.me) afAutoTurn(b); }
     else if (a.hit && a.t > BA.wind + BA.strike + BA.rec * 0.5) { b.anim.ease = null; setPose(b.anim, 'guard', 0.25); }
   } else if (b.atk) {
@@ -21617,15 +21682,22 @@ function afDrive(b, dt, sim) {
       else {
         const mv = MOVES[AF_MOVES[a.move]], col = AF_TEAM_HEX[b.team];
         b.anim.ease = AF_EASE_BACK; setPose(b.anim, mv.strike, a.heavy ? 0.09 : 0.1);   // the blade whips PAST the mark and settles
-        try { spawnSlashArc(b.group.position, afAimOf(b), mv, 1 + 0.6 * (a.k || 0), col); spawnTrail(b, 1.7, col); } catch (e) {}
+        try { spawnSlashArc(b.group.position, afAimOf(b), (!b.mounted && AF_ARC[a.clip]) || mv, 1 + 0.6 * (a.k || 0), col); spawnTrail(b, 1.7, col); } catch (e) {}   // (on foot the flash is the CLIP's: a thrust leaves a dart, not a sweep)
         if (b === AF.me) addShake(0.09 + 0.07 * (a.k || 0));
         try { SFX.swing(b.group.position); } catch (e) {}
         if (sim) afStrike(b, a.heavy, a.k || 0); else if (b === AF.me && AF.role === 'guest') afPredictStrike(b, a.heavy, a.k || 0);   // (a guest feels his blow now; the host's word follows)
       }
     }
-    const total = a.wind + a.strike + a.rec;
-    if (a.hit && b.queued && !a.last && a.t >= a.wind + a.strike + a.rec * F.chainAt) { b.queued = false; afStartAttack(b, false); } // chain from the follow-through (never past the third: mashing the button through the finisher queues nothing)
-    else if (a.t >= total) { b.atk = null; b.queued = false; b.cd = human ? (a.last ? F.comboCd : 0.04) : Math.max(b.cd, a.last ? F.comboCd : 0.04); if (a.last) b.combo = 0;   // (an NPC keeps the pause his brain chose; after a full chain everyone breathes)
+    const tEnd = a.wind + a.strike, total = tEnd + a.rec, FL = MOTION_FLOW.t, wait = a.heavy && holdNow;   // (wait: held through a heavy's follow-through — a heavy never chains into a heavy)
+    if (FL && a.clip && a.hit && !a.bow && a.t >= tEnd) {                                                    // the follow-through: the blade is OUT there, and the sim keeps count of where
+      if (!b.flow || b.flow.n !== a.n) b.flow = { k: a.clip, n: a.n, past: FL.past * FL.fps, age: 0 }; else if (!a.next) b.flow.past += dt * FL.fps * FL.rate;
+      if (b.queued && !a.last && !a.next && !wait) { a.next = afFlowPick(b, false); a.next.at = a.t; }        // the click is known and the strike is over: the next blow is named HERE, by where the blade is now
+    }
+    if (a.hit && b.queued && !a.last && !wait && a.t >= tEnd + a.rec * F.chainAt) { b.queued = false; const nx = a.next || afFlowPick(b, false);   // chain from the follow-through (never past the third: mashing the button through the finisher queues nothing)
+      if (holdNow && !bow) { b.atk = null; b.charge = afLoad(b, nx); b.chargeMove = b.combo % 3; b.anim.ease = null; setPose(b.anim, MOVES[AF_MOVES[b.chargeMove]].windup, 0.1); }   // still HELD: the next blow LOADS from here (let go early it is a light, held past the line a heavy)
+      else afStartAttack(b, false, nx); }
+    else if (a.t >= total) { const again = b.queued && holdNow && !a.last; b.atk = null; b.queued = false; b.cd = human ? (a.last ? F.comboCd : 0.04) : Math.max(b.cd, a.last ? F.comboCd : 0.04); if (a.last) b.combo = 0;   // (an NPC keeps the pause his brain chose; after a full chain everyone breathes)
+       if (again) { if (human) b.cd = 0; b.prevHold = false; }                                                 // (held through a heavy: the press counts NOW, as a load from his guard)
        b.anim.ease = null; setPose(b.anim, b.weapon === 'bow' ? 'relax' : 'guard', 0.3); if (b === AF.me) afAutoTurn(b); }
     else if (a.hit && a.t > a.wind + a.strike + a.rec * 0.5 && !a.bow) { b.anim.ease = null; setPose(b.anim, 'guard', 0.3); }
     b.blocking = false;
@@ -21776,9 +21848,9 @@ function afNearestFoeInCone(b, R, cosMin) {
   return best;
 }
 const AF_EASE_BACK = t => { const c = 1.9, u = t - 1; return 1 + (c + 1) * u * u * u + c * u * u; }; // ease-out-back: overshoot, then settle
-function afStartAttack(b, heavy) {                          // (kept for the hooks: an instant swing at a fixed weight)
+function afStartAttack(b, heavy, pick) {                    // an instant swing at a fixed weight: the chain's next light (pick: the blow named in the follow-through), and the hooks
   if (b.weapon === 'bow') { afRelease(b, 0.5); return; }    // (never a sword move with a bow in hand)
-  b.anim.ease = null; b.charge = { t: heavy ? AF_F.chargeMax : 0, heavyPose: heavy }; b.chargeMove = b.combo % 3;
+  b.anim.ease = null; b.charge = afLoad(b, pick); b.charge.t = heavy ? AF_F.chargeMax : 0; b.charge.heavyPose = !!heavy; if (heavy) afLoadHeavy(b); b.chargeMove = b.combo % 3;
   afRelease(b, heavy ? 1 : 0); b.charge = null;
 }
 // the swing itself: the load already happened in the hand; k is how much of it there was
@@ -21790,7 +21862,8 @@ function afRelease(b, k) {
   if (heavy) { move = 3; b.combo = 0; } else { move = b.chargeMove; b.combo++; b.comboT = 1.1; }
   const last = !heavy && b.combo >= F.comboMax;             // the END of the chain: the blade swings wide and he has to gather it — the window a patient foe waits for
   if (last) { b.combo = 0; b.comboT = 0; }                    // (the count closes here, so a finisher cut short by a block or a hit doesn't leave a 4th and 5th behind it)
-  b.atk = { heavy, k, t: 0, wind: 0.06 + 0.08 * k, strike: lerp(F.light.strike, F.heavy.strike, k), rec: lerp(F.light.rec, F.heavy.rec, k) * (last ? F.comboRest : 1), hit: false, move, last };
+  const ch = b.charge || afLoad(b);                          // (the blow's clip was named when the load began — afFlowPick)
+  b.atk = { heavy, k, t: 0, wind: 0.06 + 0.08 * k, strike: lerp(F.light.strike, F.heavy.strike, k), rec: lerp(F.light.rec, F.heavy.rec, k) * (last ? F.comboRest : 1), hit: false, move, last, clip: ch.clip, entry: ch.entry, n: ch.n };
   b.blocking = false;
 }
 // where a fighter's blow goes: his facing — or, in the saddle, where the RIDER is turned (a man can twist to cut
@@ -24942,7 +25015,9 @@ BV.arenaMix = (rows) => { const L = AF.lobby; if (!L || !rows) return null; L.np
 BV.arenaStep = (steps = 60, dt = 1 / 60) => { if (AF.phase === 'intro') afIntroEnd(); if (AF.phase === 'countdown') { AF.phase = 'fight'; AF.countdown = 0; afIntroTailEnd(); } for (let i = 0; i < steps; i++) afTick(dt); return BV.arenaStatus(); };
 BV.arenaInput = (patch) => { Object.assign(AF.locIn, patch || {}); return { ...AF.locIn }; };
 BV.arenaBare = (i, off) => { const b = AF.bodies[i], L = b && b.parts.modelRig; if (L && off != null) lookHelmOff(L, !!off); return b ? { name: b.name, bare: afBareHead(b), model: !!L } : null; };   // test: take the fighter's helm off / put it on, and ask whether his head is bare (afDamage's head blow)
-BV.arenaSwing = (i, heavy) => { const b = AF.bodies[i]; if (!b || b.dead) return null; afStartAttack(b, !!heavy); return { atk: !!b.atk, heavy: !!(b.atk && b.atk.heavy), move: b.atk ? b.atk.move : null }; };   // test: an instant swing at a fixed weight (the head blow: heavy, or the chop — set b.combo = 2 first)
+BV.arenaSwing = (i, heavy) => { const b = AF.bodies[i]; if (!b || b.dead) return null; afStartAttack(b, !!heavy); return { atk: !!b.atk, heavy: !!(b.atk && b.atk.heavy), move: b.atk ? b.atk.move : null, clip: b.atk ? b.atk.clip : null }; };
+BV.arenaBody = i => AF.bodies[i] || null;                 // test: the man himself (place him, heal him, still his brain: b.ctrl = 'none')
+BV.arenaFlow = i => { const one = b => ({ name: b.name, atk: b.atk ? { clip: b.atk.clip, entry: b.atk.entry, n: b.atk.n, move: b.atk.move, heavy: !!b.atk.heavy, last: !!b.atk.last, t: +b.atk.t.toFixed(3), hit: !!b.atk.hit, next: b.atk.next ? b.atk.next.clip : null } : null, charge: b.charge ? { clip: b.charge.clip, entry: b.charge.entry, n: b.charge.n, t: +b.charge.t.toFixed(3), heavy: !!b.charge.heavy, stance: b.charge.stance } : null, bash: !!b.bash, queued: !!b.queued, combo: b.combo, flow: b.flow ? { k: b.flow.k, past: +b.flow.past.toFixed(1), age: +b.flow.age.toFixed(3) } : null, out: afFlowOut(b), table: !!MOTION_FLOW.t }); return i == null ? AF.bodies.map(one) : AF.bodies[i] ? one(AF.bodies[i]) : null; };   // test: the blow the sim has named for each man, and where it thinks his blade is   // test: an instant swing at a fixed weight (the head blow: heavy, or the chop — set b.combo = 2 first)
 BV.arenaStam = (v) => { const b = AF.me; if (!b) return null; if (v != null) { afStamina(b, 0); b.stam = clamp(v, 0, b.maxStam); } return { stam: b.stam, winded: b.winded, max: b.maxStam, regen: b.stamRegen }; };   // test: read / set your stamina
 
 

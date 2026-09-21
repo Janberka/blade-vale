@@ -199,8 +199,9 @@ until it does, sprinting and standing are the game's.**
 pack's are 2–4 s performances. Each game clip (`assets/motions/g_*.json`, 30 fps, sliced with `--keep A:B`) carries `marks`
 — `top` of the wind-up and `land` of the cut, read off the blade tip's speed — and `motionBlow` lays the sim's clock on them:
 the hold draws guard → top, `strike` runs top → land so the cut ARRIVES when the sim says it hits, `rec` runs on and the
-ease back to guard covers the tail. Moves → clips: slashR `g_slashup`, slashL `g_stab`, chop `g_slashdown`, heavy `g_spin`,
-shield bash `g_swipe`. What lands, when and on whom stays the sim's.
+ease back to guard covers the tail. WHICH clip is the flow's (below): the sim names it by where the blade is (`afFlowPick` →
+`a.clip`); by count — slashR `g_slashup`, slashL `g_stab`, chop `g_slashdown`, heavy `g_spin` — only until the table is in.
+Shield bash `g_swipe`. What lands, when and on whom stays the sim's.
 
 **Giving ground is a guard** (the user: "walking backwards can be slow and you go guard mode, otherwise you could just turn
 and run"). A man with a shield who steps back from the way he faces (`b.backing`: move·facing < −0.5 in, −0.3 out; not with a
@@ -266,6 +267,26 @@ The panel scrubs the clips on the SIM's clock with the sim's numbers (`CBF` = ga
 0.35 s). The standing GUARD is a planted frame of the guard-retreat cycle (`moves.guardFrame`), so guard, retreat and the
 blows out of them are one stance. What the editor cannot show is the game's own procedural poses (a plain leap, the roll,
 the run): those stay the game's.
+
+**In the game (game.js v=308).** The SIM names the blow: `afFlowPick` when a load begins (`b.charge.clip/entry/n`), carried onto
+`b.atk`; `b.flow = { k, past, age }` keeps count of where the blade is (frames past the landing while the follow-through runs,
+then how long his hands have been free; struck, floored, locked or rolling ends it); a click that came during a blow is
+named the moment its strike is over (`a.next`) so the figure's wind-up can begin there. Rules that came with it: a button
+STILL HELD at the chain point starts a LOAD from there ("tap LONG" — it used to queue a light and throw the hold away); a
+heavy never chains into a heavy (held through a heavy's follow-through, the press counts when his hands are free, from his
+guard); the load changes to the heavy's clip where it BECOMES a heavy (0.51 s), not where the plastic arm coils (0.35 s); a
+blow thrown within 0.25 s of the guard coming down still opens from behind the shield (you cannot swing while BLOCK is
+held); a tap during a jump attack's hard landing is KEPT and comes out the tick he can move. The flash a blow leaves
+follows the clip (`AF_ARC`: a thrust leaves a dart). The FIGURE: `motionBlow` scrubs ONE blow (numbered `n`) through its
+pre-wind, load and swing from the `entry`; `motionPose` starts every new clip — and every new blow on the same clip — from
+the pose the figure last SHOWED (`L.shown`, captured after the bones are set), at full weight; a blow that is over runs ON
+while it fades (0.3 s; cut short when he is struck). And the hips come home: `b.position` is set from `inst.restPos` every
+frame — it used to be lerped from wherever it stood, so after any clip the pelvis stayed where the clip left it (half a
+pace ahead of the man after a thrust). `BV.arenaFlow(i)` = the blow the sim has named and where it thinks the blade is;
+`BV.arenaBody(i)` = the man (still his brain with `ctrl = 'none'`); `BV.motion()` now carries the frame, the crossfade and
+the hips. NOT in yet: the standing guard is still the game's own block pose (the editor holds the retreat stance), and on a
+GUEST the other fighters' ground blows are still the plastic rig's (no `b.atk` there — it would key off states 2/3/4 and a
+clip slot in the snapshot row).
 
 `BV.motion()` says which clip each figure is on and how strongly. A long take is no good for this — cut a cycle out of it
 first (`--cycle` finds one, `--cut A:B` takes it, and the last frames are eased into the first so the loop does not pop).

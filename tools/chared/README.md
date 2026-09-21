@@ -116,6 +116,17 @@ roll** (`HAND_ZERO` in `motion.js`, the user's own numbers, 2026-09-20). So a fi
 every motion, and the editor's hand sliders start from it at **0**. A clip where that hand is empty or doing something of
 its own (an open palm, a fist to the face) is baked with `--handR 0,0,0`.
 
+**A HAND TURN BELONGS TO THE CLIP IT WAS SET ON (2026-09-21).** It used to be ONE setting per browser, riding every clip and every
+pose. The user set 22 / −54 / 0 for the Walk Forward, opened the Slash Down, and the same turn lay on THAT: a guard that "stabs
+himself in the heart", a lifted blade hanging down his chest — with the hand box closed and nothing on screen to say a turn was
+on. (Reproduced to the pixel by laying his numbers on the clip; with the sliders at 0 the same frames are what he asked for —
+guard pointing forward, the lifted blade level and forward, the cut reaching out.) Now a turn is kept PER CLIP (and one for
+the bare pose) under the clip's own fingerprint, so re-baking the clip — `--overR` puts the turn INTO it — drops the stored
+turn and it can never be laid on twice; and whenever a turn is on, the MOTION panel says so in colour, with a reset beside it.
+The ARM CARRIAGE is likewise the HUGE man's WALKS' and nothing else's: off for a body of ordinary build, and off for a blow
+baked by its blade (`blade: true` in the clip) — turn the arm under it and the blade is no longer where the performer's was.
+LESSON: when the user's screen disagrees with mine, suspect what HIS browser has stored before suspecting the data.
+
 **A hand's own turn.** POSE → *hand*: pick right / left / both (or click the hand in the view) and turn it on its own three
 lines — **x bend** about the knuckle line (palm ↔ back of the hand), **y tilt** about the palm's normal (thumb ↔ little
 finger: the way a sword is pointed), **z roll** about wrist→knuckles. It rides on top of the clip (or the pose), the left

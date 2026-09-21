@@ -37,6 +37,7 @@
     <label title="take the clip's travel back out, evenly over its length — right for a steady cycle, wrong for a clip that moves in bursts (he would slide back while he stands)"><input type=checkbox id=mo_inplace> in place</label>
   </div>
   <div class=sm id=mo_info></div>
+  <div id=hand_warn style="display:none;margin-top:4px;color:#ffb14a;font-size:11px"><span></span> <button id=hand_warn_reset style="padding:1px 6px">reset</button></div>
   <h4>combo <span class=sm>— chained as the game chains them</span></h4>
   <div class=row><button data-cb="t,t,t" title="three quick clicks">tap tap tap</button><button data-cb="t,t,L" title="two clicks, then press and hold">tap tap LONG</button></div>
   <div class=row style=margin-top:4px><button data-cb="t,L,t">tap LONG tap</button><button data-cb="L,t,t">LONG tap tap</button></div>
@@ -243,7 +244,7 @@ function buildItems() { const W = RIG.wear || {}, always = Object.keys(W).filter
   await seatSword(M);
   BODY = M.meshes.find(m => m.name === 'base_body' || /_body$/.test(m.name));
   M.nodes.forEach(n => { BONE[n.name] = n; REST.set(n.name, { p: n.position.clone(), q: n.quaternion.clone() }); });
-  M.root.updateMatrixWorld(true); handAxes(); handUI();
+  M.root.updateMatrixWorld(true); handAxes(); htLoad(null);
 
   // keep the original material of each mesh, plus the swap materials
   for (const m of ALL()) {
@@ -630,12 +631,16 @@ function poseOver(arm, leg) {
 // (this browser) so the next clip is first seen with the same carriage.
 const CARRY = { open: -33, close: -8, def: 8 }, carryDeg = k => CARRY.open + (k + 10) / 20 * (CARRY.close - CARRY.open);
 let armA = 0, legA = 0, carry = CARRY.def; try { const v = parseFloat(localStorage.getItem('chared-carry')); if (v >= -10 && v <= 10) carry = v; } catch (e) {}
+// THE CARRIAGE IS FOR THE HUGE MAN'S WALKS, and for nothing else: it opens the arms of a clip made on a slighter man so they clear HIS lats. A body of
+// ordinary build needs none, and a BLOW is baked by its blade (motion.js --blade, `blade: true` in the clip) — turn the arm under it and the blade is
+// no longer where the performer's was. There the knob is off and the clip is shown exactly as baked.
+const carryOn = () => !!MO.clip && IS_BASE && !MO.clip.blade;
 function armSlider() {                              // one slider, two jobs: degrees on the bind pose, the carriage knob over a clip
-  const sl = el$('s_arm'), on = !!MO.clip; sl.min = on ? -10 : -90; sl.max = on ? 10 : 90; sl.step = on ? 0.5 : 1; sl.value = on ? carry : armA;
+  const sl = el$('s_arm'), on = !!MO.clip; sl.disabled = on && !carryOn(); sl.style.opacity = sl.disabled ? 0.35 : ''; sl.min = on ? -10 : -90; sl.max = on ? 10 : 90; sl.step = on ? 0.5 : 1; sl.value = on ? carry : armA;
   el$('l_arm').textContent = on ? 'arm carriage' : 'arms down'; ['p_bind', 'p_a', 'p_t'].forEach(i => { el$(i).disabled = on; el$(i).style.opacity = on ? 0.4 : ''; });
 }
 function pose() {
-  if (MO.clip) { applyMotion(MO.t * MO.clip.fps); el$('v_arm').textContent = (carry > 0 ? '+' : '') + carry.toFixed(1) + ' (' + carryDeg(carry).toFixed(1) + '°)'; el$('v_arm').title = carryDeg(carry).toFixed(1) + '° over the clip'; el$('v_leg').textContent = (legA > 0 ? '+' : '') + legA.toFixed(0) + '° over the clip'; }
+  if (MO.clip) { applyMotion(MO.t * MO.clip.fps); el$('v_arm').textContent = !carryOn() ? 'off — ' + (MO.clip.blade ? 'this blow is baked by its blade' : 'this body needs none') : (carry > 0 ? '+' : '') + carry.toFixed(1) + ' (' + carryDeg(carry).toFixed(1) + '°)'; el$('v_arm').title = carryDeg(carry).toFixed(1) + '° over the clip'; el$('v_leg').textContent = (legA > 0 ? '+' : '') + legA.toFixed(0) + '° over the clip'; }
   else { setPose(armA * Math.PI / 180, legA * Math.PI / 180); el$('v_arm').textContent = armA.toFixed(0) + '°'; el$('v_leg').textContent = legA.toFixed(0) + '°'; }
 }
 el$('s_arm').oninput = e => { if (MO.clip) { carry = +e.target.value; try { localStorage.setItem('chared-carry', carry); } catch (er) {} } else armA = +e.target.value; pose(); };
@@ -654,8 +659,16 @@ el$('p_t').onclick = () => preset(-65, 0, 'p_t');
 // the turns ride the hand (post-multiplied). The left hand is the right's mirror: bend and roll change sign, tilt does not
 // (n = t × d already flips with the hand), so "both" gives one carriage. Remembered per browser; the numbers are what gets
 // baked: node tools/realmesh/base/motion.js … --handR x,y,z --handL x,y,z
-const HT = { pick: '', R: [0, 0, 0], L: [0, 0, 0], ax: {} }, htQ = new THREE.Quaternion();
-try { const v = JSON.parse(localStorage.getItem('chared-hands2') || 'null'); if (v && v.R && v.L) { HT.R = v.R.map(Number); HT.L = v.L.map(Number); } } catch (e) {}
+// …AND IT BELONGS TO THE CLIP IT WAS SET ON (2026-09-21). The turn used to be ONE setting per browser, riding every clip and every pose: set
+// 22 / −54 / 0 for the Walk Forward, open the Slash Down, and the same turn lay on THAT — a guard that "stabs himself in the heart", a lifted
+// blade hanging down his chest — with the hand box closed and nothing on screen to say so. Now a turn is kept PER CLIP (and one for the bare pose),
+// under the clip's own fingerprint: re-bake the clip (motion.js --overR puts the turn INTO it) and the stored turn is dropped, so it can never be
+// laid on twice. And whenever a turn is on, the MOTION panel says so, in colour, with a reset beside it.
+const HT = { pick: '', R: [0, 0, 0], L: [0, 0, 0], ax: {}, key: '', rev: '' }, htQ = new THREE.Quaternion(), HT_STORE = 'chared-hands3';
+const htAll = () => { try { return JSON.parse(localStorage.getItem(HT_STORE) || '{}') || {}; } catch (e) { return {}; } };
+const clipRev = c => { if (!c) return 'pose'; let h = 0; for (const nm of ['handR', 'handL']) { const k = c.bones.indexOf(nm); if (k < 0) continue; const a = c.q[k]; for (let i = 0; i < a.length; i += 7) h = (h * 31 + Math.round(a[i] * 1e4)) | 0; } return c.frames + ':' + h; };
+function htLoad(c) { HT.key = c ? c.id : ''; HT.rev = clipRev(c); const v = htAll()[HT.key]; if (v && v.rev === HT.rev && v.R && v.L) { HT.R = v.R.map(Number); HT.L = v.L.map(Number); } else { HT.R = [0, 0, 0]; HT.L = [0, 0, 0]; } handUI(); }
+function htSave() { try { const all = htAll(); if (HT.R.some(Boolean) || HT.L.some(Boolean)) all[HT.key] = { rev: HT.rev, R: HT.R, L: HT.L }; else delete all[HT.key]; localStorage.setItem(HT_STORE, JSON.stringify(all)); } catch (e) {} }
 function handAxes() { for (const sd of ['L', 'R']) { const P = n => M.bindPos(n), inv = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().extractRotation(M.bindW['hand' + sd])).invert();   // (off the BIND pose, as motion.js reads them — the rest pose closes the fist, which shifts the knuckles a hair, and a baked turn then missed the sliders by a degree)
     const t = P('pinky' + sd + '0').sub(P('middle' + sd + '1')).normalize(), d = P('ring' + sd + '1').sub(P('hand' + sd)); d.addScaledVector(t, -d.dot(t)).normalize();
     HT.ax[sd] = { t: t.clone().applyQuaternion(inv), d: d.clone().applyQuaternion(inv), n: t.clone().cross(d).normalize().applyQuaternion(inv) }; } }   // called once, on the bind pose
@@ -663,11 +676,13 @@ function handOver() { const D = Math.PI / 180; for (const sd of ['L', 'R']) { co
     b.quaternion.multiply(htQ.setFromAxisAngle(a.d, v[2] * D * m)).multiply(htQ.setFromAxisAngle(a.n, v[1] * D)).multiply(htQ.setFromAxisAngle(a.t, v[0] * D * m)); } }
 function handUI() { const p = HT.pick, on = p === 'R' || p === 'L' || p === 'B', v = HT[p === 'L' ? 'L' : 'R']; ['R', 'L', 'B'].forEach(k => el$('h_' + k).classList.toggle('on', p === k)); el$('handbox').style.display = on ? '' : 'none'; el$('hand_hint').style.display = on ? 'none' : '';
   ['x', 'y', 'z'].forEach((k, i) => { el$('s_h' + k).value = v[i]; el$('v_h' + k).textContent = (v[i] > 0 ? '+' : '') + v[i] + '°'; });
-  el$('hand_say').textContent = 'right ' + HT.R.join(', ') + '  ·  left ' + HT.L.join(', ') + (HT.R.some(Boolean) || HT.L.some(Boolean) ? '  — on top of the clip\'s own' : '  = the clip as baked'); }
+  const onTop = HT.R.some(Boolean) || HT.L.some(Boolean); el$('hand_say').textContent = 'right ' + HT.R.join(', ') + '  ·  left ' + HT.L.join(', ') + (onTop ? '  — on top of ' + (MO.clip ? 'THIS clip\'s own (kept for this clip only)' : 'the pose') : '  = ' + (MO.clip ? 'the clip as baked' : 'the pose as it is'));
+  const w = el$('hand_warn'); if (w) { w.style.display = onTop ? '' : 'none'; if (onTop) w.querySelector('span').textContent = 'a hand turn is ON TOP of this ' + (MO.clip ? 'clip' : 'pose') + ': right ' + HT.R.join(', ') + ' · left ' + HT.L.join(', '); } }
 function handPick(p) { HT.pick = HT.pick === p ? '' : p; handUI(); }
-function handSet(i, val) { const who = HT.pick === 'B' ? ['R', 'L'] : [HT.pick]; for (const sd of who) HT[sd][i] = val; try { localStorage.setItem('chared-hands2', JSON.stringify({ R: HT.R, L: HT.L })); } catch (e) {} handUI(); pose(); }
+function handSet(i, val) { const who = HT.pick === 'B' ? ['R', 'L'] : [HT.pick]; for (const sd of who) HT[sd][i] = val; htSave(); handUI(); pose(); }
 ['R', 'L', 'B'].forEach(k => { el$('h_' + k).onclick = () => handPick(k); });
 el$('h_0').onclick = () => { if (!HT.pick) return; [0, 1, 2].forEach(i => handSet(i, 0)); };
+el$('hand_warn_reset').onclick = () => { HT.R = [0, 0, 0]; HT.L = [0, 0, 0]; htSave(); handUI(); pose(); };
 ['x', 'y', 'z'].forEach((k, i) => { el$('s_h' + k).oninput = e => handSet(i, +e.target.value); });
 
 // ---- motion: clips retargeted onto THIS rig by tools/realmesh/base/motion.js — motions/index.json lists them, one file a
@@ -704,6 +719,7 @@ function restPose() { for (const [nm, r0] of REST) { const b = BONE[nm]; if (b &
 async function setMotion(id) {
   el$('mo').value = id || ''; MO.clip = null; tgt.x = 0; tgt.z = 0; cam(); if (id) preset(0, 0, 'p_bind'); restPose();
   if (id) { const c = await (await fetch('motions/' + id + '.json?' + Date.now())).json(); c.q = c.q.map(a => new Float32Array(a)); c.pos = new Float32Array(c.pos); await fitClip(c); MO.clip = c; MO.t = 0; MO.play = true; }
+  htLoad(MO.clip);
   const c = MO.clip; el$('s_mof').max = c ? c.frames - 1 : 0; el$('mo_play').textContent = 'pause';
   const goes = !!(c && c.travel && (c.travel[0] || c.travel[2])); el$('mo_inplace_row').style.display = goes ? '' : 'none'; if (goes) el$('v_travel').textContent = '(it travels ' + (Math.hypot(c.travel[0], c.travel[2]) * 100).toFixed(0) + ' cm, ' + (c.speed * 100).toFixed(0) + ' cm/s)';
   el$('mo_info').textContent = c ? c.bones.length + ' bones · ' + c.frames + ' frames @ ' + c.fps + (c.fitted ? ' · the hips\' road re-laid for his legs (×' + c.fitted.toFixed(3) + ')' : '') + (c.credit ? ' · ' + c.credit : '') : '';
@@ -712,7 +728,7 @@ async function setMotion(id) {
 function applyMotion(tf) {                          // tf in frames, fractional: slerp between the two around it
   const c = MO.clip, n = c.frames, f = c.loop ? ((tf % n) + n) % n : Math.min(Math.max(tf, 0), n - 1), i0 = Math.floor(f), a = f - i0, i1 = c.loop ? (i0 + 1) % n : Math.min(i0 + 1, n - 1);
   c.bones.forEach((nm, k) => { const b = BONE[nm]; if (!b) return; moQa.fromArray(c.q[k], i0 * 4); moQb.fromArray(c.q[k], i1 * 4); b.quaternion.copy(moQa).slerp(moQb, a); });
-  poseOver(carryDeg(carry) * Math.PI / 180, legA * Math.PI / 180); handOver();
+  poseOver(carryOn() ? carryDeg(carry) * Math.PI / 180 : 0, legA * Math.PI / 180); handOver();
   const tr = c.travel && (c.travel[0] || c.travel[2]) && el$('mo_inplace').checked ? (c.loop ? f / n : f / Math.max(1, n - 1)) : 0;   // "in place": the clip's own travel taken back out, evenly over its length
   const rb = BONE[c.root]; if (rb) rb.position.set(-(tr && c.travel[0] * tr) + c.pos[i0 * 3] + (c.pos[i1 * 3] - c.pos[i0 * 3]) * a, c.pos[i0 * 3 + 1] + (c.pos[i1 * 3 + 1] - c.pos[i0 * 3 + 1]) * a, c.pos[i0 * 3 + 2] + (c.pos[i1 * 3 + 2] - c.pos[i0 * 3 + 2]) * a - (tr && c.travel[2] * tr));
   if (rb && c.travel && (c.travel[0] || c.travel[2]) && el$('mo_follow').checked && !el$('mo_inplace').checked) { tgt.x = rb.position.x - c.pos[0]; tgt.z = rb.position.z - c.pos[2]; cam(); }   // follow: the lens keeps its offset from the hips

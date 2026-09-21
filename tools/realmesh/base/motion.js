@@ -285,7 +285,8 @@ for (let k = 0; k < 2; k++) { const P = feet.map((fr, f) => new V3(fr[k].x - tra
 const stride = plantedFrames > 4 ? slidSum / plantedFrames : 0;
 const speed = r4(Math.hypot(travel[0], travel[2]) ? Math.hypot(travel[0], travel[2]) / (frames / FPS) : stride);
 const marks = Object.fromEntries(Object.entries(MARKS).map(([k, v]) => [k, +((v - keepFrom) * FPS / SRC_FPS).toFixed(2)]));   // in THIS clip's frames
-const out = { id, name: title || id, travel, speed, marks, source: path.basename(srcFile) + ' · ' + clip.name.split('/').pop(), credit, fps: FPS, frames, duration: r4(frames / FPS), loop: closes,
+const D2 = v => v.map(x => Math.round(x * 180 / Math.PI)), hand = { zero: { R: D2(HAND_TURN.R), L: D2(HAND_TURN.L) }, over: { R: D2(HAND_OVER.R), L: D2(HAND_OVER.L) } }; if (bladeFix) hand.zero[bladeFix.H.sd] = 'by the blade';   // what the hands were given, for whoever opens the file (a blade-solved hand takes no zero: the performer's blade says where it is)
+const out = { id, name: title || id, travel, speed, marks, blade: !!bladeFix || undefined, hand, source: path.basename(srcFile) + ' · ' + clip.name.split('/').pop(), credit, fps: FPS, frames, duration: r4(frames / FPS), loop: closes,
   bones: moving, q: moving.map(nm => [].concat(...tracks[nm].map(q => [r4(q.x), r4(q.y), r4(q.z), r4(q.w)]))), root: 'pelvis', pos: [].concat(...pos.map(p => [r4(p.x), r4(p.y), r4(p.z)])) };
 fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(path.join(OUT, id + '.json'), JSON.stringify(out));
 const ixFile = path.join(OUT, 'index.json'), list = fs.existsSync(ixFile) ? JSON.parse(fs.readFileSync(ixFile)) : [];

@@ -1251,7 +1251,7 @@ async function loadModelRig(name) {
   const acc = i => { const a = g.accessors[i], bv = g.bufferViews[a.bufferView], T = CT[a.componentType], n = NC[a.type]; return new T(bin, (bv.byteOffset || 0) + (a.byteOffset || 0), a.count * n); };
   const texs = g.images.map((im, i) => { const t = new THREE.TextureLoader().load(base + im.uri); t.encoding = THREE.sRGBEncoding; t.flipY = false; t.name = name + ':' + i; return t; });   // (one per image: the base body's painted atlas, the kit's palette — a mesh takes its material's)
   const texOf = p => { const mt = g.materials && g.materials[p.material || 0], bc = mt && mt.pbrMetallicRoughness && mt.pbrMetallicRoughness.baseColorTexture; return bc ? texs[g.textures[bc.index].source] : texs[0]; };
-  if (spec.skull) Object.assign(LOOK_SKULL, spec.skull); if (spec.hairline) Object.assign(LOOK_HAIRLINE, spec.hairline); if (spec.face) Object.assign(LOOK_FACE, spec.face); if (spec.helmHand) Object.assign(MODEL_HELM_HAND, spec.helmHand);   // (where the carried helm hangs in this rig's hand)   // the head's measures are the rig's (rig.json): the skull's centre and crown, the hairlines, where the ears and the lips are
+  const lookAs = { name, spec }; lookRigUse(lookAs);   // (where the carried helm hangs in this rig's hand)   // the head's measures are the rig's (rig.json): the skull's centre and crown, the hairlines, where the ears and the lips are
   const meshes = g.nodes.filter(n => n.mesh != null).map(n => { const p = g.meshes[n.mesh].primitives[0], geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(acc(p.attributes.POSITION), 3));
     if (p.attributes.NORMAL != null) geo.setAttribute('normal', new THREE.BufferAttribute(acc(p.attributes.NORMAL), 3)); else geo.computeVertexNormals();
@@ -1261,6 +1261,7 @@ async function loadModelRig(name) {
     const sk = g.skins[n.skin], gm = g.materials && g.materials[p.material || 0]; return { name: n.name, geo, joints: sk.joints, ibm: acc(sk.inverseBindMatrices), tex: texOf(p), alphaMask: !!(gm && gm.alphaMode === 'MASK'), ds: !!(gm && gm.doubleSided), wear: spec.wear && spec.wear[n.name] || null }; });   // (ds: the file says two-sided — the wraps and the plates are single sheets; wear: rig.json's word on a ware mesh — its kind, its slot, what it covers)
   // LOOKS: pieces.json (tools/realmesh/warrior_pieces.py) names every triangle's armour piece and every vertex's stuff
   let pieces = null; try { const pr = await fetch(base + 'pieces.json'); if (pr.ok) pieces = await pr.json(); } catch (e) { pieces = null; }
+  lookRigUse(lookAs);                                       // (again, after the wait: two bodies load side by side, and the other's measures may be the ones in the tables by now)
   if (pieces) for (const m of meshes) { const key = Object.keys(pieces).find(k => m.name.indexOf('_' + k + '_') >= 0 || m.name.endsWith('_' + k)); const pj = key && pieces[key]; if (!pj) continue; m.pieces = pj; m.short = key;
     const ci = pj.mats.indexOf('cloth'), uv = m.geo.getAttribute('uv'); if (ci >= 0 && uv) { for (let v = 0; v < uv.count; v++) if (pj.vmat[v] === ci) uv.setXY(v, LOOK_WHITE_UV[0], LOOK_WHITE_UV[1]); uv.needsUpdate = true; }   // (the blue cloth → a white cell: the vertex colour IS the dye)
     if (key === 'body') { if (!pj.sculpted) { lookHeadRefine(m.geo, pj); lookRuggedHead(m.geo, pj); }   // (a sculpted head — pieces.json `sculpted`, the base — keeps its own face)   // (the face: refined one level, then roughened; the ink uv below covers the new vertices too)
@@ -1499,7 +1500,10 @@ function instanceModelRig(R, ctx = 'main') {
   // model's idle stance (knees bent, sword up), and the plastic pivots at zero must mean "standing straight"
   const m0 = R.meshes[0], worldM = new Map(); m0.joints.forEach((j, k) => { worldM.set(j, new THREE.Matrix4().fromArray(m0.ibm, k * 16).invert()); });
   const worldOf = new Map();
-  for (const i of order) { const wm = worldM.get(i); if (!wm) { const pw = parent[i] >= 0 && worldOf.get(parent[i]); worldOf.set(i, pw ? pw.clone().multiply(nodes[i].matrix) : nodes[i].matrix.clone()); continue; }
+  // …EXCEPT AN ADOPTED BODY (rig.json `rest: "nodes"`, tools/realmesh/adopt): its skin is bound where IT stood, and its nodes hold the BASE's stance, limb for
+  // limb, in the base's own bone frames — so the plastic pivots' zero, every `fix`, every gear holder, the fist and every clip mean on him exactly what they
+  // mean on the base. There the nodes ARE the rest pose and the loop below (nodes ← bind) is skipped; the skin still binds by the inverse bind matrices.
+  if (R.spec.rest !== 'nodes') for (const i of order) { const wm = worldM.get(i); if (!wm) { const pw = parent[i] >= 0 && worldOf.get(parent[i]); worldOf.set(i, pw ? pw.clone().multiply(nodes[i].matrix) : nodes[i].matrix.clone()); continue; }
     const pw = parent[i] >= 0 ? worldOf.get(parent[i]) : null; const local = pw ? pw.clone().invert().multiply(wm) : wm.clone(); local.decompose(nodes[i].position, nodes[i].quaternion, nodes[i].scale); nodes[i].updateMatrix(); worldOf.set(i, wm.clone()); }
   root.updateMatrixWorld(true);
   const restLocal = nodes.map(b => b.quaternion.clone()), restPos = nodes.map(b => b.position.clone()), restWorld = [];   // world = relative to the model root (restPos: a clip carries the hips about — they come home to this)
@@ -1582,7 +1586,7 @@ function wearModelRig(h, name, o = {}) {
   // THE SHEATHED SWORD: a copy of the figure's own blade hung at the left hip on the hips bone (the walk into the pit — P.sheathed — and an archer's sidearm while his bow is out; syncModelRigs)
   let mHip = null; { const hipL = R.spec.map.hipL && inst.byName[R.spec.map.hipL], pi = hipL ? inst.parent[inst.nodes.indexOf(hipL)] : -1, hips = pi >= 0 ? inst.nodes[pi] : null, geo = hips && modelPropGeo(R, 'sword');
     if (geo) { const holder = new THREE.Group(); holder.name = 'hipHolder'; holder.quaternion.copy(inst.restWorld[pi]).invert(); holder.scale.setScalar(1 / S); hips.add(holder);
-      mHip = new THREE.Mesh(geo, modelMaterial(R, { ctx: inst.ctx })); mHip.userData.mm = { ctx: inst.ctx }; mHip.userData.mmR = R.name; mHip.name = 'hipSword'; mHip.castShadow = true; mHip.scale.setScalar(S); mHip.visible = false; modelHipPlace(mHip); holder.add(mHip); } }
+      mHip = new THREE.Mesh(geo, modelMaterial(R, { ctx: inst.ctx })); mHip.userData.mm = { ctx: inst.ctx }; mHip.userData.mmR = R.name; mHip.name = 'hipSword'; mHip.castShadow = true; mHip.scale.setScalar(S); mHip.visible = false; modelHipPlace(mHip, R); holder.add(mHip); } }
   // team colour: the cloak is dyed outright, the shield's face is tinted — the steel stays steel
   if (o.team != null) { const cloak = inst.skinned[M.cloak]; if (cloak) { cloak.userData.mm = { ctx: inst.ctx, skinning: true, map: false, color: o.team }; cloak.material = modelMaterial(R, cloak.userData.mm); }
     if (mShield) { mShield.userData.mm = { ctx: inst.ctx, skinning: true, color: new THREE.Color(o.team).lerp(new THREE.Color(0xffffff), 0.35).getHex() }; mShield.material = modelMaterial(R, mShield.userData.mm); } }
@@ -1590,12 +1594,12 @@ function wearModelRig(h, name, o = {}) {
   //  CLIP's arm pose and it belongs to the clips, which bake it (motion.js HAND_ZERO); over the game's own poses, which were
   //  authored for the sword the rig used to carry, it dragged the blade down across his body instead of holding it ready.
   //  The SEAT is what the game needs, and the mesh carries that already.)
-  const live = { h, P, g, inst, drive, mSword, mShield, mHip, mRound: null, shieldKind: 'heater', plume, q: new THREE.Quaternion(), w: [], armBase, armAmt: armBase, body: null, bodyLooked: 0 };
+  const live = { h, P, g, inst, drive, mSword, mShield, mHip, mRound: null, shieldKind: 'heater', plume, clipK: (R.spec.clipFit || {}).k || 1, q: new THREE.Quaternion(), w: [], armBase, armAmt: armBase, body: null, bodyLooked: 0 };
   MODEL_LIVE.push(live); P.modelRig = live; g.userData.model = name; return true;
 }
 // where the sheathed blade hangs (rig units off the hips bone, +x = his left): grip at the hip, the blade down and swept back along the thigh
 const MODEL_HIP = { x: 0.30, y: -0.06, z: -0.12, rx: Math.PI / 2 + 0.38, ry: 0, rz: -0.22 };
-function modelHipPlace(m) { m.position.set(MODEL_HIP.x, MODEL_HIP.y, MODEL_HIP.z); m.rotation.set(MODEL_HIP.rx, MODEL_HIP.ry, MODEL_HIP.rz); }
+function modelHipPlace(m, R) { const H = R && R.spec.hip ? Object.assign({}, MODEL_HIP, R.spec.hip) : MODEL_HIP; m.position.set(H.x, H.y, H.z); m.rotation.set(H.rx, H.ry, H.rz); }   // (rig.json `hip`: a slighter man's hip is nearer his middle — wardrobe.js measures it)
 // every render: copy the pivots onto the bones, top-down (unmapped bones keep their rest pose)
 const _tmpQ = new THREE.Quaternion();
 // ---- MOTIONS: the retargeted clips (assets/motions/, built by tools/realmesh/base/motion.js from the source takes and
@@ -1612,6 +1616,29 @@ function motionClip(id) {
     if (!c) return; c.q = c.q.map(a => new Float32Array(a)); c.pos = new Float32Array(c.pos); MOTION.clips.set(id, c);
   }).catch(() => {});
   return null;
+}
+// A CLIP ON ANOTHER BODY (2026-09-21). The quaternions are every body's — the bodies are congruent, bone for bone (tools/realmesh/adopt) — but the HIPS' ROAD
+// was laid for the base's legs. For an adopted rig (rig.json `clipFit`: where the base's pelvis rests, his legs over the base's) it is re-laid once per clip
+// and rig: the hips' travel from their rest scaled by the legs' ratio, then every frame lifted or lowered until the lowest point of HIS OWN soles (the skin his
+// feet and whatever he always wears on them carry, read off the rig once) is ON the floor — unless that frame is in the air, where the clip's own flight stays.
+// The legs alone are run forward for it (pelvis → thigh → shin → foot → toe, in the rest's translations): a few hundred frames of eight matrices.
+function motionFit(c, L) {
+  const R = MODEL_RIGS.get(L.g.userData.model), F = R && R.spec.clipFit; if (!F || !c.pos) return c; c.fit = c.fit || {}; if (c.fit[R.name]) return c.fit[R.name];
+  const g = R.g, ix = nm => g.nodes.findIndex(n => n.name === nm), M4 = THREE.Matrix4, V3 = THREE.Vector3, Q4 = THREE.Quaternion;
+  const rest = nm => { const p = new V3(), q = new Q4(), sc = new V3(); new M4().fromArray(g.nodes[ix(nm)].matrix).decompose(p, q, sc); return { p, q }; };
+  if (!R.soles) { R.soles = []; const want = new Set(['footL', 'toeL', 'footR', 'toeR']);   // the soles: every low vertex the feet's bones lead, in those bones' own frames
+    for (const m of R.meshes) { if (m.wear ? !m.wear.always : !(m.pieces && m.pieces.classes.indexOf('hair') >= 0)) continue; const pa = m.geo.getAttribute('position'), si = m.geo.getAttribute('skinIndex').array, sw = m.geo.getAttribute('skinWeight').array, low = [];
+      for (let v = 0; v < pa.count; v++) { if (pa.getY(v) > 0.03) continue; let b = 0; for (let k = 1; k < 4; k++) if (sw[v * 4 + k] > sw[v * 4 + b]) b = k; const j = si[v * 4 + b], nm = g.nodes[m.joints[j]].name; if (want.has(nm)) low.push({ nm, p: new V3(pa.getX(v), pa.getY(v), pa.getZ(v)).applyMatrix4(new M4().fromArray(m.ibm, j * 16)) }); }
+      const step = Math.max(1, Math.floor(low.length / 60)); for (let k = 0; k < low.length; k += step) R.soles.push(low[k]); } }
+  const n = c.frames, k = F.k || 1, pel = rest('pelvis'), chain = {}; for (const S of ['L', 'R']) chain[S] = ['thigh' + S, 'shin' + S, 'foot' + S, 'toe' + S].map(nm => ({ nm, r: rest(nm), t: c.bones.indexOf(nm) }));
+  const pos = new Float32Array(n * 3), lift = new Float32Array(n), kp = c.bones.indexOf(c.root || 'pelvis'), W = {}, q = new Q4(), one = new V3(1, 1, 1), v = new V3(), m = new M4();
+  for (let f = 0; f < n; f++) { for (let d = 0; d < 3; d++) pos[f * 3 + d] = pel.p.getComponent(d) + (c.pos[f * 3 + d] - F.pelvis[d]) * k;
+    const root = new M4().compose(v.set(pos[f * 3], pos[f * 3 + 1], pos[f * 3 + 2]), kp >= 0 ? q.fromArray(c.q[kp], f * 4).normalize() : q.copy(pel.q), one);
+    for (const S of ['L', 'R']) { let cur = root; for (const b of chain[S]) { cur = cur.clone().multiply(m.compose(b.r.p, b.t >= 0 ? q.fromArray(c.q[b.t], f * 4).normalize() : q.copy(b.r.q), one)); W[b.nm] = cur; } }
+    let lo = Infinity; for (const s of R.soles) lo = Math.min(lo, v.copy(s.p).applyMatrix4(W[s.nm]).y); if (lo === Infinity) lo = 0;
+    const u = Math.min(1, Math.max(0, (lo - 0.03) / 0.05)); lift[f] = -lo * (1 - u * u * (3 - 2 * u)); }
+  for (let f = 0; f < n; f++) { let sw = 0, sl = 0; for (let d = -2; d <= 2; d++) { const gI = c.loop ? ((f + d) % n + n) % n : Math.min(n - 1, Math.max(0, f + d)), w = Math.exp(-d * d / 2); sw += w; sl += w * lift[gI]; } pos[f * 3 + 1] += sl / sw; }   // (30 frames a second here: two either side is the editor's four at 60)
+  return (c.fit[R.name] = { pos, travel: c.travel ? c.travel.map(x => x * k) : null, k });
 }
 const MOTION_FOR = { walk: 'angry_walk', back: 'walk_back_cycle' };   // back: WalkBackward02's stride — the guard retreat, shield leading (played only while b.backing: there its bladed crouch is the point)            // his ordinary walk. (The source's WalkForward02 is a bladed crouch — right legs for a man turned side-on behind his shield, wrong under a torso the game points straight ahead.)
 // THE WHOLE MAN, not just his legs. Legs alone were faithful to the frame — 1° from the clip — and still read as some other
@@ -1705,7 +1732,7 @@ function motionWanted(b, mo, S) {                           // which clip suits 
 }
 const _moQa = new THREE.Quaternion(), _moQb = new THREE.Quaternion(), _moP = new THREE.Vector3();
 function motionPose(L, dt) {                                // → a local quaternion per node index for this frame, or null
-  const mo = L.mo || (L.mo = { id: null, t: 0, w: 0, on: false }), want = motionBlow(L.body, mo, dt) || motionWanted(L.body, mo, L.inst.root.scale.x);
+  const mo = L.mo || (L.mo = { id: null, t: 0, w: 0, on: false }), want = motionBlow(L.body, mo, dt) || motionWanted(L.body, mo, L.inst.root.scale.x * (L.clipK || 1));   // (clipK: a stride is as long as the legs that take it — a clip's pace on this body is the base's × his legs' ratio)
   if (!want || want.frame == null) { mo.blow = null; mo.blowN = null; }
   if (want && (want.id !== mo.id || want.fresh)) { const c = motionClip(want.id);                          // a new clip — or a new BLOW on the same one: taken up from the pose he is IN
     if (c) { const Z = L.shown; if (Z && Z.ok) { const Fm = mo.from || (mo.from = { q: new Float32Array(Z.q.length), p: new THREE.Vector3() }); Fm.q.set(Z.q); Fm.p.copy(Z.p); mo.x = 0; mo.xd = want.frame != null ? (MOTION_FLOW.t ? MOTION_FLOW.t.xfade : 0.12) : 0.18; mo.w = 1; } else mo.x = 1;   // (w = 1: what he SHOWED already holds whatever of the plastic rig's pose was in it — nothing pops)
@@ -1723,10 +1750,10 @@ function motionPose(L, dt) {                                // → a local quate
   const n = c.frames, f = c.loop ? ((mo.t * c.fps) % n + n) % n : Math.max(0, Math.min(n - 1, mo.t * c.fps)), i0 = Math.floor(f), a = f - i0, i1 = c.loop ? (i0 + 1) % n : Math.min(n - 1, i0 + 1), out = [];
   for (let k = 0; k < mo.map.length; k++) { const i = mo.map[k]; if (i < 0) continue;
     _moQa.fromArray(c.q[k], i0 * 4); _moQb.fromArray(c.q[k], i1 * 4); out[i] = _moQa.clone().slerp(_moQb, a); }
-  if (mo.root >= 0) { const tr = f / n;                     // in place: the clip's own travel taken back out
-    _moP.set(c.pos[i0 * 3] + (c.pos[i1 * 3] - c.pos[i0 * 3]) * a - (c.travel ? c.travel[0] * tr : 0),
-             c.pos[i0 * 3 + 1] + (c.pos[i1 * 3 + 1] - c.pos[i0 * 3 + 1]) * a,
-             c.pos[i0 * 3 + 2] + (c.pos[i1 * 3 + 2] - c.pos[i0 * 3 + 2]) * a - (c.travel ? c.travel[2] * tr : 0));
+  if (mo.root >= 0) { const tr = f / n, FP = motionFit(c, L), cp = FP.pos, ct = FP.travel;   // in place: the clip's own travel taken back out (FP: the hips' road for THIS body's legs — motionFit)
+    _moP.set(cp[i0 * 3] + (cp[i1 * 3] - cp[i0 * 3]) * a - (ct ? ct[0] * tr : 0),
+             cp[i0 * 3 + 1] + (cp[i1 * 3 + 1] - cp[i0 * 3 + 1]) * a,
+             cp[i0 * 3 + 2] + (cp[i1 * 3 + 2] - cp[i0 * 3 + 2]) * a - (ct ? ct[2] * tr : 0));
     out.root = { i: mo.root, p: _moP.clone() }; }
   if (mo.x < 1 && mo.from) { const x = mo.x * mo.x * (3 - 2 * mo.x), Fq = mo.from.q;                 // the crossfade: from the pose he showed when this clip took him
     for (let k = 0; k < mo.map.length; k++) { const i = mo.map[k]; if (i < 0 || !out[i]) continue; _moQa.fromArray(Fq, i * 4); out[i] = _moQa.clone().slerp(out[i], x); }
@@ -1953,11 +1980,12 @@ function lookRoll(name, arch, gear, pal, o = {}) {
   const scar = r(); look.scar = scar < 0.18 ? 'scarL' : scar < 0.36 ? 'scarR' : null; look.scarC = c.copy(skinC).lerp(new THREE.Color(0xe8a0a0), 0.45).multiplyScalar(1.05).getHex();
   // the kit
   const I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}, hm = gear && gear.helm ? I[gear.helm] : null; look.helmModel = hm && hm.model && HELM_MODELS[hm.model] ? hm.model : null;   // a helm with a sculpt of its own (the ware's `model` — the Corinthian): the sallet comes off the body, the model rides the head bone (lookHelmModelApply)
-  look.helmet = !!(look.helmModel || (lookRigSallet(MODEL_RIGS.get(MODEL_NAME)) && gear && (gear.helm || gear.plume)));   // A HELM HE CAN PUT ON: a ware's own sculpt, or the rig's sculpted sallet (there a bought plume brings the sallet it sits on). The base has NO sallet, so a plume alone is no helm: it used to say "helmed" anyway, and once the fight began his scalp — the painted hair — was left out from under a shell that was not there, with the feather standing on the bare skull (2026-09-21)
+  const RG = MODEL_RIGS.get(o.model || MODEL_NAME);      // the rig he wears (afDressGear names it): its sallet, its wares, whether it is a whole body
+  look.helmet = !!(look.helmModel || (lookRigSallet(RG) && gear && (gear.helm || gear.plume)));   // A HELM HE CAN PUT ON: a ware's own sculpt, or the rig's sculpted sallet (there a bought plume brings the sallet it sits on). The base has NO sallet, so a plume alone is no helm: it used to say "helmed" anyway, and once the fight began his scalp — the painted hair — was left out from under a shell that was not there, with the feather standing on the bare skull (2026-09-21)
   const pl = gear && gear.plume ? I[gear.plume] : null; look.plumeC = pl && pl.plume != null ? pl.plume : null;
-  look.wear = []; { const W = (MODEL_RIGS.get(MODEL_NAME) || {}).spec, WT = W && W.wear; if (WT && gear) for (const nm in WT) if (WT[nm].slot && gear[WT[nm].slot] === nm) look.wear.push(nm); }   // THE WARES (2026-09-20): a ware's item id is its mesh name; rig.json `wear` says which slot carries it                       // (the plume ware's dye: such a helm's crest takes it)
+  look.wear = []; { const W = (RG || {}).spec, WT = W && W.wear; if (WT && gear) for (const nm in WT) if (WT[nm].slot && gear[WT[nm].slot] === nm) look.wear.push(nm); }   // THE WARES (2026-09-20): a ware's item id is its mesh name; rig.json `wear` says which slot carries it                       // (the plume ware's dye: such a helm's crest takes it)
   for (const k of ['pauldron', 'elbow', 'knee', 'straps', 'pouch']) if (r() >= p(k)) look.hide.push(k); if (!look.helmet || look.helmModel) look.hide.push('helmet');
-  if (!(MODEL_RIGS.get(MODEL_NAME) || {}).spec || !MODEL_RIGS.get(MODEL_NAME).spec.fullBody) look.hide.push('skirtTop'); if (O.naked) { look.hide.push('cuirass', 'sleeve', 'pouch'); look.naked = true; }   // bare to the waist: the body under the armour shows (instanceModelRig's 'naked' mesh); the belt stays on, the belt pouches come off (two leather blocks that only read tucked under a back plate — a box on a bare back otherwise)
+  if (!(RG || {}).spec || !RG.spec.fullBody) look.hide.push('skirtTop'); if (O.naked) { look.hide.push('cuirass', 'sleeve', 'pouch'); look.naked = true; }   // bare to the waist: the body under the armour shows (instanceModelRig's 'naked' mesh); the belt stays on, the belt pouches come off (two leather blocks that only read tucked under a back plate — a box on a bare back otherwise)
   look.cloak = o.full ? true : r() < p('cloak'); look.plume = o.full || (r() < p('plume')) || !!(gear && gear.plume);
   look.shield = !A.shield && !o.full ? 'none' : (gear && gear.shield === 'heater_shield') ? 'heater' : 'round'; look.round = Math.floor(r() * 4);
   // the paint: cloth = the team dye (dulled on a poor man), steel per piece, the named colours resolved here
@@ -2022,7 +2050,7 @@ function lookKind(look, cls, mt, kd0) {
 }
 // dress a live figure in a look: paint the vertices, drop the pieces he goes without, cloak, plume, shield
 function lookApply(L, look) {
-  if (!L || !L.inst) return; L.lookBase = look; look = lookWorn(L, look);   // (the look as rolled, and the look as worn now — bareheaded while L.helmOff)
+  if (!L || !L.inst) return; lookRigUse(MODEL_RIGS.get(L.g.userData.model)); L.lookBase = look; look = lookWorn(L, look);   // (the look as rolled, and the look as worn now — bareheaded while L.helmOff)
   L.look = look; const c = new THREE.Color(), R = MODEL_RIGS.get(L.g.userData.model), M = (R && R.spec.meshes) || {};
   for (const sm of Object.values(L.inst.skinned)) { const pj = sm.userData.pieces; if (!pj) continue;
     const col = sm.geometry.getAttribute('color'), nv = col.count, hide = new Set(look.hide), skinTint = pj.classes.indexOf('hair') >= 0;
@@ -2075,6 +2103,7 @@ function lookApply(L, look) {
 // of its own (the Corinthian) is carried the same way: its geometry, rigid, in the head bone's space. Built once per figure — and again if he
 // changes helm (the shop's preview).
 function lookHelmBuild(L) {
+  if (L && L.g) lookRigUse(MODEL_RIGS.get(L.g.userData.model));
   const key = (L.lookBase && L.lookBase.helmModel) || 'sallet'; if (L.mHelm !== undefined && L.mHelmKey === key) return L.mHelm;
   if (L.mHelm) { if (L.mHelm.parent) L.mHelm.parent.remove(L.mHelm); L.mHelm.geometry.dispose(); } L.mHelm = null; L.mHelmKey = key;
   const R = MODEL_RIGS.get(L.g.userData.model); if (!R) return null;
@@ -2110,11 +2139,20 @@ function lookHelmPaint(L) {                                  // the same paint a
   for (let o = 0; o < map.length; o++) { const v = map[o] * 3, w = o * 3; dst.array[w] = src.array[v]; dst.array[w + 1] = src.array[v + 1]; dst.array[w + 2] = src.array[v + 2]; } dst.needsUpdate = true;
 }
 // where the helm hangs in the sword hand (model units, in the hand bone's frame) — BV.helmHand(o) to re-hang it live
-const MODEL_HELM_HAND = { x: 0.03, y: 0.12, z: -0.08, rx: 0, ry: 0, rz: 0 };   // (hand frame: +x up the forearm, +y down past the fingers, +z toward the body — the rim at the fingers, the helm hanging crown-down below the fist)
+const MODEL_HELM_HAND = { x: 0.03, y: 0.12, z: -0.08, rx: 0, ry: 0, rz: 0 };
+// THE HEAD'S AND THE HAND'S MEASURES ARE A RIG'S OWN (2026-09-21: two bodies are alive at once — `normal` and `huge`, MODEL_BY_SIZE). They used to be
+// written into the tables above when a rig loaded, which was fine while there was one; with two, the last to load would have set the hairline, the helm's
+// cover line and where the carried helm hangs for BOTH. The tables stay (every look function reads them), and lookRigUse points them at the rig of the
+// man being dressed: called where a look function is entered from outside (lookApply, lookHelmOff, lookHelmBuild, modelHelmPlace, the loader). One
+// comparison when the rig is the same as last time.
+const LOOK_RIG_DEF = { skull: Object.assign({}, LOOK_SKULL), face: Object.assign({}, LOOK_FACE), hairline: Object.assign({}, LOOK_HAIRLINE), helmHand: Object.assign({}, MODEL_HELM_HAND), hairTex: LOOK_HAIR_TEX.slice() }; let LOOK_RIG = null;
+function lookRigUse(R) { if (!R || R === LOOK_RIG) return; LOOK_RIG = R; const sp = R.spec || {}, D = LOOK_RIG_DEF;
+  Object.assign(LOOK_SKULL, D.skull, sp.skull); Object.assign(LOOK_FACE, D.face, sp.face); Object.assign(LOOK_HAIRLINE, D.hairline, sp.hairline); Object.assign(MODEL_HELM_HAND, D.helmHand, sp.helmHand);
+  const ht = sp.hairTex || D.hairTex; LOOK_HAIR_TEX[0] = ht[0]; LOOK_HAIR_TEX[1] = ht[1]; LOOK_HAIR_TEX[2] = ht[2]; }   // (hand frame: +x up the forearm, +y down past the fingers, +z toward the body — the rim at the fingers, the helm hanging crown-down below the fist)
 const _hm = { A: new THREE.Matrix4(), B: new THREE.Matrix4(), O: new THREE.Matrix4(), pa: new THREE.Vector3(), pb: new THREE.Vector3(), qa: new THREE.Quaternion(), qb: new THREE.Quaternion(), sa: new THREE.Vector3(), sb: new THREE.Vector3() };
 function modelHelmPlace(L) {                                 // every render while the helm is in play: in the hand (helmK null), or on its way from the hand to the head (helmK 0→1)
   const m = L.mHelm, hand = L.helmHandBone, head = L.helmHead; if (!m || !hand || !head) return;
-  const H = MODEL_HELM_HAND;
+  lookRigUse(MODEL_RIGS.get(L.g.userData.model)); const H = MODEL_HELM_HAND;
   if (L.helmK == null) { if (m.parent !== hand) hand.add(m); m.matrixAutoUpdate = true; m.position.set(H.x, H.y, H.z); m.rotation.set(H.rx, H.ry, H.rz); m.scale.setScalar(1); return; }
   const root = L.inst.root; if (m.parent !== root) root.add(m); m.matrixAutoUpdate = false;
   hand.updateWorldMatrix(true, false); head.updateWorldMatrix(true, false);
@@ -2143,7 +2181,7 @@ function lookPlumeOn(L, look) { return !!(look.helmet && look.plume && !look.hel
 function lookWorn(L, look) { return L.helmOff && (look.helmet || !look.hide.includes('helmet')) ? Object.assign({}, look, { helmet: false, hide: look.hide.concat('helmet') }) : look; }   // bareheaded: the sculpted helm dropped, the plume with it
 // the helm off and on again — the home and the barber's chair (his face and hair are the point there, as the sword and shield lie on the floor),
 // and the walk into the pit: every man comes in bareheaded and sets it on in the countdown's last breaths (afDonStep). Only the index, the plume and the hair cap change.
-function lookHelmOff(L, off) { if (!L || !!L.helmOff === !!off) return; L.helmOff = !!off; if (!L.lookBase || !L.inst) return; const look = L.look = lookWorn(L, L.lookBase); lookDraw(L, look); if (L.plume) L.plume.visible = lookPlumeOn(L, look); lookHairApply(L, look); lookHelmModelApply(L, look); }
+function lookHelmOff(L, off) { if (!L || !!L.helmOff === !!off) return; L.helmOff = !!off; if (!L.lookBase || !L.inst) return; lookRigUse(MODEL_RIGS.get(L.g.userData.model)); const look = L.look = lookWorn(L, L.lookBase); lookDraw(L, look); if (L.plume) L.plume.visible = lookPlumeOn(L, look); lookHairApply(L, look); lookHelmModelApply(L, look); }
 // ---- THE HAIR: a cap of geometry on the skull ----
 // the hairline's height at a bearing (deg) round the skull's axis, a smooth curve through the style's keys (mirrored left/right)
 function lookHairline(hs, a) {
@@ -2408,8 +2446,15 @@ function lookRoundPaint(col, pt, look) {
 }
 BV.look = { roll: lookRoll, apply: lookApply, live: () => MODEL_LIVE.map(L => ({ name: L.P.lookName, arch: L.P.lookArch, full: !!L.P.lookFull, shield: L.shieldKind, look: L.look && { kind: L.look.kind, hide: L.look.hide, helmet: L.look.helmet, helmModel: L.look.helmModel, cloak: L.look.cloak, plume: L.look.plume, hair: L.look.hair, beard: L.look.beard, skin: L.look.skin, hairStyle: L.look.hairStyle, beardStyle: L.look.beardStyle, faceShape: L.look.faceShape, hairMesh: !!(L.mHair && L.mHair.visible) } })) };   // (test: every live figure's look)
 const MODEL_ON = !/[?&]plastic\b/.test(location.search);   // the warrior is the base soldier; ?plastic brings the plastic figures back
-const MODEL_NAME = 'base';                                  // (2026-09-17: the base built from the Thor sculpt — assets/rigs/base, tools/realmesh/base/; the palette warrior stays in assets/rigs/warrior as the kit's source)
-BV.modelLoad = MODEL_ON ? loadModelRig(MODEL_NAME).then(() => { BV.modelReady = true; console.log('[model] ' + MODEL_NAME + ' ready'); }, e => console.error('[model] load failed', e)) : Promise.resolve();   // (the home / market figure waits on this — the plastic placeholder is never shown)
+const MODEL_NAME = 'glad';                                  // THE DEFAULT BODY (2026-09-21): a man of ordinary build — "Gladiator" by huyunited, CC-BY-4.0, ADOPTED onto the base's bones and bone frames (tools/realmesh/adopt → assets/rigs/glad), so every clip, grip and ware is the same file for both. (2026-09-17: `base`, the man built from the Thor sculpt — now the `huge` build.)
+// CHAR SIZE (the user: "our char is a bit big guy… when everyone is huge like this it's a problem… I should be able to select char size: normal, huge"). The
+// build is part of a man's LOOK (gear.look.z: 0 normal, 1 huge — the barber's pick, kept with the career, so every guest sees the same man). Without a pick a
+// player is of ordinary build, and one of the vale's men in seven is huge, rolled from his name (so he is the same man in the pit, on his page and on a guest's screen).
+const MODEL_BY_SIZE = { normal: 'glad', huge: 'base' }, LOOK_BUILD_NAMES = ['normal', 'huge'], AF_HUGE_ODDS = 0.15;
+function modelSizeOf(name, gear, npc) { const z = gear && gear.look ? gear.look.z : null; if (z === 0 || z === 1) return z ? 'huge' : 'normal'; return npc && lookRng(lookSeed(name) ^ 0x51ed270b)() < AF_HUGE_ODDS ? 'huge' : 'normal'; }
+function modelNameFor(size) { const n = MODEL_BY_SIZE[size] || MODEL_NAME; return MODEL_RIGS.has(n) ? n : MODEL_RIGS.has(MODEL_NAME) ? MODEL_NAME : MODEL_RIGS.size ? MODEL_RIGS.keys().next().value : n; }   // (a body still on its way down the wire: he wears the one that is here)
+BV.modelLoad = MODEL_ON ? loadModelRig(MODEL_NAME).then(() => { BV.modelReady = true; console.log('[model] ' + MODEL_NAME + ' ready'); }, e => console.error('[model] load failed', e)) : Promise.resolve();
+BV.modelLoadAll = MODEL_ON ? Promise.all([BV.modelLoad].concat(Object.values(MODEL_BY_SIZE).filter(n => n !== MODEL_NAME).map(n => loadModelRig(n).then(() => console.log('[model] ' + n + ' ready'), e => console.error('[model] ' + n + ' failed', e))))) : Promise.resolve();   // (the other build comes down beside the default one; nothing waits for it — modelNameFor)   // (the home / market figure waits on this — the plastic placeholder is never shown)
 
 // the switch: ?real (or localStorage bv-real) dresses arena teams in the real figures — AZURE knights, CRIMSON centurions, VERDANT hoplites…
 const REAL_ON = /[?&]real\b/.test(location.search);   // opt-in: ?real dresses the arena in the scanned figures (CHARACTER_EXPERIMENTS.md); the Vale knights are the default
@@ -18871,7 +18916,7 @@ function vrHallFigure(dt) {
     if (F) { VRM.hall.remove(F.group); try { disposeGroup(F.group); } catch (e) {} VRM.fig = null; }
     try {
       const G = afGearStats(gear), r = buildHumanoid(pal, 1, 'sword', { hero: true, both: true, plume: G.plume != null ? G.plume : AF_TEAM_HEX[0] }), parts = r.parts, group = r.group || r;
-      afWearModel({ group, parts }, pal); parts.lookName = who || (window.net && net.session ? net.session.username : ''); afDressGear(parts, gear, pal);
+      afWearModel({ group, parts }, pal, null, modelSizeOf(who, gear, !!(who && AF.profile && AF.profile.kind === 'npc'))); parts.lookName = who || (window.net && net.session ? net.session.username : ''); afDressGear(parts, gear, pal);
       if (parts.shield) parts.shield.visible = !showBow; if (parts.bow) parts.bow.visible = showBow; if (parts.sword) parts.sword.visible = !showBow;
       const anim = makeAnimator(parts); setPose(anim, showBow ? 'aimBow' : page === 'market' ? 'guard' : 'relax', 0.01); updateAnimator(anim, 1); restLegs(parts, 1, page === 'market' || showBow);
       group.scale.setScalar(0.5); group.position.set(-1.35, 0, -2.1); group.rotation.y = Math.atan2(1.35, 2.1);   // (half a knight = a man; to the left of the panel, turned to you)
@@ -21120,10 +21165,10 @@ function afFreshInput() { return { mx: 0, mz: 0, yaw: 0, atk: 0, heavy: 0, dodge
 function afNoPresses(I) { I.atk = I.heavy = I.dodge = I.jump = 0; }
 function afPressesSeen(b, swap) { const I = b.inp; if (!I) return; b.seenAtk = I.atk; b.seenHeavy = I.heavy; b.seenDodge = I.dodge; b.seenJump = I.jump; if (swap) b.seenSwap = I.swap; }
 function afBellInputs() { afNoPresses(AF.locIn); for (const b of AF.bodies) afPressesSeen(b); }
-function afWearModel(h, pal, ctx) {                            // dress a fresh rig (foot, or a cavalry build / seated rider) in the warrior figure
+function afWearModel(h, pal, ctx, size) {                            // dress a fresh rig (foot, or a cavalry build / seated rider) in the warrior figure
   if (!MODEL_ON || !BV.modelReady || !h || !h.parts) return false;
   const g = h.riderGroup || h.group || h;                    // a horseman: only the man in the saddle wears it, the horse is the horse
-  return wearModelRig({ group: g, parts: h.parts }, MODEL_NAME, { team: pal.cloth, ctx: ctx || 'main' });   // (ctx: main scene, the home/market preview's own renderer, or a thumbnail)
+  return wearModelRig({ group: g, parts: h.parts }, modelNameFor(size), { team: pal.cloth, ctx: ctx || 'main' });   // (ctx: main scene, the home/market preview's own renderer, or a thumbnail)
 }
 function afMakeBody(entry, idx, r) {
   const td = AF_TEAMS[entry.t];
@@ -21133,15 +21178,16 @@ function afMakeBody(entry, idx, r) {
   const xp = entry.kind === 'npc' ? (entry.xp != null ? clamp(entry.xp | 0, 0, 100) : 60) : 75;   // (a player's body only thinks for itself if they leave)
   const npc = entry.kind === 'npc', gear = npc ? afNpcGear(entry, xp, r) : afGearClean(entry.gear), G0 = afGearStats(gear), K = npc ? AF_NPC_GEAR_K : 1;   // a loadout for everyone: a player's own, an NPC's by XP
   const G = { swordDmg: lerp(1, G0.swordDmg, K), reach: G0.reach * K, hp: G0.hp * K, poise: G0.poise * K, move: G0.move * K, bow: G0.bow, bowDmg: lerp(1, G0.bowDmg, K), horse: G0.horse, horseHp: lerp(AF_HORSE.hp, G0.horseHp, K), horseSpeed: lerp(1, G0.horseSpeed, K), plume: npc ? null : G0.plume };
+  const bsize = modelSizeOf(entry.name, gear, npc);        // his BUILD: the barber's pick, or the roll of an NPC's name
   const rigOpts = { hero: entry.kind !== 'npc' || !big, both: A.bow, plume: G && G.plume != null ? G.plume : AF_TEAM_HEX[entry.t] }; // a hundred capes would melt a phone: only the humans dress up in a big fight
   const hsz = G.horse && AF_LOOK.horse[gear.horse] ? AF_LOOK.horse[gear.horse].scale : 1;   // a nag is small, a warhorse big
   const h = mounted ? buildCavalry(td.pal, A.scale * hsz, 'sword', rigOpts) : buildHumanoid(td.pal, A.scale, A.bow ? weapon : weapon, rigOpts); const group = h.group || h;
   if (REAL_ON && !mounted && BV.realReady) wearRealRig(h, REAL_TEAM[entry.t % REAL_TEAM.length] || 'knight', { lo: big && npc, team: td.pal.cloth, swordScale: A.weapon === 'longsword' ? 1.25 : 1 });   // the real figures
-  else afWearModel(h, td.pal);                                                                            // the warrior — on foot or in the saddle
+  else afWearModel(h, td.pal, null, bsize);                                                               // the warrior — on foot or in the saddle
   if (h.parts.shield) { h.parts.shield.visible = A.shield && weapon !== 'bow'; if (A.bigShield) h.parts.shield.scale.set(1.3, 1.3, 1.3); }
   group.rotation.order = 'YXZ';                              // yaw first, then a body-local tilt/roll (somersaults, crumples)
   const sp = afSpawn(entry.t, AF.cfg.teams), rgx = -Math.cos(sp.yaw), rgz = Math.sin(sp.yaw), so = afSlotOffset(entry.s, AF.cfg.per), off = so.right, back = so.back * (mounted ? 1.3 : 1);
-  const b = { id: idx, idx, team: entry.t, teamDef: td, name: entry.name, kind: entry.kind, peer: entry.peer || null, weapon, xp,
+  const b = { id: idx, idx, team: entry.t, teamDef: td, name: entry.name, size: bsize, kind: entry.kind, peer: entry.peer || null, weapon, xp,
     ctrl: entry.kind === 'npc' ? 'ai' : 'input', inp: afFreshInput(),
     group, parts: h.parts, anim: makeAnimator(h.parts),
     x: sp.cx + rgx * off - Math.sin(sp.yaw) * back, z: sp.cz + rgz * off - Math.cos(sp.yaw) * back, yaw: sp.yaw, phase: r() * TAU, tiltX: 0,
@@ -21195,7 +21241,7 @@ function afDismount(b, thrown, quiet) {                    // the man leaves the
   const h = b.horse; if (!h) return;
   h.rider = null; b.horse = null; h.x = b.x; h.z = b.z; h.yaw = b.yaw; h.vx = b.vx; h.vz = b.vz; h.sp01 = b.sp01 || 0; h.seen = true; h.tx = h.x; h.tz = h.z; h.tyaw = h.yaw;
   if (b.riderGroup) { h.group.remove(b.riderGroup); try { disposeGroup(b.riderGroup); } catch (e) {} b.riderGroup = null; }
-  const hm = buildHumanoid(b.pal, b.footScale || 1, b.weapon === 'longsword' ? 'longsword' : 'sword', b.rigOpts || {}); afWearModel(hm, b.pal);
+  const hm = buildHumanoid(b.pal, b.footScale || 1, b.weapon === 'longsword' ? 'longsword' : 'sword', b.rigOpts || {}); afWearModel(hm, b.pal, null, b.size);
   b.group = hm.group; b.parts = hm.parts; b.anim = makeAnimator(hm.parts); b.group.rotation.order = 'YXZ'; b.group.userData.afBody = b;
   b.mounted = false; b.gallop = 0; b.sp01 = 0; b.aimYaw = null; b.twist = 0; b.cav = null; b.baseScale = b.group.scale.x; b.tagH = afTagH(false, b.baseScale); b.mountCd = 2; b.wantHorse = null;
   b.atk = null; b.charge = null; b.queued = false; b.blocking = false; b.dodgeT = 0; b.rollAng = 0; b.rollSq = 0; b.moving = false; b.remoteSeen = true; b.stam = b.maxStam || AF_F.stam.max; b.winded = false;
@@ -21214,7 +21260,7 @@ function afMount(b, h, quiet) {                            // a man on foot swin
   scene.remove(b.group); try { disposeGroup(b.group); } catch (e) {}
   const rider = buildHumanoid(b.pal, 0.88, b.weapon === 'longsword' ? 'longsword' : 'sword', b.rigOpts || {});
   rider.group.position.set(0, 1.22, -0.06); h.group.add(rider.group);
-  const parts = Object.assign({}, rider.parts, { mount: h.horseG }); saddleRider(parts); afWearModel({ group: rider.group, parts }, b.pal);
+  const parts = Object.assign({}, rider.parts, { mount: h.horseG }); saddleRider(parts); afWearModel({ group: rider.group, parts }, b.pal, null, b.size);
   b.riderGroup = rider.group; b.group = h.group; b.parts = parts; b.anim = makeAnimator(parts); b.group.userData.afBody = b;
   b.mounted = true; b.horse = h; h.rider = b; b.x = h.x; b.z = h.z; b.yaw = h.yaw; b.vx = h.vx; b.vz = h.vz; b.gallop = 0; b.sp01 = h.sp01; b.cav = null; b.aimYaw = b.yaw; b.twist = 0; b.wantHorse = null;
   b.baseScale = h.group.scale.x; b.tagH = afTagH(true, b.baseScale); b.dodgeT = 0; b.rollAng = 0; b.rollSq = 0; b.atk = null; b.charge = null; b.queued = false; b.blocking = false; b.moving = false; b.tx = b.x; b.tz = b.z; b.tyaw = b.yaw;
@@ -21425,7 +21471,7 @@ function afDressGear(parts, gear, pal) {
   if (parts.sword) afBuildSword(parts.sword, sw, trim ? trim.blade : null);
   parts.gearSword = !!((gear.sword && gear.sword !== 'iron_sword' && AF_LOOK.sword[gear.sword]) || trim);   // the warrior figure puts his own blade away for this one (syncModelRigs)
   if (parts.modelRig && parts.modelRig.inst) {                // the figure's sculpted armour, worn HIS way: the look rolled from his name, his class and the piece he wears (lookRoll)
-    const L = parts.modelRig; if (L.inst.skinned && Object.values(L.inst.skinned).some(sm => sm.userData.pieces)) lookApply(L, lookRoll(parts.lookName || '', parts.lookArch || 'swordsman', gear, pal, { full: !!parts.lookFull }));
+    const L = parts.modelRig; if (L.inst.skinned && Object.values(L.inst.skinned).some(sm => sm.userData.pieces)) lookApply(L, lookRoll(parts.lookName || '', parts.lookArch || 'swordsman', gear, pal, { full: !!parts.lookFull, model: L.g.userData.model }));
     else { const R = MODEL_RIGS.get(L.g.userData.model), an = R && R.spec.meshes && R.spec.meshes.armor, am = an && L.inst.skinned[an];   // (no pieces.json: the old one-colour tint)
       if (am) { if (!am.userData.tintMat) { am.material = am.material.clone(); am.userData.tintMat = true; }
         const c = ar ? new THREE.Color(ar.torso).lerp(new THREE.Color(0xffffff), 0.4) : new THREE.Color(0xffffff); if (ar && ar.gold) c.lerp(new THREE.Color(0xd9b24a), 0.35); am.material.color.copy(c); } } }
@@ -24467,7 +24513,7 @@ function afPreviewSet(gear, pal, mounted) {
   const hsz = P.mounted && AF_LOOK.horse[gear.horse] ? AF_LOOK.horse[gear.horse].scale : 1;
   const r = P.mounted ? buildCavalry(pal, hsz, 'sword', opts) : buildHumanoid(pal, 1, 'sword', opts);
   P.rig = { group: r.group || r, parts: P.mounted ? Object.assign({}, r.parts, { mount: r.horse }) : r.parts };
-  afWearModel({ group: P.mounted ? r.riderGroup : P.rig.group, parts: P.rig.parts }, pal, 'preview');   // the marketplace man is the warrior too
+  { const prof = typeof SHELL !== 'undefined' && SHELL.page === 'profile' && AF.profile && AF.profile.gear; afWearModel({ group: P.mounted ? r.riderGroup : P.rig.group, parts: P.rig.parts }, pal, 'preview', modelSizeOf(prof ? AF.profile.name : '', gear, !!(prof && AF.profile.kind === 'npc'))); }   // the marketplace man is the warrior too
   P.rig.parts.lookName = (typeof SHELL !== 'undefined' && SHELL.page === 'profile' && AF.profile && AF.profile.gear) ? AF.profile.name : (window.net && net.session ? net.session.username : '');   // (the figure is YOU — or the man whose page this is)
   afPreviewFloor(pal, gear);                                 // (the home floor: his sword and shield, until he takes them up)
   if (MODEL_ON && !BV.modelReady) {                          // the warrior is still loading: an empty disc until he is, never the plastic stand-in
@@ -25057,6 +25103,7 @@ function afBarberRender() {
   // every row is a MENU that opens on a tap (one at a time): the label, his pick, and the choices under it
   const sec = (id, label, sub, curTxt, inner) => '<div class="bb-sec' + (open === id ? ' open' : '') + '"><button class="bb-hd" data-sec="' + id + '"><b>' + label + '</b><span>' + escHtml(curTxt) + '</span><i>▾</i></button><div class="bb-bd"><div class="bb-sub">' + sub + '</div><div class="bb-opts">' + inner + '</div></div></div>';
   p.innerHTML = '<div class="bb-head">' + (window.net && net.session ? 'Your face, kept with your career — every fighter in the pit sees it.' : 'Kept in this browser — sign in and it follows your career.') + ' Tap his head, a hand or the legs to look closer; tap again to step back.</div>'
+    + sec('z', 'Build', 'the man himself — an ordinary build, or the huge one', L.z != null && LOOK_BUILD_NAMES[L.z] ? LOOK_BUILD_NAMES[L.z] : 'normal', chips('z', LOOK_BUILD_NAMES))
     + sec('s', 'Skin', 'the tone', cur('s', LOOK_SKIN_NAMES), sw('s', LOOK_SKIN, LOOK_SKIN_NAMES))
     + sec('f', 'Face', 'the bones', cur('f', LOOK_FACE_SHAPES), chips('f', LOOK_FACE_SHAPES))
     + sec('c', 'Hair', 'the colour — every fighter wears the same cut', cur('c', HAIR_COLOURS), sw('c', LOOK_HAIR_PICK, HAIR_COLOURS))
@@ -25069,7 +25116,7 @@ function afBarberRender() {
     afLookSet({ [b.dataset.k]: +b.dataset.i }); };
 }
 function afBarberSecFocus() {                               // the open menu's part of him: the face for skin, bones, hair, colour and beard; the chest for the ink; none open, the whole man
-  const P = AF.preview; if (!P || !P.rig || P.mounted) return; const s = AF.barberSec, part = !s ? null : s === 'i' || s === 'k' ? 'chest' : 'head';
+  const P = AF.preview; if (!P || !P.rig || P.mounted) return; const s = AF.barberSec, part = !s || s === 'z' ? null : s === 'i' || s === 'k' ? 'chest' : 'head';   /* (the build: the whole man) */
   P.focus = part ? { part } : null; P.cv.style.cursor = P.focus ? 'zoom-out' : 'grab';
 }
 function afLookClear() {                                    // back to the rolled face: the picks go (the server keeps an empty look as none)
@@ -25249,7 +25296,7 @@ BV.arenaKill = (idx) => { const b = AF.bodies[idx]; if (b && !b.dead) afKill(b, 
 BV.arenaDon = () => (AF.bodies || []).map(b => ({ name: b.name, weapon: b.weapon, sheathed: !!b.parts.sheathed, helmOff: !!(b.parts.modelRig && b.parts.modelRig.helmOff), inHand: !!(b.parts.modelRig && b.parts.modelRig.mHelm && b.parts.modelRig.mHelm.visible), k: b.parts.modelRig ? b.parts.modelRig.helmK : null, ownsHelm: afDonHelm(b), stage: b.don ? b.don.stage : null, donned: !!b.donned, pose: b.anim.name, hip: !!(b.parts.modelRig && b.parts.modelRig.mHip && b.parts.modelRig.mHip.visible) }));   // test: the don — who is bareheaded / sheathed, and where each man is in it
 BV.helmHand = o => { Object.assign(MODEL_HELM_HAND, o || {}); return { ...MODEL_HELM_HAND }; };   // test: re-hang the carried helm in the hand (model units, hand-bone frame)
 BV.previewHelm = (hand, k) => { const L = AF.preview && AF.preview.rig && AF.preview.rig.parts.modelRig; if (!L) return null; lookHelmBuild(L); L.helmHand = !!hand; L.helmK = k == null ? null : k; return { built: !!L.mHelm, helmOff: !!L.helmOff, hand: L.helmHand, k: L.helmK }; };   // test: the home figure carries his helm (k: 0..1 lifts it onto his head)
-BV.hipSword = o => { Object.assign(MODEL_HIP, o || {}); for (const L of MODEL_LIVE) if (L.mHip) modelHipPlace(L.mHip); return { ...MODEL_HIP }; };   // test: re-hang the sheathed blade on every live figure
+BV.hipSword = o => { Object.assign(MODEL_HIP, o || {}); for (const L of MODEL_LIVE) if (L.mHip) modelHipPlace(L.mHip, MODEL_RIGS.get(L.g.userData.model)); return { ...MODEL_HIP }; };   // test: re-hang the sheathed blade on every live figure
 BV.previewFocus = part => { const P = AF.preview; if (!P) return null; const f = part === undefined ? (P.focus ? P.focus.part : null) : afPreviewFocus(part), r3 = v => v ? v.toArray().map(x => +x.toFixed(2)) : null, parts = {}; if (P.rig && P.camera) for (const sp of AF_PREVIEW_PARTS) { const v = afPreviewPartPos(P, sp); if (v) parts[sp[0] + (parts[sp[0]] ? '2' : '')] = { at: r3(v), ndc: r3(v.clone().project(P.camera)) }; }
   return { focus: f, cam: r3(P.camera && P.camera.position), look: r3(P.camLook), scale: P.rig ? +P.rig.group.scale.x.toFixed(2) : null, size: [P.W, P.H], parts }; };   // test: focus the preview's lens on a part (null: the full figure), or read it
 BV.previewPick = (kind) => { const P = AF.preview; return P && P.floor ? { ok: kind ? afPreviewPickup(kind) : null, held: { ...P.floor.held }, busy: P.floor.busy, yaw: +P.yaw.toFixed(2), sword: P.floor.sword && P.floor.sword.visible, shield: P.floor.shield && P.floor.shield.visible, helm: !(P.rig && P.rig.parts.modelRig && P.rig.parts.modelRig.helmOff), inHand: !!(P.rig && P.rig.parts.modelRig && P.rig.parts.modelRig.mHelm && P.rig.parts.modelRig.mHelm.visible), lift: P.helmLift ? +P.helmLift.t.toFixed(2) : null } : null; };   // test: the home floor — pick 'sword' | 'shield', or read it
@@ -25288,7 +25335,7 @@ BV.showcase = (o) => {
   const pal = (AF_TEAMS[o.team || 0] || AF_TEAMS[0]).pal;
   const h = buildHumanoid(pal, o.scale || 1, o.weapon || 'sword', { hero: o.hero !== false, both: !!o.both, armor: o.armor, plume: AF_TEAM_HEX[o.team || 0] });
   if (o.real && REAL_RIGS.size) wearRealRig(h, o.real, { team: pal.cloth });
-  else if (o.model !== false && MODEL_RIGS.size && (o.model || MODEL_ON)) { wearModelRig(h, o.model || MODEL_NAME, { team: pal.cloth });
+  else if (o.model !== false && MODEL_RIGS.size && (o.model || MODEL_ON)) { wearModelRig(h, o.model || modelNameFor(o.size), { team: pal.cloth });
     h.parts.lookName = o.name != null ? o.name : ''; h.parts.lookArch = o.arch || 'swordsman'; if (o.full) h.parts.lookFull = true; afDressGear(h.parts, o.gear || {}, pal); }   // (his look: {name, arch, gear:{armor}, full})
   const fwd = new THREE.Vector3(); camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
   const p = o.at ? new THREE.Vector3().fromArray(o.at) : camera.position.clone().add(fwd.multiplyScalar(o.dist || 7)); p.y = o.y != null ? o.y : (typeof afY === 'function' && AF.on ? afY(p.x, p.z) : 0);

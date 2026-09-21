@@ -115,6 +115,19 @@ const skull = (m, dom, eyeY) => { let top = -9; for (let v = 0; v < dom.length; 
 const skT = skull(bodyT, domT, EYE_T[1]), skG = skull(bodyG, domG, EYE_G[1]), HS = [skG.w / skT.w, skG.h / skT.h, skG.d / skT.d], headMap = p => [(p[0] - EYE_T[0]) * HS[0], EYE_G[1] + (p[1] - EYE_T[1]) * HS[1], skG.zc + (p[2] - skT.zc) * HS[2]];   // (across: about the middle; up: about the eye line, so the crown lands on his crown; deep: about the skull's own middle, so brow and nape both land)
 log('skull  base', [skT.w, skT.h, skT.d].map(x => (x * 100).toFixed(1)).join(' × '), '· his', [skG.w, skG.h, skG.d].map(x => (x * 100).toFixed(1)).join(' × '), 'cm (wide × above the eyes × deep) → ×', HS.map(x => x.toFixed(3)).join(', '));
 
+// ---------------------------------------------------------------- the head's look classes
+// The game's look paints by CLASS: the brows take the hair's colour, the sockets a shade of the skin. The base's classes were cut from its own paint
+// (headbake.py); this head takes them from the base's, through the same map the helm and the hair ride — each vertex of his head, taken back into the
+// base's space, asks the base's nearest head vertex what it is. `hair` and `beard` are NOT carried: he is shaved and smooth-cheeked, and a class with no
+// paint under it would be dyed as a flat patch. (A crop painted into his atlas is what would earn him a `hair` class.)
+const headBack = p => [p[0] / HS[0], EYE_T[1] + (p[1] - EYE_G[1]) / HS[1], skT.zc + (p[2] - skG.zc) / HS[2]];
+{ const HEADISH = new Set(['head', 'hair', 'beard', 'brow', 'socket']), src = []; for (let v = 0; v < clsT.length; v++) if (HEADISH.has(clsT[v])) src.push(v);
+  const CARRY = new Set(['brow', 'socket']), ci = c => myParts.classes.indexOf(c); let n = { brow: 0, socket: 0 };
+  for (let v = 0; v < clsG.length; v++) { if (clsG[v] !== 'head' || domG[v] !== 'head') continue; const q = headBack([bodyG.pos[v * 3], bodyG.pos[v * 3 + 1], bodyG.pos[v * 3 + 2]]); let best = -1, bd = 0.03;
+    for (const u of src) { const d = Math.hypot(bodyT.pos[u * 3] - q[0], bodyT.pos[u * 3 + 1] - q[1], bodyT.pos[u * 3 + 2] - q[2]); if (d < bd) { bd = d; best = u; } }
+    if (best >= 0 && CARRY.has(clsT[best])) { clsG[v] = clsT[best]; myParts.vclass[v] = ci(clsT[best]); n[clsT[best]]++; } }
+  log('head        brow ' + n.brow + ' · socket ' + n.socket + ' vertices, from the base\'s head'); }
+
 // ---------------------------------------------------------------- dress him
 const out = { meshes: [], materials: [], images: [] }, MAT = {}, SHARED = path.relative(OUT, BASE).split(path.sep).join('/') + '/', shared = f => SHARED + f;   // what the base already ships — the hair sheet, the kit's palette, the leather tile, the helm's maps — is REFERENCED from there, not copied: one download, one truth
 const addImage = (uri) => { let i = out.images.indexOf(uri); if (i < 0) { out.images.push(uri); i = out.images.length - 1; } return i; };
@@ -187,7 +200,9 @@ const kHand = kMan;
 const dq = m => { const p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3(); new THREE.Matrix4().fromArray(m).decompose(p, q, s); return { p, q }; };
 const W = G.bindWorlds(A), local = BONES.map((n, i) => A.restLocal[A.names.indexOf(n)]), world = BONES.map(n => W[A.names.indexOf(n)]);
 out.skeleton = { names: BONES, parent: PARENT, world, local }; fs.mkdirSync(OUT, { recursive: true }); G.write(OUT, out);
-for (const f of ['atlas.jpg', 'pieces.json', 'parts.json', 'adopt.json']) fs.copyFileSync(path.join(BODY, f), path.join(OUT, f));
+for (const f of SHIP ? ['atlas.jpg'] : ['atlas.jpg', 'parts.json', 'adopt.json']) fs.copyFileSync(path.join(BODY, f), path.join(OUT, f));   // (the game gets no debug files)
+{ const pj = JSON.parse(fs.readFileSync(path.join(BODY, 'pieces.json'), 'utf8')), B = pj.body, vc = myParts.vclass, tri = []; for (let t = 0; t < bodyG.idx.length; t += 3) { const c = [0, 1, 2].map(k => vc[bodyG.idx[t + k]]); tri.push(c[0] === c[1] || c[0] === c[2] ? c[0] : c[1] === c[2] ? c[1] : c[0]); }
+  B.vclass = vc; B.tri = tri; fs.writeFileSync(path.join(OUT, 'pieces.json'), JSON.stringify(pj)); }
 // the wares' paint: the lower half of the base's atlas (python + PIL, as the rest of the pipeline)
 if (out.images.includes('wear.jpg')) require('child_process').execFileSync('python3', ['-c', 'import sys\nfrom PIL import Image\nim = Image.open(sys.argv[1]); w, h = im.size; im.crop((0, h // 2, w, h)).save(sys.argv[2], quality=90)', path.join(BASE, 'atlas.jpg'), path.join(OUT, 'wear.jpg')]);
 { const rawA = path.join(ITEMS, 'atlas_raw.jpg'), rawW = path.join(ITEMS, 'wear_raw.jpg'); if (fs.existsSync(rawA) && !fs.existsSync(rawW)) require('child_process').execFileSync('python3', ['-c', 'import sys\nfrom PIL import Image\nim = Image.open(sys.argv[1]); w, h = im.size; im.crop((0, h // 2, w, h)).save(sys.argv[2], quality=90)', rawA, rawW]); }   // (the char editor shows paint AS PAINTED: the shipped atlas has its wear lifted for the game's light — headbake.py WEAR_LIFT)
@@ -202,6 +217,12 @@ const hm = (y, z) => headMap([0, y, z]), bs = baseRig.skull, bf = baseRig.face;
 Object.assign(rig, { wear, grip, meshes: Object.assign({}, baseRig.meshes), skull: { yc: +hm(bs.yc, 0)[1].toFixed(4), zc: +hm(0, bs.zc)[2].toFixed(4), top: +hm(bs.top, 0)[1].toFixed(4), chin: +hm(bs.chin, 0)[1].toFixed(4), coverY: +hm(bs.coverY, 0)[1].toFixed(4) },
   face: { earY: +hm(bf.earY, 0)[1].toFixed(4), earZ: +hm(0, bf.earZ)[2].toFixed(4), chinX: +(bf.chinX * HS[0]).toFixed(4), lipY: +hm(bf.lipY, 0)[1].toFixed(4), lipZ: +hm(0, bf.lipZ)[2].toFixed(4) },
   hairline: Object.fromEntries(Object.entries(baseRig.hairline).map(([k, rows]) => [k, rows.map(([a, y]) => [a, +hm(y, 0)[1].toFixed(4)])])), plumeY: +(baseRig.plumeY * HS[1]).toFixed(3), roundX: +(baseRig.roundX * (PG.handL[0] / PT.handL[0])).toFixed(3),
+  // the GAME's numbers for him: a clip's hip road is re-laid from the base's (where the base's pelvis rests, his legs over the base's — game.js motionFit);
+  // the sheathed blade hangs off HIS hip (the base's place, brought in with his hips' width and depth and down to where his hip joints are)
+  clipFit: { pelvis: PT.pelvis.map(x => +x.toFixed(5)), k: +((lenOf(PG, adopt.tips, 'thighL') + lenOf(PG, adopt.tips, 'shinL')) / (lenOf(PT, ref.tips, 'thighL') + lenOf(PT, ref.tips, 'shinL'))).toFixed(4) },
+  hip: (() => { const uG = axG.uOf((PG.thighL[1] + PG.thighR[1]) / 2), side = FIELD.G.trunk.smooth(uG, 0) / FIELD.T.trunk.smooth(0, 0), back = FIELD.G.trunk.smooth(uG, -Math.PI / 2) / FIELD.T.trunk.smooth(0, -Math.PI / 2); return { x: +(0.30 * side).toFixed(3), y: +(((PG.thighL[1] + PG.thighR[1]) / 2 - PG.pelvis[1]) - 0.06 * kMan).toFixed(3), z: +(-0.12 * back).toFixed(3) }; })(),
   helmHand: Object.fromEntries(Object.entries(baseRig.helmHand).map(([k, v]) => [k, /^r/.test(k) ? v : +(v * kHand).toFixed(4)])) });
+if (prof.rig) for (const k in prof.rig) if (k !== 'why') rig[k] = prof.rig[k];   // (the profile's own word on a rig.json field: how far his arms are let hang, say)
 fs.writeFileSync(path.join(OUT, 'rig.json'), JSON.stringify(rig, null, 1));
+if (SHIP) { const rawTo = path.join(ITEMS, 'atlas_raw.' + prof.id + '.jpg'); process.stdout.write(require('child_process').execFileSync('python3', [path.join(__dirname, 'skinbake.py'), OUT, '--raw', rawTo]).toString()); }
 log('→', path.relative(ROOT, OUT), '·', out.meshes.map(m => m.name.replace(/^FantasyWarrior_|_6_characters_0$/g, '') + ' ' + m.idx.length / 3).join(', '));

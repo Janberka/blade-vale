@@ -14,6 +14,11 @@ in are built and judged in **the char editor, `tools/chared/`** (read its README
 still taken from `assets/rigs/warrior` is the hand's bind stance and the Corinthian helm, both in `basebuild.js`
 (`WARRIOR=` overrides the path), and the kit's sword and shield, which `dress.js` re-binds onto the new skeleton.
 
+**2026-09-21 — he is `huge`, and no longer the only body.** Other models are ADOPTED onto this rig's bones and bone frames
+(`tools/realmesh/adopt/`, the char editor's CHAR SIZE): this rig is the STANDARD they are made congruent with, so its bone
+names, hierarchy, bind frames and rest locals are now a contract — rebuild it with different frames and every adopted body,
+and every clip, has to be redone.
+
 Run from a scratch folder holding `thor/` (the unzipped usdz) and `thor-gltf/`; the scripts take the build dir as their
 first argument (`build/base` by default). Then:
 

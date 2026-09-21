@@ -40,3 +40,9 @@ dist/
 
 # the char editor's screenshots (tools/chared/serve.py writes them)
 tools/chared/shots/
+
+# the adoption pipeline's intermediate (adopt.js → <id>.body → wardrobe.js); the finished rigs live in tools/chared/rigs/
+tools/chared/build/
+
+# converted SOURCE models for the adoption pipeline (somebody else's files, big; rebuilt from the .usdz — tools/realmesh/adopt/README.md)
+tools/chared/sources/

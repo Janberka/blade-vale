@@ -1,0 +1,284 @@
+{
+ "source": "Gladiator by huyunited (Sketchfab), CC-BY-4.0 — adopted onto the base skeleton by tools/realmesh/adopt (profile glad)",
+ "height": 1.96,
+ "hipY": 1.027,
+ "map": {
+  "upperBody": "spine1",
+  "head": "head",
+  "shoulderL": "armL",
+  "elbowL": "foreL",
+  "handL": "handL",
+  "shoulderR": "armR",
+  "elbowR": "foreR",
+  "handR": "handR",
+  "hipL": "thighL",
+  "kneeL": "shinL",
+  "hipR": "thighR",
+  "kneeR": "shinR"
+ },
+ "meshes": {
+  "sword": "FantasyWarrior_sword_6_characters_0",
+  "shield": "FantasyWarrior_shield_6_characters_0",
+  "body": "base_body"
+ },
+ "swordHand": "handR",
+ "shieldArm": "foreL",
+ "bowHand": "handL",
+ "cloakBones": [],
+ "reparent": {},
+ "straighten": {
+  "arms": 0.55,
+  "legs": 1
+ },
+ "plumeY": 0.342,
+ "fullBody": true,
+ "roundX": 0.463,
+ "helmHand": {
+  "x": 0.0283,
+  "y": 0.2262,
+  "z": -0.1319,
+  "rx": 0,
+  "ry": 0,
+  "rz": 0
+ },
+ "wear": {
+  "loin": {
+   "kind": "leather",
+   "always": true
+  },
+  "sandals": {
+   "kind": "leather",
+   "always": true
+  },
+  "band_L": {
+   "kind": "leather",
+   "slot": "bandL"
+  },
+  "band_R": {
+   "kind": "leather",
+   "slot": "bandR"
+  },
+  "gauntlet_L": {
+   "kind": "steel",
+   "slot": "gauntL",
+   "covers": [
+    "handL",
+    "foreL"
+   ],
+   "hides": [
+    "band_L",
+    "pauldron_L"
+   ]
+  },
+  "gauntlet_R": {
+   "kind": "steel",
+   "slot": "gauntR",
+   "covers": [
+    "handR",
+    "foreR"
+   ],
+   "hides": [
+    "band_R",
+    "pauldron_R"
+   ]
+  },
+  "legs": {
+   "kind": "cloth",
+   "slot": "legs",
+   "covers": [
+    "hips",
+    "thighL",
+    "thighR",
+    "shinL",
+    "shinR",
+    "footL",
+    "footR"
+   ],
+   "hides": [
+    "loin",
+    "sandals"
+   ]
+  },
+  "pauldron_L": {
+   "kind": "leather",
+   "slot": "pauldL",
+   "side": true
+  },
+  "pauldron_R": {
+   "kind": "leather",
+   "slot": "pauldR",
+   "side": true
+  }
+ },
+ "credit": "Gladiator by huyunited (Sketchfab), CC-BY-4.0",
+ "adopted": "glad",
+ "rest": "nodes",
+ "grip": {
+  "sword": {
+   "hand": "handR",
+   "seat": [
+    0.056297,
+    -0.965972,
+    0.252446,
+    0,
+    0.494787,
+    0.246606,
+    0.833289,
+    0,
+    -0.867189,
+    0.077995,
+    0.491834,
+    0,
+    -0.92114,
+    0.200459,
+    -0.84484,
+    1
+   ],
+   "turn": [
+    -0.213649,
+    -0.467759,
+    0.022046,
+    0.857362
+   ],
+   "deg": [
+    -30,
+    51,
+    40
+   ],
+   "note": "wardrobe.js: the base's grip said again about THIS fist (its loops ×0.638 the base's), the blade ×0.942 with the man. grip.js --bake: the sword mesh carries `seat` already (modelPropGeo UNDOES it for a prop taken off the hand). `turn`/`deg` are the hand's own turn as the char editor set it — the CLIPS bake it (motion.js HAND_ZERO); game.js does NOT lay it on its own procedural poses, which were authored for the sword the rig used to carry.",
+   "at": [
+    -0.1016,
+    -0.05006,
+    -0.0478
+   ],
+   "axis": [
+    -0.35823,
+    0.08037,
+    0.93017
+   ],
+   "flat": [
+    0.0823,
+    -0.98969,
+    0.11721
+   ],
+   "reach": 0.05753,
+   "size": 0.712
+  }
+ },
+ "skull": {
+  "yc": 1.803,
+  "zc": -0.0676,
+  "top": 1.9626,
+  "chin": 1.5977,
+  "coverY": 1.8714
+ },
+ "face": {
+  "earY": 1.763,
+  "earZ": -0.0518,
+  "chinX": 0.0544,
+  "lipY": 1.7288,
+  "lipZ": 0.0377
+ },
+ "hairline": {
+  "1": [
+   [
+    0,
+    1.9079
+   ],
+   [
+    30,
+    1.9033
+   ],
+   [
+    50,
+    1.8817
+   ],
+   [
+    65,
+    1.8645
+   ],
+   [
+    90,
+    1.8588
+   ],
+   [
+    120,
+    1.8486
+   ],
+   [
+    150,
+    1.8155
+   ],
+   [
+    180,
+    1.7904
+   ]
+  ],
+  "2": [
+   [
+    0,
+    1.917
+   ],
+   [
+    40,
+    1.9136
+   ],
+   [
+    90,
+    1.901
+   ],
+   [
+    180,
+    1.8817
+   ]
+  ],
+  "3": [
+   [
+    0,
+    1.9033
+   ],
+   [
+    30,
+    1.8999
+   ],
+   [
+    50,
+    1.8782
+   ],
+   [
+    65,
+    1.8623
+   ],
+   [
+    90,
+    1.8566
+   ],
+   [
+    120,
+    1.8474
+   ],
+   [
+    150,
+    1.8132
+   ],
+   [
+    180,
+    1.7881
+   ]
+  ],
+  "4": [
+   [
+    0,
+    1.9102
+   ],
+   [
+    90,
+    1.8759
+   ],
+   [
+    180,
+    1.8052
+   ]
+  ]
+ }
+}

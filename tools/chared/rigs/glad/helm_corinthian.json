@@ -1,0 +1,46 @@
+{
+ "src": "Helmet_of_Leonidas.usdz",
+ "fit": {
+  "s": 0.001298,
+  "tx": 0.00293,
+  "ty": 1.4981,
+  "tz": 0.011,
+  "pitch": 12
+ },
+ "verts": 4285,
+ "tris": 5606,
+ "parts": [
+  {
+   "name": "helm",
+   "start": 0,
+   "count": 4474
+  },
+  {
+   "name": "crest",
+   "start": 4474,
+   "count": 1132
+  }
+ ],
+ "bounds": {
+  "min": [
+   -0.12768234988550514,
+   1.7014398874633094,
+   -0.19686521449542113
+  ],
+  "max": [
+   0.1269896223254773,
+   2.048960687229357,
+   0.09413149967467249
+  ]
+ },
+ "layout": "position f32x3, normal f32x3, uv f32x2 (origin bottom-left), index u16x3 — in that order, no padding",
+ "metalness": 1,
+ "textures": {
+  "color": "../../../../assets/rigs/base/helm_corinthian_color.jpg",
+  "normal": "../../../../assets/rigs/base/helm_corinthian_normal.jpg",
+  "rough": "../../../../assets/rigs/base/helm_corinthian_rough.jpg",
+  "occl": "../../../../assets/rigs/base/helm_corinthian_occl.jpg"
+ },
+ "refit": "carried onto the base head with the sallet: eyes on the eyes, scale 0.841",
+ "fitted": "wardrobe.js: the base's fit carried about the eyes, ×1.209, 1.140, 1.053"
+}

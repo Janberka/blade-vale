@@ -7,6 +7,14 @@ his body, his wear, a new armour piece — is looked at here first, in the pane,
 python3 tools/chared/serve.py          # then open http://localhost:8120/tools/chared/index.html
 ```
 
+**CHAR SIZE** (top of the panel): `normal` · `huge`. One skeleton, several bodies — `huge` is the base built from the Thor
+sculpt, `normal` is *Gladiator* by huyunited (CC-BY-4.0), **adopted** onto the base's bones and bone frames by
+`tools/realmesh/adopt/` (read its README: it is the recipe for every model still to come). Because the bodies are
+congruent, the clips, the combos, the fist, the grip and every ware are the SAME files for all of them; a switch keeps the
+clip, the items, the shading and the lens. The list is `sizes.json` beside this page (`{ id, name, rig, default }`); an
+adopted rig lives in `tools/chared/rigs/<id>` until it is signed off and shipped. `source.html?src=sources/<id>` is the
+inspector for a model AS IT CAME IN — meshes, joints by name, bind against rest pose, weights per joint.
+
 It loads the game's own rig, `assets/rigs/base`, exactly as the game ships it — there is no second copy of the
 character to drift. (`?rig=<path>` points it at a build you are testing before it ships.) The one file it keeps of
 its own is `items/atlas_raw.jpg`, the atlas as it was PAINTED: the shipped `atlas.jpg` has its skin normalised for
@@ -16,7 +24,8 @@ the game's tints (`headbake.py`) and the game paints the tone back on, which the
 | --- | --- |
 | MOTION | the clips in `motions/` played on him: pick one, pause, step a frame, scrub, slow it down. A clip owns the skeleton while it is picked, and the POSE sliders become an OFFSET over it: the arms' turns into the **ARM CARRIAGE** knob, −10…+10 (below), the legs' is zeroed; "none" hands him back to the sliders |
 | SHOW | every mesh in the file, its triangle count, on/off |
-| ITEMS | what he WEARS, by the game's rules: the leather wrist bands always (there are no bare wrists), a steel arm either side, a leather pauldron either side, the helm. A steel arm takes that side's band and pauldron off; the helm takes the hair — the same table the game reads from `rig.json.wear` |
+| CHAR SIZE | which body: `normal` (the adopted gladiator) or `huge` (the base). Two poses live in a file — BIND, where the skin was bound (every geometry job works there), and REST, the zero a pose is laid on: an adopted body is bound where IT stood and RESTS in the base's stance (`rig.json` `rest: "nodes"`). The fingers rest closed round a hilt on every body, as in the game (`?openhand=1` for the base's open bind) |
+| ITEMS | built from the rig's own `rig.json.wear` table — what is always on, what a slot carries, what a piece `covers` and `hides`. What he WEARS, by the game's rules: the leather wrist bands always (there are no bare wrists), a steel arm either side, a leather pauldron either side, the helm. A steel arm takes that side's band and pauldron off; the helm takes the hair — the same table the game reads from `rig.json.wear` |
 | SHADING | textured / clay (judge the form, no paint) / normals / vertex class / silhouette; wireframe, smooth normals, double-sided (finds flipped faces), skeleton, grid + ruler |
 | ISOLATE | one body class at a time (the head, a forearm, the torso…) |
 | POSE | the bind pose, arms down, a T — and sliders for the arms and legs, to see a piece where it will crease |

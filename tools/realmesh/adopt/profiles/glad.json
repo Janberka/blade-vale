@@ -1,0 +1,26 @@
+{
+  "id": "glad",
+  "name": "the gladiator",
+  "credit": "Gladiator by huyunited (Sketchfab), CC-BY-4.0",
+  "source": "tools/chared/sources/glad2",
+  "usdz": "~/Desktop/models/chars/Gladiator 2.usdz",
+  "scale": 0.01,
+  "joints": {
+    "pelvis": "n20", "spine": ["n21", "n22", "n23"], "neck": "n24", "head": "n25",
+    "clavL": "n27", "armL": "n28", "foreL": "n29", "handL": "n30",
+    "clavR": "n35", "armR": "n36", "foreR": "n37", "handR": "n38",
+    "thighL": "n43", "shinL": "n44", "footL": "n45", "toeL": "n46",
+    "thighR": "n48", "shinR": "n49", "footR": "n50", "toeR": "n51"
+  },
+  "mirrorWeights": { "from": "R", "bones": ["fore", "hand"], "why": "the shield arm was painted for the shield: forearm weights run in streaks into the hand and tear when the wrist turns" },
+  "meshes": {
+    "body": ["body_geo", "eye_L_geo", "eye_R_geo"],
+    "eyes": ["eye_L_geo", "eye_R_geo"],
+    "wear": {
+      "loin": { "from": "loin_geo", "tris": 3200, "kind": "leather", "always": true },
+      "sandals": { "from": "shoes_geo", "tris": 3600, "kind": "leather", "always": true }
+    },
+    "unused": ["helmet_geo", "shield_geo", "weapon_geo"]
+  },
+  "tris": { "body": 6400, "hand": 1100, "head": 2400, "eye": 240 }
+}

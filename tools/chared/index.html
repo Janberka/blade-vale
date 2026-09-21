@@ -25,6 +25,8 @@
 </style>
 <body>
 <div id=ui class=pnl>
+  <h4>char size <span class=sm id=size_say></span></h4>
+  <div class=row id=sizes></div>
   <h4>motion</h4>
   <select id=mo><option value="">— none (the pose below) —</option></select>
   <div class=row style=margin-top:4px><button id=mo_play style=min-width:52px>pause</button><button id=mo_prev title="a frame back">◀</button><button id=mo_next title="a frame on">▶</button></div>
@@ -63,9 +65,8 @@
   <h4>show</h4>
   <div id=meshlist></div>
   <h4>items</h4>
-  <div class=sm style="margin-bottom:4px">wrists: leather bands (always)</div>
-  <label><span style="width:64px;display:inline-block">gauntlet</span><input type=checkbox id=i_gauntlet_L> L <input type=checkbox id=i_gauntlet_R style=margin-left:8px> R</label>
-  <label><span style="width:64px;display:inline-block">shoulder <span class=sm>leather</span></span><input type=checkbox id=i_pauldron_L> L <input type=checkbox id=i_pauldron_R style=margin-left:8px> R</label>
+  <div class=sm style="margin-bottom:4px" id=items_always></div>
+  <div id=items_rows></div>
   <label><span style="width:64px;display:inline-block">helmet</span><input type=checkbox id=i_helmet></label>
   <h4>shading</h4>
   <select id=shade>
@@ -106,7 +107,13 @@ const q = new URLSearchParams(location.search);
 // build you are testing before it ships. The PAINTED atlas lives here beside the editor: the shipped atlas.jpg has its
 // skin normalised for the game's tints (headbake.py), and the game paints the tone back on — the editor has no look
 // system, so it shows the paint the sculpt was made with.
-const DIR = q.get('rig') || '../../assets/rigs/base', RAW = 'items/atlas_raw.jpg';   // (beside this page, not under the rig: the painted atlas is the editor's, and assets/ is what players download)
+// CHAR SIZE. One skeleton, several bodies: every body is adopted onto the base's bones AND the base's bone frames
+// (tools/realmesh/adopt), so the clips, the fist, the grip and the wardrobe are the same files for all of them. The
+// sizes are listed in sizes.json beside this page — { id, name, rig } — and the pick is remembered per browser.
+let SIZES = [{ id: 'huge', name: 'huge', rig: '../../assets/rigs/base' }]; try { const x = new XMLHttpRequest(); x.open('GET', 'sizes.json?' + Date.now(), false); x.send(); if (x.status === 200) SIZES = JSON.parse(x.responseText); } catch (e) {}
+let SIZE = q.get('size'); try { SIZE = SIZE || localStorage.getItem('chared-size'); } catch (e) {} if (!SIZES.some(z => z.id === SIZE)) SIZE = (SIZES.find(z => z.default) || SIZES[0]).id; try { localStorage.setItem('chared-size', SIZE); } catch (e) {}
+const DIR = q.get('rig') || SIZES.find(z => z.id === SIZE).rig, IS_BASE = /rigs\/base\/?$/.test(DIR), RAW = IS_BASE ? 'items/atlas_raw.jpg' : '';   // (the painted atlas beside this page is the BASE's: its shipped atlas.jpg is skin-normalised for the game's tints; an adopted body still carries its own paint)
+let RIG = {}; try { const x = new XMLHttpRequest(); x.open('GET', DIR + '/rig.json?' + Date.now(), false); x.send(); if (x.status === 200) RIG = JSON.parse(x.responseText); } catch (e) {}
 const r = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
 r.setPixelRatio(Math.min(devicePixelRatio, 2)); r.setSize(innerWidth, innerHeight);
 r.outputEncoding = THREE.sRGBEncoding; r.physicallyCorrectLights = false;
@@ -151,8 +158,9 @@ async function loadGltf(dir) {
   const bin = await (await fetch(dir + '/' + g.buffers[0].uri + '?' + Date.now())).arrayBuffer();
   const CT = { 5121: Uint8Array, 5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array }, NC = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT4: 16 };
   const acc = i => { const a = g.accessors[i], bv = g.bufferViews[a.bufferView], T = CT[a.componentType], n = NC[a.type]; return new T(bin, (bv.byteOffset || 0) + (a.byteOffset || 0), a.count * n); };
-  const raw = await fetch(RAW, { method: 'HEAD' }).then(r => r.ok, () => false);
-  const texs = (g.images || []).map(im => { const t = new THREE.TextureLoader().load(im.uri === 'atlas.jpg' && raw ? RAW : dir + '/' + im.uri); t.flipY = false; t.encoding = THREE.sRGBEncoding; if (im.uri === 'leather_tile.png') t.wrapS = t.wrapT = THREE.RepeatWrapping; return t; });
+  const raw = RAW && await fetch(RAW, { method: 'HEAD' }).then(r => r.ok, () => false);
+  const rawWear = !IS_BASE && await fetch('items/wear_raw.jpg', { method: 'HEAD' }).then(r => r.ok, () => false);   // (an adopted body wears the base's wares off the lower half of the base's atlas: as painted here, lifted for the game's light in the file it ships)
+  const texs = (g.images || []).map(im => { const t = new THREE.TextureLoader().load(im.uri === 'atlas.jpg' && raw ? RAW : im.uri === 'wear.jpg' && rawWear ? 'items/wear_raw.jpg' : dir + '/' + im.uri); t.flipY = false; t.encoding = THREE.sRGBEncoding; if (/leather_tile\.png$/.test(im.uri)) t.wrapS = t.wrapT = THREE.RepeatWrapping; return t; });
   const atlasImage = await new Promise(res => { const im = new Image(); im.onload = () => res(im); im.onerror = () => res(null); im.src = dir + '/' + ((g.images || [])[0] || {}).uri; });
   const mats = (g.materials || []).map(m => {
     const p = m.pbrMetallicRoughness || {};
@@ -172,13 +180,23 @@ async function loadGltf(dir) {
     if (n.mesh == null) continue; const sk = g.skins[n.skin], ibm = acc(sk.inverseBindMatrices);
     sk.joints.forEach((j, k) => { if (!worldM.has(j)) { const m = new THREE.Matrix4().fromArray(ibm, k * 16).invert(); if (m.elements.every(Number.isFinite) && Math.abs(m.determinant()) > 1e-6) worldM.set(j, m); } });
   }
-  const worldOf = new Map();
+  // TWO POSES in a file. BIND: where the skin was bound (the inverse bind matrices) — the mesh as modelled, and the space
+  // every geometry job works in (`bindW`). REST: the zero a pose is laid on. For the base the two are one; an ADOPTED body
+  // (rig.json `rest: "nodes"`) is bound where IT stood and rests in the BASE's stance, which its nodes hold — so the same
+  // clip, the same fist and the same slider turn mean the same thing on both. (The hands' fingers rest as the nodes have
+  // them on every rig — closed round a hilt — which is what the game does: instanceModelRig, "the model was saved gripping".)
+  const worldOf = new Map(), nodeRest = nodes.map(n => ({ p: n.position.clone(), q: n.quaternion.clone() })), bindLocal = [];
   for (const i of order) {
     let wm = worldM.get(i); const pw = parent[i] >= 0 ? worldOf.get(parent[i]) : null;
     if (!wm) wm = pw ? pw.clone().multiply(nodes[i].matrix) : nodes[i].matrix.clone();
     const local = pw ? pw.clone().invert().multiply(wm) : wm.clone();
     local.decompose(nodes[i].position, nodes[i].quaternion, nodes[i].scale); nodes[i].updateMatrix(); worldOf.set(i, wm.clone());
+    bindLocal[i] = { p: nodes[i].position.clone(), q: nodes[i].quaternion.clone() };
   }
+  const underHand = i => { for (let k = parent[i]; k >= 0; k = parent[k]) if (/^hand[LR]$/.test(g.nodes[k].name)) return true; return false; };
+  const restLocal = nodes.map((n, i) => RIG.rest === 'nodes' || (!q.get('openhand') && underHand(i)) ? nodeRest[i] : bindLocal[i]);
+  nodes.forEach((n, i) => { if (g.nodes[i].mesh == null && worldOf.has(i)) { n.position.copy(restLocal[i].p); n.quaternion.copy(restLocal[i].q); n.updateMatrix(); } });
+  const bindW = {}; g.nodes.forEach((n, i) => { if (worldOf.has(i)) bindW[n.name] = worldOf.get(i); });
   const meshes = [];
   for (const n of g.nodes) {
     if (n.mesh == null) continue;
@@ -196,13 +214,25 @@ async function loadGltf(dir) {
     meshes.push(sm);
   }
   root.updateMatrixWorld(true);
-  return { g, root, nodes, parent, meshes, worldOf, atlasImage };
+  return { g, root, nodes, parent, meshes, worldOf, atlasImage, bindW, bindLocal, restLocal, bindPos: nm => bindW[nm] ? new THREE.Vector3().setFromMatrixPosition(bindW[nm]) : null };
 }
 
 const CLS_COL = [0xffd8a8, 0x4a3524, 0x8a5a2e, 0x6b4a2a, 0x2b2b3a, 0xf2f2f2, 0xd88a6a, 0x7fd1ff, 0x5ab0e0, 0x9ae06a, 0x7fc24a, 0xffd24a, 0xe0b030, 0xff8f8f, 0xe06a6a, 0xc08aff, 0xa06ae0, 0x8affd8, 0x5ae0b0];
 let M, BODY, PIECES, BONE = {}, REST = new Map();
 const NAMES = ['base'], MODELS = [];   // the editor shows ONE character: the base, dressed from the ITEMS panel
 
+// the size buttons: a pick reloads the editor on that body (the camera, the clip and the items ride along in the URL)
+{ const host = document.getElementById('sizes'); for (const z of SIZES) { const b = document.createElement('button'); b.textContent = z.name || z.id; b.className = z.id === SIZE && !q.get('rig') ? 'on' : ''; b.title = z.rig;
+    b.onclick = () => { const u = new URLSearchParams(location.search); u.set('size', z.id); u.delete('rig'); if (MO.clip) u.set('motion', MO.clip.id); else u.delete('motion'); u.set('shade', document.getElementById('shade').value); u.set('az', (az * 180 / Math.PI).toFixed(0)); u.set('d', dist.toFixed(2)); u.set('cy', tgt.y.toFixed(2)); const it = [...document.querySelectorAll('#items_rows input, #i_helmet')].filter(e => e.checked).map(e => e.id.slice(2)); if (it.length) u.set('wear', it.join(',')); else u.delete('wear'); location.search = u.toString(); };
+    host.appendChild(b); }
+  document.getElementById('size_say').textContent = RIG.credit ? '— ' + RIG.credit : ''; }
+// ITEMS come from the rig's own table (rig.json `wear`): what is always on, what a slot carries, what a piece covers and takes off
+function buildItems() { const W = RIG.wear || {}, always = Object.keys(W).filter(k => W[k].always), rows = new Map(), want = (q.get('wear') || '').split(',');
+  document.getElementById('items_always').textContent = always.length ? 'always: ' + always.map(k => k.replace(/_([LR])$/, ' $1')).join(', ') : '';
+  for (const k of Object.keys(W)) { if (W[k].always) continue; const m = k.match(/^(.*)_([LR])$/), stem = m ? m[1] : k; (rows.get(stem) || rows.set(stem, []).get(stem)).push(k); }
+  const host = document.getElementById('items_rows'); host.innerHTML = '';
+  for (const [stem, ks] of rows) { const l = document.createElement('label'); l.innerHTML = '<span style="width:64px;display:inline-block">' + stem + ' <span class=sm>' + (W[ks[0]].kind || '') + '</span></span>' + ks.map(k => '<input type=checkbox id="i_' + k + '"' + (want.includes(k) ? ' checked' : '') + '> ' + ((k.match(/_([LR])$/) || [])[1] || '')).join(' &nbsp;'); host.appendChild(l); }
+  host.querySelectorAll('input').forEach(e => e.onchange = applyItems); if (want.includes('helmet')) document.getElementById('i_helmet').checked = true; }
 (async () => {
   for (let i = 0; i < NAMES.length; i++) {
     const mm = await loadGltf(DIR);
@@ -238,9 +268,10 @@ const NAMES = ['base'], MODELS = [];   // the editor shows ONE character: the ba
   }
   for (const mm of MODELS) { mm.skel = new THREE.SkeletonHelper(mm.root); mm.skel.visible = false; mm.skel.material.depthTest = false; mm.skel.renderOrder = 9; s.add(mm.skel); }
   for (const mm of MODELS) await loadHelm(mm);
-  for (const mm of MODELS) dressPauldrons(mm);
-  buildMeshList();
-  applyShade(); applyShow(); measure();
+  await loadTile(); for (const mm of MODELS) dressPauldrons(mm);
+  if (q.get('shade') && [...el$('shade').options].some(o => o.value === q.get('shade'))) el$('shade').value = q.get('shade');
+  buildMeshList(); buildItems();
+  applyShade(); applyItems(); measure();
   await loadMotions();
   window.__ready = true;
 })();
@@ -292,6 +323,9 @@ const STYLES = {
   leather: { out: 0.015, up: 0.008, down: 0.020, tuck: 0.010, tileU: 0.10, tileV: 0.04, roughness: 0.62, metalness: 0.25 }
 };
 let STEEL = null;   // the tile: the silver ribbed column of Thor's Equip_03, cropped out of the atlas once
+// (an ADOPTED body's atlas is its own paint — no steel sheet in it — so there the tile is the one the base exported, items/leather_tile.png: one leather for every body)
+async function loadTile() { if (IS_BASE || STEEL) return; const im = await new Promise(res => { const i = new Image(); i.onload = () => res(i); i.onerror = () => res(null); i.src = 'items/leather_tile.png?' + Date.now(); }); if (!im) return;
+  const cv = document.createElement('canvas'); cv.width = im.width; cv.height = im.height; cv.getContext('2d').drawImage(im, 0, 0); STEEL = new THREE.CanvasTexture(cv); STEEL.wrapS = STEEL.wrapT = THREE.RepeatWrapping; STEEL.encoding = THREE.sRGBEncoding; STEEL.anisotropy = 4; }
 function steelTile(mm) {
   if (STEEL) return STEEL;
   const img = mm.atlasImage; if (!img) return null;
@@ -374,7 +408,7 @@ function armorPart(mm, m, ax, o = {}) {
       const Pv = new THREE.Vector3(p3[0], p3[1], p3[2]), d = Pv.clone().sub(J2), L = d.length(); d.normalize();
       rcF.set(J2, d); rcF.far = L + 0.3;
       const h2 = rcF.intersectObject(bodyM, false); if (!h2.length) return p3;
-      const far = h2.reduce((a2, x2) => x2.distance > a2 ? x2.distance : a2, 0);
+      const far = outerSkin(h2, L);
       const want = Math.max(L, far + FLOOR); const Q = J2.clone().add(d.multiplyScalar(want)); return [Q.x, Q.y, Q.z]; };
     const place = (x, y, drop) => { const h = heightAt(x, y) - drop;
       const T = new THREE.Vector3().copy(T0).multiplyScalar(x * ce - y * se).add(new THREE.Vector3().copy(T1).multiplyScalar(x * se + y * ce));
@@ -407,8 +441,8 @@ function dressPauldrons(mm) { for (const m of mm.meshes) { const side = (m.name.
 window.__exportArmor = async () => {
   const out = {}; for (const m of M.meshes) { if (!/^pauldron_(L|R)$/.test(m.name) || !m.userData.armor) continue; const g = m.geometry, A = k => Array.from(g.getAttribute(k).array);
     out[m.name] = { pos: A('position'), nrm: A('normal'), uv: A('uv'), ji: A('skinIndex'), w: A('skinWeight'), idx: Array.from(g.index.array), style: m.userData.style || 'leather' }; }
-  await fetch('/export?pauldron_baked.json', { method: 'POST', body: JSON.stringify(out) });
-  if (STEEL) await fetch('/export?leather_tile.png', { method: 'POST', body: STEEL.image.toDataURL('image/png') });
+  await fetch('/export?pauldron_baked' + (RIG.adopted ? '.' + RIG.adopted : '') + '.json', { method: 'POST', body: JSON.stringify(out) });   // (a body's plates are its own: they were seated on ITS shoulders — wardrobe.js --baked reads pauldron_baked.<id>.json)
+  if (STEEL && IS_BASE) await fetch('/export?leather_tile.png', { method: 'POST', body: STEEL.image.toDataURL('image/png') });
   return Object.keys(out).map(k => k + ' ' + out[k].idx.length / 3 + ' tris').join(', ');
 };
 // SIT IT ON THE SHOULDER, AND DRESS IT LIKE THE STEEL ARM. The kit's plate was fitted to the old lofted body and floats
@@ -416,10 +450,15 @@ window.__exportArmor = async () => {
 // axis until the nearest point stands 1.5 cm off the skin, and the rest of its dome keeps its shape. Its paint is the
 // kit's grey; the uvs are re-projected onto the ribbed plate of Thor's own steel sheet in the atlas, so it reads as
 // one set with the gauntlet.
+// the OUTER SKIN under a plate's point, L from the joint along its ray: the farthest crossing that is still THIS shoulder's — within
+// a few centimetres past the point. (The farthest crossing of all was right on the base, whose shoulder is a boulder; on a slighter
+// man a ray that grazes the back of the deltoid carries on through the lat and leaves by the back, 20 cm on — and the plate's rear
+// edge, set "off the skin" out there, stood out of it in shards.)
+function outerSkin(hits, L) { let near = 0; for (const h of hits) if (h.distance <= L + 0.06) near = Math.max(near, h.distance);   /* (no skin within reach: the point stays where the plate has it) */ return near || L; }
 function fitPauldron(mm, m, side) {
   const body = mm.meshes.find(x => /base_body/.test(x.name)); const bone = mm.nodes.find(n => n.name === 'arm' + side); if (!body || !bone) return;
   const g = m.geometry, used = [...new Set(g.index.array)], pos = g.getAttribute('position');
-  const J = new THREE.Vector3().setFromMatrixPosition(bone.matrixWorld);
+  const J = mm.bindPos('arm' + side);   // (in BIND space, where the geometry is — an adopted body's bones rest in the base's stance, not where its skin was bound)
   // the piece's own outward axis: joint -> centroid
   const C = new THREE.Vector3(); for (const v of used) C.add(new THREE.Vector3(pos.getX(v), pos.getY(v), pos.getZ(v))); C.multiplyScalar(1 / used.length);
   const ax = C.clone().sub(J).normalize();
@@ -442,7 +481,7 @@ function fitPauldron(mm, m, side) {
   const side0 = body.material.side; body.material.side = THREE.DoubleSide;   // the ray starts INSIDE the body: front-side only, the skin's inner face is culled and nothing is ever hit
   for (const v of used) { const P = new THREE.Vector3(pos.getX(v), pos.getY(v), pos.getZ(v)), d = P.clone().sub(J), L = d.length(); d.normalize();
     rc.set(J, d); rc.far = L + 0.3; const hits = rc.intersectObject(body, false); if (!hits.length) continue;
-    const far = hits.reduce((a, h) => h.distance > a ? h.distance : a, 0);   // the OUTER skin along this ray
+    const far = outerSkin(hits, L);   // the OUTER skin along this ray
     const excess = L - far - MARGIN, want = far + MARGIN + Math.max(0, excess) * KEEP;   // never inside the skin, most of the float taken out
     const Q = J.clone().add(d.clone().multiplyScalar(want)); pos.setXYZ(v, Q.x, Q.y, Q.z); farMap.set(v, { far, d }); n++; }
   body.material.side = side0; pos.needsUpdate = true; window.__pauldronFit = (window.__pauldronFit || []).concat([side + ':' + n + '/' + used.length]);
@@ -460,7 +499,7 @@ function buildMeshList() {
   for (const mm of MODELS) {
     for (const m of mm.meshes) {
       const nm = short(m.name);
-      const on = !(isHair(m) || /gauntlet|pauldron|helmet/i.test(nm)) && !HIDE.some(h => nm.toLowerCase().includes(h.toLowerCase()));   // a ware is off until the ITEMS panel puts it on
+      const wr = (RIG.wear || {})[m.name], on = !(isHair(m) || (wr && !wr.always) || /helmet/i.test(nm)) && !HIDE.some(h => nm.toLowerCase().includes(h.toLowerCase()));   // a ware is off until the ITEMS panel puts it on
       m.userData.want = on;
       const l = document.createElement('label');
       l.innerHTML = '<input type=checkbox' + (on ? ' checked' : '') + '> ' + nm + ' <span class=sm>' + (m.geometry.index.count / 3 | 0) + '</span>';
@@ -472,24 +511,20 @@ function buildMeshList() {
 // WHAT A PIECE COVERS. A gauntlet takes the place of the hand and of that arm's wrist wrap — the same rule as the
 // game's LOOK_UNDER, where a body part is dropped under the piece over it (the file's own left arm wears no wrap either).
 function applyItems() {   // the ITEMS panel is the truth for every ware; the mesh list below it just mirrors that
-  const on = id => { const e = el$(id); return !!(e && e.checked); };
+  const on = id => { const e = el$(id); return !!(e && e.checked); }, W = RIG.wear || {}, worn = k => W[k] && (W[k].always || on('i_' + k));
   for (const mm of MODELS) for (const m of mm.meshes) {
-    if (/^gauntlet_|^pauldron_/.test(m.name)) m.userData.want = on('i_' + m.name);
+    if (W[m.name]) m.userData.want = !!worn(m.name);       // (an `always` piece is the default: the bands are the base's wrists, there are no bare ones)
     if (m.name === 'helmet') m.userData.want = on('i_helmet');
-    if (/^band_/.test(m.name)) m.userData.want = true;   // the bands are the default wrist: there are no bare ones
   }
-  for (const mm of MODELS) for (const m of mm.meshes) {
-    const side = (m.name.match(/_(L|R)$/) || [])[1];
-    if (/^pauldron_/.test(m.name) && side && on('i_gauntlet_' + side)) m.userData.want = false;   // the steel arm brings its own shoulder
-    if (/hair/i.test(m.name) && on('i_helmet')) m.userData.want = false;                          // no hair through a helm
-  }
+  for (const k of Object.keys(W)) if (worn(k)) for (const h of W[k].hides || []) for (const mm of MODELS) for (const m of mm.meshes) if (m.name === h) m.userData.want = false;   // a steel arm takes that side's band and pauldron off
+  for (const mm of MODELS) for (const m of mm.meshes) if (/hair/i.test(m.name) && on('i_helmet')) m.userData.want = false;                          // no hair through a helm
   applyShow();
 }
 function applyUnder() {
   for (const mm of MODELS) {
     const body = mm.meshes.find(m => /base_body/.test(m.name)); const pj = mm.pieces && mm.pieces.body; if (!body || !pj) continue;
     if (!body.userData.idx0) body.userData.idx0 = Array.from(body.geometry.index.array);
-    const worn = side => { const g = mm.meshes.find(m => m.name === 'gauntlet_' + side); return g && g.userData.want; };
+    const W = RIG.wear || {}, wornNow = mm.meshes.filter(m => W[m.name] && m.userData.want);
     // THE WHOLE ARM IS THE PIECE, exactly as the file wears it: shoulder to fingertips in steel, so the hand, the
     // forearm and the upper arm all go with it. Fitting flesh inside the steel instead — drawn in, flared to the rim,
     // matched angle by angle — kept coming out through it on one side or leaving a void in the sleeve on the other:
@@ -497,14 +532,13 @@ function applyUnder() {
     if (!body.userData.pos0) body.userData.pos0 = Float32Array.from(body.geometry.getAttribute('position').array);
     const bones = body.skeleton.bones, bp = nm => { const i = bones.findIndex(b2 => b2.name === nm); return i < 0 ? null : new THREE.Vector3().setFromMatrixPosition(bones[i].matrixWorld); };
     const hide = [];
-    for (const side of ['L', 'R']) { if (!worn(side)) continue;
+    for (const wm of wornNow) { const covers = W[wm.name].covers || []; if (!covers.length) continue;
       // the HAND and the FOREARM go; the upper arm STAYS inside the steel one. Dropped too, the torso is left cut open
       // at the shoulder — the deltoid belongs to the arm class, and without it there is a notch beside the pauldron.
       // the HAND and the FOREARM go. The UPPER ARM stays, at its own size: dropped, the torso's shoulder shelf is left
       // standing in the air (the deltoid's attachment is classed torso), and drawn in, the bicep visibly narrows as it
       // enters the steel. The steel is grown instead, in the build, until it contains the arm.
-      for (const part of ['hand', 'fore']) { const c2 = pj.classes.indexOf(part + side); if (c2 >= 0) hide.push(c2); }
-      const b2 = mm.meshes.find(m => m.name === 'band_' + side); if (b2) b2.userData.want = false; }
+      for (const part of covers) { const c2 = pj.classes.indexOf(part); if (c2 >= 0) hide.push(c2); } }
     const i0 = body.userData.idx0, p0 = body.userData.pos0;
     const key = hide.join(','); if (body.userData.hideKey === key) continue; body.userData.hideKey = key;
     if (!hide.length) body.geometry.setIndex(i0.slice());
@@ -567,7 +601,7 @@ function applyShadeBodyOnly() {
   const mode = el$('shade').value; BODY.material = BODY.userData[mode] || BODY.userData.tex;
 }
 ['t_bones', 't_grid'].forEach(id => el$(id).onchange = applyShow);
-['i_gauntlet_L', 'i_gauntlet_R', 'i_pauldron_L', 'i_pauldron_R', 'i_helmet'].forEach(id => el$(id).onchange = applyItems);
+el$('i_helmet').onchange = applyItems;
 ['shade', 't_wire', 't_smooth', 't_double'].forEach(id => el$(id).onchange = applyShade);
 el$('iso').onchange = () => { if (el$('iso').value === '') { applyShadeBodyOnly(); } else isolate(); };
 
@@ -646,13 +680,33 @@ async function loadMotions() {
   for (const m of MO.list) { const o = document.createElement('option'); o.value = m.id; o.textContent = m.name + '  ·  ' + (m.frames / m.fps).toFixed(2) + ' s' + (m.loop ? ' loop' : ''); el$('mo').appendChild(o); }
   if (q.get('motion')) setMotion(q.get('motion'));
 }
+// ---- A CLIP ON ANOTHER BODY. The quaternions carry over as they are (the bodies are congruent, bone for bone); what does not
+// is the HIPS' ROAD, which was laid for the base's legs. So for an adopted body the road is re-laid once per clip: the hips'
+// travel from their rest scaled by the legs' ratio, and then every frame lifted or lowered until the lowest point of his
+// own soles is ON the floor — unless that frame is in the air (the soles clear the floor by more than a step's roll), where
+// the clip's own flight is kept. The lift is smoothed over a few frames so a change of the standing foot does not tick.
+let BASEREF = null, SOLES = null;
+async function baseRef() { if (BASEREF) return BASEREF; const b = await (await fetch('../../assets/rigs/base/bones.json?' + Date.now())).json(), P = Object.fromEntries(b.map(x => [x.path, x.pos])), d = (a, c) => Math.hypot(P[a][0] - P[c][0], P[a][1] - P[c][1], P[a][2] - P[c][2]);
+  return (BASEREF = { pelvis: P.pelvis, leg: d('thighL', 'shinL') + d('shinL', 'footL') }); }
+function solePoints() { if (SOLES) return SOLES; const pts = [], v = new THREE.Vector3();
+  for (const m of M.meshes) { if (!m.isSkinnedMesh || !m.userData.want) continue; const pa = m.geometry.getAttribute('position'), si = m.geometry.getAttribute('skinIndex'), sw = m.geometry.getAttribute('skinWeight'), low = [];
+    for (let i = 0; i < pa.count; i++) { let b = 0; for (let k = 1; k < 4; k++) if (sw.array[i * 4 + k] > sw.array[i * 4 + b]) b = k; const bone = m.skeleton.bones[si.array[i * 4 + b]]; if (!bone || !/^(foot|toe)[LR]$/.test(bone.name) || pa.getY(i) > 0.03) continue; low.push({ bone, inv: m.skeleton.boneInverses[si.array[i * 4 + b]], i, pa }); }
+    const step = Math.max(1, Math.floor(low.length / 60)); for (let k = 0; k < low.length; k += step) { const o = low[k]; pts.push({ bone: o.bone, p: v.fromBufferAttribute(o.pa, o.i).applyMatrix4(o.inv).clone() }); } }
+  return (SOLES = pts); }
+async function fitClip(c) { if (!RIG.adopted || c.fitted || !c.pos) return c; const B = await baseRef(), rest = REST.get(c.root).p, leg = M.bindPos('thighL').distanceTo(M.bindPos('shinL')) + M.bindPos('shinL').distanceTo(M.bindPos('footL')), k = leg / B.leg, n = c.frames, S = solePoints(), v = new THREE.Vector3();
+  const pos = new Float32Array(n * 3), lift = new Float32Array(n), rb = BONE[c.root];
+  for (let f = 0; f < n; f++) { for (let d = 0; d < 3; d++) pos[f * 3 + d] = rest.getComponent(d) + (c.pos[f * 3 + d] - B.pelvis[d]) * k;
+    c.bones.forEach((nm, j) => { const b = BONE[nm]; if (b) b.quaternion.fromArray(c.q[j], f * 4); }); rb.position.set(pos[f * 3], pos[f * 3 + 1], pos[f * 3 + 2]); M.root.updateMatrixWorld(true);
+    let lo = Infinity; for (const s of S) lo = Math.min(lo, v.copy(s.p).applyMatrix4(s.bone.matrixWorld).y); const u = Math.min(1, Math.max(0, (lo - 0.03) / 0.05)); lift[f] = -lo * (1 - u * u * (3 - 2 * u)); }
+  for (let f = 0; f < n; f++) { let sw = 0, sl = 0; for (let d = -4; d <= 4; d++) { const g = c.loop ? ((f + d) % n + n) % n : Math.min(n - 1, Math.max(0, f + d)), w = Math.exp(-d * d / 8); sw += w; sl += w * lift[g]; } pos[f * 3 + 1] += sl / sw; }
+  c.pos = pos; if (c.travel) c.travel = c.travel.map(x => x * k); if (c.speed) c.speed *= k; c.fitted = k; restPose(); return c; }
 function restPose() { for (const [nm, r0] of REST) { const b = BONE[nm]; if (b && b.isBone) { b.position.copy(r0.p); b.quaternion.copy(r0.q); } } pose(); }
 async function setMotion(id) {
   el$('mo').value = id || ''; MO.clip = null; tgt.x = 0; tgt.z = 0; cam(); if (id) preset(0, 0, 'p_bind'); restPose();
-  if (id) { const c = await (await fetch('motions/' + id + '.json?' + Date.now())).json(); c.q = c.q.map(a => new Float32Array(a)); c.pos = new Float32Array(c.pos); MO.clip = c; MO.t = 0; MO.play = true; }
+  if (id) { const c = await (await fetch('motions/' + id + '.json?' + Date.now())).json(); c.q = c.q.map(a => new Float32Array(a)); c.pos = new Float32Array(c.pos); await fitClip(c); MO.clip = c; MO.t = 0; MO.play = true; }
   const c = MO.clip; el$('s_mof').max = c ? c.frames - 1 : 0; el$('mo_play').textContent = 'pause';
   const goes = !!(c && c.travel && (c.travel[0] || c.travel[2])); el$('mo_inplace_row').style.display = goes ? '' : 'none'; if (goes) el$('v_travel').textContent = '(it travels ' + (Math.hypot(c.travel[0], c.travel[2]) * 100).toFixed(0) + ' cm, ' + (c.speed * 100).toFixed(0) + ' cm/s)';
-  el$('mo_info').textContent = c ? c.bones.length + ' bones · ' + c.frames + ' frames @ ' + c.fps + (c.credit ? ' · ' + c.credit : '') : '';
+  el$('mo_info').textContent = c ? c.bones.length + ' bones · ' + c.frames + ' frames @ ' + c.fps + (c.fitted ? ' · the hips\' road re-laid for his legs (×' + c.fitted.toFixed(3) + ')' : '') + (c.credit ? ' · ' + c.credit : '') : '';
   if (!c) { el$('v_mof').textContent = '–'; el$('s_mof').value = 0; } armSlider(); pose();
 }
 function applyMotion(tf) {                          // tf in frames, fractional: slerp between the two around it
@@ -697,7 +751,7 @@ const cbS = u => { u = Math.min(1, Math.max(0, u)); return u * u * (3 - 2 * u); 
 const CB_TOK = { t: 'tap', L: 'LONG', J: 'JUMP+tap', G: 'guard', B: 'bash', F: 'move in', K: 'back off' },
       CB_NAME = { stab: 'THRUST', up: 'RISING CUT', down: 'CUT DOWN', spin: 'SPIN', jump: 'JUMP ATTACK', bash: 'SHIELD SWIPE', walk: 'moving in', back: 'backing off under the shield', hold: 'shield up' };
 async function cbLoad() { if (CB.flow) return; const FL = await (await fetch('../../assets/motions/flow.json?' + Date.now())).json();
-  const get = async id => { const c = await (await fetch('../../assets/motions/' + id + '.json?' + Date.now())).json(); c.q = c.q.map(a => new Float32Array(a)); c.pos = new Float32Array(c.pos); return c; };
+  const get = async id => { const c = await (await fetch('../../assets/motions/' + id + '.json?' + Date.now())).json(); c.q = c.q.map(a => new Float32Array(a)); c.pos = new Float32Array(c.pos); return fitClip(c); };
   for (const [k, id] of Object.entries(FL.clips)) CB.clips[k] = await get(id); CB.clips.walk = await get(FL.moves.walk); CB.clips.back = await get(FL.moves.back);
   CB.bones = CB.clips.down.bones; for (const c of Object.values(CB.clips)) if (c.bones.join() !== CB.bones.join()) throw new Error('combo: the clips do not share one bone list');
   const rg = await (await fetch(DIR + '/rig.json?' + Date.now())).json(), g = rg.grip && rg.grip.sword; CB.S = rg.hipY ? 1.52 / rg.hipY : 1.39;   // game units per metre of him (the sim's leap is in game units)
@@ -828,7 +882,7 @@ function measure() {
   const band = (y, half) => {
     const R = new Array(32).fill(0); let x0 = 9, x1 = -9, z0 = 9, z1 = -9, n = 0;
     for (let v = 0; v < pos.count; v++) {
-      const k = vc ? vc[v] : -1; if (names[k] !== 'torso') continue;
+      const k = vc ? vc[v] : -1; if (names[k] !== 'torso' && names[k] !== 'hips') continue;
       const yy = pos.getY(v); if (Math.abs(yy - y) > half) continue;
       const x = pos.getX(v), z = pos.getZ(v); n++;
       x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z);
@@ -839,14 +893,14 @@ function measure() {
     const g = Math.PI * (3 * (A + B) - Math.sqrt((3 * A + B) * (A + 3 * B)));
     return { w: n ? x1 - x0 : NaN, d: n ? z1 - z0 : NaN, g, n };
   };
-  const wp = n => { const b = BONE[n]; if (!b) return null; return new THREE.Vector3().setFromMatrixPosition(b.matrixWorld); };
+  const wp = n => M.bindPos(n);   // (joints where the skin was bound: the mesh is measured as modelled, whatever stance the bones rest in)
   const d = (a, b) => (a && b) ? a.distanceTo(b) : NaN;
   const sh = wp('armR'), elb = wp('foreR'), wr = wp('handR'), hip = wp('thighR'), kn = wp('shinR'), ft = wp('footR');
   const chest = band(bot + H * 0.72, H * 0.02), waist = band(bot + H * 0.62, H * 0.02), hips = band(bot + H * 0.53, H * 0.02);
   const cm = m => (m * 100).toFixed(1);
   const tris = ALL().filter(m => m.visible).reduce((a, m) => a + m.geometry.index.count / 3, 0) | 0;
   el$('stat').innerHTML =
-    `<b>the base</b>  ${tris} tris shown\n` +
+    `<b>${(SIZES.find(z => z.id === SIZE) || {}).name || 'the base'}</b>  ${tris} tris shown\n` +
     `height        <b>${cm(H)}</b> cm\n` +
     `head length   <b>${cm(headH)}</b> cm\n` +
     `heads tall    <b>${(H / headH).toFixed(2)}</b>  (ideal 7.5–8)\n` +

@@ -1,0 +1,4 @@
+[
+  { "id": "normal", "name": "normal", "rig": "rigs/glad", "default": true },
+  { "id": "huge", "name": "huge", "rig": "../../assets/rigs/base" }
+]

@@ -7,15 +7,24 @@ setvbuf(stdout, nil, _IONBF, 0)
 let src = URL(fileURLWithPath: CommandLine.arguments[1]), outDir = URL(fileURLWithPath: CommandLine.arguments[2])
 let texDir: String? = CommandLine.arguments.count > 3 ? CommandLine.arguments[3] : nil
 var gMaterials: [[String: Any]] = [], gTextures: [[String: Any]] = [], gImages: [[String: Any]] = []
-func texFor(_ meshName: String) -> Int? {
+var gMatOf: [String: Int] = [:]                          // one glTF material per texture key, however many meshes wear it
+func texFor(_ meshName: String, _ matName: String?) -> Int? {
   guard let td = texDir, let files = try? FileManager.default.contentsOfDirectory(atPath: td) else { return nil }
-  // mesh names look like SK_1039_1039506_mo_MI_1039506_Body_0 -> key MI_1039506_Body
-  guard let r = meshName.range(of: "MI_") else { return nil }; var key = String(meshName[r.lowerBound...]); if key.hasSuffix("_0") { key = String(key.dropLast(2)) }
+  // the key is whatever `<key>_baseColor.*` file the mesh's MATERIAL is named after (Sketchfab's usdz: Gladiator_MAT ->
+  // Gladiator_MAT_baseColor.jpg); failing that the Thor file's rule — mesh names like SK_1039_1039506_mo_MI_1039506_Body_0 -> MI_1039506_Body;
+  // failing that the longest texture key the mesh's own name contains (body_geo_Gladiator_MAT_0 -> Gladiator_MAT)
+  let keys = files.compactMap { f -> String? in guard let r = f.range(of: "_baseColor.") else { return nil }; return String(f[..<r.lowerBound]) }
+  var key = ""
+  if let mn = matName, keys.contains(mn) { key = mn }
+  else if let r = meshName.range(of: "MI_") { key = String(meshName[r.lowerBound...]); if key.hasSuffix("_0") { key = String(key.dropLast(2)) } }
+  else if let k = keys.filter({ meshName.contains($0) }).max(by: { $0.count < $1.count }) { key = k }
+  if key.isEmpty { return nil }
+  if let done = gMatOf[key] { return done }
   func img(_ suffix: String) -> Int? { guard let f = files.first(where: { $0.hasPrefix(key + "_" + suffix + ".") }) else { return nil }; try? FileManager.default.copyItem(at: URL(fileURLWithPath: td).appendingPathComponent(f), to: outDir.appendingPathComponent(f)); gImages.append(["uri": f]); gTextures.append(["source": gImages.count - 1, "sampler": 0]); return gTextures.count - 1 }
   var mat: [String: Any] = ["name": key, "pbrMetallicRoughness": ["metallicFactor": 0, "roughnessFactor": 0.9]]
   if let b = img("baseColor") { var p = mat["pbrMetallicRoughness"] as! [String: Any]; p["baseColorTexture"] = ["index": b]; mat["pbrMetallicRoughness"] = p; if files.contains(where: { $0.hasPrefix(key + "_baseColor.png") }) { mat["alphaMode"] = "MASK"; mat["alphaCutoff"] = 0.5; mat["doubleSided"] = true } } else { return nil }
   if let n = img("normal") { mat["normalTexture"] = ["index": n] }
-  gMaterials.append(mat); return gMaterials.count - 1
+  gMaterials.append(mat); gMatOf[key] = gMaterials.count - 1; return gMaterials.count - 1
 }
 try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
 let asset = MDLAsset(url: src); asset.loadTextures()
@@ -90,7 +99,7 @@ for m in meshes {
   var attrs: [String: Any] = ["POSITION": accF(P, comps: 3, type: "VEC3", target: 34962, minmax: true), "JOINTS_0": accU16(J, comps: 4, type: "VEC4", target: 34962), "WEIGHTS_0": accF(W, comps: 4, type: "VEC4", target: 34962)]
   if N.count == nv * 3 { attrs["NORMAL"] = accF(N, comps: 3, type: "VEC3", target: 34962) }
   if uv.count == nv * 2 { attrs["TEXCOORD_0"] = accF(uv, comps: 2, type: "VEC2", target: 34962) }
-  let mi = texFor(m.name) ?? 0; gMeshes.append(["name": m.name, "primitives": [["attributes": attrs, "indices": accU32(idx), "material": mi]]])
+  let mi = texFor(m.name, ((m.submeshes as? [MDLSubmesh]) ?? []).first?.material?.name) ?? 0; gMeshes.append(["name": m.name, "primitives": [["attributes": attrs, "indices": accU32(idx), "material": mi]]])
   // this mesh's skin: joints in ITS order, IBMs picked from the skeleton's bind transforms
   let ibmM: [Float] = jmap.flatMap { m16(bindWorld[$0].inverse) }
   skins.append(["joints": jmap, "inverseBindMatrices": accF(ibmM, comps: 16, type: "MAT4"), "skeleton": roots.first ?? 0])

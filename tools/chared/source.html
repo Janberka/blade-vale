@@ -1,0 +1,129 @@
+<!doctype html><meta charset=utf-8><title>Blade Vale — source inspector</title>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<style>
+  :root{--bg:#23262b;--pnl:#15171acc;--ink:#e6e6e6;--dim:#9aa0a8;--acc:#d8a56a}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden}
+  canvas{display:block;touch-action:none}
+  .pnl{position:fixed;background:var(--pnl);backdrop-filter:blur(6px);border:1px solid #ffffff1a;border-radius:8px;padding:8px 10px}
+  #ui{left:10px;top:10px;width:232px;max-height:calc(100vh - 20px);overflow:auto}
+  #ui h4{margin:10px 0 5px;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);font-weight:600}
+  #ui h4:first-child{margin-top:0}
+  label{display:flex;align-items:center;gap:6px;padding:1px 0;cursor:pointer;user-select:none}
+  label input{accent-color:var(--acc)}
+  .row{display:flex;flex-wrap:wrap;gap:4px}
+  button{background:#ffffff14;color:var(--ink);border:1px solid #ffffff1f;border-radius:5px;padding:4px 7px;font:inherit;cursor:pointer}
+  button.on{background:var(--acc);color:#1a1a1a;border-color:var(--acc)}
+  select{background:#ffffff14;color:var(--ink);border:1px solid #ffffff1f;border-radius:5px;padding:3px 5px;font:inherit;width:100%}
+  #stat{right:10px;top:10px;min-width:230px;white-space:pre;font-size:11px;color:var(--dim)}
+  #stat b{color:var(--ink);font-weight:600}
+  .sm{color:var(--dim);font-size:11px}
+  .tag{position:fixed;pointer-events:none;font-size:10px;color:#ffe2b8;text-shadow:0 0 3px #000,0 0 3px #000;transform:translate(6px,-6px);white-space:nowrap}
+</style>
+<body>
+<div id=ui class=pnl>
+  <h4>source <span class=sm id=srcname></span></h4>
+  <div class=sm>a model AS IT CAME IN — before tools/realmesh/adopt puts it on our skeleton. Look here first: what the meshes are, how the joints run, what pose it was bound in.</div>
+  <h4>pose</h4>
+  <div class=row><button id=p_bind class=on title="the pose the skin was bound in (inverse bind matrices)">bind</button><button id=p_rest title="the pose the file's nodes are left in">rest</button></div>
+  <h4>meshes</h4>
+  <div id=meshlist></div>
+  <h4>shading</h4>
+  <select id=shade><option value=tex>textured</option><option value=clay>clay</option><option value=w>weights of the picked joint</option><option value=dom>dominant joint</option></select>
+  <label><input type=checkbox id=t_bones checked> skeleton</label>
+  <label><input type=checkbox id=t_tags checked> joint names</label>
+  <label><input type=checkbox id=t_double> double-sided</label>
+  <label><input type=checkbox id=t_grid checked> grid + ruler</label>
+  <h4>joint <span class=sm>— pick one: its weights, its children</span></h4>
+  <select id=joint size=12 style=height:190px></select>
+  <div class=sm id=jinfo></div>
+  <h4>camera</h4>
+  <div class=row><button data-v="0">front</button><button data-v="180">back</button><button data-v="90">left</button><button data-v="-90">right</button><button data-v="35">3/4</button></div>
+</div>
+<div id=stat class=pnl>loading…</div>
+<div id=tags></div>
+<script src="../../vendor/three.min.js?v=r128"></script>
+<script>
+// THE SOURCE INSPECTOR. `?src=<dir>` (beside this page; default sources/glad2) holds a scene.gltf as usd2gltf.swift / any
+// exporter wrote it, in ITS units and ITS pose. `?scale=` overrides the guess (a model taller than 10 is in centimetres).
+const q = new URLSearchParams(location.search), SRC = q.get('src') || 'sources/glad2';
+const el$ = id => document.getElementById(id); el$('srcname').textContent = SRC;
+const r = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true }); r.setPixelRatio(Math.min(devicePixelRatio, 2)); r.setSize(innerWidth, innerHeight); r.outputEncoding = THREE.sRGBEncoding; document.body.appendChild(r.domElement);
+const s = new THREE.Scene(); s.background = new THREE.Color(0x23262b);
+const c = new THREE.PerspectiveCamera(32, innerWidth / innerHeight, 0.01, 200);
+s.add(new THREE.HemisphereLight(0xdfe6f0, 0x3a3630, 0.6)); const key = new THREE.DirectionalLight(0xfff2e2, 1.1); key.position.set(2, 3.4, 3); s.add(key);
+const fill = new THREE.DirectionalLight(0xbfd4ff, 0.34); fill.position.set(-3, 1.6, -1.5); s.add(fill);
+const gnd = new THREE.Group(); s.add(gnd); gnd.add(new THREE.GridHelper(6, 24, 0x4a4f57, 0x33373d));
+{ const g = new THREE.Group(); g.position.set(0.85, 0, 0); g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 2.2, 0)]), new THREE.LineBasicMaterial({ color: 0x5a6069 })));
+  for (let y = 0; y <= 2.2001; y += 0.1) { const big = Math.abs(y * 2 % 1) < 1e-6, w = big ? 0.07 : 0.035; g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-w, y, 0), new THREE.Vector3(0, y, 0)]), new THREE.LineBasicMaterial({ color: big ? 0x8b939c : 0x545a62 }))); } gnd.add(g); }
+let az = (+q.get('az') || 28) * Math.PI / 180, el = (+q.get('el') || 4) * Math.PI / 180, dist = +q.get('d') || 5.2, tgt = new THREE.Vector3(0, 1.0, 0);
+function cam() { c.position.set(tgt.x + Math.sin(az) * Math.cos(el) * dist, tgt.y + Math.sin(el) * dist, tgt.z + Math.cos(az) * Math.cos(el) * dist); c.lookAt(tgt); } cam();
+
+let G, NODES = [], PARENT = [], MESHES = [], ROOT, SKEL, JOINTS = [], BINDL = [], RESTL = [], PICK = -1, SCALE = 1;
+(async () => {
+  const g = G = await (await fetch(SRC + '/scene.gltf?' + Date.now())).json(), bin = await (await fetch(SRC + '/' + g.buffers[0].uri + '?' + Date.now())).arrayBuffer();
+  const CT = { 5121: Uint8Array, 5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array }, NC = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT4: 16 };
+  const acc = i => { const a = g.accessors[i], bv = g.bufferViews[a.bufferView]; return new CT[a.componentType](bin, (bv.byteOffset || 0) + (a.byteOffset || 0), a.count * NC[a.type]); };
+  const texs = (g.images || []).map(im => { const t = new THREE.TextureLoader().load(SRC + '/' + im.uri); t.flipY = false; t.encoding = THREE.sRGBEncoding; return t; });
+  const mats = (g.materials || []).map(m => { const p = m.pbrMetallicRoughness || {}, mm = new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0, skinning: true }); if (p.baseColorTexture) mm.map = texs[g.textures[p.baseColorTexture.index].source]; mm.name = m.name; return mm; });
+  NODES = g.nodes.map(n => { const b = new THREE.Bone(); b.name = n.name; if (n.matrix) new THREE.Matrix4().fromArray(n.matrix).decompose(b.position, b.quaternion, b.scale); else { if (n.translation) b.position.fromArray(n.translation); if (n.rotation) b.quaternion.fromArray(n.rotation); if (n.scale) b.scale.fromArray(n.scale); } b.updateMatrix(); return b; });
+  PARENT = new Array(NODES.length).fill(-1); g.nodes.forEach((n, i) => (n.children || []).forEach(ch => { PARENT[ch] = i; NODES[i].add(NODES[ch]); }));
+  ROOT = new THREE.Group(); g.nodes.forEach((n, i) => { if (PARENT[i] < 0 && n.mesh == null) ROOT.add(NODES[i]); });
+  RESTL = NODES.map(b => ({ p: b.position.clone(), q: b.quaternion.clone(), s: b.scale.clone() }));
+  // the bind pose: each joint's world matrix is the inverse of its inverse bind matrix; a joint WITHOUT one rides its parent
+  const order = []; const dfs = i => { order.push(i); (g.nodes[i].children || []).forEach(dfs); }; g.nodes.forEach((n, i) => { if (PARENT[i] < 0) dfs(i); });
+  const worldM = new Map(), isJoint = new Set();
+  for (const n of g.nodes) { if (n.mesh == null || n.skin == null) continue; const sk = g.skins[n.skin], ibm = acc(sk.inverseBindMatrices);
+    sk.joints.forEach((j, k) => { isJoint.add(j); if (!worldM.has(j)) { const m = new THREE.Matrix4().fromArray(ibm, k * 16).invert(); if (m.elements.every(Number.isFinite) && Math.abs(m.determinant()) > 1e-9) worldM.set(j, m); } }); }
+  const worldOf = new Map(); BINDL = NODES.map(() => null);
+  for (const i of order) { let wm = worldM.get(i); const pw = PARENT[i] >= 0 ? worldOf.get(PARENT[i]) : null; if (!wm) wm = pw ? pw.clone().multiply(NODES[i].matrix) : NODES[i].matrix.clone();
+    const local = pw ? pw.clone().invert().multiply(wm) : wm.clone(), L = { p: new THREE.Vector3(), q: new THREE.Quaternion(), s: new THREE.Vector3() }; local.decompose(L.p, L.q, L.s); BINDL[i] = L; worldOf.set(i, wm.clone()); }
+  JOINTS = order.filter(i => isJoint.has(i));
+  let top = -1e9; const unBound = [];
+  for (const n of g.nodes) { if (n.mesh == null) continue; const p = g.meshes[n.mesh].primitives[0], geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(acc(p.attributes.POSITION), 3)); if (p.attributes.NORMAL != null) geo.setAttribute('normal', new THREE.BufferAttribute(acc(p.attributes.NORMAL), 3)); else geo.computeVertexNormals();
+    if (p.attributes.TEXCOORD_0 != null) geo.setAttribute('uv', new THREE.BufferAttribute(acc(p.attributes.TEXCOORD_0), 2));
+    geo.setAttribute('skinIndex', new THREE.BufferAttribute(acc(p.attributes.JOINTS_0), 4)); geo.setAttribute('skinWeight', new THREE.BufferAttribute(acc(p.attributes.WEIGHTS_0), 4)); geo.setIndex(new THREE.BufferAttribute(acc(p.indices), 1));
+    geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(geo.getAttribute('position').count * 3).fill(0.3), 3));
+    const sk = g.skins[n.skin], ibm = acc(sk.inverseBindMatrices), sm = new THREE.SkinnedMesh(geo, mats[p.material || 0]); sm.name = n.name; sm.frustumCulled = false; ROOT.add(sm);
+    sm.bind(new THREE.Skeleton(sk.joints.map(j => NODES[j]), sk.joints.map((j, k) => { const m = new THREE.Matrix4().fromArray(ibm, k * 16); return m.elements.every(Number.isFinite) ? m : new THREE.Matrix4(); })), new THREE.Matrix4());
+    sm.userData = { tex: sm.material, clay: new THREE.MeshStandardMaterial({ color: 0xc8c3bb, roughness: 0.62, skinning: true }), w: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8, skinning: true }), joints: sk.joints, want: true };
+    geo.computeBoundingBox(); top = Math.max(top, geo.boundingBox.max.y); MESHES.push(sm); }
+  SCALE = +q.get('scale') || (top > 10 ? 0.01 : 1); ROOT.scale.setScalar(SCALE); s.add(ROOT);
+  SKEL = new THREE.SkeletonHelper(ROOT); SKEL.material.depthTest = false; SKEL.renderOrder = 9; s.add(SKEL);
+  setPose('bind');
+  const host = el$('meshlist'); for (const m of MESHES) { const l = document.createElement('label'); l.innerHTML = '<input type=checkbox checked> ' + m.name.replace(/_geo.*$/, '') + ' <span class=sm>' + (m.geometry.index.count / 3 | 0) + '</span>'; l.querySelector('input').onchange = e => { m.userData.want = e.target.checked; show(); }; host.appendChild(l); }
+  const js = el$('joint'); for (const i of JOINTS) { let d = 0; for (let p = PARENT[i]; p >= 0 && isJoint.has(p); p = PARENT[p]) d++; const o = document.createElement('option'); o.value = i; o.textContent = ' '.repeat(d) + NODES[i].name + (worldM.has(i) ? '' : '  (no bind)'); js.appendChild(o); }
+  js.onchange = () => { PICK = +js.value; paint(); info(); };
+  show(); stat(); window.__ready = true;
+})();
+function setPose(which) { const L = which === 'rest' ? RESTL : BINDL; NODES.forEach((b, i) => { if (!L[i] || !b.isBone) return; b.position.copy(L[i].p); b.quaternion.copy(L[i].q); b.scale.copy(L[i].s); }); ROOT.updateMatrixWorld(true); el$('p_bind').classList.toggle('on', which !== 'rest'); el$('p_rest').classList.toggle('on', which === 'rest'); }
+el$('p_bind').onclick = () => setPose('bind'); el$('p_rest').onclick = () => setPose('rest');
+function show() { const mode = el$('shade').value; for (const m of MESHES) { m.visible = m.userData.want; m.material = mode === 'tex' ? m.userData.tex : mode === 'clay' ? m.userData.clay : m.userData.w; m.material.side = el$('t_double').checked ? THREE.DoubleSide : THREE.FrontSide; m.material.needsUpdate = true; }
+  SKEL.visible = el$('t_bones').checked; gnd.visible = el$('t_grid').checked; paint(); }
+const HUE = i => new THREE.Color().setHSL((i * 0.618034) % 1, 0.65, 0.55);
+function paint() { const mode = el$('shade').value; if (mode !== 'w' && mode !== 'dom') return;
+  for (const m of MESHES) { const g = m.geometry, ji = g.getAttribute('skinIndex'), jw = g.getAttribute('skinWeight'), col = g.getAttribute('color'), J = m.userData.joints;
+    for (let v = 0; v < col.count; v++) { if (mode === 'w') { let w = 0; for (let k = 0; k < 4; k++) if (J[ji.array[v * 4 + k]] === PICK) w += jw.array[v * 4 + k]; col.setXYZ(v, 0.18 + 0.82 * w, 0.18 + 0.5 * w * w, 0.2 * (1 - w)); }
+      else { let b = 0; for (let k = 1; k < 4; k++) if (jw.array[v * 4 + k] > jw.array[v * 4 + b]) b = k; const cc = HUE(J[ji.array[v * 4 + b]]); col.setXYZ(v, cc.r, cc.g, cc.b); } } col.needsUpdate = true; } }
+function info() { if (PICK < 0) return; let n = 0, sum = 0; for (const m of MESHES) { const ji = m.geometry.getAttribute('skinIndex').array, jw = m.geometry.getAttribute('skinWeight').array, J = m.userData.joints; for (let v = 0; v < ji.length / 4; v++) for (let k = 0; k < 4; k++) if (J[ji[v * 4 + k]] === PICK && jw[v * 4 + k] > 0.01) { n++; sum += jw[v * 4 + k]; } }
+  const p = NODES[PICK].getWorldPosition(new THREE.Vector3()); el$('jinfo').textContent = NODES[PICK].name + ' at ' + [p.x, p.y, p.z].map(v => (v * 100).toFixed(1)).join(', ') + ' cm · ' + n + ' weighted verts · children: ' + (NODES[PICK].children.filter(x => x.isBone).map(x => x.name).join(' ') || '—'); }
+function stat() { let lo = 1e9, hi = -1e9, tris = 0; for (const m of MESHES) { const b = m.geometry.boundingBox; lo = Math.min(lo, b.min.y); hi = Math.max(hi, b.max.y); tris += m.geometry.index.count / 3; }
+  el$('stat').innerHTML = '<b>' + SRC + '</b>\n' + MESHES.length + ' meshes · ' + (tris | 0) + ' tris · ' + JOINTS.length + ' joints\nunits: ×' + SCALE + ' → <b>' + ((hi - lo) * SCALE * 100).toFixed(1) + '</b> cm tall (all meshes)\nmaterials: ' + (G.materials || []).map(m => m.name).join(', '); }
+['shade', 't_bones', 't_double', 't_grid'].forEach(id => el$(id).onchange = show);
+document.querySelectorAll('[data-v]').forEach(b => b.onclick = () => { az = +b.dataset.v * Math.PI / 180; cam(); });
+let drag = null; const dom = r.domElement;
+dom.addEventListener('pointerdown', e => { dom.setPointerCapture(e.pointerId); drag = { x: e.clientX, y: e.clientY, pan: e.button === 2 || e.shiftKey }; }); dom.addEventListener('pointerup', () => drag = null); dom.addEventListener('contextmenu', e => e.preventDefault());
+dom.addEventListener('pointermove', e => { if (!drag) return; const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY;
+  if (drag.pan) { const k = dist * 0.0016; tgt.addScaledVector(new THREE.Vector3().setFromMatrixColumn(c.matrix, 0), -dx * k).addScaledVector(new THREE.Vector3().setFromMatrixColumn(c.matrix, 1), dy * k); } else { az -= dx * 0.0075; el = Math.max(-1.45, Math.min(1.45, el + dy * 0.0075)); } cam(); });
+dom.addEventListener('wheel', e => { e.preventDefault(); dist = Math.max(0.08, Math.min(20, dist * (1 + e.deltaY * 0.0012))); cam(); }, { passive: false });
+addEventListener('resize', () => { r.setSize(innerWidth, innerHeight); c.aspect = innerWidth / innerHeight; c.updateProjectionMatrix(); });
+window.__view = (a, e, d, y, x, z) => { if (a != null) az = a * Math.PI / 180; if (e != null) el = e * Math.PI / 180; if (d != null) dist = d; if (y != null) tgt.y = y; if (x != null) tgt.x = x; if (z != null) tgt.z = z; cam(); };
+window.__set = (k, v) => { const n = el$(k); if (n.type === 'checkbox') n.checked = v; else n.value = v; n.onchange && n.onchange(); return k + '=' + v; };
+window.__save = async name => { draw(); await fetch('/shot?' + name, { method: 'POST', body: r.domElement.toDataURL('image/jpeg', 0.92) }); return name; };
+const tagHost = el$('tags'), TAGS = new Map(), tv = new THREE.Vector3();
+function draw() { r.render(s, c); const on = el$('t_tags').checked && el$('t_bones').checked; tagHost.style.display = on ? '' : 'none'; if (!on) return;
+  for (const i of JOINTS) { let t = TAGS.get(i); if (!t) { t = document.createElement('div'); t.className = 'tag'; t.textContent = NODES[i].name; tagHost.appendChild(t); TAGS.set(i, t); }
+    NODES[i].getWorldPosition(tv).project(c); t.style.left = ((tv.x * 0.5 + 0.5) * innerWidth) + 'px'; t.style.top = ((-tv.y * 0.5 + 0.5) * innerHeight) + 'px'; t.style.display = tv.z < 1 ? '' : 'none'; t.style.color = i === PICK ? '#ffb14a' : '#ffe2b8'; } }
+(function loop() { requestAnimationFrame(loop); if (window.__ready) draw(); })();
+</script>

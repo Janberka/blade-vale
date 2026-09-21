@@ -5,7 +5,73 @@
   "frames": 56,
   "fps": 60,
   "loop": true,
-  "speed": 1.8988,
+  "speed": 1.4197,
+  "marks": null,
+  "credit": "Gladiator 1+motions by Kapi777 (Sketchfab), CC-BY-4.0"
+ },
+ {
+  "id": "g_slashdown",
+  "name": "Slash Down (game)",
+  "frames": 68,
+  "fps": 30,
+  "loop": false,
+  "speed": 0.0572,
+  "marks": {
+   "top": 25,
+   "land": 29
+  },
+  "credit": "Gladiator 1+motions by Kapi777 (Sketchfab), CC-BY-4.0"
+ },
+ {
+  "id": "g_slashup",
+  "name": "Slash Up (game)",
+  "frames": 72,
+  "fps": 30,
+  "loop": false,
+  "speed": 0.0731,
+  "marks": {
+   "top": 27.5,
+   "land": 35
+  },
+  "credit": "Gladiator 1+motions by Kapi777 (Sketchfab), CC-BY-4.0"
+ },
+ {
+  "id": "g_spin",
+  "name": "Spin (game)",
+  "frames": 68,
+  "fps": 30,
+  "loop": false,
+  "speed": 0.9518,
+  "marks": {
+   "top": 20.5,
+   "land": 25.5
+  },
+  "credit": "Gladiator 1+motions by Kapi777 (Sketchfab), CC-BY-4.0"
+ },
+ {
+  "id": "g_stab",
+  "name": "Stab (game)",
+  "frames": 65,
+  "fps": 30,
+  "loop": false,
+  "speed": 0.0406,
+  "marks": {
+   "top": 21.5,
+   "land": 28
+  },
+  "credit": "Gladiator 1+motions by Kapi777 (Sketchfab), CC-BY-4.0"
+ },
+ {
+  "id": "g_swipe",
+  "name": "Shield Swipe (game)",
+  "frames": 64,
+  "fps": 30,
+  "loop": false,
+  "speed": 0.0201,
+  "marks": {
+   "top": 23,
+   "land": 34.5
+  },
   "credit": "Gladiator 1+motions by Kapi777 (Sketchfab), CC-BY-4.0"
  }
 ]

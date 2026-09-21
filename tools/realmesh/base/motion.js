@@ -1,6 +1,6 @@
 // A MOTION for the base: a clip on somebody else's skeleton (usdanim.swift's JSON) retargeted onto assets/rigs/base, for the
 // char editor's MOTION panel.
-//   node tools/realmesh/base/motion.js <anim.json> <id> "<Name>" [--clip 0] [--profile cc_sketchfab] [--credit "…"] [--noloop] [--air] [--theirhands] [--handR x,y,z] [--handL x,y,z] [--hands x,y,z] [--cut A:B] [--cycle]
+//   node tools/realmesh/base/motion.js <anim.json> <id> "<Name>" [--clip 0] [--profile cc_sketchfab] [--credit "…"] [--noloop] [--air] [--theirhands] [--handR x,y,z] [--handL x,y,z] [--hands x,y,z] [--cut A:B] [--cycle] [--keep A:B] [--marks top=52,land=60] [--fps 30]
 //   → tools/chared/motions/<id>.json, listed in tools/chared/motions/index.json
 //
 // HOW: in WORLD space, bone by bone. A source bone's turn away from its own reference pose, D(t) = Qs(t)·Qs_ref⁻¹, is laid
@@ -75,7 +75,9 @@ const ALIGN = {}; for (const s of ['L', 'R']) {
 
 const args = process.argv.slice(2), flag = (k, d) => { const i = args.indexOf('--' + k); if (i < 0) return d; const v = args[i + 1]; args.splice(i, 2); return v; };
 const sw = k => { const i = args.indexOf('--' + k); if (i < 0) return false; args.splice(i, 1); return true; }, noloop = sw('noloop'), air = sw('air'), theirHands = sw('theirhands'), findCycle = sw('cycle');
-const CUT = String(flag('cut', '')).split(':').map(Number);   // --cut A:B  keeps source frames A..B (at 60 a second)
+const CUT = String(flag('cut', '')).split(':').map(Number);   // --cut A:B  keeps source frames A..B (at 60 a second) AS A LOOP (its tail eased into its head)
+const KEEP = String(flag('keep', '')).split(':').map(Number);  // --keep A:B the same slice as a ONE-OFF: a blow, from leaving the guard to being back in it
+const MARKS = Object.fromEntries(String(flag('marks', '')).split(',').filter(Boolean).map(kv => { const [k, v] = kv.split('='); return [k, +v]; }));   // --marks top=52,land=60  moments the GAME needs, in source frames
 // THE SWORD HAND'S ZERO — the user's own numbers (2026-09-20), set by eye in the char editor: the fist as it HOLDS A SWORD,
 // bend −30° / tilt +51° / roll +40° on the hand's own lines. Every clip is baked with it, so a fighter carries his blade
 // the same way in all of them and the editor's hand sliders start from it at 0. A clip where that hand is empty or does
@@ -122,7 +124,9 @@ let t0 = clip.times[0], dur = clip.times[end] - t0, frames = closes ? Math.round
 // ONE CYCLE out of a long take. The source clips are 5-second performances (two steps, a hold, three more); a game wants
 // the stride alone, so it can loop it at whatever speed the man is actually moving. --cut A:B keeps frames A..B; --cycle
 // finds them — the pair whose poses match closest, over a window long enough to be a stride (0.4…1.6 s) — and says so.
-if (CUT.length === 2 && CUT.every(Number.isFinite)) { t0 = t0 + CUT[0] / FPS; frames = CUT[1] - CUT[0]; dur = frames / FPS; closes = true; }
+const SRC_FPS = 60, keepFrom = KEEP.length === 2 && KEEP.every(Number.isFinite) ? KEEP[0] : CUT.length === 2 && CUT.every(Number.isFinite) ? CUT[0] : 0;
+if (CUT.length === 2 && CUT.every(Number.isFinite)) { t0 = t0 + CUT[0] / SRC_FPS; dur = (CUT[1] - CUT[0]) / SRC_FPS; frames = Math.round(dur * FPS); closes = true; }
+else if (KEEP.length === 2 && KEEP.every(Number.isFinite)) { t0 = t0 + KEEP[0] / SRC_FPS; dur = (KEEP[1] - KEEP[0]) / SRC_FPS; frames = Math.round(dur * FPS) + 1; closes = false; }
 const world = clip.world ? clip.world.map(a => { const m = new M4().fromArray(a), p = new V3(), q = new Q4(), s = new V3(); m.decompose(p, q, s); return { p: p.divideScalar(s.x), q }; }) : null;
 function sample(t) {                                 // their locals and the skeleton's own placement at time t
   let k = 0; while (k < end - 1 && clip.times[k + 1] <= t) k++; const a = Math.min(1, Math.max(0, (t - clip.times[k]) / (clip.times[k + 1] - clip.times[k])));
@@ -195,7 +199,7 @@ for (let f = 0; f < frames; f++) {
     const prev = last[b.name]; if (prev && prev.dot(ql) < 0) ql.set(-ql.x, -ql.y, -ql.z, -ql.w); last[b.name] = ql; tracks[b.name].push(ql); }
   pos.push(Pw[tIx.pelvis]);
   soles.push(SOLE.map(o => o.local.clone().applyQuaternion(Qw[tIx[o.bone]]).add(Pw[tIx[o.bone]]).y));
-  feet.push(['L', 'R'].map(sd => Pw[tIx['toe' + sd]].clone().sub(Pw[tIx.pelvis])));   // each toe in the HIPS' frame: how the ground runs past him, travelling clip or not
+  feet.push(['L', 'R'].map(sd => Pw[tIx['foot' + sd]].clone()));                      // each ankle, for the stride's own speed (below)
 }
 
 // ---- a cut cycle is a slice out of a performance, so its end does not quite meet its start (14° on the worst bone of the
@@ -235,13 +239,19 @@ const travel = carried.length() > 0.05 ? [r4(carried.x), 0, r4(carried.z)] : [0,
 // the man is covering (on a travelling clip the foot stands still and the hips move — the same number either way), so the
 // stride's speed is the mean of that, over the frames a foot is planted. The game plays a clip at (his real speed ÷ this)
 // and the feet stop skating; without it an in-place walk has no speed at all to scale against.
-// Per frame take the foot that is DOWN (the lower of the two) and how fast it slides through the hips' frame, then the
-// MEDIAN of that over the clip — a mean is wrung out of shape by the frames a foot is swinging or planting. Checked
-// against the clips whose travel says the answer: walk_cycle 51 against a true 53 cm/s.
-const slid = []; for (let f = 1; f < frames; f++) { const k = feet[f][0].y < feet[f][1].y ? 0 : 1, d = feet[f][k].clone().sub(feet[f - 1][k]); slid.push(Math.hypot(d.x, d.z) * FPS); }
-slid.sort((a, b) => a - b); const stride = slid.length ? slid[slid.length >> 1] : 0, plantedFrames = slid.length;
+// Take the clip IN PLACE (its travel drawn back out evenly) and watch each ankle: while a foot is FLAT (within 2.5 cm of
+// its own lowest) and sliding BACKWARDS, the pace it slides at is the pace he is covering. The mean of that. Checked against
+// the clips whose travel gives the answer: walk_cycle 53 against a true 53 cm/s, walk_forward 48 against 50. (Earlier tries —
+// a mean over every "planted" frame, a median of the lower foot, the feet's widest spread — came out 3× apart on these clips:
+// what matters is FLAT and BACKWARDS, which leaves the swing, the plant and the push-off out. No use on a backward walk,
+// whose feet slide the other way; those travel, and travel is exact.)
+let slidSum = 0, plantedFrames = 0;
+for (let k = 0; k < 2; k++) { const P = feet.map((fr, f) => new V3(fr[k].x - travel[0] * f / frames, fr[k].y, fr[k].z - travel[2] * f / frames)), lo = Math.min(...P.map(p => p.y));
+  for (let f = 0; f < frames; f++) { const g = (f + 1) % frames; if (!closes && g === 0) continue; const vz = (P[g].z - P[f].z) * FPS; if (P[f].y < lo + 0.025 && P[g].y < lo + 0.025 && vz < 0) { slidSum += -vz; plantedFrames++; } } }
+const stride = plantedFrames > 4 ? slidSum / plantedFrames : 0;
 const speed = r4(Math.hypot(travel[0], travel[2]) ? Math.hypot(travel[0], travel[2]) / (frames / FPS) : stride);
-const out = { id, name: title || id, travel, speed, source: path.basename(srcFile) + ' · ' + clip.name.split('/').pop(), credit, fps: FPS, frames, duration: r4(frames / FPS), loop: closes,
+const marks = Object.fromEntries(Object.entries(MARKS).map(([k, v]) => [k, +((v - keepFrom) * FPS / SRC_FPS).toFixed(2)]));   // in THIS clip's frames
+const out = { id, name: title || id, travel, speed, marks, source: path.basename(srcFile) + ' · ' + clip.name.split('/').pop(), credit, fps: FPS, frames, duration: r4(frames / FPS), loop: closes,
   bones: moving, q: moving.map(nm => [].concat(...tracks[nm].map(q => [r4(q.x), r4(q.y), r4(q.z), r4(q.w)]))), root: 'pelvis', pos: [].concat(...pos.map(p => [r4(p.x), r4(p.y), r4(p.z)])) };
 fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(path.join(OUT, id + '.json'), JSON.stringify(out));
 const ixFile = path.join(OUT, 'index.json'), list = fs.existsSync(ixFile) ? JSON.parse(fs.readFileSync(ixFile)) : [];
@@ -251,7 +261,7 @@ const cm = x => (x * 100).toFixed(1);
 console.log(`${out.name}: ${frames} frames @ ${FPS} (${out.duration}s) ${closes ? 'LOOP' : 'once'} · ${moving.length}/${names.length} bones move · his hip ${(T[tIx.pelvis].Pw.y).toFixed(3)} over theirs ${hipY.toFixed(1)} → up/down ×${K.toFixed(4)}, along the floor ×${KXZ.toFixed(4)} (by the legs)`);
 if (!theirHands) { const H = HANDS.find(h => 'hand' + h.sd === (rigSpec.swordHand || 'handR')), rg = a => Math.round(Math.min(...a)) + '…' + Math.round(Math.max(...a)) + '°';
   console.log(`  hands: thumbs to the front — rolled up to ${(rollMax * 180 / Math.PI).toFixed(0)}° about the forearm (${WRIST_SHARE * 100}% in the forearm bone), own turn R ${HAND_TURN.R.map(x => Math.round(x * 180 / Math.PI)).join(',')} L ${HAND_TURN.L.map(x => Math.round(x * 180 / Math.PI)).join(',')} · the blade's line: ${rg(H.fwd)} forward of upright, ${rg(H.inw)} toward his middle`); }
-console.log(`  his stride runs the ground past him at ${(stride * 100).toFixed(0)} cm/s (median of the down foot over ${plantedFrames} frames) — what the game plays it against`);
+console.log(`  his stride runs the ground past him at ${(stride * 100).toFixed(0)} cm/s (flat feet sliding back, ${plantedFrames} frames) — what the game plays it against`);
 console.log(travel[0] || travel[2] ? `  TRAVELS ${(Math.hypot(travel[0], travel[2]) * 100).toFixed(0)} cm a ${closes ? 'loop' : 'clip'} (${(speed * 100).toFixed(0)} cm/s, heading ${(Math.atan2(travel[0], travel[2]) * 180 / Math.PI).toFixed(0)}° off straight ahead)` : '  treads on the spot');
 console.log(`  pelvis y ${cm(Math.min(...pos.map(p => p.y)))}…${cm(Math.max(...pos.map(p => p.y)))} cm (rest ${cm(T[tIx.pelvis].Pw.y)}) · x ${cm(Math.min(...pos.map(p => p.x)))}…${cm(Math.max(...pos.map(p => p.x)))} · z ${cm(Math.min(...pos.map(p => p.z)))}…${cm(Math.max(...pos.map(p => p.z)))}`);
 console.log(`  lowest sole point over the clip: before the lift ${cm(Math.min(...low0))}…${cm(Math.max(...low0))}, after ${cm(Math.min(...low))}…${cm(Math.max(...low))} cm (0 = on the ground) · L ${cm(Math.min(...lowL))}…${cm(Math.max(...lowL))} · R ${cm(Math.min(...lowR))}…${cm(Math.max(...lowR))}`);

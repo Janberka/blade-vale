@@ -1612,28 +1612,60 @@ const MOTION_FOR = { walk: 'angry_walk' };            // his ordinary walk. (The
 // guard, the same legs looked like a stranger's ("compare the walk with the editor's angry walk, they don't look alike at
 // all"). So while he is WALKING the clip has him, all 52 bones; the moment he blocks, swings, charges, rolls, is thrown or
 // mounts, motionWanted lets go and the game's own poses have him back — and those are the ones tied to what lands.
-function motionWanted(b) {                                  // which clip suits the man this frame, if any
+// A WALK IS NOT A RUN. The clip is a brisk walk: its flat feet slide back at 1.42 m/s (motion.js measures it, `speed`), which
+// on a figure scaled ×1.39 is ~2 units a second. A fighter here JOGS at 3.5 and sprints at 5.9 — to keep its feet on the
+// ground the walk would have to play at 1.8× and 3×, and at 2.5× (where riding the game's own run cadence put it) it was
+// the frantic little shuffle the user saw: "we are running weirdly". So the walk is played at the pace he is really
+// covering (rate = his speed ÷ the clip's, the feet hold the ground) for as long as that is a pace a walk can be — up to
+// MOTION_MAX_RATE — and past it the game's own run has him back until the pack has a RUN of its own. (Hysteresis on the
+// way out and in, so a man at the edge does not flicker between the two.)
+const MOTION_MAX_RATE = 1.9;
+// THE BLOWS. The sim's blow is three short spans — `wind` (0.06–0.14 s: the load happened in the HOLD before it, b.charge),
+// `strike` (0.10–0.12 s, the hit lands as it opens) and `rec` — and its four moves are the three of the chain and the heavy.
+// The pack's blows are 2–4 s PERFORMANCES: leave the guard, draw the blade up, cut, gather, settle. So a clip is not played,
+// it is SCRUBBED: each carries two marks (`top`, the top of its wind-up, where the blade pauses; `land`, where the cut
+// arrives — read off the blade tip's speed, tools/realmesh/base) and the sim's clock is laid on them:
+//   the hold      guard → top, as far as he has loaded it (a tap starts a few frames under the top: the draw is a flick);
+//   wind          on up to the top;          strike   top → a little past `land`, so the cut ARRIVES when the sim says it hits;
+//   rec           on from there at a bit over life's own pace; whatever is left of the tail, the ease back to his guard covers.
+// What lands, when, and on whom is still entirely the sim's: the clip only ever shows the blow the sim is already making.
+const MOTION_ATK = ['g_slashup', 'g_stab', 'g_slashdown', 'g_spin'], MOTION_BASH = 'g_swipe';   // AF_MOVES: slashR, slashL, chop, heavy
+function motionBlow(b, mo) {
+  if (!b || b.dead || b.mounted || b.weapon === 'bow') return null;
+  const F = AF_F, bash = b.bash, a = b.atk && !b.atk.bow ? b.atk : null, ch = !a && !bash && b.charge ? b.charge : null; if (!a && !ch && !bash) return null;
+  const id = bash ? MOTION_BASH : MOTION_ATK[a ? a.move : (ch.heavyPose || ch.t >= F.chargeMax * F.heavyAt ? 3 : (b.chargeMove != null ? b.chargeMove : b.combo % 3))] || MOTION_ATK[0];
+  const c = motionClip(id); if (!c || !c.marks) return null; const top = c.marks.top, land = c.marks.land, fps = c.fps;
+  if (mo.blow !== id) { mo.blow = id; mo.rel = null; }
+  let f;
+  if (ch) { const k = Math.min(1, ch.t / (F.chargeMax * 0.8)); f = top * (k * k * (3 - 2 * k)); mo.rel = f; }                  // the hold: as far up as he has loaded it
+  else { const W = bash ? F.bash : a, t = (bash || a).t, from = Math.max(mo.rel == null ? 0 : mo.rel, top - 0.12 * fps);         // (a tap: the last eighth of a second of the draw)
+    if (t < W.wind) f = from + (top - from) * (t / W.wind);
+    else if (t < W.wind + W.strike) f = top + (land + 0.06 * fps - top) * ((t - W.wind) / W.strike);
+    else f = Math.min(c.frames - 1, land + 0.06 * fps + (t - W.wind - W.strike) * fps * 1.25); }
+  return { id, frame: f };
+}
+function motionWanted(b, mo, S) {                           // which clip suits the man this frame, if any
   if (!b || b.dead || b.mounted || b.atk || b.charge || b.blocking || b.rollT > 0 || b.airT > 0 || b.landT > 0 || b.rushT > 0) return null;
-  if (!b.moving || Math.hypot(b.vx || 0, b.vz || 0) < 0.35) return null;
-  return { id: MOTION_FOR.walk, phase: b.phase || 0 };     // ON HIS OWN CADENCE: b.phase is the walk the game already keeps
+  const sp = Math.hypot(b.vx || 0, b.vz || 0); if (!b.moving || sp < 0.35) return null;
+  const c = MOTION.clips.get(MOTION_FOR.walk), v0 = ((c && c.speed) || 1.4) * (S || 1), rate = sp / v0;
+  if (rate > MOTION_MAX_RATE * (mo && mo.on ? 1.08 : 0.95)) return null;          // a run: not this clip's to play
+  const back = Math.sin(b.yaw || 0) * (b.vx || 0) + Math.cos(b.yaw || 0) * (b.vz || 0) < -0.1;   // (yaw 0 faces +z) giving ground: the same stride, run backwards
+  return { id: MOTION_FOR.walk, rate: Math.max(0.55, rate) * (back ? -1 : 1) };
 }
 const _moQa = new THREE.Quaternion(), _moQb = new THREE.Quaternion(), _moP = new THREE.Vector3();
 function motionPose(L, dt) {                                // → a local quaternion per node index for this frame, or null
-  const want = motionWanted(L.body), mo = L.mo || (L.mo = { id: null, t: 0, w: 0 });
-  if (want && want.id !== mo.id) { const c = motionClip(want.id); if (c) { mo.id = want.id; mo.c = c; mo.t = 0; mo.map = null; } else if (!mo.c) return null; }
+  const mo = L.mo || (L.mo = { id: null, t: 0, w: 0, on: false }), want = motionBlow(L.body, mo) || motionWanted(L.body, mo, L.inst.root.scale.x);
+  if (!want || want.frame == null) mo.blow = null;
+  if (want && want.id !== mo.id) { const c = motionClip(want.id); if (c) { mo.id = want.id; mo.c = c; mo.t = 0; mo.map = null; if (want.frame != null) mo.w = Math.min(mo.w, 0.35); } else if (!mo.c) return null; }   // (a new clip over an old one: drop the weight so the change is eased, not cut)
   if (!mo.c) return null;
-  const on = !!(want && want.id === mo.id);
-  mo.w = Math.max(0, Math.min(1, mo.w + (on ? dt / 0.14 : -dt / 0.12)));   // ease in, ease out — never a cut
+  const on = mo.on = !!(want && want.id === mo.id);
+  mo.w = Math.max(0, Math.min(1, mo.w + (on ? dt / (want.frame != null ? 0.07 : 0.14) : -dt / (mo.wasBlow ? 0.2 : 0.12))));   // ease in, ease out — never a cut (a blow comes in quicker than a walk and hands back to the guard slower)
+  if (on) mo.wasBlow = want.frame != null;
   if (mo.w <= 0) { if (!on) mo.id = null; return null; }
   const c = mo.c;
-  // ON THE GAME'S OWN CADENCE. `b.phase` is the walk cycle the sim already keeps for its procedural legs: it runs faster as
-  // he speeds up, slower at a walk, and BACKWARDS when he gives ground — all of it already tuned against how fast he really
-  // covers ground. Riding it means the clip strides at exactly the rate the old legs did, and there is no stride speed to
-  // guess at (measuring one off the planted foot gave answers 3× apart on these clips). One procedural cycle (2π) is one
-  // of ours, and a walk cycle is TWO steps either way, so they line up.
-  if (on) mo.t = want.phase / (Math.PI * 2) * (c.frames / c.fps);
+  if (on) { if (want.frame != null) mo.t = want.frame / c.fps; else mo.t += dt * want.rate; }   // a blow is SCRUBBED by the sim's clock; a walk runs at the pace he is really covering
   if (!mo.map) { mo.map = c.bones.map(nm => { const n = L.inst.byName[nm]; return n ? L.inst.nodes.indexOf(n) : -1; }); mo.root = c.root && L.inst.byName[c.root] ? L.inst.nodes.indexOf(L.inst.byName[c.root]) : -1; }
-  const n = c.frames, f = ((mo.t * c.fps) % n + n) % n, i0 = Math.floor(f), a = f - i0, i1 = (i0 + 1) % n, out = [];
+  const n = c.frames, f = c.loop ? ((mo.t * c.fps) % n + n) % n : Math.max(0, Math.min(n - 1, mo.t * c.fps)), i0 = Math.floor(f), a = f - i0, i1 = c.loop ? (i0 + 1) % n : Math.min(n - 1, i0 + 1), out = [];
   for (let k = 0; k < mo.map.length; k++) { const i = mo.map[k]; if (i < 0) continue;
     _moQa.fromArray(c.q[k], i0 * 4); _moQb.fromArray(c.q[k], i1 * 4); out[i] = _moQa.clone().slerp(_moQb, a); }
   if (mo.root >= 0) { const tr = f / n;                     // in place: the clip's own travel taken back out

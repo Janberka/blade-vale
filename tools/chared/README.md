@@ -175,6 +175,19 @@ ahead (the user: "guard legs but body top isn't turned like that anim, so it doe
 `angry_walk` is the one whose legs belong under an upright man. Judge a clip by the body it was performed with, not just
 by whether it retargets cleanly.
 
+**A walk is not a run.** `angry_walk` covers ground at 1.42 m/s (motion.js measures it off the flat, backward-sliding feet —
+checked against travelling clips: 53 vs a true 53 cm/s); a fighter here jogs at 3.5 units/s and sprints at 5.9. The walk is
+played at the pace he really covers (rate = his speed ÷ the clip's) up to 1.9×, and past that the game's own run has him —
+riding the sim's run cadence instead put the walk at 2.5× ("we are running weirdly"). **The pack has no run and no idle;
+until it does, sprinting and standing are the game's.**
+
+**The blows are SCRUBBED, not played.** The sim's blow is `wind` + `strike` + `rec` (~0.5 s, after a hold that loads it); the
+pack's are 2–4 s performances. Each game clip (`assets/motions/g_*.json`, 30 fps, sliced with `--keep A:B`) carries `marks`
+— `top` of the wind-up and `land` of the cut, read off the blade tip's speed — and `motionBlow` lays the sim's clock on them:
+the hold draws guard → top, `strike` runs top → land so the cut ARRIVES when the sim says it hits, `rec` runs on and the
+ease back to guard covers the tail. Moves → clips: slashR `g_slashup`, slashL `g_stab`, chop `g_slashdown`, heavy `g_spin`,
+shield bash `g_swipe`. What lands, when and on whom stays the sim's.
+
 `BV.motion()` says which clip each figure is on and how strongly. A long take is no good for this — cut a cycle out of it
 first (`--cycle` finds one, `--cut A:B` takes it, and the last frames are eased into the first so the loop does not pop).
 

@@ -306,6 +306,13 @@ first `fight` snapshot arrives is snapped forward. Skip with Space / Enter / Esc
 URL (or `BV.arena({ intro: false })`) turns it off. Test hooks: `BV.arenaIntro()` reads it, `BV.arenaIntro(n)` jumps
 to shot n, `BV.arenaIntro({ advance: secs })` steps it, `BV.arenaIntro('skip')`.
 
+**Nothing pressed before the bell is a press.** The buttons are counts (`I.atk / dodge / jump / swap`) and a man acts when
+his input's count is not the one he last saw — so a count left standing is an action at the first tick. Every count
+starts a bout at 0 (`afBoot`), none is kept through the entrance or the countdown (`afNoPresses` in `afFrame`: the Space
+that skips the film is not a leap at the bell, and a guest sends none either), and at the bell every man has seen what
+his input holds (`afBellInputs`). The swap alone waits: F in the countdown is a weapon chosen, changed at the bell. A
+man whose input is replaced (link lost, back, left) has seen the new one too (`afPressesSeen`).
+
 **The victory** (`afVictoryStart` / `afVictoryBody` / `afOutroCompose`, phase `over`): when the last man falls the
 pit freezes where it stands. Every fighter still on his feet keeps the spot he held at the bell — `afVictoryBody`
 drives the living for the whole `over` phase, on the host and on every guest alike, so nobody is left mid-swing and a

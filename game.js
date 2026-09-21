@@ -20877,6 +20877,22 @@ function afTagH(mounted, scale) { return (mounted ? 4.3 : 3.4) * (scale || 1) + 
 const AF_TAG_R2 = { near: 24 * 24, big: 12 * 12 };
 function afTagNear(pos) { return camera.position.distanceToSquared(pos) < (AF.bodies.length > AF_LIM.heroCap ? AF_TAG_R2.big : AF_TAG_R2.near); }
 function afFreshInput() { return { mx: 0, mz: 0, yaw: 0, atk: 0, heavy: 0, dodge: 0, block: false, hold: false, swap: 0, jump: 0 }; } // atk = release count (a tap between samples still lands); hold = the button is down (charging)
+// NOTHING PRESSED BEFORE THE BELL IS A PRESS (2026-09-21, the user: "we start all the games with jumping"). The buttons
+// are COUNTS (a tap between two samples still lands) and a man acts when his input's count is not the one he last saw
+// (seenAtk / seenDodge / seenJump / seenSwap). Three things left a count standing against a new body's 0, and each was
+// an edge waiting for the first tick of the fight — he LEAPT at the bell:
+//   · the bout before: afBoot zeroed atk / heavy / dodge and forgot jump and swap — one leap in any fight, and every
+//     fight after it opened with one (a guest's count rode the wire onto the host's fresh body the same way);
+//   · the Space that skips the entrance: the page's own key handler counts it as a leap (requestDodge) besides the skip;
+//   · anything tapped in the countdown (a click, Q / E / C, JUMP on a phone): kept, and played at the bell.
+// So every count starts a bout at 0 (afBoot), none is kept before the bell (afFrame) and AT the bell every man has seen
+// what his input holds (afBellInputs: the host's copy of a guest whose own bell rang first). The SWAP alone waits: F in
+// the countdown is a man choosing his weapon, and he changes hands at the bell. And a man whose input is REPLACED (the
+// link drops and a brain takes him, he comes back, he leaves for good) has seen the new one too — his old counts
+// against a fresh struct's zeros were a roll, a leap, a cut and a change of weapon nobody asked for.
+function afNoPresses(I) { I.atk = I.heavy = I.dodge = I.jump = 0; }
+function afPressesSeen(b, swap) { const I = b.inp; if (!I) return; b.seenAtk = I.atk; b.seenHeavy = I.heavy; b.seenDodge = I.dodge; b.seenJump = I.jump; if (swap) b.seenSwap = I.swap; }
+function afBellInputs() { afNoPresses(AF.locIn); for (const b of AF.bodies) afPressesSeen(b); }
 function afWearModel(h, pal, ctx) {                            // dress a fresh rig (foot, or a cavalry build / seated rider) in the warrior figure
   if (!MODEL_ON || !BV.modelReady || !h || !h.parts) return false;
   const g = h.riderGroup || h.group || h;                    // a horseman: only the man in the saddle wears it, the horse is the horse
@@ -23024,7 +23040,7 @@ function afApplyRemotePose(b, dt) {
   if (s !== 15) b.rushT = 0;
 }
 function afApplySnap(s) {
-  if (s.ph === 'fight' && (AF.phase === 'countdown' || AF.phase === 'intro')) { if (AF.phase === 'intro') afIntroEnd(); AF.phase = 'fight'; AF.countdown = 0; afIntroTailEnd(); afBanner('FIGHT', '', 1.0); afCrowdReact(false); }   // the host's bell rang while we were still watching the entrance
+  if (s.ph === 'fight' && (AF.phase === 'countdown' || AF.phase === 'intro')) { if (AF.phase === 'intro') afIntroEnd(); AF.phase = 'fight'; AF.countdown = 0; afBellInputs(); afIntroTailEnd(); afBanner('FIGHT', '', 1.0); afCrowdReact(false); }   // the host's bell rang while we were still watching the entrance
   AF.t = s.t || AF.t;
   const n = AF.net, nowS = performance.now() / 1000, st = +s.t || 0;
   if (n) {                                                   // the host's clock (afRenderTime) and the snap rate
@@ -23138,7 +23154,7 @@ function afNetTick(dt) {
     AF.events = [];
     const I = AF.locIn, n = AF.net;
     n.pingAcc += dt; if (n.pingAcc >= AF_NET.pingDt) { n.pingAcc = 0; afSend({ k: 'ping', t: performance.now() }, AF.hostPeer || undefined); }
-    const sig = I.atk + '|' + I.dodge + '|' + I.swap + '|' + (I.hold ? 1 : 0) + (I.block ? 1 : 0);   // a button edge goes out NOW; the sticks ride the tick
+    const sig = I.atk + '|' + I.dodge + '|' + I.swap + '|' + I.jump + '|' + (I.hold ? 1 : 0) + (I.block ? 1 : 0);   // a button edge goes out NOW (the leap too — it used to wait for the tick); the sticks ride the tick
     AF.inAcc += dt; if (sig === n.inSig && AF.inAcc < AF_NET.inDt) return; AF.inAcc = 0; n.inSig = sig;
     afSend({ k: 'in', mx: +I.mx.toFixed(2), mz: +I.mz.toFixed(2), yaw: +I.yaw.toFixed(3), st: I.steer == null ? null : +I.steer.toFixed(2), th: I.thr == null ? null : +I.thr.toFixed(2), hy: AF.me && AF.me.mounted ? +AF.me.yaw.toFixed(3) : null, atk: I.atk, heavy: I.heavy, dodge: I.dodge, roll: I.rollDir == null ? null : +I.rollDir.toFixed(2), block: I.block ? 1 : 0, hold: I.hold ? 1 : 0, swap: I.swap, jump: I.jump, px: VR.on && AF.me && !AF.me.dead ? +AF.me.x.toFixed(2) : undefined, pz: VR.on && AF.me && !AF.me.dead ? +AF.me.z.toFixed(2) : undefined }, AF.hostPeer || undefined);   // (VR: where my head walked me) — to the host alone: the other guests have no use for my sticks
   } else AF.events = [];
@@ -23198,7 +23214,7 @@ function afOnFightMsg(m) {
 // they are back (peer-rejoin hands it to them again) or the grace runs out (peer-leave makes it an NPC for good).
 function afPeerAway(id) {
   const b = AF.bodies.find(x => x.peer === id);
-  if (b && !b.dead && b.ctrl === 'input') { b.awayPeer = true; b.ctrl = 'ai'; b.inp = afFreshInput(); b.inp.yaw = b.yaw; afLogLine(b.name + ' lost the link — holding their place', '#c9bfda'); }
+  if (b && !b.dead && b.ctrl === 'input') { b.awayPeer = true; b.ctrl = 'ai'; b.inp = afFreshInput(); b.inp.yaw = b.yaw; afPressesSeen(b, true); afLogLine(b.name + ' lost the link — holding their place', '#c9bfda'); }
   for (const r of AF.roster) if (r.peer === id) r.away = true;
 }
 function afPeerRejoin(oldId, id) {                            // same player, new socket: every reference to the old id moves over
@@ -23206,11 +23222,11 @@ function afPeerRejoin(oldId, id) {                            // same player, ne
   const inp = AF.inputs.get(oldId); if (inp) { AF.inputs.delete(oldId); AF.inputs.set(id, inp); }
   if (AF.goAcks && AF.goAcks.delete(oldId)) AF.goAcks.add(id);
   const b = AF.bodies.find(x => x.peer === oldId);
-  if (b) { b.peer = id; if (b.awayPeer) { b.awayPeer = false; if (!b.dead) { b.ctrl = 'input'; b.inp = AF.inputs.get(id) || afFreshInput(); AF.inputs.set(id, b.inp); b.inp.yaw = b.yaw; } afLogLine(b.name + ' is back', '#c9bfda'); } }
+  if (b) { b.peer = id; if (b.awayPeer) { b.awayPeer = false; if (!b.dead) { b.ctrl = 'input'; b.inp = AF.inputs.get(id) || afFreshInput(); AF.inputs.set(id, b.inp); b.inp.yaw = b.yaw; afPressesSeen(b, true); } afLogLine(b.name + ' is back', '#c9bfda'); } }
 }
 function afPeerLeftFight(id) {
   const b = AF.bodies.find(x => x.peer === id);
-  if (b && !b.dead) { b.ctrl = 'ai'; b.inp = afFreshInput(); b.inp.yaw = b.yaw; b.kind = 'npc'; afLogLine(b.name + ' left — a fighter of the vale takes the sword', '#c9bfda'); }
+  if (b && !b.dead) { b.ctrl = 'ai'; b.inp = afFreshInput(); b.inp.yaw = b.yaw; afPressesSeen(b, true); b.kind = 'npc'; afLogLine(b.name + ' left — a fighter of the vale takes the sword', '#c9bfda'); }
   for (const r of AF.roster) if (r.peer === id) { r.kind = 'npc'; r.peer = null; }
   AF.inputs.delete(id);
 }
@@ -23222,8 +23238,8 @@ function afFrame(now, noRaf) {
   afNetStats(Math.max(rawDt, 1e-3));
   let gdt = dt;                                              // hit-stop: the fight crawls for a few frames on impact; camera/FX stay real-time
   if (AF.hitstop > 0) { AF.hitstop -= dt; if (AF.role !== 'host') gdt = dt * 0.08; }   // (a host with guests never freezes the SHARED sim on his own blows — the shake, the kick and the FOV punch stay)
-  if (AF.phase === 'countdown') { AF.countdown -= dt; if (AF.countdown <= 0) { AF.phase = 'fight'; afIntroTailEnd(); afBanner('FIGHT', '', 1.0); afCrowdReact(false); } } // guests count too (the host's snapshot also flips it)
-  if (AF.me && !AF.me.dead && AF.phase === 'fight') { afReadLocalInput(); if (VR.on) vrInput(dt); } else { const I = AF.locIn; I.mx = I.mz = 0; I.block = false; }   // (VR: the head and the sticks fill the same struct)
+  if (AF.phase === 'countdown') { AF.countdown -= dt; if (AF.countdown <= 0) { AF.phase = 'fight'; afBellInputs(); afIntroTailEnd(); afBanner('FIGHT', '', 1.0); afCrowdReact(false); } } // guests count too (the host's snapshot also flips it)
+  if (AF.me && !AF.me.dead && AF.phase === 'fight') { afReadLocalInput(); if (VR.on) vrInput(dt); } else { const I = AF.locIn; I.mx = I.mz = 0; I.block = false; if (AF.phase === 'intro' || AF.phase === 'countdown') afNoPresses(I); }   // (VR: the head and the sticks fill the same struct · before the bell no press is kept, so a guest sends none either — afNoPresses)
   afGoResend(now);
   if (AF.phase === 'fight' || AF.phase === 'over') {
     if (AF.role === 'guest') { afSubstep(afGuestTick, gdt); if (AF.me && AF.net) { const H = AF.net.hist; H.push({ t: now, x: AF.me.x, z: AF.me.z }); if (H.length > 120) H.shift(); } }   // (hist: where I was, for the host's late word on my position — afApplySnap)
@@ -23792,8 +23808,8 @@ function afBoot(spec) {
     else if (entry.kind !== 'npc' && AF.role === 'guest') { b.ctrl = 'remote'; }
     else if (entry.kind !== 'npc') { b.ctrl = 'ai'; }        // a solo fight lists no players; a stale peer becomes an NPC
   });
-  const I = AF.locIn; I.atk = I.heavy = I.dodge = 0; I.block = false; AF.keys.clear();
-  if (AF.me) { AF.cam.yaw = AF.me.yaw; AF.cam.pitch = AF_CAM_DEF.pitch; AF.cam.dist = AF_CAM_DEF.dist; AF.me.seenAtk = AF.me.seenHeavy = AF.me.seenDodge = 0; }
+  const I = AF.locIn; afNoPresses(I); I.swap = 0; I.block = I.hold = false; AF.keys.clear();   // (every count, jump and swap too: one left from the bout before was a leap at the bell — afNoPresses)
+  if (AF.me) { AF.cam.yaw = AF.me.yaw; AF.cam.pitch = AF_CAM_DEF.pitch; AF.cam.dist = AF_CAM_DEF.dist; AF.me.seenAtk = AF.me.seenHeavy = AF.me.seenDodge = AF.me.seenJump = AF.me.seenSwap = 0; }
   else if (AF.role === 'guest') { console.warn('[arena] no seat for me in the roster', window.coop && window.coop.id, spec.roster.map(e => e.name + ':' + e.kind + ':' + e.peer)); setTimeout(() => { if (AF.on && !AF.me) afBanner('NO SEAT IN THIS FIGHT', 'the lobby had no place for you — you watch this one', 4); }, 3200); }   // (never silent: a spectator should know why he is one)
   for (const b of AF.bodies) afDonReset(b);                 // every man comes in bareheaded, his sword at his hip (afDonStep sets the helm on and draws before the bell)
   AF.phase = 'countdown'; AF.countdown = AF_F.countdown; AF.t = 0; AF.over = false; AF.leaving = false; AF.reportP = null; AF.winner = -1; AF.standings = null; AF.events = []; AF._hc = 0; AF.last = 0; AF.hitstop = 0; AF.assignT = 0; afNetReset(); trauma = 0; camKick.set(0, 0, 0); fovPunch = 0;

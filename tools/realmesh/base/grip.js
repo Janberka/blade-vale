@@ -18,6 +18,7 @@ const ROOT = path.join(__dirname, '..', '..', '..'), RIG = path.join(ROOT, 'asse
 const V3 = THREE.Vector3, Q4 = THREE.Quaternion, M4 = THREE.Matrix4;
 const args = process.argv.slice(2), flag = (k, d) => { const i = args.indexOf('--' + k); if (i < 0) return d; const v = +args[i + 1]; args.splice(i, 2); return v; };
 const BAKE = args.includes('--bake'); if (BAKE) args.splice(args.indexOf('--bake'), 1);
+const GEAR = args.includes('--gear'); if (GEAR) args.splice(args.indexOf('--gear'), 1);   // only (re)write where a LOADOUT sword sits in the fist — rig.json.grip.sword.at/axis/flat — and touch nothing else
 const GAP = flag('gap', 1.0) / 100, TILT = flag('tilt', 0) * Math.PI / 180, TURN = flag('turn', 0) * Math.PI / 180, PUSH = flag('push', 0) / 100, clipId = args[0] || 'angry_walk';
 const SIDE = 'R', HAND = 'hand' + SIDE, FINGERS = [['index', 'pinky', 0], ['middle', 'ring', 1], ['ring', 'index', 1], ['little', 'middle', 1]];   // what it IS, what the rig calls it, where its knuckle is in the chain
 
@@ -109,5 +110,13 @@ const cm = x => (x * 100).toFixed(1), v = a => a.toArray().map(x => +x.toFixed(2
 console.log(`fist (${clipId}): loop centres index→little ${loops.map(l => '[' + l.c.toArray().map(cm).join(' ') + ']').join(' ')} cm · loop radius ${loops.map(l => cm(l.r)).join(' / ')} cm`);
 console.log(`  handle line ${v(axis)} (bind space) · its middle ${C.toArray().map(cm).join(' ')} · knuckles face ${v(distal)} · span index↔little ${cm(loops[0].c.distanceTo(loops[3].c))} cm`);
 console.log(`sword: ${cm(Math.max(...s) - sPommel)} cm, grip ${cm(guardLow - sPommel)} cm from pommel end to guard, grip radius ${cm(gripR)} cm, was ${cm(posOf(wm(HAND)).clone().sub(sc).addScaledVector(L, -posOf(wm(HAND)).clone().sub(sc).dot(L)).length())} cm off the wrist, pointing ${v(L)}`);
+// A LOADOUT sword (game.js afBuildSword: grip along its own +Y about the origin, flat facing its Z, guard 0.2 game units up)
+// is not this mesh, so the seat cannot be baked into it — the game mounts it on the hand bone, and used to pin its origin to
+// the bone itself: the WRIST, a hand's length short of the fist. So the fist is handed over in the HAND's own frame:
+// `at` the middle of the handle's line, `axis` the way the blade leaves, `flat` the blade's flat — game.js lays the sword on them.
+if (GEAR || BAKE) { const hw = wm(HAND), inv = rot(hw).invert(), r5 = a => a.toArray().map(x => +x.toFixed(5));
+  const live = JSON.parse(fs.readFileSync(path.join(RIG, 'rig.json'))); live.grip = live.grip || {}; live.grip.sword = live.grip.sword || { hand: HAND };
+  Object.assign(live.grip.sword, { at: r5(C.clone().applyMatrix4(hw.clone().invert())), axis: r5(axis.clone().applyQuaternion(inv)), flat: r5(flatH.clone().applyQuaternion(inv)), reach: +(along + fingerHalf + GAP).toFixed(5) });
+  if (!BAKE) { fs.writeFileSync(path.join(RIG, 'rig.json'), JSON.stringify(live, null, 1)); console.log('GEAR: rig.json.grip.sword.at/axis/flat/reach written (the seat and the mesh untouched)'); } else Object.assign(rig, { grip: live.grip }); }
 if (BAKE) bake();
 console.log(`seat: turned ${(pick.ang * 180 / Math.PI).toFixed(0)}°, guard ${cm(GAP)} cm clear of the index finger, ${cm((sAtC - sPommel) - (loops[0].c.distanceTo(loops[3].c) - along) - fingerHalf)} cm of grip and pommel past the little finger → ${path.relative(ROOT, path.join(CHARED, 'items', 'sword_grip.json'))}`);

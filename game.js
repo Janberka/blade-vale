@@ -1555,7 +1555,19 @@ function wearModelRig(h, name, o = {}) {
   const mount = (grp, boneName) => { if (!grp || !inst.byName[boneName]) return; const bone = inst.byName[boneName]; const holder = new THREE.Group(); holder.name = 'gearHolder';
     holder.quaternion.copy(inst.restWorld[inst.nodes.indexOf(bone)]).invert(); holder.scale.setScalar(1 / S); bone.add(holder);
     grp.parent && grp.parent.remove(grp); grp.position.set(0, 0, 0); holder.add(grp); };
-  if (P.sword) { mount(P.sword, R.spec.swordHand); P.sword.traverse(x => { if (x.isMesh) x.visible = false; }); }
+  if (P.sword) { mount(P.sword, R.spec.swordHand); P.sword.traverse(x => { if (x.isMesh) x.visible = false; });
+    // A LOADOUT sword in his FIST. `mount` pins a prop's origin to the bone — for the hand that is the WRIST, a hand's length
+    // short of the fingers, and the blade then swung about his wrist on the plastic rig's own wrist channel: "our sword won't
+    // fit into our hand". rig.json.grip.sword (tools/realmesh/base/grip.js) hands the fist over in the hand's own frame — `at`
+    // the middle of the handle's line through the curled fingers, `axis` the way a blade leaves it (the thumb side), `flat` the
+    // blade's flat — and afBuildSword's sword is laid on them: its grip runs along its own +Y about the origin, its flat faces
+    // its Z, its guard sits 0.2 up. Slid down the line until the guard is a finger clear of the index, and held RIGID there
+    // (fixedGrip: the hand bone carries the wrist's turn already; the rig's own iron blade never had the extra channel either).
+    const gs = (R.spec.grip || {}).sword, holder = gs && gs.at && P.sword.parent && P.sword.parent.name === 'gearHolder' ? P.sword.parent : null;
+    if (holder) { const ax = new THREE.Vector3().fromArray(gs.axis).normalize(), fl = new THREE.Vector3().fromArray(gs.flat).normalize(), wd = new THREE.Vector3().crossVectors(ax, fl).normalize();
+      holder.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(wd, ax, fl));                       // sword X (its width) → wd, Y (the blade) → axis, Z (its flat) → flat
+      holder.position.fromArray(gs.at).addScaledVector(ax, (gs.reach || 0.09) - 0.2 / S);                       // the guard (0.2 game units up the sword) lands `reach` up the line from the fist's middle
+      P.sword.rotation.set(0, 0, 0); P.sword.userData.fixedGrip = true; } }
   if (P.bow) mount(P.bow, R.spec.bowHand || R.spec.swordHand);
   if (P.shield) { mount(P.shield, R.spec.shieldArm); P.shield.visible = false; P.shield.userData.modelHidden = true; }   // the figure's own shield shows instead
   let plume = null; { g.traverse(x => { if (x.name === 'plume') plume = x; });   // the plume rides the figure's head bone, on the helmet's crown (rig.json plumeY = crown height above the head bone, model units)

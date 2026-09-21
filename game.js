@@ -1927,6 +1927,7 @@ const LOOK_WOOL = [0x5a4a3a, 0x4a4a4c, 0x6a5040, 0x3e3a36];                 // b
 const LOOK_FUR = [0x4a3626, 0x5a4432, 0x3e2e22];
 function lookSeed(s) { let h = 2166136261 >>> 0; s = String(s || ''); for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return h; }
 function lookRng(seed) { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+function lookRigSallet(R) { return !!(R && R.meshes && R.meshes.some(m => m.pieces && m.pieces.classes.indexOf('helmet') >= 0)); }   // does this rig carry a sculpted sallet (the old warrior kit did; the base does not — its only helm is a ware's own sculpt)
 function lookOdds(kind, arch, k) { const O = LOOK_ARMOR[kind] || LOOK_ARMOR.none, K = LOOK_CLASS[arch] || {}; return clamp((O[k] || 0) + (K[k === 'helm' ? 'helmet' : k] || 0), 0, 1); }   // (afNpcGear rolls a helm with it)
 // roll the look: name = whose (the seed), arch = his class, gear = his loadout (armor, helm, shield, plume), pal = the team
 // palette; o.full = every loose piece on (the shop's mannequin). The helm and the shield are what he WEARS; the loose
@@ -1951,8 +1952,8 @@ function lookRoll(name, arch, gear, pal, o = {}) {
   look.faceShape = has('f') ? LK.f : Math.floor(lookRng(lookSeed(name) ^ 0x2545f491)() * LOOK_FACE_SHAPES.length);   // (its own stream: the bones came later, nobody's hair or kit re-rolls for them)
   const scar = r(); look.scar = scar < 0.18 ? 'scarL' : scar < 0.36 ? 'scarR' : null; look.scarC = c.copy(skinC).lerp(new THREE.Color(0xe8a0a0), 0.45).multiplyScalar(1.05).getHex();
   // the kit
-  look.helmet = !!(gear && (gear.helm || gear.plume));                                              // (a bought plume needs a helm to sit on)
-  const I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}, hm = look.helmet && gear.helm ? I[gear.helm] : null; look.helmModel = hm && hm.model && HELM_MODELS[hm.model] ? hm.model : null;   // a helm with a sculpt of its own (the ware's `model` — the Corinthian): the sallet comes off the body, the model rides the head bone (lookHelmModelApply)
+  const I = window.ARENA_CAT ? ARENA_CAT.ARENA_ITEMS : {}, hm = gear && gear.helm ? I[gear.helm] : null; look.helmModel = hm && hm.model && HELM_MODELS[hm.model] ? hm.model : null;   // a helm with a sculpt of its own (the ware's `model` — the Corinthian): the sallet comes off the body, the model rides the head bone (lookHelmModelApply)
+  look.helmet = !!(look.helmModel || (lookRigSallet(MODEL_RIGS.get(MODEL_NAME)) && gear && (gear.helm || gear.plume)));   // A HELM HE CAN PUT ON: a ware's own sculpt, or the rig's sculpted sallet (there a bought plume brings the sallet it sits on). The base has NO sallet, so a plume alone is no helm: it used to say "helmed" anyway, and once the fight began his scalp — the painted hair — was left out from under a shell that was not there, with the feather standing on the bare skull (2026-09-21)
   const pl = gear && gear.plume ? I[gear.plume] : null; look.plumeC = pl && pl.plume != null ? pl.plume : null;
   look.wear = []; { const W = (MODEL_RIGS.get(MODEL_NAME) || {}).spec, WT = W && W.wear; if (WT && gear) for (const nm in WT) if (WT[nm].slot && gear[WT[nm].slot] === nm) look.wear.push(nm); }   // THE WARES (2026-09-20): a ware's item id is its mesh name; rig.json `wear` says which slot carries it                       // (the plume ware's dye: such a helm's crest takes it)
   for (const k of ['pauldron', 'elbow', 'knee', 'straps', 'pouch']) if (r() >= p(k)) look.hide.push(k); if (!look.helmet || look.helmModel) look.hide.push('helmet');
@@ -2061,7 +2062,7 @@ function lookApply(L, look) {
     for (const nm in W) { const sm = L.inst.skinned[nm]; if (sm) sm.visible = !!(W[nm].always || on.has(nm)) && !off.has(nm); } } }
   if (L.inst.skinned.naked) L.inst.skinned.naked.visible = !!look.naked; if (L.inst.skinned.belt) L.inst.skinned.belt.visible = !!look.naked;   // (the whole man's belt: on with the bare body)
   const cloak = L.inst.skinned[M.cloak]; if (cloak) { cloak.visible = !!look.cloak; if (cloak.material && cloak.material.color && !cloak.material.map) cloak.material.color.setHex(look.cloakC); }
-  if (L.plume) L.plume.visible = !!(look.helmet && look.plume && !look.helmModel);   // (a helm with a crest of its own carries no feather: the crest takes the plume's dye)
+  if (L.plume) L.plume.visible = lookPlumeOn(L, look);   // (a helm with a crest of its own carries no feather: the crest takes the plume's dye — lookPlumeOn)
   lookHairApply(L, look);                                                // the cut: a cap on the skull when he stands bareheaded
   lookHelmModelApply(L, look);                                           // a helm with a sculpt of its own (the Corinthian) on the head bone
   L.shieldKind = look.shield; if (look.shield === 'round') lookRoundShield(L, look); else if (L.mRound) L.mRound.visible = false;
@@ -2127,7 +2128,7 @@ function modelHelmPlace(L) {                                 // every render whi
 const LOOK_UNDER = {};   // (the kit's table — torso under the cuirass, thighs under the skirt… — is empty since 2026-09-20: the base's wares say what they cover themselves, rig.json `wear[].covers` — lookDraw)   // a base body part → the kit piece that covers it (lookDraw)
 function lookDraw(L, look) {
   const R = MODEL_RIGS.get(L.g.userData.model), H = look.helmet && look.helmModel && R && R.helms ? R.helms[look.helmModel] : null;
-  const hide = new Set(look.hide); if (look.helmet && !H) hide.add('hair');   // (under the sallet the scalp is not drawn: it lies inside the shell, and the tessellated crown would show through it; a helm of its own says what it covers — helmCoverMask)
+  const hide = new Set(look.hide); if (look.helmet && !H && lookRigSallet(R)) hide.add('hair');   // (under the sallet the scalp is not drawn: it lies inside the shell, and the tessellated crown would show through it; a helm of its own says what it covers — helmCoverMask. Only where there IS a sallet: on the base a "helmed" look with no shell to show — a helm sculpt that failed to load — keeps its hair rather than an open skull)
   // THE BASE BODY under its kit (pieces.json `sculpted`): a part is not drawn under the piece that covers it — the torso under a cuirass, the upper arms under
   // sleeves, the forearms under vambraces, the thighs under the skirt, the shins under greaves, the feet in boots — so a stride or a swing never pushes skin
   // through the cloth (the warrior never had a body under there). A look that drops the piece (naked: cuirass and sleeves) shows what was under it.
@@ -2138,10 +2139,11 @@ function lookDraw(L, look) {
     for (let t = 0; t < tri.length; t++) { if (hd.has(pj.classes[tri[t]]) || (cover && cover[t])) continue; idx.array[n] = i0[t * 3]; idx.array[n + 1] = i0[t * 3 + 1]; idx.array[n + 2] = i0[t * 3 + 2]; n += 3; }
     idx.needsUpdate = true; sm.geometry.setDrawRange(0, n); }
 }
+function lookPlumeOn(L, look) { return !!(look.helmet && look.plume && !look.helmModel && lookRigSallet(MODEL_RIGS.get(L.g.userData.model))); }   // the feather stands on a SALLET's crown and nowhere else: a helm with a crest of its own takes the plume's dye on the crest, and a bare head wears no feather (the base has no sallet — a plume there is the Corinthian's crest colour)
 function lookWorn(L, look) { return L.helmOff && (look.helmet || !look.hide.includes('helmet')) ? Object.assign({}, look, { helmet: false, hide: look.hide.concat('helmet') }) : look; }   // bareheaded: the sculpted helm dropped, the plume with it
 // the helm off and on again — the home and the barber's chair (his face and hair are the point there, as the sword and shield lie on the floor),
 // and the walk into the pit: every man comes in bareheaded and sets it on in the countdown's last breaths (afDonStep). Only the index, the plume and the hair cap change.
-function lookHelmOff(L, off) { if (!L || !!L.helmOff === !!off) return; L.helmOff = !!off; if (!L.lookBase || !L.inst) return; const look = L.look = lookWorn(L, L.lookBase); lookDraw(L, look); if (L.plume) L.plume.visible = !!(look.helmet && look.plume && !look.helmModel); lookHairApply(L, look); lookHelmModelApply(L, look); }
+function lookHelmOff(L, off) { if (!L || !!L.helmOff === !!off) return; L.helmOff = !!off; if (!L.lookBase || !L.inst) return; const look = L.look = lookWorn(L, L.lookBase); lookDraw(L, look); if (L.plume) L.plume.visible = lookPlumeOn(L, look); lookHairApply(L, look); lookHelmModelApply(L, look); }
 // ---- THE HAIR: a cap of geometry on the skull ----
 // the hairline's height at a bearing (deg) round the skull's axis, a smooth curve through the style's keys (mirrored left/right)
 function lookHairline(hs, a) {

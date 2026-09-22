@@ -19,7 +19,7 @@
   const A = {
     on: false, dist: 18, draw: 0, want: 0, elev: 0, az: 0, auto: true, follow: true, cmdE: 0, cmdA: 0,
     vmax: 56, g: 9.81, brace: 0.20, limb: 0.80, riser: 0.13,   // m/s at full draw · brace height · limb arc length · half the riser
-    flying: [], stuck: [], ends: [], loosed: 0, snap: 0, renock: 0, hold: 0, view: 'side', camBack: null,
+    poleR: new THREE.Vector3(-1, 0.45, 0.35), fwd: 0.12, flying: [], stuck: [], ends: [], loosed: 0, snap: 0, renock: 0, hold: 0, view: 'side', camBack: null,
   };
   window.__ARCH = A;
 
@@ -171,7 +171,7 @@
     for (const n of TOUCH) { const r0 = REST.get(n); if (B(n) && r0) B(n).quaternion.copy(r0.q); } M.root.updateMatrixWorld(true);
     const Y = n => Qn().setFromAxisAngle(UP, n);
     turnW(B('neck'), Y(0.62)); turnW(B('head'), Y(0.78)); turnW(B('head'), Qn().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -0.06));   // turned to the target, cheek down onto the string
-    const anchor = B('head').localToWorld(JAW.clone());
+    const anchor = B('head').localToWorld(JAW.clone()); anchor.z += A.fwd;   // (his chest faces +Z, across the string's path: the draw is brought out in front of it)
     const e = A.cmdE, dir = aimDir(e, A.cmdA), bup = UP.clone().addScaledVector(dir, -dir.dot(UP)).normalize();
     // the bow fist: on the arrow line one reach out — the rest (5.5 cm over the tunnel) on the line, the arm all but straight
     const SL = pW(B('armL')), reach = (A.armLen.L[0] + A.armLen.L[1]) * 0.975 + FIST.L.c.length() * 0.8, P0 = anchor.clone().addScaledVector(bup, -0.062).sub(SL);
@@ -182,7 +182,7 @@
     const k = A.draw, follow = A.snap > 0 ? Math.min(1, A.snap / 0.15) * 0.07 : 0;
     const back = A.brace + 0.02 + (t - A.brace - 0.02) * k + follow;
     const tunnelR = anchor.clone().addScaledVector(dir, t - back).addScaledVector(bup, -0.012);
-    const qR = fistQ('R', bup, dir); ik('R', tunnelR.clone().sub(FIST.R.c.clone().applyQuaternion(qR)), new THREE.Vector3(-0.35, 0.35, 1)); seatHand('R', qR);
+    const qR = fistQ('R', bup, dir); ik('R', tunnelR.clone().sub(FIST.R.c.clone().applyQuaternion(qR)), A.poleR); seatHand('R', qR);
     M.root.updateMatrixWorld(true);
     // the bow in the left fist, as the fist actually came out
     const hL = B('handL'), qh = qW(hL), gw = FIST.L.g.clone().applyQuaternion(qh), dw = FIST.L.d.clone().applyQuaternion(qh); dw.addScaledVector(gw, -dw.dot(gw)).normalize();

@@ -2658,6 +2658,8 @@ function buildFighterBody(def, palette) {
 // Channels: shoulder R/L (x,z), elbows (x), waist lean (x) & twist (y), wrist pitch.
 const POSES = {
   relax:      { shRx:  0.08, shRz:  0.32, elR: -0.25, shLx:  0.08, shLz: -0.32, elL: -0.25, leanX: 0,     twistY: 0,     wristX: -0.5 },
+  // walking easy (the walk into the pit): the arms HANG and swing with the stride (afCommit) — the user, 2026-09-22: "the rested arms are up, can we just swing them"
+  stroll:     { shRx:  0.02, shRz:  0.06, elR: -0.12, shLx:  0.02, shLz: -0.06, elL: -0.12, leanX: 0,     twistY: 0,     wristX: -0.5 },
   // wide aggressive ready stance: sword arm flared out and cocked, shield arm broad in front
   guard:      { shRx: -0.65, shRz:  0.45, elR: -1.20, shLx: -0.55, shLz:  0.00, elL: -0.80, leanX: 0.12,  twistY: -0.30, wristX: 1.15 },
   windupR:    { shRx: -1.90, shRz:  0.95, elR: -1.60, shLx: -0.45, shLz:  0.40, elL: -0.60, leanX: -0.12, twistY:  0.65, wristX: -0.20 },
@@ -20703,7 +20705,7 @@ function afIntroBody(b, sdt) {
     b.moving = true; b.gait = gait === 'canter' || gait === 'run' ? GAIT.run : GAIT.walk;
     if (b.mounted) { b.parts.mount.userData.rig.speed01 = gait === 'canter' ? 0.75 : 0.12; b.phase += sdt * (gait === 'canter' ? 3 + 2.4 * spd / 4 : 3.4); }
     else b.phase += sdt * b.gait.tempo * clamp(spd / AF_F.move, 0.35, 1) * 1.1;
-    walkLegs(b.parts, b.phase, b.gait.leg); setPose(b.anim, 'relax', 0.3);
+    walkLegs(b.parts, b.phase, b.gait.leg); setPose(b.anim, b.mounted ? 'relax' : 'stroll', 0.3);
   } else {
     b.moving = false; b.vx = b.vz = 0; restLegs(b.parts, sdt, S.phase === 'done' || S.pauseT > 0);
     if (S.rally) setPose(b.anim, S.rally.steps[S.rally.i].pose, 0.2);
@@ -21632,11 +21634,12 @@ function afIntegrate(b, dt) {                              // friction + slope +
 // the SECONDARY-MOTION layer, applied on top of the pose every frame: arm counter-swing and torso lean on
 // the run, breathing, a head that looks at the foe, a directional flinch when hit, a cape that flares with
 // speed, and dust at the feet. Everything here is additive so the authored poses stay readable.
+const AF_STROLL_SWING = 0.38;   // rad each way: a man walking easy, not marching
 function afCommit(b, dt) {
   updateAnimator(b.anim, dt);
   const p = b.parts, F = AF_F, sp = Math.hypot(b.vx, b.vz), fwd = b.vx * Math.sin(b.yaw) + b.vz * Math.cos(b.yaw);
   const g = b.gait || GAIT.run;
-  if (b.moving && !b.dead) walkArms(p, b.phase, g.arm * (b.atk || b.blocking ? 0.3 : 1), 0);
+  if (b.moving && !b.dead) walkArms(p, b.phase, b.anim.name === 'stroll' ? AF_STROLL_SWING : g.arm * (b.atk || b.blocking ? 0.3 : 1), 0);   // (strolling, the hanging arms swing with the stride)
   if (b.flashT > 0) { b.flashT -= dt; if (!b.flashWhite) { setTint(p, 0xfff0e0); b.flashWhite = true; } if (b.flashT <= 0) { b.flashWhite = false; b.tinted = false; setTint(p, null); } }
   if (!b.dead) {
     const ex = b.maxStam ? 1 - b.stam / b.maxStam : 0;      // (spent: the breath deepens and quickens — bent over it when winded)

@@ -52,7 +52,7 @@
   <label><input type=checkbox id=cb_trail checked> blade trail</label>
   <div class=sm id=cb_say style="white-space:pre-line;min-height:4.8em"></div>
   <h4>pose</h4>
-  <div class=row><button id=p_bind class=on>bind</button><button id=p_a>A</button><button id=p_t>T</button></div>
+  <div class=row><button id=p_bind class=on>bind</button><button id=p_a>A</button><button id=p_t>T</button><button id=p_home title="the stance he holds on the game's HOME page (poses/home.json, read off the game)">home</button></div>
   <label class=sm><span id=l_arm>arms down</span> <span id=v_arm>0°</span></label><input type=range id=s_arm min=-90 max=90 value=0>
   <label class=sm>legs apart <span id=v_leg>0°</span></label><input type=range id=s_leg min=-20 max=30 value=0>
   <div class=row style="margin-top:6px;align-items:center"><span class=sm style=width:34px>hand</span><button id=h_R>right</button><button id=h_L>left</button><button id=h_B>both</button><button id=h_0 title="put the picked hand back as the clip has it">reset</button></div>
@@ -274,6 +274,7 @@ function buildItems() { const W = RIG.wear || {}, always = Object.keys(W).filter
   buildMeshList(); buildItems();
   applyShade(); applyItems(); measure();
   await loadMotions();
+  if (q.get('pose') && !q.get('motion')) await posePreset(q.get('pose'));   // ?pose=home: the stance off the game's home page
   window.__ready = true;
 })();
 
@@ -607,7 +608,9 @@ el$('i_helmet').onchange = applyItems;
 el$('iso').onchange = () => { if (el$('iso').value === '') { applyShadeBodyOnly(); } else isolate(); };
 
 // ---- pose
+let FIXED = null;   // a whole stance read off the game (poses/<id>.json: local quaternions per bone) — the home page's; null = the sliders' pose
 function setPose(arm, leg) {
+  if (FIXED) { for (const [nm, r0] of REST) { const b = BONE[nm]; if (b && b.isBone) { const f = FIXED.q[nm], p = FIXED.pos && FIXED.pos[nm]; b.quaternion.copy(f ? new THREE.Quaternion().fromArray(f) : r0.q); b.position.copy(p ? new THREE.Vector3().fromArray(p) : r0.p); } } handOver(); M.root.updateMatrixWorld(true); return; }
   const put = (name, ax, ang) => { const b = BONE[name]; if (!b) return; const rest = REST.get(name); b.quaternion.copy(rest.q).multiply(new THREE.Quaternion().setFromAxisAngle(ax, ang)); };
   const X = new THREE.Vector3(1, 0, 0), Z = new THREE.Vector3(0, 0, 1);
   put('armL', Z, -arm); put('armR', Z, arm);
@@ -637,7 +640,7 @@ let armA = 0, legA = 0, carry = CARRY.def; try { const v = parseFloat(localStora
 const carryOn = () => !!MO.clip && IS_BASE && !MO.clip.blade;
 function armSlider() {                              // one slider, two jobs: degrees on the bind pose, the carriage knob over a clip
   const sl = el$('s_arm'), on = !!MO.clip; sl.disabled = on && !carryOn(); sl.style.opacity = sl.disabled ? 0.35 : ''; sl.min = on ? -10 : -90; sl.max = on ? 10 : 90; sl.step = on ? 0.5 : 1; sl.value = on ? carry : armA;
-  el$('l_arm').textContent = on ? 'arm carriage' : 'arms down'; ['p_bind', 'p_a', 'p_t'].forEach(i => { el$(i).disabled = on; el$(i).style.opacity = on ? 0.4 : ''; });
+  el$('l_arm').textContent = on ? 'arm carriage' : 'arms down'; ['p_bind', 'p_a', 'p_t', 'p_home'].forEach(i => { el$(i).disabled = on; el$(i).style.opacity = on ? 0.4 : ''; });
 }
 function pose() {
   if (MO.clip) { applyMotion(MO.t * MO.clip.fps); el$('v_arm').textContent = !carryOn() ? 'off — ' + (MO.clip.blade ? 'this blow is baked by its blade' : 'this body needs none') : (carry > 0 ? '+' : '') + carry.toFixed(1) + ' (' + carryDeg(carry).toFixed(1) + '°)'; el$('v_arm').title = carryDeg(carry).toFixed(1) + '° over the clip'; el$('v_leg').textContent = (legA > 0 ? '+' : '') + legA.toFixed(0) + '° over the clip'; }
@@ -645,10 +648,15 @@ function pose() {
 }
 el$('s_arm').oninput = e => { if (MO.clip) { carry = +e.target.value; try { localStorage.setItem('chared-carry', carry); } catch (er) {} } else armA = +e.target.value; pose(); };
 el$('s_leg').oninput = e => { legA = +e.target.value; pose(); };
-function preset(a, l, btn) { armA = a; legA = l; el$('s_arm').value = a; el$('s_leg').value = l; pose(); ['p_bind', 'p_a', 'p_t'].forEach(i => el$(i).classList.toggle('on', i === btn)); }
+function preset(a, l, btn) { FIXED = null; restPose0(); armA = a; legA = l; el$('s_arm').value = a; el$('s_leg').value = l; pose(); ['p_bind', 'p_a', 'p_t', 'p_home'].forEach(i => el$(i).classList.toggle('on', i === btn)); }
 el$('p_bind').onclick = () => preset(0, 0, 'p_bind');
 el$('p_a').onclick = () => preset(-30, 8, 'p_a');
 el$('p_t').onclick = () => preset(-65, 0, 'p_t');
+async function posePreset(id) { const f = await (await fetch('poses/' + id + '.json?' + Date.now())).json(); if (MO.clip) await setMotion(''); preset(0, 0, 'p_' + id); FIXED = f; pose();
+  for (const i of document.querySelectorAll('#meshlist input')) if (i.__mesh && f.empty && f.empty.some(k => i.__mesh.name.toLowerCase().includes(k))) { i.checked = false; i.onchange({ target: i }); } }   // (on the home his hands are empty: the sword and shield lie on the floor)
+function restPose0() { for (const [nm, r0] of REST) { const b = BONE[nm]; if (b && b.isBone) { b.position.copy(r0.p); b.quaternion.copy(r0.q); } } }
+el$('p_home').onclick = () => posePreset('home');
+window.__pose = id => posePreset(id);
 
 // ---- A HAND'S OWN TURN, ON TOP OF THE CLIP'S. A clip is baked with the sword hand's zero (motion.js HAND_ZERO — the fist as
 // it holds a sword), so 0 here IS that carriage and these sliders are what you would ADD to it.

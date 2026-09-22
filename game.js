@@ -1514,7 +1514,14 @@ function instanceModelRig(R, ctx = 'main') {
       if (n.matrix) { const q = new THREE.Quaternion(); new THREE.Matrix4().fromArray(n.matrix).decompose(new THREE.Vector3(), q, new THREE.Vector3()); restLocal[i].copy(q); }
       else if (n.rotation) restLocal[i].fromArray(n.rotation); }); }
   for (const i of order) restWorld[i] = parent[i] < 0 ? restLocal[i].clone() : restWorld[parent[i]].clone().multiply(restLocal[i]);
-  return { root, nodes, byName, parent, order, restLocal, restPos, restWorld, skinned, mat, ctx };
+  // THE EMPTY HAND (the user, 2026-09-22: "still crippled fingers when we don't hold anything — my thumb and point finger go through each other"): the
+  // rest pose closes the fingers round a hilt, so a hand with nothing in it gripped air. Each finger's RESTING curl: from the skin's own open hand (the
+  // bind pose) a third of the way to the fist, the thumb only a tenth (further, it lies on the index finger) — judged in the char editor. syncModelRigs
+  // eases a hand into it whenever that hand holds nothing (modelHandsOpen).
+  const relax = []; for (let i = 0; i < nodes.length; i++) { const m = /^(pinky|ring|middle|index|thumb)([LR])\d$/.exec(nodes[i].name); if (!m || parent[i] < 0 || !worldM.get(i) || !worldM.get(parent[i])) continue;
+    const bq = new THREE.Quaternion(); worldM.get(parent[i]).clone().invert().multiply(worldM.get(i)).decompose(new THREE.Vector3(), bq, new THREE.Vector3()); if (bq.dot(restLocal[i]) < 0) bq.set(-bq.x, -bq.y, -bq.z, -bq.w);
+    relax.push({ i, side: m[2], q: bq.slerp(restLocal[i], m[1] === 'thumb' ? MODEL_RELAX.thumb : MODEL_RELAX.finger) }); }
+  return { root, nodes, byName, parent, order, restLocal, restPos, restWorld, skinned, mat, ctx, relax };
 }
 // a rigid prop of the figure (its sword, its shield — each weighted to one hand bone) as a plain geometry with that
 // hand at the origin and the bind-space orientation kept: the sword's blade runs +Z, the shield's face looks +X
@@ -1789,7 +1796,16 @@ function syncModelRigs() {
     const shieldOn = !vr && !L.P.noModelShield && !!(L.P.bow ? !L.P.bow.visible : true);   // (his LOOK says which shield, if any — lookApply)
     if (L.mShield) L.mShield.visible = shieldOn && L.shieldKind === 'heater';
     if (L.mRound) L.mRound.visible = shieldOn && L.shieldKind === 'round';
+    modelHandsOpen(L, dtMo, !!(L.mSword && L.mSword.visible) || showGear || !!(L.mHelm && L.mHelm.visible) || !!(L.P.bow && L.P.bow.visible) || vr,
+      !!(L.mShield && L.mShield.visible) || !!(L.mRound && L.mRound.visible) || !!(L.P.bow && L.P.bow.visible) || vr);
   }
+}
+// an EMPTY hand rests open (inst.relax, instanceModelRig); one that holds a blade, a shield, a bow or the helm grips. Eased, so drawing the sword closes the fist.
+const MODEL_RELAX = { finger: 0.35, thumb: 0.1 }, _mhQ = new THREE.Quaternion();
+function modelHandsOpen(L, dt, heldR, heldL) {
+  const R = L.inst.relax; if (!R || !R.length) return; const O = L.open || (L.open = { R: heldR ? 0 : 1, L: heldL ? 0 : 1 }), k = Math.min(1, (dt || 0.016) * 8);
+  O.R += ((heldR ? 0 : 1) - O.R) * k; O.L += ((heldL ? 0 : 1) - O.L) * k; if (O.R < 0.002 && O.L < 0.002) return;
+  for (const f of R) { const w = O[f.side]; if (w > 0.002) L.inst.nodes[f.i].quaternion.slerp(f.q, w); }
 }
 { const _r = renderer.render.bind(renderer); renderer.render = (s, c) => { if (MODEL_LIVE.length) syncModelRigs(); return _r(s, c); }; }
 BV.motion = () => MODEL_LIVE.map(L => ({ name: L.body && L.body.name, clip: L.mo && L.mo.id, w: L.mo ? +L.mo.w.toFixed(2) : 0, t: L.mo ? +L.mo.t.toFixed(2) : 0, f: L.mo && L.mo.c ? +(L.mo.t * L.mo.c.fps).toFixed(1) : 0, x: L.mo && L.mo.x != null ? +L.mo.x.toFixed(2) : 1, hips: L.rootI >= 0 ? L.inst.nodes[L.rootI].position.toArray().map(v => +v.toFixed(3)) : null, loaded: [...MOTION.clips.keys()].filter(k => MOTION.clips.get(k)) }));   // test: which clip each figure is playing, and how strongly

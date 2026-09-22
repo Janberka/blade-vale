@@ -1,6 +1,6 @@
 {
   "name": "home",
-  "note": "the HOME page stance (game.js afPreviewPose 'relax' + restLegs, breath averaged out), read off the game's own preview man 2026-09-22 \u2014 local bone quaternions, the same on every body (congruent rigs); 2026-09-22 the user's wrist turn (tilt -62 both hands: palms to the thighs) baked into handL/R, and the fingers eased from the sword fist to a resting curl (0.35 of the way from the normal man's open hand to HIS OWN fist \u2014 re-blended whenever his hand is rebuilt)",
+  "note": "the HOME page stance (game.js afPreviewPose 'relax' + restLegs, breath averaged out), read off the game's own preview man 2026-09-22 \u2014 local bone quaternions, the same on every body (congruent rigs); 2026-09-22 the user's wrist turn (tilt -62 both hands: palms to the thighs) baked into handL/R, and the fingers eased from the sword fist to a resting curl (0.35 of the way from the normal man's open hand to HIS OWN fist, the thumb 0.1 \u2014 the game's MODEL_RELAX, the empty hand \u2014 re-blended whenever his hand is rebuilt)",
   "empty": ["sword", "shield"],
   "pos": {
     "pelvis": [0, 1.0867, -0.04341]
@@ -45,9 +45,9 @@
     "indexL1": [-0.18196, -0.3294, 0.41172, 0.82998],
     "indexL2": [-0.00907, 0.08065, 0.40598, 0.91027],
     "indexL3": [0.02077, 0.07057, 0.41407, 0.90727],
-    "thumbL0": [0.7921, 0.19964, 0.06102, 0.57358],
-    "thumbL1": [-0.00781, 0.06796, 0.15255, 0.98593],
-    "thumbL2": [-0.00159, -0.16336, 0.28849, 0.94344],
+    "thumbL0": [0.87074, 0.21032, 0.02282, 0.4439],
+    "thumbL1": [-0.01537, 0.08208, 0.09296, 0.99216],
+    "thumbL2": [-0.00703, -0.23791, 0.18496, 0.95349],
     "pinkyR0": [-0.06946, -0.17356, 0.30373, 0.93424],
     "pinkyR1": [0.00329, 0.10436, 0.35463, 0.92916],
     "pinkyR2": [0.00332, 0.04006, 0.1916, 0.98065],
@@ -63,8 +63,8 @@
     "indexR1": [-0.18224, -0.32919, 0.41171, 0.83001],
     "indexR2": [-0.00908, 0.08034, 0.40297, 0.91164],
     "indexR3": [0.02073, 0.07021, 0.41102, 0.90868],
-    "thumbR0": [0.79414, 0.19961, 0.06183, 0.57068],
-    "thumbR1": [-0.00831, 0.06832, 0.15305, 0.98582],
-    "thumbR2": [-0.00122, -0.16311, 0.29095, 0.94273]
+    "thumbR0": [0.8712, 0.21027, 0.02305, 0.44302],
+    "thumbR1": [-0.01551, 0.08218, 0.0931, 0.99214],
+    "thumbR2": [-0.00692, -0.23786, 0.18568, 0.95336]
   }
 }

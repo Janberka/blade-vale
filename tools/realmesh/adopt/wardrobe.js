@@ -178,7 +178,8 @@ const grip = JSON.parse(JSON.stringify(baseRig.grip || {})), kMan = rig.height /
     // axis and flat, in the hand's frame — is the base's, to the degree. A clip is baked so that the BLADE is where the performer's was (motion.js --blade),
     // and that is only true on another body if its blade lies in its hand's frame as the base's does. (Laid along his own loops' line it left 7.8° off the
     // base's: every cut would have landed 7.8° wide on him. The price is the hilt crossing his loops 6 mm off-centre at each end — nothing the eye finds.)
-    const axG = axT.clone(), atG = fG.mid.clone().add(atT.clone().sub(fT.mid).multiplyScalar(kF)), flG = flT.clone(), reachG = gs.reach * kF, off = fG.axis.clone().applyQuaternion(lean).angleTo(axT) * 180 / Math.PI;
+    // (profile `grip.slide`, metres: the guard that much farther up the handle line from his fist — the hand slides down the handle, toward its middle)
+    const axG = axT.clone(), atG = fG.mid.clone().add(atT.clone().sub(fT.mid).multiplyScalar(kF)), flG = flT.clone(), reachG = gs.reach * kF + ((prof.grip || {}).slide || 0), off = fG.axis.clone().applyQuaternion(lean).angleTo(axT) * 180 / Math.PI;
     const basis = (ax, fl) => new THREE.Matrix4().makeBasis(new THREE.Vector3().crossVectors(ax, fl).normalize(), ax, fl), hT = new THREE.Matrix4().fromArray(WT[REF.names.indexOf('handR')]), hG = new THREE.Matrix4().fromArray(WG[A.names.indexOf('handR')]);
     // the blade: rigid, the guard's place on the handle line → the same place on his, scaled with the MAN (a plain sword is 53 % of a man's height — swordsize.js), not with his fingers
     const gT = hT.clone().multiply(new THREE.Matrix4().makeTranslation(...atT.clone().addScaledVector(axT, gs.reach).toArray())).multiply(basis(axT, flT)), gG = hG.clone().multiply(new THREE.Matrix4().makeTranslation(...atG.clone().addScaledVector(axG, reachG).toArray())).multiply(basis(axG, flG));

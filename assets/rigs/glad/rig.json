@@ -130,9 +130,9 @@
     0.051315,
     0.483398,
     0,
-    -0.847241,
-    0.079709,
-    -0.762516,
+    -0.837935,
+    0.084487,
+    -0.751931,
     1
    ],
    "turn": [
@@ -146,11 +146,11 @@
     51,
     40
    ],
-   "note": "wardrobe.js: the base's grip said again about THIS fist (its loops ×0.565 the base's), the blade ×0.942 with the man. grip.js --bake: the sword mesh carries `seat` already (modelPropGeo UNDOES it for a prop taken off the hand). `turn`/`deg` are the hand's own turn as the char editor set it — the CLIPS bake it (motion.js HAND_ZERO); game.js does NOT lay it on its own procedural poses, which were authored for the sword the rig used to carry.",
+   "note": "wardrobe.js: the base's grip said again about THIS fist (its loops ×0.563 the base's), the blade ×0.942 with the man. grip.js --bake: the sword mesh carries `seat` already (modelPropGeo UNDOES it for a prop taken off the hand). `turn`/`deg` are the hand's own turn as the char editor set it — the CLIPS bake it (motion.js HAND_ZERO); game.js does NOT lay it on its own procedural poses, which were authored for the sword the rig used to carry.",
    "at": [
-    -0.09411,
-    -0.04551,
-    -0.0419
+    -0.09582,
+    -0.0464,
+    -0.04225
    ],
    "axis": [
     -0.24416,
@@ -162,7 +162,7 @@
     -0.98351,
     0.16996
    ],
-   "reach": 0.05093,
+   "reach": 0.06574,
    "size": 0.712
   }
  },

@@ -92,7 +92,8 @@
       "mcp": 15
     },
     "little": {
-      "mcp": 25,
+      "mcp": 5,
+      "pip": -5,
       "spread": 30
     },
     "thumb": {
@@ -100,5 +101,9 @@
       "ip": -15
     },
     "why": "the base's fist closes loose on his slighter hand (index and little ~9° short of the base's, the little finger 3 cm off the ring's): each joint closed further about its own hinge, the little one swung in to its neighbour, the thumb eased off the fingers (2026-09-22)"
+  },
+  "grip": {
+    "slide": 0.015,
+    "why": "the user, 2026-09-22: \"we are holding too high of the handle — move it slightly towards the middle\""
   }
 }

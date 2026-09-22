@@ -24652,6 +24652,18 @@ function afPreviewPose(dur) {
 }
 const br0 = (now, i) => Math.sin(now / 1000 * 2.6 - 0.9 - i * 0.35);   // the breath reaching the cape, segment by segment
 const dt0 = P => clamp((performance.now() - (P.lastT || performance.now())) / 1000, 0, 0.1);   // the frame's dt before P.lastT is stamped
+// THE WRISTS AT REST (the user, 2026-09-22, in the char editor: "the wrist angle was not correct for this arm position — what I set should be the
+// default of this pos"): standing relaxed on the home and at the barber's, his hands turn palm-in to the thighs — the hand bones' own locals off the
+// editor's home pose (tools/chared/poses/home.json handL/handR), eased in over the pivots' wrist; any other stance (the market's guard, a bow, the
+// saddle) eases back to the pivots'. The same locals serve both bodies (the rigs are congruent).
+const PREVIEW_WRIST = { handR: [-0.58649, 0.40271, -0.34665, 0.6113], handL: [-0.5865, 0.40271, -0.34665, 0.61129] }, _pwQ = new THREE.Quaternion();
+function afPreviewWrists(P, dt) {
+  const L = P.rig && P.rig.parts.modelRig; if (!L || !L.inst) return;
+  P.wristW = clamp((P.wristW || 0) + ((!P.fighting && !P.mounted) ? 1 : -1) * dt * 4, 0, 1); if (!P.wristW) return;
+  const k = P.wristW * P.wristW * (3 - 2 * P.wristW);
+  for (const nm in PREVIEW_WRIST) { const b = L.inst.byName[nm]; if (b) { b.quaternion.slerp(_pwQ.fromArray(PREVIEW_WRIST[nm]), k); b.updateMatrixWorld(true); } }
+  if (L.mHelm && L.mHelm.visible) modelHelmPlace(L);   /* (the helm he carries hangs on the hand: placed again on the turned wrist) */
+}
 function afPreviewFrame() {
   const P = AF.preview; if (!P || !afShellVisible() || !P.renderer || !P.rig) { if (P) P.loop = false; return; }
   const w = P.cv.clientWidth, h = P.cv.clientHeight;
@@ -24686,6 +24698,7 @@ function afPreviewFrame() {
   if (P.rig.parts.mount) saddleRider(P.rig.parts);
   if (P.rig.parts.cape) { const segs = P.rig.parts.cape.userData.segs || []; segs.forEach((sg, i) => { sg.rotation.x = 0.06 + Math.sin(now / 700 + i) * 0.03 + 0.02 * br0(now, i); }); }
   if (MODEL_LIVE.length) syncModelRigs();                     // (the warrior's bones follow the pivots before THIS renderer draws — the hook sits on the main one)
+  afPreviewWrists(P, dt);
   if (P.camDef) afPreviewLens(P, dt);                         // the lens: the page's framing, or eased in on the part he was tapped on (afPreviewFocus)
   P.renderer.render(P.scene, P.camera);
   requestAnimationFrame(afPreviewFrame);

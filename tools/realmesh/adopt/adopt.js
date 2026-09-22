@@ -158,8 +158,18 @@ function compact(mesh, idx, per) { const map = new Map(), o = { idx: [] }; for (
     const idx = o.tris ? await simplify(m, () => '*', { '*': o.tris }) : m.idx, C = compact({ pos: m.pos, nrm: m.nrm, uv: m.uv, ji: Array.from(ww.ji), w: Array.from(ww.w) }, idx, { pos: 3, nrm: 3, uv: 2, ji: 4, w: 4 });
     out.meshes.push({ name, pos: Float32Array.from(C.pos), nrm: Float32Array.from(C.nrm), uv: Float32Array.from(C.uv), ji: Uint16Array.from(C.ji), w: Float32Array.from(C.w), idx: Uint32Array.from(C.idx), material: 1 });
     wearSpec[name] = Object.fromEntries(Object.entries(o).filter(([k]) => !['from', 'tris'].includes(k))); }
+  // HIS OWN FIST. The base's fist (its finger rest locals) was shaped for the base's thick fingers round the base's thick hilt; on a slighter hand it
+  // closes loose, and the index and little finger stop ~9° short of the base's (the gladiator, 2026-09-22: "collapsed into each other"). The profile's
+  // `fist` closes each joint further by so many degrees about the finger's own hinge — the base's hinge in its bone's frame (A = FN·FR⁻¹, so
+  // Q⁻¹·FN·ŷ = refQ⁻¹·FR·ŷ: the same axis on every body). rig.json says `ownFist`, and the game and the editor then leave a clip's finger tracks
+  // off this body (every clip carries the base's fist there, unchanged frame to frame): the fingers stay as his nodes have them.
+  // `spread` swings a finger at its knuckle about the palm's normal instead (+ toward the thumb); the thumb's joints are `cmc`, `mcp`, `ip`.
+  const FIST = prof.fist || null, fistJ = {}; if (FIST) for (const S of SIDES) { for (const phys in FINGERS) { const b = fingerBones(phys, S), o = Object.assign({}, FIST.all, FIST[phys]); fistJ[b.mcp] = [o.mcp || 0, o.spread || 0]; fistJ[b.pip] = [o.pip || 0, 0]; fistJ[b.dip] = [o.dip || 0, 0]; }
+    const t = FIST.thumb || {}; fistJ['thumb' + S + '0'] = [t.cmc || 0, t.spread || 0]; fistJ['thumb' + S + '1'] = [t.mcp || 0, 0]; fistJ['thumb' + S + '2'] = [t.ip || 0, 0]; }
+  function ownFist(n) { const q = ref.restQ[n], d = fistJ[n]; if (!d || !(d[0] || d[1])) return q; const toBone = ref.Q[n].clone().invert(), ax = v => new THREE.Vector3(...v).applyQuaternion(FR[n]).applyQuaternion(toBone).normalize(), D = Math.PI / 180 * (/L\d$/.test(n) ? -1 : 1);   // (the left's frames are the right's in the mirror, and a mirrored turn about the mirrored axis runs the other way)
+    return q.clone().multiply(new THREE.Quaternion().setFromAxisAngle(ax([0, 1, 0]), d[0] * D)).multiply(new THREE.Quaternion().setFromAxisAngle(ax([0, 0, 1]), d[1] * D)); }
   // the skeleton: bound where HE stands (the inverse bind matrices), left in the BASE's stance (the nodes)
-  const world = BONES.map(n => G.compose(P[n], [Q[n].x, Q[n].y, Q[n].z, Q[n].w])), local = BONES.map((n, i) => { const p = PARENT[i]; let t = P[n]; if (p >= 0) { const v = new THREE.Vector3(...V.sub(P[n], P[BONES[p]])).applyQuaternion(Q[BONES[p]].clone().invert()); t = [v.x, v.y, v.z]; } const q = ref.restQ[n]; return G.compose(t, [q.x, q.y, q.z, q.w]); });
+  const world = BONES.map(n => G.compose(P[n], [Q[n].x, Q[n].y, Q[n].z, Q[n].w])), local = BONES.map((n, i) => { const p = PARENT[i]; let t = P[n]; if (p >= 0) { const v = new THREE.Vector3(...V.sub(P[n], P[BONES[p]])).applyQuaternion(Q[BONES[p]].clone().invert()); t = [v.x, v.y, v.z]; } const q = ownFist(n); return G.compose(t, [q.x, q.y, q.z, q.w]); });
   fs.mkdirSync(OUT, { recursive: true });
   const srcMat = srcBody.material, texOf = m => SRC.g.images[SRC.g.textures[m.pbrMetallicRoughness.baseColorTexture.index].source].uri; fs.copyFileSync(path.join(ROOT, prof.source, texOf(srcMat)), path.join(OUT, 'atlas.jpg'));
   out.images = ['atlas.jpg']; out.materials = [{ name: 'base', pbrMetallicRoughness: { baseColorTexture: { index: 0 }, metallicFactor: 0, roughnessFactor: 0.9 } }, { name: 'own', doubleSided: true, pbrMetallicRoughness: { baseColorTexture: { index: 0 }, metallicFactor: 0, roughnessFactor: 0.9 } }];
@@ -170,7 +180,7 @@ function compact(mesh, idx, per) { const map = new Map(), o = { idx: [] }; for (
   fs.writeFileSync(path.join(OUT, 'parts.json'), JSON.stringify({ classes: CLASSES, vclass: B.vclass }));
   // rig.json: the base's own, with this man's measures. `rest: "nodes"` — the zero pose is the one in the file's nodes (the base's stance), not the bind pose.
   const baseRig = JSON.parse(fs.readFileSync(path.join(ROOT, 'assets/rigs/base/rig.json'), 'utf8')); let lo = 1e9, hi = -1e9; for (let v = 1; v < B.pos.length; v += 3) { lo = Math.min(lo, B.pos[v]); hi = Math.max(hi, B.pos[v]); }
-  const rig = Object.assign({}, baseRig, { source: prof.credit + ' — adopted onto the base skeleton by tools/realmesh/adopt (profile ' + prof.id + ')', credit: prof.credit, adopted: prof.id, rest: 'nodes', height: +(hi - lo).toFixed(3), hipY: +((P.thighL[1] + P.thighR[1]) / 2 - lo).toFixed(4), wear: wearSpec, meshes: { body: 'base_body' } });
+  const rig = Object.assign({}, baseRig, { source: prof.credit + ' — adopted onto the base skeleton by tools/realmesh/adopt (profile ' + prof.id + ')', credit: prof.credit, adopted: prof.id, rest: 'nodes', ownFist: FIST ? true : undefined, height: +(hi - lo).toFixed(3), hipY: +((P.thighL[1] + P.thighR[1]) / 2 - lo).toFixed(4), wear: wearSpec, meshes: { body: 'base_body' } });
   delete rig.grip; delete rig.skull; delete rig.hairline; delete rig.face;      // the wardrobe and the look bake write these for HIM
   fs.writeFileSync(path.join(OUT, 'rig.json'), JSON.stringify(rig, null, 1));
   const eyes = (prof.meshes.eyes || []).map(pre => { const m = meshOf(pre), c = [0, 0, 0], n = m.pos.length / 3; for (let v = 0; v < n; v++) { const q = toOurs(m.pos[v * 3], m.pos[v * 3 + 1], m.pos[v * 3 + 2]); c[0] += q[0] / n; c[1] += q[1] / n; c[2] += q[2] / n; } return c; });

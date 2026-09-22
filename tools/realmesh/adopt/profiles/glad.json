@@ -81,5 +81,24 @@
       "legs": 1
     },
     "why": "the base keeps 45% of its open A-stance so the arms clear the huge man's lats; a man of ordinary build lets them hang"
+  },
+  "fist": {
+    "all": {
+      "mcp": 12,
+      "pip": 8,
+      "dip": 0
+    },
+    "index": {
+      "mcp": 15
+    },
+    "little": {
+      "mcp": 25,
+      "spread": 30
+    },
+    "thumb": {
+      "mcp": -10,
+      "ip": -15
+    },
+    "why": "the base's fist closes loose on his slighter hand (index and little ~9° short of the base's, the little finger 3 cm off the ring's): each joint closed further about its own hinge, the little one swung in to its neighbour, the thumb eased off the fingers (2026-09-22)"
   }
 }

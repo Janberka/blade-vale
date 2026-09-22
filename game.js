@@ -1622,6 +1622,7 @@ function motionClip(id) {
 // and rig: the hips' travel from their rest scaled by the legs' ratio, then every frame lifted or lowered until the lowest point of HIS OWN soles (the skin his
 // feet and whatever he always wears on them carry, read off the rig once) is ON the floor — unless that frame is in the air, where the clip's own flight stays.
 // The legs alone are run forward for it (pelvis → thigh → shin → foot → toe, in the rest's translations): a few hundred frames of eight matrices.
+const MOTION_FINGER = /^(pinky|ring|middle|index|thumb)[LR]\d$/;
 function motionFit(c, L) {
   const R = MODEL_RIGS.get(L.g.userData.model), F = R && R.spec.clipFit; if (!F || !c.pos) return c; c.fit = c.fit || {}; if (c.fit[R.name]) return c.fit[R.name];
   const g = R.g, ix = nm => g.nodes.findIndex(n => n.name === nm), M4 = THREE.Matrix4, V3 = THREE.Vector3, Q4 = THREE.Quaternion;
@@ -1746,7 +1747,7 @@ function motionPose(L, dt) {                                // → a local quate
   const c = mo.c;
   if (on) { if (want.frame != null) mo.t = want.frame / c.fps; else mo.t += dt * want.rate; }   // a blow is SCRUBBED by the sim's clock; a walk runs at the pace he is really covering
   else if (mo.wasBlow && !cut) mo.t = Math.min((c.frames - 1) / c.fps, mo.t + dt * (mo.rate || 1.25));   // a blow that is OVER runs on while it fades: the blade finishes its road home instead of freezing in the air
-  if (!mo.map) { mo.map = c.bones.map(nm => { const n = L.inst.byName[nm]; return n ? L.inst.nodes.indexOf(n) : -1; }); mo.root = c.root && L.inst.byName[c.root] ? L.inst.nodes.indexOf(L.inst.byName[c.root]) : -1; }
+  if (!mo.map) { const own = (MODEL_RIGS.get(L.g.userData.model) || { spec: {} }).spec.ownFist; mo.map = c.bones.map(nm => { const n = L.inst.byName[nm]; return n && !(own && MOTION_FINGER.test(nm)) ? L.inst.nodes.indexOf(n) : -1; });   /* (a body with its OWN FIST — rig.json ownFist, tools/realmesh/adopt: every clip carries the base's fist on the fingers; his stay as his nodes have them) */ mo.root = c.root && L.inst.byName[c.root] ? L.inst.nodes.indexOf(L.inst.byName[c.root]) : -1; }
   const n = c.frames, f = c.loop ? ((mo.t * c.fps) % n + n) % n : Math.max(0, Math.min(n - 1, mo.t * c.fps)), i0 = Math.floor(f), a = f - i0, i1 = c.loop ? (i0 + 1) % n : Math.min(n - 1, i0 + 1), out = [];
   for (let k = 0; k < mo.map.length; k++) { const i = mo.map[k]; if (i < 0) continue;
     _moQa.fromArray(c.q[k], i0 * 4); _moQb.fromArray(c.q[k], i1 * 4); out[i] = _moQa.clone().slerp(_moQb, a); }

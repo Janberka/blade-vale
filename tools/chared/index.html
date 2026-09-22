@@ -733,9 +733,10 @@ async function setMotion(id) {
   el$('mo_info').textContent = c ? c.bones.length + ' bones · ' + c.frames + ' frames @ ' + c.fps + (c.fitted ? ' · the hips\' road re-laid for his legs (×' + c.fitted.toFixed(3) + ')' : '') + (c.credit ? ' · ' + c.credit : '') : '';
   if (!c) { el$('v_mof').textContent = '–'; el$('s_mof').value = 0; } armSlider(); pose();
 }
+const FINGER_RE = /^(pinky|ring|middle|index|thumb)[LR]\d$/;   // a body with its OWN FIST (rig.json ownFist — tools/realmesh/adopt): a clip's finger tracks (the base's fist) stay off it
 function applyMotion(tf) {                          // tf in frames, fractional: slerp between the two around it
   const c = MO.clip, n = c.frames, f = c.loop ? ((tf % n) + n) % n : Math.min(Math.max(tf, 0), n - 1), i0 = Math.floor(f), a = f - i0, i1 = c.loop ? (i0 + 1) % n : Math.min(i0 + 1, n - 1);
-  c.bones.forEach((nm, k) => { const b = BONE[nm]; if (!b) return; moQa.fromArray(c.q[k], i0 * 4); moQb.fromArray(c.q[k], i1 * 4); b.quaternion.copy(moQa).slerp(moQb, a); });
+  c.bones.forEach((nm, k) => { const b = BONE[nm]; if (!b || (RIG.ownFist && FINGER_RE.test(nm))) return; moQa.fromArray(c.q[k], i0 * 4); moQb.fromArray(c.q[k], i1 * 4); b.quaternion.copy(moQa).slerp(moQb, a); });
   poseOver(carryOn() ? carryDeg(carry) * Math.PI / 180 : 0, legA * Math.PI / 180); handOver();
   const tr = c.travel && (c.travel[0] || c.travel[2]) && el$('mo_inplace').checked ? (c.loop ? f / n : f / Math.max(1, n - 1)) : 0;   // "in place": the clip's own travel taken back out, evenly over its length
   const rb = BONE[c.root]; if (rb) rb.position.set(-(tr && c.travel[0] * tr) + c.pos[i0 * 3] + (c.pos[i1 * 3] - c.pos[i0 * 3]) * a, c.pos[i0 * 3 + 1] + (c.pos[i1 * 3 + 1] - c.pos[i0 * 3 + 1]) * a, c.pos[i0 * 3 + 2] + (c.pos[i1 * 3 + 2] - c.pos[i0 * 3 + 2]) * a - (tr && c.travel[2] * tr));
@@ -866,7 +867,7 @@ function cbTrail(t) { const N = 28, span = 0.30;
     pa.setXYZ(i * 2, r0.x, r0.y, r0.z); pa.setXYZ(i * 2 + 1, tip.x, tip.y, tip.z); const cr = hot ? 1 : 0.35, cg = hot ? 0.62 : 0.75, cbb = hot ? 0.25 : 1;   // the cut itself burns orange, the rest of the blade's road is blue
     ca.setXYZ(i * 2, cr * k * 0.2, cg * k * 0.2, cbb * k * 0.2); ca.setXYZ(i * 2 + 1, cr * k * 0.8, cg * k * 0.8, cbb * k * 0.8); }
   pa.needsUpdate = true; ca.needsUpdate = true; }
-function cbApply(t) { const P = cbPose(t); CB.bones.forEach((nm, k) => { const b = BONE[nm]; if (b) b.quaternion.fromArray(P.q, k * 4); }); const rb = BONE[CB.clips.down.root]; if (rb) rb.position.fromArray(P.p);
+function cbApply(t) { const P = cbPose(t); CB.bones.forEach((nm, k) => { const b = BONE[nm]; if (b && !(RIG.ownFist && FINGER_RE.test(nm))) b.quaternion.fromArray(P.q, k * 4); }); const rb = BONE[CB.clips.down.root]; if (rb) rb.position.fromArray(P.p);
   const sg = cbSegAt(t), a = sg.a; cbTrail(t);
   el$('v_mof').textContent = t.toFixed(2) + ' / ' + CB.total.toFixed(2) + ' s'; el$('s_mof').value = Math.round(t * 60);
   const what = !a ? sg.say : a.blow ? (a.heavy ? 'HEAVY ' : a.last ? 'finisher ' : 'light ') + CB_NAME[sg.clip] + '  ·  ' + sg.say : CB_NAME[a.clip] + (sg.say !== CB_NAME[a.clip] ? '  ·  ' + sg.say : '');

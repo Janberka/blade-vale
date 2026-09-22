@@ -22139,12 +22139,16 @@ function afRide(b, dt, I, mm, canMove, sim) {
   }
 }
 // the enemy the fight camera frames (2026-09-22, the user: "its focus is our character but the focus should be the closest
-// enemy"): the nearest living foe within 16 m; the one already held stays until another is clearly nearer, so the lens doesn't twitch
+// enemy"): the nearest living foe within 16 m. In a crowd ("the cam position keeps changing") the one held is KEPT: at least
+// 1.5 s, and after that only for a man at under 60% of his distance — or when he falls or gets away past 18 m
 function afCamFoe(me) {
   if (!me || me.dead || AF.phase !== 'fight') { AF.camFoe = null; return null; }
-  let best = null, bd = 16, cur = AF.camFoe;
+  let cur = AF.camFoe; const now = performance.now();
   if (cur && (cur.dead || Math.hypot(cur.x - me.x, cur.z - me.z) > 18)) cur = null;
-  for (const o of AF.bodies) { if (o.dead || o.team === me.team || o === me) continue; const d = Math.hypot(o.x - me.x, o.z - me.z) * (o === cur ? 0.75 : 1); if (d < bd) { bd = d; best = o; } }
+  if (cur && now - (AF.camFoeT || 0) < 1500) return cur;
+  let best = null, bd = 16;
+  for (const o of AF.bodies) { if (o.dead || o.team === me.team || o === me) continue; const d = Math.hypot(o.x - me.x, o.z - me.z) * (o === cur ? 0.6 : 1); if (d < bd) { bd = d; best = o; } }
+  if (best !== AF.camFoe) AF.camFoeT = now;
   return (AF.camFoe = best);
 }
 // after a swing or a roll, if a foe is at your elbow but not in front of you, the camera swings onto him —
@@ -23027,7 +23031,10 @@ function afReadLocalInput() {
   }
   const me = AF.me;
   const foe = afCamFoe(me);                                 // THE LENS HOLDS THE NEAREST ENEMY: the aim eases onto him unless you are looking round yourself
-  if (foe && !AF.autoTurn && performance.now() - (AF.lookAt || 0) > 1200) cam.yaw += angleDelta(cam.yaw, Math.atan2(foe.x - me.x, foe.z - me.z)) * 0.12;
+  if (foe && !AF.autoTurn && performance.now() - (AF.lookAt || 0) > 1200) {   // (a dead zone: while he is already in the middle of the view the lens holds still)
+    const d = angleDelta(cam.yaw, Math.atan2(foe.x - me.x, foe.z - me.z)), dz = 0.22;
+    if (Math.abs(d) > dz) cam.yaw += (d - Math.sign(d) * dz) * 0.08;
+  }
   if (me && me.mounted) {
     // ON HORSEBACK THE STICK IS THE REINS: left/right turns the horse, up/down is the pace (A/D, W/S) — it no longer
     // points at a spot on the screen. The right side (the mouse) aims the RIDER: head and shoulders twist to look,
@@ -23600,7 +23607,7 @@ function afCamAboveGround(clr) {                          // the lens never sink
 // THE FOLLOW CAMERA'S DEFAULT (2026-09-20, the user: "make the default battle angle like this, more cinematic" — the char editor's
 // over-the-shoulder shot): close behind him, barely above the shoulder, the man set a little to the left of the frame so the lens
 // looks past his sword arm. pitch / dist are the rig's starting values (the wheel and a drag still change them), side the lateral offset.
-const AF_CAM_DEF = { pitch: 0.06, dist: 3.8, side: 0.55, minDist: 2.4, eye: 2.15 };   // (eye: the point on him the lens holds — his upper back; the base stands 2.9 tall, the old 1.55 was the warrior's chest and cut his head off)
+const AF_CAM_DEF = { pitch: 0.06, dist: 3.8, side: 1.2, up: 1.4, ahead: 5, aimSide: 1, aimUp: -1.4, minDist: 2.4, eye: 2.15 };   // (eye: the point on him the lens holds — his upper back; the base stands 2.9 tall, the old 1.55 was the warrior's chest and cut his head off)
 function afCamera(dt) {
   const me = AF.me, cam = AF.cam;
   if (AF.phase === 'intro' && AF.intro) afIntroCamera(dt);   // the entrance's own lens (afIntroStart's shot list)
@@ -23608,27 +23615,20 @@ function afCamera(dt) {
   else if (AF.fin && afFinFilm()) afFinCamera(dt);           // FINISH HIM: the call, the wait you can only watch, the blow
   else if (me && !me.dead) {
     const hy = afY(me.x, me.z) + AF_CAM_DEF.eye + (me.airY || 0) * 0.6, cp = Math.cos(cam.pitch);
-    // OVER THE CROWD: if a body stands between you and the lens (the press behind you in a big fight), the camera
-    // rises and comes in a little so it looks down over their helmets instead of through their chests
-    const bx = -Math.sin(cam.yaw), bz = -Math.cos(cam.yaw), L = cam.dist * cp; let blocked = false;
-    for (const o of AF.bodies) { if (o === me || o.dead) continue; const ox = o.x - me.x, oz = o.z - me.z, along = ox * bx + oz * bz; if (along < 0.6 || along > L + 1) continue; if (Math.abs(ox * bz - oz * bx) < 1.1) { blocked = true; break; } }
-    AF.camLift = lerp(AF.camLift || 0, blocked ? 1 : 0, clamp(dt * (blocked ? 6 : 2), 0, 1));
-    const dist = cam.dist * (1 - 0.2 * AF.camLift), lift = 2.1 * AF.camLift;
-    const fk = AF.camFoeK || 0, side = AF_CAM_DEF.side + 1.2 * fk;   // (an enemy held: further out over the shoulder, so he is seen past you, not through you)
-    const sdx = -Math.cos(cam.yaw) * side, sdz = Math.sin(cam.yaw) * side;   // (over his right shoulder: the lens looks along (sin yaw, cos yaw), so its right is (-cos yaw, sin yaw) — the old (cos, -sin) sat on his LEFT)
-    tmpV.set(me.x - Math.sin(cam.yaw) * dist * cp + sdx, hy + dist * Math.sin(cam.pitch) + 0.6 + 1.3 * fk + lift, me.z - Math.cos(cam.yaw) * dist * cp + sdz);
+    // ONE FIXED FRAMING (2026-09-22, the user: "we should always see our char on the left bottom/middle of the screen"): the lens
+    // and the point it looks at both ride on him — out over his right shoulder, above his head, looking ahead past him — so he
+    // holds the same place in the frame whatever the fight does; only the yaw (yours, or the ease onto the enemy) turns it.
+    // (The old crowd lift is gone: it moved him about the screen, and the lens now sits high enough to see over the press.)
+    const C = AF_CAM_DEF, dist = cam.dist, fx = Math.sin(cam.yaw), fz = Math.cos(cam.yaw);
+    const sdx = -fz * C.side, sdz = fx * C.side;   // (over his right shoulder: the lens looks along (sin yaw, cos yaw), so its right is (-cos yaw, sin yaw) — the old (cos, -sin) sat on his LEFT)
+    tmpV.set(me.x - fx * dist * cp + sdx, hy + dist * Math.sin(cam.pitch) + C.up, me.z - fz * dist * cp + sdz);
     if (AF.phase === 'countdown' && !AF.noSweep) {           // the SWEEP: from high over the pit down onto your shoulder as the bell nears (not after a film: its walk-in has already brought the lens here)
       const k = 1 - clamp(AF.countdown / AF_F.countdown, 0, 1), e = k * k * (3 - 2 * k), a = cam.yaw + Math.PI * 0.9 * (1 - e);
       const r = lerp(AF_F.radius * 1.12, cam.dist, e), h = lerp(AF.cfg.venue === 'pit' ? AF_PIT.roofY - 2.4 : clamp(AF_F.radius * 0.55 + 6, 12, 19), tmpV.y - hy, e);   // (from over the lower rows, under the sails, down onto the shoulder)
       tmpV2.set(me.x - Math.sin(a) * r, hy + h, me.z - Math.cos(a) * r);
       camera.position.copy(tmpV2); if (AF.cfg.venue === 'pit') afCamInPit(); camera.lookAt(me.x, hy + 0.2, me.z);   // (the pits: the sweep's end lands behind a man at the wall — over the lip, not inside the blocks)
-    } else { const la = 3 * AF.camLift; camera.position.lerp(tmpV, clamp(dt * 14, 0, 1)); afCamInPit(); afCamAboveGround(0.7);
-      tmpV2.set(me.x + Math.sin(cam.yaw) * la + sdx, hy + 0.9 * AF.camLift, me.z + Math.cos(cam.yaw) * la + sdz);
-      const foe = AF.camFoe && !AF.camFoe.dead ? AF.camFoe : null;   // the enemy held: the lens looks at HIM (his chest), not at your own back
-      AF.camFoeK = lerp(AF.camFoeK || 0, foe ? 1 : 0, clamp(dt * 3, 0, 1));
-      if (foe) AF.camFoeAt = (AF.camFoeAt || new THREE.Vector3()).set(foe.x, afY(foe.x, foe.z) + AF_CAM_DEF.eye * 0.8 + (foe.airY || 0) * 0.6, foe.z);
-      if (AF.camFoeAt && AF.camFoeK > 0.001) tmpV2.lerp(AF.camFoeAt, AF.camFoeK);
-      camera.lookAt(tmpV2); } // lifted: look ahead over the fight, not down at your own helmet
+    } else { camera.position.lerp(tmpV, clamp(dt * 14, 0, 1)); afCamInPit(); afCamAboveGround(0.7);
+      camera.lookAt(me.x + fx * C.ahead + sdx * C.aimSide, hy + C.aimUp, me.z + fz * C.ahead + sdz * C.aimSide); }
     const sp = Math.hypot(me.vx, me.vz); AF.fov = lerp(AF.fov, afBaseFov() + clamp(sp / AF_F.move, 0, 1.2) * 5, clamp(dt * 4, 0, 1)); // a run widens the lens
   } else {                                                  // SPECTATING: ride on any fighter's shoulder, or a free camera over the pit
     const S = AF.spec, o = AF.orbit;
@@ -25333,6 +25333,7 @@ BV.arena = (cfg) => { afOpenLobby('host'); if (cfg && cfg.intro != null) AF.intr
   if (cfg.npcXp) AF.lobby.npcXp = cfg.npcXp; if (cfg.clutter != null) AF.clutterK = cfg.clutter; if (cfg.time) AF.lobby.time = cfg.time; if (cfg.weather) AF.lobby.weather = cfg.weather; if (cfg.pit) AF.lobby.pit = cfg.pit; if (cfg.ground) AF.lobby.ground = cfg.ground; if (cfg.arch) AF.lobby.npcArch = AF.lobby.npcArch.map(row => row.map(() => cfg.arch)); afLobbyRender(); if (cfg.start) afStartFight(); } return BV.arenaStatus(); }; // (npcXp / arch: test overrides)
 BV.arenaFinish = (cmd) => { if (cmd === 'always') AF.finForce = true; else if (cmd === 'never') AF.finForce = false; else if (cmd === 'dice') AF.finForce = null; else if (cmd === 'fell') afFinFell(); const Fn = AF.fin; return { force: AF.finForce == null ? 'dice' : AF.finForce ? 'always' : 'never', seen: afFinSeen(), fin: Fn ? { phase: Fn.phase, t: +Fn.t.toFixed(2), s: +Fn.s.toFixed(2), ot: +(Fn.ot || 0).toFixed(2), bt: +Fn.bt.toFixed(2), v: Fn.v.name, by: Fn.by.name, hp: Fn.v.hp, mine: afFinMine(), film: afFinFilm(), ts: +afFinScale().toFixed(2) } : null, over: AF.over, phase: AF.phase }; };   // test: FINISH HIM — force the die ('always' / 'never' / 'dice'), let him fall ('fell'), read the beat
 BV.arenaFeed = (d, from) => { afOnFightMsg({ from: from || AF.hostPeer || 999, data: d }); return BV.arenaStatus(); };   // test: hand the fight a wire message as if the relay had brought it (a guest's snaps and events, without a second tab)
+BV.arenaCamDef = (o) => { if (o) Object.assign(AF_CAM_DEF, o); const v = new THREE.Vector3(); return { def: { ...AF_CAM_DEF }, pos: camera.position.toArray(), fov: camera.fov, asp: camera.aspect, foe: AF.camFoe ? AF.camFoe.idx : null, ndc: AF.bodies.map(b => v.set(b.x, afY(b.x, b.z) + 1.45, b.z).project(camera).toArray().slice(0, 2).map(n => +n.toFixed(2))) }; };   // test: tune the fight framing live; where each body's middle sits on screen (NDC, -1..1)
 BV.arenaStart = () => { afStartFight(); return BV.arenaStatus(); };
 BV.arenaRematch = () => { afRematch(); return BV.arenaStatus(); };   // test: the Rematch button (also what a guest runs when the host's new 'go' lands)
 BV.ruinPreview = (scale = 1.9) => { if (!AF_RUINPACK || !AF.on) return null; const m = afMesher(), names = Object.keys(AF_RUINPACK); names.forEach((n, i) => { const x = (i - (names.length - 1) / 2) * 7; m.add(afPackGeo(n), x, afY(x, 0), 0, 0, null, scale, scale, scale); }); const mesh = m.build(); scene.add(mesh); AF.props.push(mesh); return names; };   // test: the pack's pieces in a row across the sand

@@ -83,7 +83,10 @@ function frames(R, tipsOf) { const F = {};
     // the hand: wrist → the middle finger's knuckle, and the palm's normal off the knuckle line (index → little)
     const kMid = pb(bone(FINGERS.middle, 1)), kIdx = pb(bone(FINGERS.index, 0)), kLit = pb(bone(FINGERS.little, 1)), hd = V.sub(kMid, p('hand')), kn = V.sub(kLit, kIdx), palm = V.norm(V.cross(hd, kn)); const hq = frameQ(hd, palm); set('hand' + S, hq);
     for (const phys in FINGERS) { const b = fingerBones(phys, S), chain = [b.mcp, b.pip, b.dip].map(pb).concat([tip(b.dip)]);
-      let curl = V.cross(V.sub(chain[1], chain[0]), V.sub(chain[3], chain[1])); if (V.angle(V.sub(chain[1], chain[0]), V.sub(chain[3], chain[1])) < 10) curl = V.cross(V.sub(chain[1], chain[0]), palm); curl = V.norm(curl);
+      // the hinge lies ACROSS THE PALM (the finger's line × the palm's normal). It used to be read off the finger's own bend, but a hand modelled
+      // relaxed bends each finger only 15-30°, and a little sideways drift in that bend tipped the hinge 7-22° off (the base's: 2-12°): the fist
+      // then folded his fingers across each other and left the little one sticking out — "like when I pop my fingers" (the user, 2026-09-22).
+      const curl = V.norm(V.cross(V.sub(chain[1], chain[0]), palm));
       [b.mcp, b.pip, b.dip].forEach((n, i) => set(n, frameQ(V.sub(chain[i + 1], chain[i]), curl))); if (b.base) set(b.base, hq); }   // (a metacarpal is part of the palm: it rides the hand)
     { const n = ['thumb' + S + '0', 'thumb' + S + '1', 'thumb' + S + '2'], chain = n.map(pb).concat([tip(n[2])]); let curl = V.cross(V.sub(chain[1], chain[0]), V.sub(chain[3], chain[1])); if (V.angle(V.sub(chain[1], chain[0]), V.sub(chain[3], chain[1])) < 8) curl = V.cross(V.sub(chain[1], chain[0]), palm); curl = V.norm(curl);
       n.forEach((nm, i) => set(nm, frameQ(V.sub(chain[i + 1], chain[i]), curl))); }

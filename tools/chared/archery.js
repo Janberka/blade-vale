@@ -152,7 +152,7 @@
     const Ml = new THREE.Matrix4().makeBasis(F.g, F.d, F.n), Mw = new THREE.Matrix4().makeBasis(gw, d, n); return Qn().setFromRotationMatrix(Mw.multiply(Ml.transpose())); };
   function ik(sd, wrist, pole) {
     const arm = B('arm' + sd), fore = B('fore' + sd), hand = B('hand' + sd), [a, b] = A.armLen[sd];
-    const S = pW(arm), T = wrist.clone().sub(S), dd = Math.min(Math.max(T.length(), 0.05), (a + b) * 0.999), u = T.normalize();
+    const S = pW(arm), T = wrist.clone().sub(S), dd = Math.min(Math.max(T.length(), 0.05), (a + b) * 0.99995), u = T.normalize();
     const cosA = Math.min(1, Math.max(-1, (a * a + dd * dd - b * b) / (2 * a * dd))), v = pole.clone().addScaledVector(u, -pole.dot(u)).normalize();
     const E = S.clone().addScaledVector(u, a * cosA).addScaledVector(v, a * Math.sqrt(1 - cosA * cosA));
     turnW(arm, Qn().setFromUnitVectors(pW(fore).sub(S).normalize(), E.sub(S).normalize())); arm.updateMatrixWorld(true);
@@ -173,11 +173,13 @@
     turnW(B('neck'), Y(0.62)); turnW(B('head'), Y(0.78)); turnW(B('head'), Qn().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -0.06));   // turned to the target, cheek down onto the string
     const anchor = B('head').localToWorld(JAW.clone()); anchor.z += A.fwd;   // (his chest faces +Z, across the string's path: the draw is brought out in front of it)
     const e = A.cmdE, dir = aimDir(e, A.cmdA), bup = UP.clone().addScaledVector(dir, -dir.dot(UP)).normalize();
-    // the bow fist: on the arrow line one reach out — the rest (5.5 cm over the tunnel) on the line, the arm all but straight
-    const SL = pW(B('armL')), reach = (A.armLen.L[0] + A.armLen.L[1]) * 0.975 + FIST.L.c.length() * 0.8, P0 = anchor.clone().addScaledVector(bup, -0.062).sub(SL);
-    const bq = P0.dot(dir), t = -bq + Math.sqrt(Math.max(0, bq * bq - (P0.lengthSq() - reach * reach)));
-    A.full = t; const tunnelL = anchor.clone().addScaledVector(dir, t).addScaledVector(bup, -0.062);
-    const qL = fistQ('L', bup, dir); ik('L', tunnelL.clone().sub(FIST.L.c.clone().applyQuaternion(qL)), new THREE.Vector3(0, -0.6, -1)); seatHand('L', qL);
+    // the bow fist: on the arrow line (the rest 6 cm over the tunnel), the WRIST put one arm's length from the shoulder —
+    // an easy bend while he sets up, pushed out as he pulls, locked straight at full draw (the user, 2026-09-22)
+    const qL = fistQ('L', bup, dir), SL = pW(B('armL')), arm = A.armLen.L[0] + A.armLen.L[1], ks = A.draw * A.draw * (3 - 2 * A.draw);
+    const P0 = anchor.clone().addScaledVector(bup, -0.062).sub(FIST.L.c.clone().applyQuaternion(qL)).sub(SL), bq = P0.dot(dir);
+    const along = r => -bq + Math.sqrt(Math.max(0, bq * bq - (P0.lengthSq() - r * r)));
+    A.full = along(arm); const t = along(arm * (0.95 + 0.05 * ks)); const tunnelL = anchor.clone().addScaledVector(dir, t).addScaledVector(bup, -0.062);
+    ik('L', tunnelL.clone().sub(FIST.L.c.clone().applyQuaternion(qL)), new THREE.Vector3(0, -0.6, -1)); seatHand('L', qL);
     // the draw fist: the string in its tunnel, back along the line from brace to the anchor; after the loose it runs on past the jaw
     const k = A.draw, follow = A.snap > 0 ? Math.min(1, A.snap / 0.15) * 0.07 : 0;
     const back = A.brace + 0.02 + (t - A.brace - 0.02) * k + follow;
